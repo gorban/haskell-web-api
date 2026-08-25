@@ -36,7 +36,12 @@ spec = do
     it "stays running while idle, serves real HTTP traffic, and only stops when terminated" $ do
       withUnusedLoopbackPort $ \unusedPort ->
         withSystemTempDirectory "haskell-web-api-run" $ \workingDirectory -> do
-          writeFile (workingDirectory <> "/.env") ("LISTENER_0_PORT=" <> show unusedPort <> "\n")
+          writeFile
+            (workingDirectory <> "/.env")
+            ( "LISTENER_0_PORT="
+                <> show unusedPort
+                <> "\nDATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+            )
           withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
             (_, _, _, processHandle) <-
               createProcess
@@ -88,7 +93,10 @@ spec = do
                       "LISTENER_1_SCHEME=https",
                       "LISTENER_1_TLS_SOURCE=manual",
                       "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
-                      "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath
+                      "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath,
+                      "DATABASE_PASSWORD=web_api",
+                      "SMTP_PASSWORD=password",
+                      "TOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                     ]
                 )
               withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
@@ -145,7 +153,10 @@ spec = do
                       "LISTENER_1_TLS_SOURCE=manual",
                       "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
                       "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath,
-                      "REDIRECT_HTTP_TO_HTTPS=false"
+                      "REDIRECT_HTTP_TO_HTTPS=false",
+                      "DATABASE_PASSWORD=web_api",
+                      "SMTP_PASSWORD=password",
+                      "TOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                     ]
                 )
               withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do

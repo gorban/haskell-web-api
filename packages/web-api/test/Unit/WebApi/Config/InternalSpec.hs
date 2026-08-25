@@ -22,6 +22,15 @@ import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..)
 import WebApi.Postgres.Testing (newPostgresPool)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), defaultRequestContext)
 
+-- Kept in the test only: production configuration must never acquire these
+-- repository-known fixtures by omission.
+developmentEnvironmentSecrets :: [(Text.Text, Text.Text)]
+developmentEnvironmentSecrets =
+  [ ("DATABASE_PASSWORD", "web_api"),
+    ("SMTP_PASSWORD", "password"),
+    ("TOTP_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+  ]
+
 spec = do
   describe "DatabasePoolCapacity" $ do
     it "accepts only positive capacities" $ do
@@ -1431,24 +1440,21 @@ spec = do
           parseRuntimeAppConfig envPairs listenerPairs otherPairs `shouldBe` Left expectedError
 
   describe "defaultAppEnvironmentConfig" $ do
-    it "keeps committed .env defaults aligned with the parsed development config" $ do
+    it "keeps committed .env defaults free of credentials and encryption keys" $ do
       committedEnvDefaults
         `shouldBe` [ ("APP_MODE", "development"),
                      ("DATABASE_HOST", "127.0.0.1"),
                      ("DATABASE_PORT", "5432"),
                      ("DATABASE_NAME", "web_api_dev"),
                      ("DATABASE_USER", "web_api_runtime"),
-                     ("DATABASE_PASSWORD", "web_api"),
                      ("DATABASE_CONNECT_TIMEOUT_SECONDS", "10"),
                      ("DATABASE_POOL_CAPACITY", "10"),
                      ("SMTP_HOST", "127.0.0.1"),
                      ("SMTP_PORT", "5025"),
                      ("SMTP_HELO_NAME", "localhost"),
                      ("SMTP_USER", "test@localhost"),
-                     ("SMTP_PASSWORD", "password"),
                      ("EMAIL_FROM", "noreply@localhost"),
-                     ("PUBLIC_BASE_URL", "http://127.0.0.1:5001"),
-                     ("TOTP_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                     ("PUBLIC_BASE_URL", "http://127.0.0.1:5001")
                    ]
       smtpDeliveryHost (smtpDeliveryConfig defaultAppEnvironmentConfig) `shouldBe` "127.0.0.1"
       smtpDeliveryPort (smtpDeliveryConfig defaultAppEnvironmentConfig) `shouldBe` 5025
@@ -1617,8 +1623,16 @@ spec = do
         `shouldBe` "[MissingConfigValue \"DATABASE_PASSWORD\",InvalidConfigValue \"APP_MODE\" \"staging\"]"
 
   describe "parseAppEnvironmentConfig" $ do
-    it "parses committed development defaults into the expected config" $
+    it "requires every credential and encryption key outside compiled defaults" $ do
       parseAppEnvironmentConfig committedEnvDefaults [] []
+        `shouldBe` Left (MissingConfigValue "DATABASE_PASSWORD")
+      parseAppEnvironmentConfig committedEnvDefaults [("DATABASE_PASSWORD", "local_password")] []
+        `shouldBe` Left (MissingConfigValue "SMTP_PASSWORD")
+      parseAppEnvironmentConfig committedEnvDefaults [("DATABASE_PASSWORD", "local_password"), ("SMTP_PASSWORD", "local_password")] []
+        `shouldBe` Left (MissingConfigValue "TOTP_ENCRYPTION_KEY")
+
+    it "parses explicit local development credentials into the expected config" $
+      parseAppEnvironmentConfig committedEnvDefaults developmentEnvironmentSecrets []
         `shouldBe` Right defaultAppEnvironmentConfig
 
     it "lets .env.local override committed .env defaults" $ do
@@ -1630,7 +1644,7 @@ spec = do
               ("DATABASE_USER", "local_user"),
               ("DATABASE_PASSWORD", "local_password")
             ]
-      parseAppEnvironmentConfig committedEnvDefaults localOverrides []
+      parseAppEnvironmentConfig committedEnvDefaults (developmentEnvironmentSecrets <> localOverrides) []
         `shouldBe` Right
           defaultAppEnvironmentConfig
             { appMode = Test,
@@ -1660,7 +1674,7 @@ spec = do
               ("DATABASE_PORT", "7432"),
               ("DATABASE_PASSWORD", "runtime_password")
             ]
-      parseAppEnvironmentConfig committedEnvDefaults localOverrides environmentOverrides
+      parseAppEnvironmentConfig committedEnvDefaults (developmentEnvironmentSecrets <> localOverrides) environmentOverrides
         `shouldBe` Right
           defaultAppEnvironmentConfig
             { appMode = Test,
@@ -1689,20 +1703,20 @@ spec = do
         `shouldBe` Left (MissingConfigValue "DATABASE_PASSWORD")
 
     it "fails invalid port or mode values with precise errors" $ do
-      parseAppEnvironmentConfig committedEnvDefaults [] [("APP_MODE", "staging")]
+      parseAppEnvironmentConfig (committedEnvDefaults <> developmentEnvironmentSecrets) [] [("APP_MODE", "staging")]
         `shouldBe` Left (InvalidConfigValue "APP_MODE" "staging")
-      parseAppEnvironmentConfig committedEnvDefaults [] [("DATABASE_PORT", "0")]
+      parseAppEnvironmentConfig (committedEnvDefaults <> developmentEnvironmentSecrets) [] [("DATABASE_PORT", "0")]
         `shouldBe` Left (InvalidConfigValue "DATABASE_PORT" "0")
-      parseAppEnvironmentConfig committedEnvDefaults [] [("SMTP_PORT", "65536")]
+      parseAppEnvironmentConfig (committedEnvDefaults <> developmentEnvironmentSecrets) [] [("SMTP_PORT", "65536")]
         `shouldBe` Left (InvalidConfigValue "SMTP_PORT" "65536")
-      parseAppEnvironmentConfig committedEnvDefaults [] [("SMTP_PORT", "not-a-port")]
+      parseAppEnvironmentConfig (committedEnvDefaults <> developmentEnvironmentSecrets) [] [("SMTP_PORT", "not-a-port")]
         `shouldBe` Left (InvalidConfigValue "SMTP_PORT" "not-a-port")
-      parseAppEnvironmentConfig committedEnvDefaults [] [("TOTP_ENCRYPTION_KEY", "not-a-key")]
+      parseAppEnvironmentConfig (committedEnvDefaults <> developmentEnvironmentSecrets) [] [("TOTP_ENCRYPTION_KEY", "not-a-key")]
         `shouldBe` Left (InvalidConfigValue "TOTP_ENCRYPTION_KEY" "<redacted>")
-      parseAppEnvironmentConfig committedEnvDefaults [("APP_MODE", "production")] []
+      parseAppEnvironmentConfig (committedEnvDefaults <> developmentEnvironmentSecrets) [("APP_MODE", "production")] []
         `shouldBe` Left (InvalidConfigValue "TOTP_ENCRYPTION_KEY" "development-default")
       parseAppEnvironmentConfig
-        committedEnvDefaults
+        (committedEnvDefaults <> developmentEnvironmentSecrets)
         [ ("APP_MODE", "production"),
           ("TOTP_ENCRYPTION_KEY", "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI")
         ]
@@ -1716,7 +1730,7 @@ spec = do
           let envPath = tempDirectory <> "/.env"
               envLocalPath = tempDirectory <> "/.env.local"
           writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nDATABASE_NAME=shared_db\nDATABASE_USER=shared_user\nDATABASE_PASSWORD=shared_password\n"
-          writeFile envLocalPath "APP_MODE=test\nDATABASE_PORT=7432\nDATABASE_PASSWORD=local_password\n"
+          writeFile envLocalPath "APP_MODE=test\nDATABASE_PORT=7432\nDATABASE_PASSWORD=local_password\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
           loadAppEnvironmentConfigWithFiles envPath envLocalPath
             `shouldReturn` Right
               defaultAppEnvironmentConfig
@@ -1742,7 +1756,7 @@ spec = do
                 let envPath = tempDirectory <> "/.env"
                     envLocalPath = tempDirectory <> "/.env.local"
                 writeFile envPath "APP_MODE=development\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nDATABASE_NAME=shared_db\nDATABASE_USER=shared_user\nDATABASE_PASSWORD=shared_password\n"
-                writeFile envLocalPath "APP_MODE=test\nDATABASE_PORT=7432\nDATABASE_PASSWORD=local_password\nTOTP_ENCRYPTION_KEY=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\n"
+                writeFile envLocalPath "APP_MODE=test\nDATABASE_PORT=7432\nDATABASE_PASSWORD=local_password\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\n"
                 loadAppEnvironmentConfigWithFiles envPath envLocalPath
                   `shouldReturn` Right
                     defaultAppEnvironmentConfig
@@ -1800,7 +1814,7 @@ spec = do
       withSystemTempDirectory "app-environment-config-current-directory" $ \tempDirectory ->
         withClearedAppEnvironment $ do
           writeFile (tempDirectory <> "/.env") "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nDATABASE_NAME=shared_db\nDATABASE_USER=shared_user\nDATABASE_PASSWORD=shared_password\n"
-          writeFile (tempDirectory <> "/.env.local") "APP_MODE=test\nDATABASE_PASSWORD=local_password\n"
+          writeFile (tempDirectory <> "/.env.local") "APP_MODE=test\nDATABASE_PASSWORD=local_password\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
           withCurrentDirectory tempDirectory $
             loadAppEnvironmentConfig
               `shouldReturn` Right
@@ -1832,13 +1846,15 @@ spec = do
         `shouldBe` "[AppEnvironmentOverridesFileError \".env\" (InvalidConfigOverridesLine 1 \"BROKEN\"),AppEnvironmentConfigParseError (InvalidConfigValue \"DATABASE_PORT\" \"0\")]"
 
   describe "parseAppStartupConfig" $
-    it "parses committed environment and runtime defaults into the expected startup config" $ do
+    it "requires explicit secrets before parsing environment and runtime defaults" $ do
       defaultAppStartupConfig
         `shouldBe` AppStartupConfig
           { startupEnvironmentConfig = defaultAppEnvironmentConfig,
             startupAppConfig = defaultAppConfig
           }
       parseAppStartupConfig (committedEnvDefaults <> committedRuntimeDefaults) [] []
+        `shouldBe` Left (MissingConfigValue "DATABASE_PASSWORD")
+      parseAppStartupConfig (committedEnvDefaults <> committedRuntimeDefaults) developmentEnvironmentSecrets []
         `shouldBe` Right defaultAppStartupConfig
 
   describe "loadAppStartupConfigWithFiles" $ do
@@ -1849,7 +1865,7 @@ spec = do
             let envPath = tempDirectory <> "/.env"
                 envLocalPath = tempDirectory <> "/.env.local"
             writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nTOTP_ENCRYPTION_KEY=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\nAPP_TITLE_PREFIX=web-api-shared\nLISTENER_0_PORT=5443\n"
-            writeFile envLocalPath "DATABASE_PASSWORD=local_password\nAPP_TITLE_PREFIX=web-api-local\nLISTENER_0_PORT=7443\n"
+            writeFile envLocalPath "DATABASE_PASSWORD=local_password\nSMTP_PASSWORD=password\nAPP_TITLE_PREFIX=web-api-local\nLISTENER_0_PORT=7443\n"
             loadAppStartupConfigWithFiles envPath envLocalPath
               `shouldReturn` Right
                 AppStartupConfig
@@ -1893,7 +1909,7 @@ spec = do
                   let envPath = tempDirectory <> "/.env"
                       envLocalPath = tempDirectory <> "/.env.local"
                   writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nTOTP_ENCRYPTION_KEY=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\nAPP_TITLE_PREFIX=web-api-shared\nLISTENER_0_HOST=127.0.0.1\nLISTENER_0_PORT=5443\n"
-                  writeFile envLocalPath "DATABASE_PASSWORD=local_password\nAPP_TITLE_PREFIX=web-api-local\nLISTENER_0_PORT=7443\n"
+                  writeFile envLocalPath "DATABASE_PASSWORD=local_password\nSMTP_PASSWORD=password\nAPP_TITLE_PREFIX=web-api-local\nLISTENER_0_PORT=7443\n"
                   loadAppStartupConfigWithFiles envPath envLocalPath
                     `shouldReturn` Right
                       AppStartupConfig
@@ -1938,6 +1954,7 @@ spec = do
             loadAppStartupConfigWithFiles brokenEnvPath envLocalPath
               `shouldReturn` Left
                 (AppStartupOverridesFileError brokenEnvPath (InvalidConfigOverridesLine 1 "APP_TITLE_PREFIX"))
+            writeFile envLocalPath "DATABASE_PASSWORD=local_password\nSMTP_PASSWORD=local_password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
             writeFile invalidEnvPath "LISTENER_0_PORT=0\n"
             loadAppStartupConfigWithFiles invalidEnvPath envLocalPath
               `shouldReturn` Left
@@ -1965,7 +1982,7 @@ spec = do
         withClearedAppEnvironment $
           withClearedRuntimeEnvironment $ do
             writeFile (tempDirectory <> "/.env") "APP_MODE=production\nAPP_TITLE_PREFIX=web-api-shared\n"
-            writeFile (tempDirectory <> "/.env.local") "APP_MODE=test\nLISTENER_0_PORT=6001\n"
+            writeFile (tempDirectory <> "/.env.local") "APP_MODE=test\nDATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nLISTENER_0_PORT=6001\n"
             withCurrentDirectory tempDirectory $
               loadAppStartupConfig
                 `shouldReturn` Right

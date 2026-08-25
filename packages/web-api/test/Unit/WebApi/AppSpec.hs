@@ -903,7 +903,7 @@ spec = do
         withUnusedTcpEndpoint $ \unusedEndpoint ->
           withSystemTempDirectory "web-api-run" $ \tempDirectory ->
             withCurrentDirectory tempDirectory $ do
-              writeFile ".env" ("LISTENER_0_PORT=" <> show (tcpEndpointPort unusedEndpoint) <> "\n")
+              writeFile ".env" ("LISTENER_0_PORT=" <> show (tcpEndpointPort unusedEndpoint) <> "\nDATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n")
               withSystemTempFile "web-api-output.txt" $ \outputPath outputHandle -> do
                 completionReference <- newIORef Nothing
                 serverThreadId <- forkIO $ do
@@ -928,7 +928,7 @@ spec = do
       withClearedAppEnvironment $
         withSystemTempDirectory "web-api-run-invalid" $ \tempDirectory ->
           withCurrentDirectory tempDirectory $ do
-            writeFile ".env" "LISTENER_0_PORT=0\n"
+            writeFile ".env" "LISTENER_0_PORT=0\nDATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
             result <-
               ( try $
                   withSystemTempFile "web-api-output.txt" $ \_ outputHandle -> do

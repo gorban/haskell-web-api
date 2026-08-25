@@ -22,7 +22,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import System.Environment (getEnvironment)
 import System.IO (Handle, hPutStrLn)
-import WebApi.Config (AppEnvironmentConfig (..), DatabaseConfig (..), committedEnvDefaults, parseAppEnvironmentConfig, singletonDatabasePoolCapacity)
+import WebApi.Config (DatabaseConfig (..), committedEnvDefaults, parseRuntimeDatabaseConfig, singletonDatabasePoolCapacity)
 import WebApi.Postgres.Migration
   ( runPostgresMigrationsForRuntime,
     runPostgresSeed,
@@ -57,8 +57,7 @@ loadDatabaseSetupConfig =
 loadRuntimeDatabaseConfig :: IO (Either ConfigParseError DatabaseConfig)
 loadRuntimeDatabaseConfig =
   fmap
-    ( fmap databaseConfig
-        . parseAppEnvironmentConfig committedEnvDefaults []
+    ( parseRuntimeDatabaseConfig committedEnvDefaults []
         . map (bimap Text.pack Text.pack)
     )
     getEnvironment

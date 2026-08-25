@@ -9,6 +9,16 @@ import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), AppMode (..), DatabaseConfig (..), ObservabilityConfig (..), OtlpExporter (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultStaticAssetContentTypes)
 import WebApi.SetupConfig (AppSetupConfig (..), AppSetupConfigLoadError (..), SetupAutostartConfig (..), committedSetupDefaults, defaultAppSetupConfig, defaultSetupAutostartConfig, loadAppSetupConfig, loadAppSetupConfigWithFiles, parseAppSetupConfig)
 
+testRuntimeSecrets :: [(Text.Text, Text.Text)]
+testRuntimeSecrets =
+  [ ("DATABASE_PASSWORD", "web_api"),
+    ("SMTP_PASSWORD", "password"),
+    ("TOTP_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+  ]
+
+testSetupDefaults :: [(Text.Text, Text.Text)]
+testSetupDefaults = committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults <> testRuntimeSecrets
+
 spec = do
   describe "parseAppSetupConfig" $ do
     it "parses committed runtime and setup defaults into the expected setup config" $ do
@@ -28,16 +38,20 @@ spec = do
             setupMigrationDatabaseConfig = Nothing,
             setupAutostartConfig = defaultSetupAutostartConfig
           }
-      parseAppSetupConfig (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults) [] []
+      parseAppSetupConfig testSetupDefaults [] []
         `shouldBe` Right defaultAppSetupConfig
-      parseAppSetupConfig (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults) [] []
+      parseAppSetupConfig testSetupDefaults [] []
+        `shouldBe` Right defaultAppSetupConfig
+      -- Setup defaults stay independently optional: runtime credentials must be
+      -- explicit, but setup-autostart values retain their documented fallback.
+      parseAppSetupConfig (committedEnvDefaults <> committedRuntimeDefaults <> testRuntimeSecrets) [] []
         `shouldBe` Right defaultAppSetupConfig
       parseAppSetupConfig (committedEnvDefaults <> committedRuntimeDefaults) [] []
-        `shouldBe` Right defaultAppSetupConfig
+        `shouldBe` Left (MissingConfigValue "DATABASE_PASSWORD")
 
     it "lets setup booleans follow the same layered precedence as runtime config" $
       parseAppSetupConfig
-        (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
+        testSetupDefaults
         [ ("APP_TITLE_PREFIX", "setup-local"),
           ("SETUP_AUTOSTART_DATABASE", "yes")
         ]
@@ -59,7 +73,7 @@ spec = do
 
     it "lets OTLP_TRACING_ENABLED use the default local endpoint while still flowing into setup config" $
       parseAppSetupConfig
-        (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
+        testSetupDefaults
         []
         [ ("OTLP_TRACING_ENABLED", "true"),
           ("OTLP_TRACING_HEADERS", "authorization=Bearer token")
@@ -86,7 +100,7 @@ spec = do
 
     it "parses optional migration-owner credentials separately from the runtime database config" $
       parseAppSetupConfig
-        (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
+        testSetupDefaults
         [ ("DATABASE_USER", "web_api_runtime"),
           ("WEB_API_MIGRATION_DATABASE_HOST", "127.0.0.1"),
           ("WEB_API_MIGRATION_DATABASE_PORT", "5432"),
@@ -126,22 +140,22 @@ spec = do
 
     it "fails invalid runtime, setup, or partial migration config values explicitly" $ do
       parseAppSetupConfig
-        (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
+        testSetupDefaults
         []
         [("LISTENER_0_PORT", "0")]
         `shouldBe` Left (InvalidConfigValue "LISTENER_0_PORT" "0")
       parseAppSetupConfig
-        (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
+        testSetupDefaults
         []
         [("SETUP_AUTOSTART_DATABASE", "sometimes")]
         `shouldBe` Left (InvalidConfigValue "SETUP_AUTOSTART_DATABASE" "sometimes")
       parseAppSetupConfig
-        (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
+        testSetupDefaults
         []
         [("WEB_API_MIGRATION_DATABASE_HOST", "127.0.0.1")]
         `shouldBe` Left (MissingConfigValue "WEB_API_MIGRATION_DATABASE_PORT")
       parseAppSetupConfig
-        (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
+        testSetupDefaults
         []
         [ ("WEB_API_MIGRATION_DATABASE_HOST", "127.0.0.1"),
           ("WEB_API_MIGRATION_DATABASE_PORT", "0"),
@@ -160,7 +174,7 @@ spec = do
               let envPath = tempDirectory <> "/.env"
                   envLocalPath = tempDirectory <> "/.env.local"
               writeFile envPath "APP_TITLE_PREFIX=web-api-shared\nSETUP_AUTOSTART_DATABASE=true\n"
-              writeFile envLocalPath "APP_TITLE_PREFIX=web-api-local\nSETUP_AUTOSTART_JAEGER=yes\n"
+              writeFile envLocalPath "DATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nAPP_TITLE_PREFIX=web-api-local\nSETUP_AUTOSTART_JAEGER=yes\n"
               loadAppSetupConfigWithFiles envPath envLocalPath
                 `shouldReturn` Right
                   AppSetupConfig
@@ -188,7 +202,7 @@ spec = do
                     let envPath = tempDirectory <> "/.env"
                         envLocalPath = tempDirectory <> "/.env.local"
                     writeFile envPath "APP_TITLE_PREFIX=web-api-shared\nSETUP_AUTOSTART_DATABASE=true\n"
-                    writeFile envLocalPath "APP_TITLE_PREFIX=web-api-local\nSETUP_AUTOSTART_JAEGER=no\n"
+                    writeFile envLocalPath "DATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nAPP_TITLE_PREFIX=web-api-local\nSETUP_AUTOSTART_JAEGER=no\n"
                     loadAppSetupConfigWithFiles envPath envLocalPath
                       `shouldReturn` Right
                         AppSetupConfig
@@ -222,7 +236,7 @@ spec = do
                       "WEB_API_MIGRATION_DATABASE_USER=web_api_owner"
                     ]
                 )
-              writeFile envLocalPath "WEB_API_MIGRATION_DATABASE_PASSWORD=owner-secret\n"
+              writeFile envLocalPath "DATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nWEB_API_MIGRATION_DATABASE_PASSWORD=owner-secret\n"
               loadAppSetupConfigWithFiles envPath envLocalPath
                 `shouldReturn` Right
                   AppSetupConfig
@@ -266,6 +280,7 @@ spec = do
               loadAppSetupConfigWithFiles brokenEnvPath envLocalPath
                 `shouldReturn` Left
                   (AppSetupOverridesFileError brokenEnvPath (InvalidConfigOverridesLine 1 "SETUP_AUTOSTART_DATABASE"))
+              writeFile envLocalPath "DATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
               writeFile invalidEnvPath "SETUP_AUTOSTART_JAEGER=maybe\n"
               loadAppSetupConfigWithFiles invalidEnvPath envLocalPath
                 `shouldReturn` Left
@@ -295,7 +310,7 @@ spec = do
           withClearedRuntimeEnvironment $
             withClearedSetupEnvironment $ do
               writeFile (tempDirectory <> "/.env") "SETUP_AUTOSTART_DATABASE=true\n"
-              writeFile (tempDirectory <> "/.env.local") "APP_TITLE_PREFIX=web-api-dev\nSETUP_AUTOSTART_JAEGER=true\n"
+              writeFile (tempDirectory <> "/.env.local") "DATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nAPP_TITLE_PREFIX=web-api-dev\nSETUP_AUTOSTART_JAEGER=true\n"
               withCurrentDirectory tempDirectory $
                 loadAppSetupConfig
                   `shouldReturn` Right

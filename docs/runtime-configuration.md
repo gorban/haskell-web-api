@@ -1,6 +1,6 @@
 # Runtime configuration
 
-The full `web-api` application has localhost-friendly defaults. Startup reads configuration in this
+The full `web-api` application has localhost-friendly non-secret defaults. Startup reads configuration in this
 order, with each later layer overriding the earlier one:
 
 1. Defaults compiled into the application.
@@ -21,7 +21,7 @@ The smaller `two-pages-example` has its own fixed local configuration and does n
 | `DATABASE_PORT` | PostgreSQL port. | `5432` |
 | `DATABASE_NAME` | Runtime database name. | `web_api_dev` |
 | `DATABASE_USER` | Runtime database username. | `web_api_runtime` |
-| `DATABASE_PASSWORD` | Runtime database password. | `web_api` |
+| `DATABASE_PASSWORD` | Runtime database password. Required from `.env.local` or the process environment. | required |
 | `WEB_API_MIGRATION_DATABASE_HOST` | Migration-only PostgreSQL host, read by setup and migration commands rather than the runtime request path. | unset |
 | `WEB_API_MIGRATION_DATABASE_PORT` | Migration-only PostgreSQL port. | unset |
 | `WEB_API_MIGRATION_DATABASE_NAME` | Migration-only PostgreSQL database name. | unset |
@@ -31,10 +31,10 @@ The smaller `two-pages-example` has its own fixed local configuration and does n
 | `SMTP_PORT` | SMTP server port. | `5025` |
 | `SMTP_HELO_NAME` | HELO/EHLO name sent to the SMTP server. | `localhost` |
 | `SMTP_USER` | SMTP username. | `test@localhost` |
-| `SMTP_PASSWORD` | SMTP password. | `password` |
+| `SMTP_PASSWORD` | SMTP password. Required from `.env.local` or the process environment. | required |
 | `EMAIL_FROM` | Sender address for application email. | `noreply@localhost` |
 | `PUBLIC_BASE_URL` | Public origin used when rendering absolute links in emails and workflows. | `http://127.0.0.1:5001` |
-| `TOTP_ENCRYPTION_KEY` | URL-safe unpadded base64 encoding of a 32-byte encryption key for stored TOTP secrets. The committed development fixture is rejected when `APP_MODE=production`. | development fixture only |
+| `TOTP_ENCRYPTION_KEY` | URL-safe unpadded base64 encoding of a fresh 32-byte encryption key for stored TOTP secrets. Required from `.env.local` or the process environment. | required |
 | `APP_TITLE_PREFIX` | Prefix for rendered HTML page titles. | `web-api` |
 | `LISTENER_<n>_HOST` | Interface for listener `n`. | listener 0: `127.0.0.1` |
 | `LISTENER_<n>_PORT` | Port for listener `n`. | listener 0: `5001` |
@@ -99,10 +99,12 @@ setting any one `WEB_API_MIGRATION_DATABASE_*` value requires all five. Runtime 
 identities are deliberately separate; see [SETUP.md](../SETUP.md) for database creation, migration, and
 test prerequisites. The supported PostgreSQL major version is currently 17.
 
-The compiled SMTP credentials and `TOTP_ENCRYPTION_KEY` are localhost development fixtures, never
-production secrets. `APP_MODE=production` rejects the committed TOTP key at startup; set a fresh,
-independent 32-byte key in `.env.local` or the process environment. For deployment, prefer process
-environment injection or a secret manager over a committed file.
+Runtime startup has no compiled defaults for `DATABASE_PASSWORD`, `SMTP_PASSWORD`, or
+`TOTP_ENCRYPTION_KEY`. It requires each one even when `APP_MODE` is omitted or set to
+`development`; application mode is not a security boundary. Generate a fresh, independent TOTP key (for example,
+`openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`) and keep it in `.env.local`, a process
+environment injector, or a secret manager. For deployment, prefer process environment injection or
+a secret manager over a file.
 
 ## Request resource limits
 
@@ -218,6 +220,8 @@ DATABASE_PORT=5432
 DATABASE_NAME=web_api_dev
 DATABASE_USER=web_api_runtime
 DATABASE_PASSWORD=web_api
+SMTP_PASSWORD=password
+TOTP_ENCRYPTION_KEY=<fresh-url-safe-unpadded-32-byte-key>
 APP_TITLE_PREFIX=web-api-dev
 LISTENER_0_HOST=127.0.0.1
 LISTENER_0_PORT=5001

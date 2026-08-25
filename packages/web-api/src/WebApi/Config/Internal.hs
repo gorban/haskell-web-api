@@ -45,6 +45,7 @@ module WebApi.Config.Internal
     loadAppStartupConfig,
     loadAppStartupConfigWithFiles,
     parseAppEnvironmentConfig,
+    parseRuntimeDatabaseConfig,
     parseAppStartupConfig,
     parseRuntimeAppConfig,
     databasePoolCapacityValue,
@@ -291,6 +292,13 @@ instance HasServerConfig AppConfig where
           observability = appObservability
         }
 
+-- | Non-secret defaults that make local endpoint configuration convenient but
+-- cannot authenticate to a database, SMTP server, or protect durable TOTP
+-- secrets.  Those three values are required from @.env.local@ or the process
+-- environment in /every/ mode: 'AppMode' is application behaviour, not a
+-- trust boundary.  In particular, a deployment which omits @APP_MODE@ must
+-- fail closed rather than start with a repository-known encryption key or
+-- credential.
 committedEnvDefaults :: [(Text, Text)]
 committedEnvDefaults =
   [ ("APP_MODE", "development"),
@@ -298,17 +306,14 @@ committedEnvDefaults =
     ("DATABASE_PORT", "5432"),
     ("DATABASE_NAME", "web_api_dev"),
     ("DATABASE_USER", "web_api_runtime"),
-    ("DATABASE_PASSWORD", "web_api"),
     ("DATABASE_CONNECT_TIMEOUT_SECONDS", "10"),
     ("DATABASE_POOL_CAPACITY", "10"),
     ("SMTP_HOST", "127.0.0.1"),
     ("SMTP_PORT", "5025"),
     ("SMTP_HELO_NAME", "localhost"),
     ("SMTP_USER", "test@localhost"),
-    ("SMTP_PASSWORD", "password"),
     ("EMAIL_FROM", "noreply@localhost"),
-    ("PUBLIC_BASE_URL", "http://127.0.0.1:5001"),
-    ("TOTP_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+    ("PUBLIC_BASE_URL", "http://127.0.0.1:5001")
   ]
 
 committedRuntimeDefaults :: [(Text, Text)]
@@ -468,13 +473,7 @@ loadAppStartupConfigWithFiles committedDefaultsPath localOverridesPath = do
 parseAppEnvironmentConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError AppEnvironmentConfig
 parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides = do
   parsedMode <- parseMode =<< requiredConfigValue "APP_MODE"
-  parsedDatabaseHost <- requiredConfigValue "DATABASE_HOST"
-  parsedDatabasePort <- parsePort =<< requiredConfigValue "DATABASE_PORT"
-  parsedDatabaseName <- requiredConfigValue "DATABASE_NAME"
-  parsedDatabaseUser <- requiredConfigValue "DATABASE_USER"
-  parsedDatabasePassword <- requiredConfigValue "DATABASE_PASSWORD"
-  parsedDatabaseConnectTimeoutSeconds <- parseConnectTimeout =<< requiredConfigValue databaseConnectTimeoutSecondsKey
-  parsedDatabasePoolCapacity <- parsePoolCapacity =<< requiredConfigValue databasePoolCapacityKey
+  parsedDatabaseConfig <- parseRuntimeDatabaseConfig committedDefaults localOverrides environmentOverrides
   parsedSmtpHost <- requiredConfigValue "SMTP_HOST"
   parsedSmtpPort <- parseSmtpPort =<< requiredConfigValue "SMTP_PORT"
   parsedSmtpHeloName <- requiredConfigValue "SMTP_HELO_NAME"
@@ -487,16 +486,7 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
   pure
     AppEnvironmentConfig
       { appMode = parsedMode,
-        databaseConfig =
-          DatabaseConfig
-            { databaseHost = parsedDatabaseHost,
-              databasePort = parsedDatabasePort,
-              databaseName = parsedDatabaseName,
-              databaseUser = parsedDatabaseUser,
-              databasePassword = parsedDatabasePassword,
-              databaseConnectTimeoutSeconds = parsedDatabaseConnectTimeoutSeconds,
-              databasePoolCapacity = parsedDatabasePoolCapacity
-            },
+        databaseConfig = parsedDatabaseConfig,
         smtpDeliveryConfig =
           SmtpDeliveryConfig
             { smtpDeliveryHost = parsedSmtpHost,
@@ -617,6 +607,33 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
         configLocalOverrides = localOverrides,
         configEnvironmentOverrides = environmentOverrides
       }
+
+-- | Parse exactly the runtime database identity from the normal layered
+-- configuration sources.  Database setup deliberately uses this smaller
+-- existing configuration boundary: requiring SMTP or TOTP secrets merely to
+-- migrate PostgreSQL would couple an administrative operation to unrelated
+-- credentials.  The runnable application still calls
+-- 'parseAppEnvironmentConfig' and therefore requires all three secrets.
+parseRuntimeDatabaseConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError DatabaseConfig
+parseRuntimeDatabaseConfig committedDefaults localOverrides environmentOverrides =
+  DatabaseConfig
+    <$> requiredConfigValue "DATABASE_HOST"
+    <*> (parsePort =<< requiredConfigValue "DATABASE_PORT")
+    <*> requiredConfigValue "DATABASE_NAME"
+    <*> requiredConfigValue "DATABASE_USER"
+    <*> requiredConfigValue "DATABASE_PASSWORD"
+    <*> (parseConnectTimeout =<< requiredConfigValue databaseConnectTimeoutSecondsKey)
+    <*> (parsePoolCapacity =<< requiredConfigValue databasePoolCapacityKey)
+  where
+    requiredConfigValue key =
+      maybe (Left (MissingConfigValue key)) Right (lookupConfigValue key configLayers)
+
+    configLayers =
+      ConfigLayers
+        { configLayerCommittedDefaults = committedDefaults,
+          configLayerLocalOverrides = localOverrides,
+          configLayerEnvironmentOverrides = environmentOverrides
+        }
 
 data ConfigSources = ConfigSources
   { configCommittedDefaults :: [(Text, Text)],
