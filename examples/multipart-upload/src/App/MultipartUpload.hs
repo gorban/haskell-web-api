@@ -41,7 +41,9 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Api
-  ( ApiEndpointRequest (..),
+  ( ApiEndpointContract (..),
+    ApiEndpointRequest (..),
+    ApiFieldFailurePolicy (ApiUseGenericFieldFailure),
     ApiMethod (ApiGet, ApiPost),
     ApiMultipartRequest,
     ApiMultipartRequestError (ApiMultipartRequestFailed),
@@ -49,9 +51,10 @@ import HarchWeb.Api
     ApiResponse (..),
     ApiResponseEncoder,
     ApiRouteEndpoint,
+    ApiRouteEndpointDeclaration (..),
     SomeApiRouteEndpoint (..),
     apiResponse,
-    apiRouteEndpointAtNeverFailing,
+    apiRouteEndpointNeverFailing,
     apiUtf8ContentType,
     at,
     bytesResponseEncoder,
@@ -114,22 +117,20 @@ htmlResponseEncoders = bytesResponseEncoder (apiUtf8ContentType htmlMediaType) :
 
 showUploadFormEndpoint :: NativeUploadState -> ApiRouteEndpoint () () domainFailure ByteString.ByteString
 showUploadFormEndpoint state =
-  apiRouteEndpointAtNeverFailing
-    ApiGet
-    (at nativeUploadPath)
-    noRequestFields
-    ApiNoRequestBody
-    htmlResponseEncoders
+  apiRouteEndpointNeverFailing
+    ( ApiRouteEndpointDeclaration
+        (at nativeUploadPath)
+        (ApiEndpointContract ApiGet noRequestFields ApiNoRequestBody htmlResponseEncoders ApiUseGenericFieldFailure)
+    )
     (\_endpointRequest -> issueUploadToken state >>= renderUploadFormPage)
 
 submitUploadEndpoint :: NativeUploadState -> ApiRouteEndpoint () (ApiMultipartRequest InMemoryUpload) domainFailure ByteString.ByteString
 submitUploadEndpoint state =
-  apiRouteEndpointAtNeverFailing
-    ApiPost
-    (at nativeUploadPath)
-    noRequestFields
-    (ApiMultipartRequestBody inMemoryMultipartStorage defaultMultipartLimits)
-    htmlResponseEncoders
+  apiRouteEndpointNeverFailing
+    ( ApiRouteEndpointDeclaration
+        (at nativeUploadPath)
+        (ApiEndpointContract ApiPost noRequestFields (ApiMultipartRequestBody inMemoryMultipartStorage defaultMultipartLimits) htmlResponseEncoders ApiUseGenericFieldFailure)
+    )
     (\endpointRequest -> handleUploadSubmission state (apiEndpointRequestBody endpointRequest))
 
 issueUploadToken :: NativeUploadState -> IO CsrfToken

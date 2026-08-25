@@ -4,7 +4,14 @@
 -- | Private representation shared by the endpoint declaration, family, and
 -- runtime modules.  Keeping the constructors here lets the route-family
 -- interpreter inspect declarations without making 'ApiPath' or endpoint
--- constructors public API. Decision record (PR-F5, 2026-08-25): API body
+-- constructors public API. Decision record (PR-F6, 2026-08-25): one
+-- 'ApiEndpointContract' groups method, request codec/body, representations,
+-- and field-failure policy; 'ApiRouteEndpointDeclaration' adds the path only
+-- when a context-free endpoint owns one. This extends the existing endpoint
+-- declaration boundary instead of retaining a Cartesian constructor-name
+-- matrix: context-aware definitions reuse the contract, while the two
+-- genuinely distinct handler rails remain explicit. No compatibility aliases
+-- remain. See @docs/design-guidance.md@. Decision record (PR-F5, 2026-08-25): API body
 -- declarations use the opaque 'ApiRequestBodyByteLimit', checked from a
 -- 'Natural' against the private reader's 'Int' range. This extends the one
 -- endpoint declaration boundary instead of adding runtime validation; the
@@ -15,6 +22,9 @@ module HarchWeb.Api.Endpoint.Internal
     apiMethodText,
     ApiPath (..),
     at,
+    ApiFieldFailurePolicy (..),
+    ApiEndpointContract (..),
+    ApiRouteEndpointDeclaration (..),
     ApiRouteEndpoint (..),
     SomeApiRouteEndpoint (..),
     ApiEndpointRequest (..),
@@ -29,11 +39,7 @@ module HarchWeb.Api.Endpoint.Internal
     apiRequestBodyByteLimitValue,
     ApiRequestBody (..),
     apiRouteEndpoint,
-    apiRouteEndpointWithFieldFailure,
-    apiRouteEndpointAt,
-    apiRouteEndpointAtWithFieldFailure,
-    apiRouteEndpointAtNeverFailing,
-    apiRouteEndpointAtNeverFailingWithFieldFailure,
+    apiRouteEndpointNeverFailing,
     apiRouteEndpointPath,
     apiRouteEndpointMethod,
   )
@@ -101,6 +107,32 @@ newtype ApiPath = ApiPath Text
 
 at :: Text -> ApiPath
 at = ApiPath
+
+-- | How a typed endpoint declaration turns field decoding rejections into a
+-- protocol response. The policy belongs beside the input and representation
+-- declarations, not in a separate constructor-name suffix.
+data ApiFieldFailurePolicy response
+  = ApiUseGenericFieldFailure
+  | ApiRenderFieldFailures ([ApiRequestParseError] -> ApiResponse response)
+
+-- | The reusable typed contract for an API request: method, decoded fields,
+-- exactly one body consumer, response representations, and field-error
+-- policy. Context-aware route definitions consume this value directly.
+data ApiEndpointContract fields body response = ApiEndpointContract
+  { apiEndpointContractMethod :: ApiMethod,
+    apiEndpointContractFields :: RequestCodec fields,
+    apiEndpointContractBody :: ApiRequestBody body,
+    apiEndpointContractEncoders :: NonEmpty (ApiResponseEncoder response),
+    apiEndpointContractFieldFailurePolicy :: ApiFieldFailurePolicy response
+  }
+
+-- | A path-owning endpoint declaration. It combines a route path with one
+-- 'ApiEndpointContract'; context-free route tables use this while
+-- context-aware definitions reuse the contract without manufacturing a path.
+data ApiRouteEndpointDeclaration fields body response = ApiRouteEndpointDeclaration
+  { apiRouteEndpointDeclarationPath :: ApiPath,
+    apiRouteEndpointDeclarationContract :: ApiEndpointContract fields body response
+  }
 
 -- | One typed endpoint declaration for use in the application's shared route
 -- table. It owns its path, method, field decoding, exactly one declared body
@@ -200,94 +232,40 @@ data ApiRequestBody body where
     MultipartLimits ->
     ApiRequestBody (ApiMultipartRequest stored)
 
+-- | Construct an endpoint with an ordinary, typed domain-failure rail.
+-- 'ApiRouteEndpointDeclaration' keeps route and request protocol choices
+-- cohesive, leaving this function to state only the genuinely distinct
+-- handler mode and its failure interpreter.
 apiRouteEndpoint ::
   (Typeable response) =>
-  ApiMethod ->
-  RequestCodec fields ->
-  ApiRequestBody body ->
-  NonEmpty (ApiResponseEncoder response) ->
+  ApiRouteEndpointDeclaration fields body response ->
   (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
   (domainFailure -> ApiResponse response) ->
   ApiRouteEndpoint fields body domainFailure response
-apiRouteEndpoint method = apiRouteEndpointAt method (at "")
+apiRouteEndpoint declaration =
+  ApiRouteEndpoint path method fields body encoders fieldFailure
+  where
+    ApiRouteEndpointDeclaration path contract = declaration
+    ApiEndpointContract method fields body encoders failurePolicy = contract
+    fieldFailure = case failurePolicy of
+      ApiUseGenericFieldFailure -> Nothing
+      ApiRenderFieldFailures renderFieldFailures -> Just renderFieldFailures
 
--- | Like 'apiRouteEndpoint', but the declaration renders accumulated field
--- errors instead of the legacy generic protocol response.  Keeping the
--- errors at the declaration boundary preserves their source and field names
--- without leaking a transport concern into the handler's domain-failure rail.
--- The runtime fixes this response's status at 400, since field decoding is a
--- client request failure rather than an application outcome.
-apiRouteEndpointWithFieldFailure ::
+-- | Construct an endpoint with a total handler and no fabricated domain
+-- failure branch.
+apiRouteEndpointNeverFailing ::
   (Typeable response) =>
-  ApiMethod ->
-  RequestCodec fields ->
-  ApiRequestBody body ->
-  NonEmpty (ApiResponseEncoder response) ->
-  ([ApiRequestParseError] -> ApiResponse response) ->
-  (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
-  (domainFailure -> ApiResponse response) ->
-  ApiRouteEndpoint fields body domainFailure response
-apiRouteEndpointWithFieldFailure method = apiRouteEndpointAtWithFieldFailure method (at "")
-
--- | Construct a typed endpoint that owns a concrete path. The route-table
--- adapter can use 'apiRouteEndpoint' while the application route codec
--- remains the authoritative path owner.
-apiRouteEndpointAt ::
-  (Typeable response) =>
-  ApiMethod ->
-  ApiPath ->
-  RequestCodec fields ->
-  ApiRequestBody body ->
-  NonEmpty (ApiResponseEncoder response) ->
-  (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
-  (domainFailure -> ApiResponse response) ->
-  ApiRouteEndpoint fields body domainFailure response
-apiRouteEndpointAt method path fields body encoders =
-  ApiRouteEndpoint path method fields body encoders Nothing
-
--- | Path-owning variant of 'apiRouteEndpointWithFieldFailure'.
-apiRouteEndpointAtWithFieldFailure ::
-  (Typeable response) =>
-  ApiMethod ->
-  ApiPath ->
-  RequestCodec fields ->
-  ApiRequestBody body ->
-  NonEmpty (ApiResponseEncoder response) ->
-  ([ApiRequestParseError] -> ApiResponse response) ->
-  (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
-  (domainFailure -> ApiResponse response) ->
-  ApiRouteEndpoint fields body domainFailure response
-apiRouteEndpointAtWithFieldFailure method path fields body encoders fieldFailure =
-  ApiRouteEndpoint path method fields body encoders (Just fieldFailure)
-
--- | Construct an endpoint whose handler has no domain-failure rail. Prefer
--- this over inventing an unreachable error value and failure renderer: it
--- makes total behavior explicit and leaves no impossible branch.
-apiRouteEndpointAtNeverFailing ::
-  (Typeable response) =>
-  ApiMethod ->
-  ApiPath ->
-  RequestCodec fields ->
-  ApiRequestBody body ->
-  NonEmpty (ApiResponseEncoder response) ->
+  ApiRouteEndpointDeclaration fields body response ->
   (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
   ApiRouteEndpoint fields body domainFailure response
-apiRouteEndpointAtNeverFailing method path fields body encoders =
-  ApiRouteEndpointNeverFailing path method fields body encoders Nothing
-
--- | Total-handler variant of 'apiRouteEndpointAtWithFieldFailure'.
-apiRouteEndpointAtNeverFailingWithFieldFailure ::
-  (Typeable response) =>
-  ApiMethod ->
-  ApiPath ->
-  RequestCodec fields ->
-  ApiRequestBody body ->
-  NonEmpty (ApiResponseEncoder response) ->
-  ([ApiRequestParseError] -> ApiResponse response) ->
-  (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
-  ApiRouteEndpoint fields body domainFailure response
-apiRouteEndpointAtNeverFailingWithFieldFailure method path fields body encoders fieldFailure =
-  ApiRouteEndpointNeverFailing path method fields body encoders (Just fieldFailure)
+apiRouteEndpointNeverFailing declaration =
+  ApiRouteEndpointNeverFailing path method fields body encoders fieldFailure
+  where
+    ApiRouteEndpointDeclaration path contract = declaration
+    ApiEndpointContract method fields body encoders failurePolicy = contract
+    fieldFailure = case failurePolicy of
+      ApiUseGenericFieldFailure -> Nothing
+      ApiRenderFieldFailures renderFieldFailures -> Just renderFieldFailures
 
 apiRouteEndpointPath :: ApiRouteEndpoint fields body domainFailure response -> ApiPath
 apiRouteEndpointPath endpoint =

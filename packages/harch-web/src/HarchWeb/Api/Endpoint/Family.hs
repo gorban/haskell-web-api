@@ -17,9 +17,7 @@
 module HarchWeb.Api.Endpoint.Family
   ( apiRouteDefinition,
     apiRouteDefinitionWithContext,
-    apiRouteDefinitionWithContextWithFieldFailure,
     apiRouteDefinitionWithContextNeverFailing,
-    apiRouteDefinitionWithContextNeverFailingWithFieldFailure,
     ApiEndpointFamily,
     ApiEndpointFamilyError (..),
     apiEndpointFamily,
@@ -63,14 +61,11 @@ apiRouteDefinition endpoint =
 -- synthetic endpoint path and method fields.
 apiRouteDefinitionWithContext ::
   (Typeable response) =>
-  ApiMethod ->
-  RequestCodec fields ->
-  ApiRequestBody body ->
-  NonEmpty (ApiResponseEncoder response) ->
+  ApiEndpointContract fields body response ->
   (context -> ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
   (domainFailure -> ApiResponse response) ->
   RouteDefinition route context
-apiRouteDefinitionWithContext method fields body encoders contextAwareHandler failureResponse =
+apiRouteDefinitionWithContext contract contextAwareHandler failureResponse =
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMethods = [toRouteMethod method],
@@ -80,51 +75,23 @@ apiRouteDefinitionWithContext method fields body encoders contextAwareHandler fa
             fields
             body
             encoders
-            Nothing
+            fieldFailure
             (contextAwareHandler (HarchWeb.requestContext routeRequest))
             failureResponse
             request
     }
-
--- | Context-aware variant that gives the declaration its accumulated typed
--- request-field failures. The runtime fixes this response's status at 400.
-apiRouteDefinitionWithContextWithFieldFailure ::
-  (Typeable response) =>
-  ApiMethod ->
-  RequestCodec fields ->
-  ApiRequestBody body ->
-  NonEmpty (ApiResponseEncoder response) ->
-  ([ApiRequestParseError] -> ApiResponse response) ->
-  (context -> ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
-  (domainFailure -> ApiResponse response) ->
-  RouteDefinition route context
-apiRouteDefinitionWithContextWithFieldFailure method fields body encoders fieldFailure contextAwareHandler failureResponse =
-  RouteDefinition
-    { routeNavigationLabel = Nothing,
-      routeMethods = [toRouteMethod method],
-      routeResponse = \request routeRequest ->
-        HarchWeb.ProtocolResponseResult
-          <$> runApiRouteEndpointHandler
-            fields
-            body
-            encoders
-            (Just fieldFailure)
-            (contextAwareHandler (HarchWeb.requestContext routeRequest))
-            failureResponse
-            request
-    }
+  where
+    ApiEndpointContract method fields body encoders failurePolicy = contract
+    fieldFailure = fieldFailureRenderer failurePolicy
 
 -- | The total-handler variant has no fabricated failure renderer or
 -- unreachable error branch.
 apiRouteDefinitionWithContextNeverFailing ::
   (Typeable response) =>
-  ApiMethod ->
-  RequestCodec fields ->
-  ApiRequestBody body ->
-  NonEmpty (ApiResponseEncoder response) ->
+  ApiEndpointContract fields body response ->
   (context -> ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
   RouteDefinition route context
-apiRouteDefinitionWithContextNeverFailing method fields body encoders contextAwareHandler =
+apiRouteDefinitionWithContextNeverFailing contract contextAwareHandler =
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMethods = [toRouteMethod method],
@@ -134,36 +101,19 @@ apiRouteDefinitionWithContextNeverFailing method fields body encoders contextAwa
             fields
             body
             encoders
-            Nothing
+            fieldFailure
             (contextAwareHandler (HarchWeb.requestContext routeRequest))
             request
     }
+  where
+    ApiEndpointContract method fields body encoders failurePolicy = contract
+    fieldFailure = fieldFailureRenderer failurePolicy
 
--- | Total-handler context-aware variant that renders accumulated request-field
--- failures at the declaration boundary while retaining HTTP 400.
-apiRouteDefinitionWithContextNeverFailingWithFieldFailure ::
-  (Typeable response) =>
-  ApiMethod ->
-  RequestCodec fields ->
-  ApiRequestBody body ->
-  NonEmpty (ApiResponseEncoder response) ->
-  ([ApiRequestParseError] -> ApiResponse response) ->
-  (context -> ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
-  RouteDefinition route context
-apiRouteDefinitionWithContextNeverFailingWithFieldFailure method fields body encoders fieldFailure contextAwareHandler =
-  RouteDefinition
-    { routeNavigationLabel = Nothing,
-      routeMethods = [toRouteMethod method],
-      routeResponse = \request routeRequest ->
-        HarchWeb.ProtocolResponseResult
-          <$> runApiRouteEndpointHandlerNeverFailing
-            fields
-            body
-            encoders
-            (Just fieldFailure)
-            (contextAwareHandler (HarchWeb.requestContext routeRequest))
-            request
-    }
+fieldFailureRenderer :: ApiFieldFailurePolicy response -> Maybe ([ApiRequestParseError] -> ApiResponse response)
+fieldFailureRenderer failurePolicy =
+  case failurePolicy of
+    ApiUseGenericFieldFailure -> Nothing
+    ApiRenderFieldFailures renderFieldFailures -> Just renderFieldFailures
 
 -- | A non-empty, unambiguous set of typed endpoint declarations. Construct it
 -- with 'apiEndpointFamily' so a codec and definition cannot be derived from

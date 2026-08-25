@@ -12,8 +12,10 @@ import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import Data.Typeable (Typeable)
 import HarchWeb qualified
 import HarchWeb.Api
+import HarchWeb.Api qualified as Api
 import HarchWeb.Api.Multipart (MultipartConsumeError (..), MultipartScopedPart (..), defaultMultipartLimits, inMemoryMultipartStorage)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Routing (RouteRequest (..))
@@ -37,37 +39,132 @@ testEndpointFamily = requireApiEndpointFamily testEndpointTable
 
 testEndpoint :: ApiMethod -> ApiPath -> Text -> ApiRouteEndpoint () () () Text
 testEndpoint method path responseText =
-  apiRouteEndpointAt
-    method
-    path
-    (pure ())
-    ApiNoRequestBody
-    (textResponseEncoder :| [])
+  Api.apiRouteEndpoint
+    ( ApiRouteEndpointDeclaration
+        path
+        (ApiEndpointContract method (pure ()) ApiNoRequestBody (textResponseEncoder :| []) ApiUseGenericFieldFailure)
+    )
     (const (pure (Right (apiResponse responseText))))
     (const (apiResponse "unreachable"))
 
 neverFailingEndpoint :: ApiRouteEndpoint () () domainFailure Text
 neverFailingEndpoint =
-  apiRouteEndpointAtNeverFailing
-    ApiGet
-    (at "/api/total")
-    noRequestFields
-    ApiNoRequestBody
-    (textResponseEncoder :| [])
+  Api.apiRouteEndpointNeverFailing
+    ( ApiRouteEndpointDeclaration
+        (at "/api/total")
+        (ApiEndpointContract ApiGet noRequestFields ApiNoRequestBody (textResponseEncoder :| []) ApiUseGenericFieldFailure)
+    )
     (const (pure (apiResponse "Total")))
 
 streamEndpoint :: ApiRouteEndpoint () () () ()
 streamEndpoint =
-  apiRouteEndpointAt
-    ApiGet
-    (at "/api/stream")
-    (pure ())
-    ApiNoRequestBody
-    (streamingResponseEncoder plainTextContentType streamResponse :| [])
+  Api.apiRouteEndpoint
+    ( ApiRouteEndpointDeclaration
+        (at "/api/stream")
+        (ApiEndpointContract ApiGet (pure ()) ApiNoRequestBody (streamingResponseEncoder plainTextContentType streamResponse :| []) ApiUseGenericFieldFailure)
+    )
     (const (pure (Right (apiResponse ()))))
     (const (apiResponse ()))
   where
     streamResponse _ write flush = write (Builder.byteString "streamed") >> flush
+
+testApiRouteEndpoint ::
+  (Typeable response) =>
+  ApiMethod ->
+  RequestCodec fields ->
+  ApiRequestBody body ->
+  NonEmpty (ApiResponseEncoder response) ->
+  (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
+  (domainFailure -> ApiResponse response) ->
+  ApiRouteEndpoint fields body domainFailure response
+testApiRouteEndpoint method fields body encoders =
+  Api.apiRouteEndpoint (ApiRouteEndpointDeclaration (at "") (ApiEndpointContract method fields body encoders ApiUseGenericFieldFailure))
+
+testApiRouteEndpointWithFieldFailure ::
+  (Typeable response) =>
+  ApiMethod ->
+  RequestCodec fields ->
+  ApiRequestBody body ->
+  NonEmpty (ApiResponseEncoder response) ->
+  ([ApiRequestParseError] -> ApiResponse response) ->
+  (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
+  (domainFailure -> ApiResponse response) ->
+  ApiRouteEndpoint fields body domainFailure response
+testApiRouteEndpointWithFieldFailure method fields body encoders fieldFailure =
+  Api.apiRouteEndpoint (ApiRouteEndpointDeclaration (at "") (ApiEndpointContract method fields body encoders (ApiRenderFieldFailures fieldFailure)))
+
+testApiRouteEndpointAtNeverFailing ::
+  (Typeable response) =>
+  ApiMethod ->
+  ApiPath ->
+  RequestCodec fields ->
+  ApiRequestBody body ->
+  NonEmpty (ApiResponseEncoder response) ->
+  (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
+  ApiRouteEndpoint fields body domainFailure response
+testApiRouteEndpointAtNeverFailing method path fields body encoders =
+  Api.apiRouteEndpointNeverFailing (ApiRouteEndpointDeclaration path (ApiEndpointContract method fields body encoders ApiUseGenericFieldFailure))
+
+testApiRouteEndpointAtNeverFailingWithFieldFailure ::
+  (Typeable response) =>
+  ApiMethod ->
+  ApiPath ->
+  RequestCodec fields ->
+  ApiRequestBody body ->
+  NonEmpty (ApiResponseEncoder response) ->
+  ([ApiRequestParseError] -> ApiResponse response) ->
+  (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
+  ApiRouteEndpoint fields body domainFailure response
+testApiRouteEndpointAtNeverFailingWithFieldFailure method path fields body encoders fieldFailure =
+  Api.apiRouteEndpointNeverFailing (ApiRouteEndpointDeclaration path (ApiEndpointContract method fields body encoders (ApiRenderFieldFailures fieldFailure)))
+
+testApiRouteDefinitionWithContext ::
+  (Typeable response) =>
+  ApiMethod ->
+  RequestCodec fields ->
+  ApiRequestBody body ->
+  NonEmpty (ApiResponseEncoder response) ->
+  (context -> ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
+  (domainFailure -> ApiResponse response) ->
+  RouteDefinition route context
+testApiRouteDefinitionWithContext method fields body encoders =
+  Api.apiRouteDefinitionWithContext (ApiEndpointContract method fields body encoders ApiUseGenericFieldFailure)
+
+testApiRouteDefinitionWithContextWithFieldFailure ::
+  (Typeable response) =>
+  ApiMethod ->
+  RequestCodec fields ->
+  ApiRequestBody body ->
+  NonEmpty (ApiResponseEncoder response) ->
+  ([ApiRequestParseError] -> ApiResponse response) ->
+  (context -> ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
+  (domainFailure -> ApiResponse response) ->
+  RouteDefinition route context
+testApiRouteDefinitionWithContextWithFieldFailure method fields body encoders fieldFailure =
+  Api.apiRouteDefinitionWithContext (ApiEndpointContract method fields body encoders (ApiRenderFieldFailures fieldFailure))
+
+testApiRouteDefinitionWithContextNeverFailing ::
+  (Typeable response) =>
+  ApiMethod ->
+  RequestCodec fields ->
+  ApiRequestBody body ->
+  NonEmpty (ApiResponseEncoder response) ->
+  (context -> ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
+  RouteDefinition route context
+testApiRouteDefinitionWithContextNeverFailing method fields body encoders =
+  Api.apiRouteDefinitionWithContextNeverFailing (ApiEndpointContract method fields body encoders ApiUseGenericFieldFailure)
+
+testApiRouteDefinitionWithContextNeverFailingWithFieldFailure ::
+  (Typeable response) =>
+  ApiMethod ->
+  RequestCodec fields ->
+  ApiRequestBody body ->
+  NonEmpty (ApiResponseEncoder response) ->
+  ([ApiRequestParseError] -> ApiResponse response) ->
+  (context -> ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
+  RouteDefinition route context
+testApiRouteDefinitionWithContextNeverFailingWithFieldFailure method fields body encoders fieldFailure =
+  Api.apiRouteDefinitionWithContextNeverFailing (ApiEndpointContract method fields body encoders (ApiRenderFieldFailures fieldFailure))
 
 testHeaderValue :: Text -> ApiHeaderValue
 testHeaderValue value = fromMaybe (error "expected test header value to be valid") (apiHeaderValue value)
@@ -317,7 +414,7 @@ spec =
 
     it "keeps a route-table endpoint's compatibility path explicit" $
       apiRouteEndpointPath
-        ( apiRouteEndpoint
+        ( testApiRouteEndpoint
             ApiGet
             (pure ())
             ApiNoRequestBody
@@ -326,6 +423,34 @@ spec =
             (const (apiResponse "unreachable"))
         )
         `shouldBe` at ""
+
+    it "keeps every declaration choice together in the public typed records" $ do
+      let contract =
+            ApiEndpointContract
+              ApiPost
+              (pure ())
+              ApiNoRequestBody
+              (textResponseEncoder :| [])
+              ApiUseGenericFieldFailure
+          declaration = ApiRouteEndpointDeclaration (at "/api/contract") contract
+          decodedFields = runRequestCodec (apiEndpointContractFields contract) (apiRequestDataFromWaiRequest Wai.defaultRequest)
+      expectAll
+        ( (apiEndpointContractMethod contract `shouldBe` ApiPost)
+            :| [ apiRouteEndpointDeclarationPath declaration `shouldBe` at "/api/contract",
+                 case decodedFields of
+                   ApiRequestDecoded () -> pure ()
+                   _ -> expectationFailure "expected the contract's request codec to decode fields",
+                 case apiEndpointContractBody contract of
+                   ApiNoRequestBody -> pure ()
+                   _ -> expectationFailure "expected the contract's no-body declaration",
+                 case apiEndpointContractEncoders contract of
+                   _ :| _ -> pure (),
+                 case apiEndpointContractFieldFailurePolicy contract of
+                   ApiUseGenericFieldFailure -> pure ()
+                   ApiRenderFieldFailures _ -> expectationFailure "expected the contract's generic field-failure policy",
+                 apiEndpointContractMethod (apiRouteEndpointDeclarationContract declaration) `shouldBe` ApiPost
+               ]
+        )
 
     describe "apiResponseBodyToProtocolResponse" $ do
       it "converts status, headers, and body into the server protocol response" $
@@ -353,7 +478,7 @@ spec =
     describe "apiRouteDefinition" $ do
       let requiredQuery = requiredField (queryField "q" apiTextValue)
           successfulEndpoint =
-            apiRouteEndpointWithFieldFailure
+            testApiRouteEndpointWithFieldFailure
               ApiPost
               requiredQuery
               ApiNoRequestBody
@@ -365,7 +490,7 @@ spec =
               )
               (\() -> apiResponse "unreachable")
           domainFailureEndpoint =
-            apiRouteEndpoint
+            testApiRouteEndpoint
               ApiGet
               (pure ())
               ApiNoRequestBody
@@ -378,9 +503,9 @@ spec =
           ( (routeNavigationLabel (apiRouteDefinition successfulEndpoint) `shouldBe` Nothing)
               :| [ routeMethods (apiRouteDefinition successfulEndpoint) `shouldBe` [HarchWeb.RoutePost],
                    routeMethods (apiRouteDefinition domainFailureEndpoint) `shouldBe` [HarchWeb.RouteGet],
-                   routeMethods (apiRouteDefinition (apiRouteEndpoint ApiPut (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) `shouldBe` [HarchWeb.RoutePut],
-                   routeMethods (apiRouteDefinition (apiRouteEndpoint ApiPatch (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) `shouldBe` [HarchWeb.RoutePatch],
-                   routeMethods (apiRouteDefinition (apiRouteEndpoint ApiDelete (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) `shouldBe` [HarchWeb.RouteDelete]
+                   routeMethods (apiRouteDefinition (testApiRouteEndpoint ApiPut (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) `shouldBe` [HarchWeb.RoutePut],
+                   routeMethods (apiRouteDefinition (testApiRouteEndpoint ApiPatch (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) `shouldBe` [HarchWeb.RoutePatch],
+                   routeMethods (apiRouteDefinition (testApiRouteEndpoint ApiDelete (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) `shouldBe` [HarchWeb.RouteDelete]
                  ]
           )
 
@@ -398,7 +523,7 @@ spec =
 
       it "gives a field-failure renderer every accumulated error in declaration order" $ do
         let accumulatingEndpoint =
-              apiRouteEndpointWithFieldFailure
+              testApiRouteEndpointWithFieldFailure
                 ApiGet
                 ( (,)
                     <$> requiredField (queryField "query" apiTextValue)
@@ -420,7 +545,7 @@ spec =
 
       it "keeps an explicit invalid codec out of the field-failure renderer" $ do
         let invalidEndpoint =
-              apiRouteEndpointWithFieldFailure
+              testApiRouteEndpointWithFieldFailure
                 ApiGet
                 (requestCodec (const ApiRequestCodecInvalid))
                 ApiNoRequestBody
@@ -436,7 +561,7 @@ spec =
 
       it "lets a total handler declaration render typed field failures" $ do
         let totalEndpoint =
-              apiRouteEndpointAtNeverFailingWithFieldFailure
+              testApiRouteEndpointAtNeverFailingWithFieldFailure
                 ApiGet
                 (at "/api/total-field-failure")
                 (requiredField (queryField "query" apiTextValue))
@@ -453,9 +578,9 @@ spec =
                  ]
           )
 
-      it "retains the generic field response for the legacy total constructor" $ do
+      it "uses the generic field response when the total declaration chooses that policy" $ do
         let legacyEndpoint =
-              apiRouteEndpointAtNeverFailing
+              testApiRouteEndpointAtNeverFailing
                 ApiGet
                 (at "/api/legacy-total-field-failure")
                 (requiredField (queryField "query" apiTextValue))
@@ -491,7 +616,7 @@ spec =
 
       it "maps bounded buffered-body failures without invoking the handler" $ do
         let bufferedEndpoint =
-              apiRouteEndpoint
+              testApiRouteEndpoint
                 ApiPost
                 (pure ())
                 (ApiBufferedRequestBody RejectMissingContentType (bodyByteLimit 4) [textBodyDecoder])
@@ -529,7 +654,7 @@ spec =
         -- the client sent something malformed. 415 here is a strictly safer
         -- outcome than a silent 200 that guessed.
         let assumedEndpoint =
-              apiRouteEndpoint
+              testApiRouteEndpoint
                 ApiPost
                 (pure ())
                 (ApiBufferedRequestBody (AssumeMediaType plainTextMediaType) (bodyByteLimit 4) [textBodyDecoder])
@@ -549,7 +674,7 @@ spec =
 
       it "combines repeated Accept header lines per RFC 9110 instead of falling back to the first declared representation" $ do
         let negotiatedEndpoint =
-              apiRouteEndpoint
+              testApiRouteEndpoint
                 ApiGet
                 (pure ())
                 ApiNoRequestBody
@@ -567,7 +692,7 @@ spec =
 
       it "uses an explicitly assumed media type only when the endpoint opts in" $ do
         let assumedContentTypeEndpoint =
-              apiRouteEndpoint
+              testApiRouteEndpoint
                 ApiPost
                 (pure ())
                 (ApiBufferedRequestBody (AssumeMediaType plainTextMediaType) (bodyByteLimit 4) [textBodyDecoder])
@@ -584,7 +709,7 @@ spec =
       it "decodes one bounded URL-encoded form body before applying its declared form fields" $ do
         handlerCalls <- newIORef (0 :: Int)
         let formEndpoint =
-              apiRouteEndpoint
+              testApiRouteEndpoint
                 ApiPost
                 ( (,)
                     <$> requiredField (queryField "source" apiTextValue)
@@ -627,7 +752,7 @@ spec =
       it "maps missing, oversized, ambiguous, and field-invalid form requests before the handler" $ do
         handlerCalls <- newIORef (0 :: Int)
         let formEndpoint =
-              apiRouteEndpoint
+              testApiRouteEndpoint
                 ApiPost
                 (requiredField (formField "name" apiTextValue))
                 (ApiUrlEncodedFormRequestBody RejectMissingContentType (bodyByteLimit 64) 1)
@@ -666,7 +791,7 @@ spec =
 
       it "negotiates declared response encoders and adds Vary: Accept" $ do
         let negotiatedEndpoint =
-              apiRouteEndpoint
+              testApiRouteEndpoint
                 ApiGet
                 (pure ())
                 ApiNoRequestBody
@@ -703,7 +828,7 @@ spec =
 
       it "carries a handler's observability attributes and log entries onto the rendered protocol response, never the body" $ do
         let diagnosticEndpoint =
-              apiRouteEndpoint
+              testApiRouteEndpoint
                 ApiGet
                 (pure ())
                 ApiNoRequestBody
@@ -732,7 +857,7 @@ spec =
 
       it "merges Accept into an application Vary header without changing its spelling" $ do
         let varyEndpoint =
-              apiRouteEndpoint
+              testApiRouteEndpoint
                 ApiGet
                 (pure ())
                 ApiNoRequestBody
@@ -748,7 +873,7 @@ spec =
                 )
                 (\() -> apiResponse "unreachable")
             alreadyVaryEndpoint =
-              apiRouteEndpoint
+              testApiRouteEndpoint
                 ApiGet
                 (pure ())
                 ApiNoRequestBody
@@ -768,7 +893,7 @@ spec =
       it "selects the encoder whose declared Content-Type satisfies Accept parameters" $ do
         let plainMediaType = testMediaType "text/plain"
             parameterAwareEndpoint =
-              apiRouteEndpoint
+              testApiRouteEndpoint
                 ApiGet
                 (pure ())
                 ApiNoRequestBody
@@ -801,7 +926,7 @@ spec =
               write (Builder.byteString "second")
               writeIORef executionReference True
             streamingEndpoint =
-              apiRouteEndpoint
+              testApiRouteEndpoint
                 ApiGet
                 (pure ())
                 ApiNoRequestBody
@@ -833,7 +958,7 @@ spec =
         let requestBody =
               "--endpoint-boundary\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nQuarterly report\r\n--endpoint-boundary\r\nContent-Disposition: form-data; name=\"attachment\"; filename=\"report.txt\"\r\n\r\ncontents\r\n--endpoint-boundary--\r\n"
             multipartEndpoint =
-              apiRouteEndpoint
+              testApiRouteEndpoint
                 ApiPost
                 (requiredField (queryField "mode" apiTextValue))
                 (ApiMultipartRequestBody inMemoryMultipartStorage defaultMultipartLimits)
@@ -865,7 +990,7 @@ spec =
 
       it "leaves a multipart parser failure typed for the endpoint handler" $ do
         let multipartEndpoint =
-              apiRouteEndpoint
+              testApiRouteEndpoint
                 ApiPost
                 (pure ())
                 (ApiMultipartRequestBody inMemoryMultipartStorage defaultMultipartLimits)
@@ -903,7 +1028,7 @@ spec =
       it "gives a streaming endpoint one chunk-at-a-time consumer instead of a buffered body" $ do
         chunksReference <- newIORef ["ab", "cd", "e"]
         let streamingEndpoint =
-              apiRouteEndpoint
+              testApiRouteEndpoint
                 ApiPost
                 (pure ())
                 (ApiStreamingRequestBody (bodyByteLimit 5))
@@ -920,7 +1045,7 @@ spec =
       it "leaves a streamed chunk exceeding the declared budget typed for the endpoint handler" $ do
         chunksReference <- newIORef ["ab", "cd", "ef"]
         let streamingEndpoint =
-              apiRouteEndpoint
+              testApiRouteEndpoint
                 ApiPost
                 (pure ())
                 (ApiStreamingRequestBody (bodyByteLimit 5))
@@ -936,7 +1061,7 @@ spec =
 
       it "rejects a streamed body whose declared Content-Length already exceeds the budget, before any pull" $ do
         let streamingEndpoint =
-              apiRouteEndpoint
+              testApiRouteEndpoint
                 ApiPost
                 (pure ())
                 (ApiStreamingRequestBody (bodyByteLimit 5))
@@ -951,7 +1076,7 @@ spec =
 
     describe "apiRouteDefinitionWithContext" $ do
       let contextAwareEndpointDefinition =
-            apiRouteDefinitionWithContext
+            testApiRouteDefinitionWithContext
               ApiGet
               (pure ())
               ApiNoRequestBody
@@ -959,7 +1084,7 @@ spec =
               (\contextValue _endpointRequest -> pure (Right (apiResponse ("context:" <> contextValue))))
               (\() -> apiResponse "unreachable")
           failingContextAwareEndpointDefinition =
-            apiRouteDefinitionWithContext
+            testApiRouteDefinitionWithContext
               ApiGet
               (requiredField (queryField "query" apiTextValue))
               ApiNoRequestBody
@@ -992,7 +1117,7 @@ spec =
               :| [apiRouteResponseBody response `shouldBe` "context-aware domain failure"]
           )
 
-      it "retains the generic field response for a legacy context route" $ do
+      it "uses the generic field response when a context route chooses that policy" $ do
         response <- routeResponse failingContextAwareEndpointDefinition Wai.defaultRequest (RouteRequest () ())
         expectAll
           ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status400)
@@ -1001,7 +1126,7 @@ spec =
 
       it "lets a context-aware declaration render its typed field failures" $ do
         let fieldFailureDefinition =
-              apiRouteDefinitionWithContextWithFieldFailure
+              testApiRouteDefinitionWithContextWithFieldFailure
                 ApiGet
                 (requiredField (queryField "query" apiTextValue))
                 ApiNoRequestBody
@@ -1028,7 +1153,7 @@ spec =
 
     describe "apiRouteDefinitionWithContextNeverFailing" $ do
       let neverFailingContextAwareEndpointDefinition =
-            apiRouteDefinitionWithContextNeverFailing
+            testApiRouteDefinitionWithContextNeverFailing
               ApiPost
               (requiredField (queryField "greeting" apiTextValue))
               (ApiBufferedRequestBody (AssumeMediaType plainTextMediaType) (bodyByteLimit 64) [textBodyDecoder])
@@ -1060,7 +1185,7 @@ spec =
                  ]
           )
 
-      it "retains the generic field response for a legacy total context route" $ do
+      it "uses the generic field response when a total context route chooses that policy" $ do
         response <- runWithContext "context" Wai.defaultRequest
         expectAll
           ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status400)
@@ -1069,7 +1194,7 @@ spec =
 
       it "lets a total context-aware declaration render typed field failures" $ do
         let fieldFailureDefinition =
-              apiRouteDefinitionWithContextNeverFailingWithFieldFailure
+              testApiRouteDefinitionWithContextNeverFailingWithFieldFailure
                 ApiGet
                 (requiredField (queryField "query" apiTextValue))
                 ApiNoRequestBody

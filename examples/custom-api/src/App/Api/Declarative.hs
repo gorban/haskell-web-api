@@ -124,22 +124,20 @@ greetingMediaType = requireApiMediaType "text/x-greeting"
 
 readGreetingEndpoint :: ApiRouteEndpoint () () domainFailure GreetingResponse
 readGreetingEndpoint =
-  apiRouteEndpointAtNeverFailing
-    ApiGet
-    (at "/api/greeting")
-    noRequestFields
-    ApiNoRequestBody
-    greetingEncoders
+  apiRouteEndpointNeverFailing
+    ( ApiRouteEndpointDeclaration
+        (at "/api/greeting")
+        (ApiEndpointContract ApiGet noRequestFields ApiNoRequestBody greetingEncoders ApiUseGenericFieldFailure)
+    )
     (\_endpointRequest -> pure (apiResponse (greetingFor "World")))
 
 submitGreetingEndpoint :: ApiRouteEndpoint () GreetingRequest domainFailure GreetingResponse
 submitGreetingEndpoint =
-  apiRouteEndpointAtNeverFailing
-    ApiPost
-    (at "/api/greeting")
-    noRequestFields
-    (ApiBufferedRequestBody RejectMissingContentType maxGreetingBodyBytes [greetingRequestBodyDecoder])
-    greetingEncoders
+  apiRouteEndpointNeverFailing
+    ( ApiRouteEndpointDeclaration
+        (at "/api/greeting")
+        (ApiEndpointContract ApiPost noRequestFields (ApiBufferedRequestBody RejectMissingContentType maxGreetingBodyBytes [greetingRequestBodyDecoder]) greetingEncoders ApiUseGenericFieldFailure)
+    )
     (pure . apiResponse . greetingFor . requestedName . apiEndpointRequestBody)
 
 maxGreetingBodyBytes :: ApiRequestBodyByteLimit
@@ -147,12 +145,11 @@ maxGreetingBodyBytes = requireApiRequestBodyByteLimit (16 * 1024)
 
 uploadAvatarEndpoint :: ApiRouteEndpoint () (ApiMultipartRequest InMemoryUpload) AvatarUploadFailure Text
 uploadAvatarEndpoint =
-  apiRouteEndpointAt
-    ApiPost
-    (at "/api/avatar")
-    noRequestFields
-    (ApiMultipartRequestBody inMemoryMultipartStorage defaultMultipartLimits)
-    (textResponseEncoder :| [])
+  apiRouteEndpoint
+    ( ApiRouteEndpointDeclaration
+        (at "/api/avatar")
+        (ApiEndpointContract ApiPost noRequestFields (ApiMultipartRequestBody inMemoryMultipartStorage defaultMultipartLimits) (textResponseEncoder :| []) ApiUseGenericFieldFailure)
+    )
     handleAvatarUpload
     avatarUploadFailureResponse
 

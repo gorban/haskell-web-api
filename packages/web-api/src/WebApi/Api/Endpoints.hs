@@ -38,7 +38,9 @@ import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import HarchWeb.Api
-  ( ApiMethod (ApiGet),
+  ( ApiEndpointContract (..),
+    ApiFieldFailurePolicy (ApiUseGenericFieldFailure),
+    ApiMethod (ApiGet),
     ApiRequestBody (ApiNoRequestBody),
     ApiResponse (..),
     RequestCodec,
@@ -91,19 +93,25 @@ noApiRequestFields = pure ()
 statusApiRouteDefinition :: RouteDefinition AppRoute AppRequestContext
 statusApiRouteDefinition =
   apiRouteDefinitionWithContextNeverFailing
-    ApiGet
-    noApiRequestFields
-    ApiNoRequestBody
-    (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
+    ( ApiEndpointContract
+        ApiGet
+        noApiRequestFields
+        ApiNoRequestBody
+        (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
+        ApiUseGenericFieldFailure
+    )
     (\requestContext _endpointRequest -> pure (apiResponse (jsonBytes (statusApiBody (requestLocale requestContext)))))
 
 secondApiRouteDefinition :: PageRepository -> RouteDefinition AppRoute AppRequestContext
 secondApiRouteDefinition pageRepository =
   apiRouteDefinitionWithContext
-    ApiGet
-    noApiRequestFields
-    ApiNoRequestBody
-    (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
+    ( ApiEndpointContract
+        ApiGet
+        noApiRequestFields
+        ApiNoRequestBody
+        (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
+        ApiUseGenericFieldFailure
+    )
     ( \requestContext _endpointRequest -> do
         secondPageResult <- loadSecondPage pageRepository (requestLocale requestContext)
         let databaseOperations = databaseResultOperations secondPageResult
