@@ -2,9 +2,9 @@
 
 {-# SPEC #-}
 
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (forkIO, newEmptyMVar, putMVar, readMVar, takeMVar, threadDelay)
 import Control.Exception (evaluate, try)
-import Control.Monad ()
+import Control.Monad (forM, replicateM, replicateM_, void)
 import Data.ByteString qualified as ByteString ()
 import Data.ByteString.Builder qualified as Builder ()
 import Data.ByteString.Char8 qualified as ByteStringChar8 ()
@@ -97,6 +97,33 @@ spec = do
         show
           <$> reloadTlsCredentialsIfChanged reloadingTlsCredentials
             `shouldReturn` initialCredentials
+
+    it "serializes simultaneous credential reloads after a file change" $
+      withSystemTempDirectory "harch-web-reloading-tls" $ \tempDirectory -> do
+        let certificatePath = tempDirectory </> "fullchain.pem"
+            privateKeyPath = tempDirectory </> "privkey.pem"
+            concurrentReloadCount = 32
+        writeFile certificatePath manualTlsCertificatePem
+        writeFile privateKeyPath manualTlsPrivateKeyPem
+        reloadingTlsCredentials <- loadReloadingTlsCredentials (tlsCertificateFilePath certificatePath) (tlsPrivateKeyFilePath privateKeyPath)
+        initialCredentials <- show <$> reloadTlsCredentialsIfChanged reloadingTlsCredentials
+        threadDelay 100000
+        writeFile certificatePath manualTlsCertificatePem
+        writeFile privateKeyPath manualTlsPrivateKeyPem
+        startReloads <- newEmptyMVar
+        readyReloads <- newEmptyMVar
+        reloadResults <-
+          replicateM concurrentReloadCount $ do
+            reloadResult <- newEmptyMVar
+            void . forkIO $ do
+              putMVar readyReloads ()
+              readMVar startReloads
+              reloadTlsCredentialsIfChanged reloadingTlsCredentials >>= putMVar reloadResult . show
+            pure reloadResult
+        replicateM_ concurrentReloadCount (takeMVar readyReloads)
+        putMVar startReloads ()
+        reloadedCredentials <- forM reloadResults takeMVar
+        reloadedCredentials `shouldBe` replicate concurrentReloadCount initialCredentials
 
   describe "loadTlsCredentialSnapshotOrThrowWithLoader" $ do
     it "fails explicitly when the TLS credential files disappear during startup loading" $
