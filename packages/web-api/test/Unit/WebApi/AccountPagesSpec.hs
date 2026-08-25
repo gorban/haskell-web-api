@@ -734,6 +734,10 @@ spec = do
         >>= \case
           Left (AccountCredentialStoreUnavailable "account credentials are not configured") -> pure ()
           _ -> expectationFailure "expected unavailable account credentials"
+      replacePasswordHashIfCurrent unconfiguredCredentialStore accountId (Password.PasswordHash "old-hash") (Password.PasswordHash "new-hash")
+        >>= \case
+          Left (AccountCredentialStoreUnavailable "account credentials are not configured") -> pure ()
+          _ -> expectationFailure "expected unavailable account credentials"
       let unconfiguredLoginAttemptStore = accountWorkflowLoginAttemptStore unavailableAccountWorkflow
           assertLoginAttemptsUnavailable :: IO (Either LoginAttemptStoreError value) -> Expectation
           assertLoginAttemptsUnavailable action =

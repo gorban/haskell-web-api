@@ -61,6 +61,12 @@ spec = do
       let unchangedStore = buildRuntimePostgresAccountCredentialStoreWithRunner (\_ _ _ -> pure (Right [])) databaseConfig
       replacePasswordHashIfCurrent unchangedStore accountId (required "legacy password hash" (readPasswordHash encodedPasswordHash)) replacementHash
         `shouldReturnEqual` Right False
+      let unavailableStore = buildRuntimePostgresAccountCredentialStoreWithRunner (\_ _ _ -> pure (Left "connection failed")) databaseConfig
+      replacePasswordHashIfCurrent unavailableStore accountId (required "legacy password hash" (readPasswordHash encodedPasswordHash)) replacementHash
+        `shouldReturnEqual` Left (AccountCredentialStoreUnavailable "connection failed")
+      let corruptStore = buildRuntimePostgresAccountCredentialStoreWithRunner (\_ _ _ -> pure (Right [["another-account"]])) databaseConfig
+      replacePasswordHashIfCurrent corruptStore accountId (required "legacy password hash" (readPasswordHash encodedPasswordHash)) replacementHash
+        `shouldReturnEqual` Left (AccountCredentialStoreCorruptData "unexpected password-hash replacement result: [[\"another-account\"]]")
 
     it "maps absent, malformed, and unavailable credential results to typed outcomes" $ do
       let storeFor result = buildRuntimePostgresAccountCredentialStoreWithRunner (\_ _ _ -> pure result) databaseConfig

@@ -78,19 +78,17 @@ buildRuntimePostgresAccountCredentialStoreWithRunner runQuery source =
       findCredential findAccountCredentialByUsernameQuery [usernameText username]
     findCredential query parameters =
       runExceptT $ do
-        rows <-
-          runStoreQuery AccountCredentialStoreUnavailable $
-            runQuery source query parameters
+        rows <- runCredentialQuery query parameters
         liftEither (decodeAccountCredentialRows rows)
     replacePasswordHash accountId previousHash replacementHash =
       runExceptT $ do
         rows <-
-          runStoreQuery AccountCredentialStoreUnavailable $
-            runQuery
-              source
-              replacePasswordHashIfCurrentQuery
-              [accountIdText accountId, passwordHashText previousHash, passwordHashText replacementHash]
+          runCredentialQuery
+            replacePasswordHashIfCurrentQuery
+            [accountIdText accountId, passwordHashText previousHash, passwordHashText replacementHash]
         liftEither (decodePasswordHashReplacement accountId rows)
+    runCredentialQuery query parameters =
+      runStoreQuery AccountCredentialStoreUnavailable (runQuery source query parameters)
 
 buildRuntimePostgresAccountStoreWithRunner ::
   (source -> Text -> [Text] -> IO (Either Text [[Text]])) ->

@@ -25,10 +25,11 @@ module WebApi.Login
 where
 
 import Control.Exception (evaluate, onException)
-import Control.Monad (void, when)
+import Control.Monad (join, void, when)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Core.Control.Error (fromMaybeError, liftEitherWith)
 import Crypto.Error (maybeCryptoError)
+import Data.Foldable (for_)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -379,10 +380,8 @@ opportunisticallyRehashPassword passwordRehasher credentialStore passwordWorkGat
         passwordWorkGate
         (passwordHashMemoryKibibytes rehashPolicy)
         (rehashVerifiedPassword passwordRehasher rehashPolicy password)
-    case maybeReplacement of
-      Just (Just replacementHash) ->
-        void (replacePasswordHashIfCurrent credentialStore accountId previousHash replacementHash)
-      _ -> pure ()
+    for_ (join maybeReplacement) $ \replacementHash ->
+      void (replacePasswordHashIfCurrent credentialStore accountId previousHash replacementHash)
   where
     accountId = accountCredentialId credential
     previousHash = accountCredentialPasswordHash credential
