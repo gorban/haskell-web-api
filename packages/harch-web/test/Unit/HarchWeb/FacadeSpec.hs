@@ -5,6 +5,7 @@
 import Control.Concurrent ()
 import Control.Exception ()
 import Control.Monad ()
+import Crypto.Error (CryptoFailable (CryptoPassed))
 import Data.ByteString qualified as ByteString ()
 import Data.ByteString.Builder qualified as Builder ()
 import Data.ByteString.Char8 qualified as ByteStringChar8 ()
@@ -24,6 +25,8 @@ import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
 import HarchWeb.Observability qualified as Observability (ObservabilityAttribute (ObservabilityAttribute, attributeName, attributeValue), ObservabilityAttributeValue (TextAttribute), RequestIdentity (RequestIdentity, requestIdentityMethod, requestIdentityPath, requestIdentityRoutePath, requestIdentityScheme), ResponseKind (PageResponseKind), buildRequestObservability, mkSpanMethodLabel, mkSpanRoutePath)
+import HarchWeb.Password qualified as Password
+import HarchWeb.Secret qualified as Secret
 import HarchWeb.Security qualified as Security ()
 import Network.HTTP.Client qualified as HttpClient ()
 import Network.HTTP.Types qualified as Http (status200, status202, status422, status500, status503)
@@ -80,6 +83,40 @@ facadeRuntimeServer = runServer
 
 movedSpec :: Spec
 movedSpec = do
+  describe "public role-safe boundaries" $ do
+    it "constructs and applies opaque path, password, secret, TLS, and span roles through their public modules" $ do
+      urlPathText (applyRequestPathPrefix (mkPathPrefix "/app/") (mkUrlPath "/second")) `shouldBe` "/app/second"
+      urlPathText (stripRequestPathPrefix (mkPathPrefix "/app") (mkUrlPath "/app/second")) `shouldBe` "/second"
+      Password.mkPasswordHashingPolicy (Password.argon2Iterations 1) (Password.argon2MemoryKib 8) (Password.argon2Parallelism 1)
+        `shouldBe` Just (Password.defaultPasswordHashingPolicy {Password.passwordHashIterations = 1, Password.passwordHashMemoryKibibytes = 8, Password.passwordHashParallelism = 1})
+      let encryptionKey =
+            case Secret.mkSecretEncryptionKey "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI" of
+              Just key -> key
+              Nothing -> error "expected valid secret-encryption-key fixture"
+          encryptionNonce =
+            case Secret.mkEncryptionNonce "0123456789ab" of
+              Just nonce -> nonce
+              Nothing -> error "expected valid encryption-nonce fixture"
+      case Secret.encryptSecretWithNonce encryptionKey encryptionNonce (Secret.mkSecretPlaintext "fixture") of
+        CryptoPassed envelope ->
+          case Secret.decryptSecretText encryptionKey envelope of
+            CryptoPassed (Right plaintext) -> plaintext `shouldBe` "fixture"
+            _ -> expectationFailure "expected test secret decryption to succeed"
+        _ -> expectationFailure "expected test secret encryption to succeed"
+      tlsCertificateFilePathValue (tlsCertificateFilePath "certificate.pem") `shouldBe` "certificate.pem"
+      tlsPrivateKeyFilePathValue (tlsPrivateKeyFilePath "key.pem") `shouldBe` "key.pem"
+      Observability.buildRequestObservability
+        Observability.RequestIdentity
+          { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+            Observability.requestIdentityScheme = "https",
+            Observability.requestIdentityPath = "/second",
+            Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/second"
+          }
+        200
+        Observability.PageResponseKind
+        []
+        `seq` pure ()
+
   describe "public record coverage" $ do
     it "reads every exported selector from the public request, page, shell, and document records" $ do
       let request = RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
