@@ -884,6 +884,9 @@ spec = do
               ("REQUEST_HEADER_MAX_BYTES", "8192"),
               ("REQUEST_HEADER_MAX_COUNT", "32"),
               ("REQUEST_HEADER_VALUE_MAX_BYTES", "1024"),
+              ("REQUEST_COOKIE_MAX_COUNT", "4"),
+              ("REQUEST_COOKIE_NAME_MAX_BYTES", "64"),
+              ("REQUEST_COOKIE_VALUE_MAX_BYTES", "512"),
               ("REQUEST_PATH_SEGMENT_MAX_COUNT", "8"),
               ("REQUEST_PATH_SEGMENT_MAX_BYTES", "128"),
               ("REQUEST_QUERY_FIELD_MAX_COUNT", "16"),
@@ -901,6 +904,9 @@ spec = do
                     HarchWeb.requestHeaderByteLimit = HarchWeb.requestByteLimit 8192,
                     HarchWeb.requestHeaderCountLimit = HarchWeb.mkRequestHeaderCountLimit 32,
                     HarchWeb.requestHeaderValueByteLimit = HarchWeb.requestByteLimit 1024,
+                    HarchWeb.requestCookieCountLimit = HarchWeb.requestItemCountLimit 4,
+                    HarchWeb.requestCookieNameByteLimit = HarchWeb.requestByteLimit 64,
+                    HarchWeb.requestCookieValueByteLimit = HarchWeb.requestByteLimit 512,
                     HarchWeb.requestPathSegmentCountLimit = HarchWeb.requestItemCountLimit 8,
                     HarchWeb.requestPathSegmentByteLimit = HarchWeb.requestByteLimit 128,
                     HarchWeb.requestQueryFieldCountLimit = HarchWeb.requestItemCountLimit 16,
@@ -921,6 +927,8 @@ spec = do
           )
             :| [ parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_NETWORK_TIMEOUT_SECONDS", "not-a-number")]
                    `shouldBe` Left (InvalidConfigValue "REQUEST_NETWORK_TIMEOUT_SECONDS" "not-a-number"),
+                 parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_COOKIE_MAX_COUNT", "not-a-number")]
+                   `shouldBe` Left (InvalidConfigValue "REQUEST_COOKIE_MAX_COUNT" "not-a-number"),
                  parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_HEADER_MAX_COUNT", "not-a-number")]
                    `shouldBe` Left (InvalidConfigValue "REQUEST_HEADER_MAX_COUNT" "not-a-number"),
                  parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_PATH_SEGMENT_MAX_COUNT", "not-a-number")]
@@ -935,6 +943,8 @@ spec = do
                    `shouldBe` Left (InvalidConfigValue "REQUEST_NETWORK_TIMEOUT_SECONDS" "-1"),
                  parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_HEADER_MAX_COUNT", "-1")]
                    `shouldBe` Left (InvalidConfigValue "REQUEST_HEADER_MAX_COUNT" "-1"),
+                 parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_COOKIE_VALUE_MAX_BYTES", "-1")]
+                   `shouldBe` Left (InvalidConfigValue "REQUEST_COOKIE_VALUE_MAX_BYTES" "-1"),
                  parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_PATH_SEGMENT_MAX_COUNT", "-1")]
                    `shouldBe` Left (InvalidConfigValue "REQUEST_PATH_SEGMENT_MAX_COUNT" "-1")
                ]

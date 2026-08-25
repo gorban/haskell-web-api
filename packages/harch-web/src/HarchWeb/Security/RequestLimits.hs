@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | Opt-in request-resource limits checked before route parsing, middleware,
 -- and request observability. This module owns only the request-budget
 -- boundary; response security headers, request-context extraction, and
@@ -33,6 +35,7 @@ where
 
 import Data.ByteString qualified as ByteString
 import Data.CaseInsensitive qualified as CaseInsensitive
+import Data.Maybe (isNothing)
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word8)
 import Network.Wai qualified as Wai
@@ -115,6 +118,16 @@ data RequestHeadLimits = RequestHeadLimits
     requestHeaderByteLimit :: Maybe RequestByteLimit,
     requestHeaderCountLimit :: Maybe RequestHeaderCountLimit,
     requestHeaderValueByteLimit :: Maybe RequestByteLimit,
+    -- | Optional bounds for syntactically valid request cookie pairs. These
+    -- are deliberately separate from 'requestHeaderValueByteLimit': one raw
+    -- @Cookie@ header can contain many independently application-visible
+    -- pairs. The validator scans the raw bytes before API/action cookie
+    -- decoding, counts only the valid pairs that decoder would retain, and
+    -- does not build a list while doing so. See the EM decision record in
+    -- @docs/design-guidance.md@.
+    requestCookieCountLimit :: Maybe RequestItemCountLimit,
+    requestCookieNameByteLimit :: Maybe RequestByteLimit,
+    requestCookieValueByteLimit :: Maybe RequestByteLimit,
     requestPathSegmentCountLimit :: Maybe RequestItemCountLimit,
     requestPathSegmentByteLimit :: Maybe RequestByteLimit,
     requestQueryFieldCountLimit :: Maybe RequestItemCountLimit,
@@ -129,6 +142,9 @@ unboundedRequestHeadLimits =
       requestHeaderByteLimit = Nothing,
       requestHeaderCountLimit = Nothing,
       requestHeaderValueByteLimit = Nothing,
+      requestCookieCountLimit = Nothing,
+      requestCookieNameByteLimit = Nothing,
+      requestCookieValueByteLimit = Nothing,
       requestPathSegmentCountLimit = Nothing,
       requestPathSegmentByteLimit = Nothing,
       requestQueryFieldCountLimit = Nothing,
@@ -160,6 +176,9 @@ data RequestHeadLimitFailure
   | TooManyRequestHeaders
   | RequestHeadersTooLarge
   | RequestHeaderValueTooLarge
+  | TooManyRequestCookies
+  | RequestCookieNameTooLarge
+  | RequestCookieValueTooLarge
   | TooManyPathSegments
   | RequestPathSegmentTooLarge
   | TooManyQueryFields
@@ -177,6 +196,7 @@ validateRequestHead limits request
   | exceedsHeaderCountLimit (requestHeaderCountLimit limits) (length requestHeaders) = Left TooManyRequestHeaders
   | exceedsByteLimit (requestHeaderByteLimit limits) requestHeadersBytes = Left RequestHeadersTooLarge
   | any (exceedsByteLimit (requestHeaderValueByteLimit limits) . ByteString.length . snd) requestHeaders = Left RequestHeaderValueTooLarge
+  | Just cookieFailure <- validateRequestCookies limits requestHeaders = Left cookieFailure
   | exceedsItemCountLimit (requestPathSegmentCountLimit limits) (pathSegmentCount rawPath) = Left TooManyPathSegments
   | exceedsDelimitedFieldByteLimit (requestPathSegmentByteLimit limits) 47 rawPath = Left RequestPathSegmentTooLarge
   | exceedsItemCountLimit (requestQueryFieldCountLimit limits) (queryFieldCount rawQuery) = Left TooManyQueryFields
@@ -188,6 +208,47 @@ validateRequestHead limits request
     rawQuery = Wai.rawQueryString request
     requestTargetBytes = ByteString.length rawPath + ByteString.length rawQuery
     requestHeadersBytes = sum [ByteString.length (CaseInsensitive.original name) + ByteString.length value | (name, value) <- requestHeaders]
+
+-- | Validate only the bounded, syntactically valid cookie pairs that
+-- 'HarchWeb.Api.Request.apiRequestDataFromWaiRequest' exposes to a caller.
+-- Invalid fragments keep that decoder's established "ignore" behavior. No
+-- cookie policy means no cookie scan, preserving the pre-EM compatibility
+-- path entirely.
+validateRequestCookies :: RequestHeadLimits -> [(CaseInsensitive.CI ByteString.ByteString, ByteString.ByteString)] -> Maybe RequestHeadLimitFailure
+validateRequestCookies limits requestHeaders
+  | noCookieLimits = Nothing
+  | otherwise = goHeaders 0 requestHeaders
+  where
+    noCookieLimits =
+      isNothing (requestCookieCountLimit limits)
+        && isNothing (requestCookieNameByteLimit limits)
+        && isNothing (requestCookieValueByteLimit limits)
+
+    goHeaders _ [] = Nothing
+    goHeaders cookieCount ((headerName, headerValue) : remainingHeaders)
+      | CaseInsensitive.foldedCase headerName /= "cookie" = goHeaders cookieCount remainingHeaders
+      | otherwise =
+          case goCookieSegments cookieCount headerValue of
+            Left cookieFailure -> Just cookieFailure
+            Right nextCookieCount -> goHeaders nextCookieCount remainingHeaders
+
+    goCookieSegments cookieCount cookieBytes =
+      let (cookieSegment, remainingBytes) = ByteString.break (== 59) cookieBytes
+       in case validateCookieSegment cookieCount cookieSegment of
+            Left cookieFailure -> Left cookieFailure
+            Right nextCookieCount ->
+              case ByteString.uncons remainingBytes of
+                Nothing -> Right nextCookieCount
+                Just (_, nextCookieBytes) -> goCookieSegments nextCookieCount nextCookieBytes
+
+    validateCookieSegment cookieCount rawCookie =
+      case ByteString.break (== 61) (ByteString.dropWhile isCookieWhitespace rawCookie) of
+        (cookieName, valueWithSeparator)
+          | ByteString.null cookieName || ByteString.null valueWithSeparator || not (ByteString.all isCookieNameByte cookieName) -> Right cookieCount
+          | exceedsByteLimit (requestCookieNameByteLimit limits) (ByteString.length cookieName) -> Left RequestCookieNameTooLarge
+          | exceedsByteLimit (requestCookieValueByteLimit limits) (ByteString.length (ByteString.drop 1 valueWithSeparator)) -> Left RequestCookieValueTooLarge
+          | exceedsItemCountLimit (requestCookieCountLimit limits) (cookieCount + 1) -> Left TooManyRequestCookies
+          | otherwise -> Right (cookieCount + 1)
 
 isUtf8 :: ByteString.ByteString -> Bool
 isUtf8 = either (const False) (const True) . TextEncoding.decodeUtf8'
@@ -239,3 +300,20 @@ exceedsDelimitedFieldByteLimit maybeLimit delimiter =
         Just (byte, remaining)
           | byte == delimiter -> fieldBytes > maximumBytes || go 0 maximumBytes remaining
           | otherwise -> go (fieldBytes + 1) maximumBytes remaining
+
+isCookieWhitespace :: Word8 -> Bool
+isCookieWhitespace byte = byte == 32 || byte == 9
+
+isCookieNameByte :: Word8 -> Bool
+isCookieNameByte byte =
+  byte == 33
+    || (byte >= 35 && byte <= 39)
+    || byte == 42
+    || byte == 43
+    || byte == 45
+    || byte == 46
+    || (byte >= 48 && byte <= 57)
+    || (byte >= 65 && byte <= 90)
+    || (byte >= 94 && byte <= 122)
+    || byte == 124
+    || byte == 126

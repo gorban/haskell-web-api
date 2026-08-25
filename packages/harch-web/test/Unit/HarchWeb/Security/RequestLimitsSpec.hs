@@ -19,7 +19,7 @@ import Data.Maybe (fromMaybe)
 import Data.Text ()
 import Data.Text qualified as Text ()
 import Data.Text.Encoding qualified as TextEncoding ()
-import HarchWeb (Application (applicationRequestMiddleware, renderRequestResponse), MiddlewareResult (ContinueMiddleware), RequestBodyReadFailure (RequestBodyLimitExceeded), RequestHeadLimitFailure (InvalidRequestTargetEncoding, RequestHeaderValueTooLarge, RequestHeadersTooLarge, RequestPathSegmentTooLarge, RequestQueryFieldTooLarge, RequestTargetTooLarge, TooManyPathSegments, TooManyQueryFields, TooManyRequestHeaders), RequestHeadLimits (requestHeaderByteLimit, requestHeaderCountLimit, requestHeaderValueByteLimit, requestPathSegmentByteLimit, requestPathSegmentCountLimit, requestQueryFieldByteLimit, requestQueryFieldCountLimit, requestTargetByteLimit), RequestMiddleware (RequestMiddleware), RequestPolicyConfig (requestHeadLimits), RequestTransportLimits (requestNetworkTimeout, requestSlowlorisByteLimit), RouteRequest (RouteRequest), mkRequestConcurrencyLimit, mkRequestHeaderCountLimit, newRequestBodyChunkReader, readRequestBodyUpTo, requestByteLimit, requestConcurrencyLimitValue, requestItemCountLimit, requestTimeoutSeconds, requestTimeoutSecondsValue, toWaiApplication, unboundedRequestHeadLimits, validateRequestHead, warpDefaultRequestTransportLimits)
+import HarchWeb (Application (applicationRequestMiddleware, renderRequestResponse), MiddlewareResult (ContinueMiddleware), RequestBodyReadFailure (RequestBodyLimitExceeded), RequestHeadLimitFailure (InvalidRequestTargetEncoding, RequestCookieNameTooLarge, RequestCookieValueTooLarge, RequestHeaderValueTooLarge, RequestHeadersTooLarge, RequestPathSegmentTooLarge, RequestQueryFieldTooLarge, RequestTargetTooLarge, TooManyPathSegments, TooManyQueryFields, TooManyRequestCookies, TooManyRequestHeaders), RequestHeadLimits (requestCookieCountLimit, requestCookieNameByteLimit, requestCookieValueByteLimit, requestHeaderByteLimit, requestHeaderCountLimit, requestHeaderValueByteLimit, requestPathSegmentByteLimit, requestPathSegmentCountLimit, requestQueryFieldByteLimit, requestQueryFieldCountLimit, requestTargetByteLimit), RequestMiddleware (RequestMiddleware), RequestPolicyConfig (requestHeadLimits), RequestTransportLimits (requestNetworkTimeout, requestSlowlorisByteLimit), RouteRequest (RouteRequest), mkRequestConcurrencyLimit, mkRequestHeaderCountLimit, newRequestBodyChunkReader, readRequestBodyUpTo, requestByteLimit, requestConcurrencyLimitValue, requestItemCountLimit, requestTimeoutSeconds, requestTimeoutSecondsValue, toWaiApplication, unboundedRequestHeadLimits, validateRequestHead, warpDefaultRequestTransportLimits)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -80,6 +80,9 @@ spec = do
                 requestQueryFieldByteLimit = requestByteLimit 3
               }
           emptyQueryLimits = unboundedRequestHeadLimits {requestQueryFieldCountLimit = requestItemCountLimit 0}
+          cookieCountLimits = unboundedRequestHeadLimits {requestCookieCountLimit = requestItemCountLimit 1}
+          cookieNameLimits = unboundedRequestHeadLimits {requestCookieNameByteLimit = requestByteLimit 3}
+          cookieValueLimits = unboundedRequestHeadLimits {requestCookieValueByteLimit = requestByteLimit 3}
       expectAll
         ( (validateRequestHead limits (requestFor "/long" []) `shouldBe` Left RequestTargetTooLarge)
             :| [ validateRequestHead limits (requestFor "\255" []) `shouldBe` Left InvalidRequestTargetEncoding,
@@ -94,10 +97,18 @@ spec = do
                  validateRequestHead (pathLimits {requestPathSegmentByteLimit = Nothing, requestPathSegmentCountLimit = requestItemCountLimit 0}) (requestFor "one" []) `shouldBe` Left TooManyPathSegments,
                  validateRequestHead queryLimits ((requestFor "/ok" []) {Wai.rawQueryString = "?one&two"}) `shouldBe` Left TooManyQueryFields,
                  validateRequestHead queryLimits ((requestFor "/ok" []) {Wai.rawQueryString = "?long"}) `shouldBe` Left RequestQueryFieldTooLarge,
+                 validateRequestHead cookieCountLimits (requestFor "/ok" [("Cookie", "one=1; two=2")]) `shouldBe` Left TooManyRequestCookies,
+                 validateRequestHead cookieNameLimits (requestFor "/ok" [("Cookie", "name=1")]) `shouldBe` Left RequestCookieNameTooLarge,
+                 validateRequestHead cookieValueLimits (requestFor "/ok" [("Cookie", "a=long")]) `shouldBe` Left RequestCookieValueTooLarge,
+                 validateRequestHead cookieCountLimits (requestFor "/ok" [("Cookie", "malformed; bad name=ignored; Empty=")]) `shouldBe` Right (),
+                 validateRequestHead cookieCountLimits (requestFor "/ok" [("X-Ignored", "one=1"), ("Cookie", "!#$%&'*+-.0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ^_`abcdefghijklmnopqrstuvwxyz|~=value")]) `shouldBe` Right (),
+                 validateRequestHead
+                   (unboundedRequestHeadLimits {requestHeaderValueByteLimit = requestByteLimit 3, requestCookieValueByteLimit = requestByteLimit 100})
+                   (requestFor "/ok" [("Cookie", "a=long")])
+                   `shouldBe` Left RequestHeaderValueTooLarge,
                  validateRequestHead emptyQueryLimits ((requestFor "/ok" []) {Wai.rawQueryString = "?"}) `shouldBe` Right ()
                ]
         )
-
     it "keeps request-budget constructors total and their failure values inspectable" $ do
       byteLimitInput <- newIORef 8
       differentByteLimitInput <- newIORef 9
@@ -126,12 +137,18 @@ spec = do
           boundedHeadLimits =
             unboundedRequestHeadLimits
               { requestTargetByteLimit = byteLimit,
-                requestHeaderCountLimit = headerCountLimit
+                requestHeaderCountLimit = headerCountLimit,
+                requestCookieCountLimit = itemCountLimit,
+                requestCookieNameByteLimit = byteLimit,
+                requestCookieValueByteLimit = differentByteLimit
               }
           differentBoundedHeadLimits =
             unboundedRequestHeadLimits
               { requestTargetByteLimit = differentByteLimit,
-                requestHeaderCountLimit = differentHeaderCountLimit
+                requestHeaderCountLimit = differentHeaderCountLimit,
+                requestCookieCountLimit = differentItemCountLimit,
+                requestCookieNameByteLimit = differentByteLimit,
+                requestCookieValueByteLimit = byteLimit
               }
           transportLimits =
             warpDefaultRequestTransportLimits
@@ -153,10 +170,12 @@ spec = do
                  show headerCountLimit `shouldBe` "Just (RequestHeaderCountLimit 2)",
                  boundedHeadLimits `shouldBe` boundedHeadLimits,
                  show boundedHeadLimits
-                   `shouldBe` "RequestHeadLimits {requestTargetByteLimit = Just (RequestByteLimit 8), requestHeaderByteLimit = Nothing, requestHeaderCountLimit = Just (RequestHeaderCountLimit 2), requestHeaderValueByteLimit = Nothing, requestPathSegmentCountLimit = Nothing, requestPathSegmentByteLimit = Nothing, requestQueryFieldCountLimit = Nothing, requestQueryFieldByteLimit = Nothing}",
+                   `shouldBe` "RequestHeadLimits {requestTargetByteLimit = Just (RequestByteLimit 8), requestHeaderByteLimit = Nothing, requestHeaderCountLimit = Just (RequestHeaderCountLimit 2), requestHeaderValueByteLimit = Nothing, requestCookieCountLimit = Just (RequestItemCountLimit 4), requestCookieNameByteLimit = Just (RequestByteLimit 8), requestCookieValueByteLimit = Just (RequestByteLimit 9), requestPathSegmentCountLimit = Nothing, requestPathSegmentByteLimit = Nothing, requestQueryFieldCountLimit = Nothing, requestQueryFieldByteLimit = Nothing}",
                  boundedHeadLimits `shouldNotBe` differentBoundedHeadLimits,
                  failure `shouldNotBe` RequestTargetTooLarge,
                  show failure `shouldBe` "RequestHeadersTooLarge",
+                 RequestCookieNameTooLarge `shouldNotBe` RequestCookieValueTooLarge,
+                 show TooManyRequestCookies `shouldBe` "TooManyRequestCookies",
                  byteLimitValue /= differentByteLimitValue `shouldBe` True,
                  show byteLimitValue `shouldBe` "RequestByteLimit 8",
                  show [byteLimitValue] `shouldBe` "[RequestByteLimit 8]",
@@ -315,6 +334,9 @@ spec = do
               (unboundedRequestHeadLimits {requestHeaderCountLimit = mkRequestHeaderCountLimit 1}, requestFor "/ok" [("A", "1"), ("B", "2")] "", Http.status431),
               (unboundedRequestHeadLimits {requestHeaderByteLimit = requestByteLimit 4}, requestFor "/ok" [("Header", "value")] "", Http.status431),
               (unboundedRequestHeadLimits {requestHeaderValueByteLimit = requestByteLimit 3}, requestFor "/ok" [("A", "1234")] "", Http.status431),
+              (unboundedRequestHeadLimits {requestCookieCountLimit = requestItemCountLimit 1}, requestFor "/ok" [("Cookie", "one=1; two=2")] "", Http.status431),
+              (unboundedRequestHeadLimits {requestCookieNameByteLimit = requestByteLimit 3}, requestFor "/ok" [("Cookie", "name=1")] "", Http.status431),
+              (unboundedRequestHeadLimits {requestCookieValueByteLimit = requestByteLimit 3}, requestFor "/ok" [("Cookie", "a=long")] "", Http.status431),
               (unboundedRequestHeadLimits {requestPathSegmentCountLimit = requestItemCountLimit 1}, requestFor "/one/two" [] "", Http.status414),
               (unboundedRequestHeadLimits {requestPathSegmentByteLimit = requestByteLimit 2}, requestFor "/long" [] "", Http.status414),
               (unboundedRequestHeadLimits {requestQueryFieldCountLimit = requestItemCountLimit 1}, requestFor "/ok" [] "?one&two", Http.status414),

@@ -183,6 +183,9 @@ requestHeadLimitResponse limitFailure =
         TooManyRequestHeaders -> Http.status431
         RequestHeadersTooLarge -> Http.status431
         RequestHeaderValueTooLarge -> Http.status431
+        TooManyRequestCookies -> Http.status431
+        RequestCookieNameTooLarge -> Http.status431
+        RequestCookieValueTooLarge -> Http.status431
         TooManyPathSegments -> Http.status414
         RequestPathSegmentTooLarge -> Http.status414
         TooManyQueryFields -> Http.status414

@@ -19,7 +19,7 @@ import Data.Maybe ()
 import Data.Text ()
 import Data.Text qualified as Text (isInfixOf, pack)
 import Data.Text.Encoding qualified as TextEncoding ()
-import HarchWeb (Application (renderRequestResponse), LocalTestServer (localServerBaseUrl, localServerHost, localServerPort), RequestHeadLimits (requestHeaderByteLimit, requestHeaderCountLimit), RequestPolicyConfig (requestConcurrencyLimit, requestHeadLimits, requestTransportLimits), RequestTransportLimits (requestNetworkTimeout, requestSlowlorisByteLimit), RouteRequest (requestRoute), StaticAssetRoot (StaticAssetRoot, staticDirectory, staticUrlPrefix), StaticAssetsConfig (StaticAssetsConfig, staticAssetContentTypes, staticAssetRoots, staticCacheControlSeconds), defaultStaticAssetContentTypes, mkRequestConcurrencyLimit, mkRequestHeaderCountLimit, requestByteLimit, requestTimeoutSeconds, toWaiApplication, unboundedRequestHeadLimits, warpDefaultRequestTransportLimits, withLocalTestServer, withLocalTestServerForApplication)
+import HarchWeb (Application (renderRequestResponse), LocalTestServer (localServerBaseUrl, localServerHost, localServerPort), RequestHeadLimits (requestCookieCountLimit, requestHeaderByteLimit, requestHeaderCountLimit), RequestPolicyConfig (requestConcurrencyLimit, requestHeadLimits, requestTransportLimits), RequestTransportLimits (requestNetworkTimeout, requestSlowlorisByteLimit), RouteRequest (requestRoute), StaticAssetRoot (StaticAssetRoot, staticDirectory, staticUrlPrefix), StaticAssetsConfig (StaticAssetsConfig, staticAssetContentTypes, staticAssetRoots, staticCacheControlSeconds), defaultStaticAssetContentTypes, mkRequestConcurrencyLimit, mkRequestHeaderCountLimit, requestByteLimit, requestItemCountLimit, requestTimeoutSeconds, toWaiApplication, unboundedRequestHeadLimits, warpDefaultRequestTransportLimits, withLocalTestServer, withLocalTestServerForApplication)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -117,6 +117,18 @@ spec = do
         -- per-value setting; see docs/runtime-configuration.md), so Warp
         -- itself constructs the WAI request; only the count-aware WAI gate
         -- can reject it, with 431.
+        responseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "431"
+
+    it "rejects a cookie count across repeated Cookie fields at the real listener" $ do
+      let limitedApplication =
+            sampleApplicationWithConfig
+              emptyStaticAssets
+              (defaultRequestPolicy {requestHeadLimits = unboundedRequestHeadLimits {requestCookieCountLimit = requestItemCountLimit 1}})
+      withLocalTestServer limitedApplication $ \localTestServer -> do
+        responseBytes <-
+          readRawLoopbackHttpResponse
+            (localServerPort localTestServer)
+            "GET /known HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: first=1\r\ncOoKiE: second=2\r\n\r\n"
         responseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "431"
 
     it "closes an incomplete request that makes no configured network progress" $ do

@@ -60,6 +60,9 @@ The smaller `two-pages-example` has its own fixed local configuration and does n
 | `REQUEST_HEADER_MAX_BYTES` | Optional total request-header budget. Warp applies it while parsing the wire request; the framework also checks it before middleware. | unset (unbounded) |
 | `REQUEST_HEADER_MAX_COUNT` | Optional maximum number of request header fields. | unset (unbounded) |
 | `REQUEST_HEADER_VALUE_MAX_BYTES` | Optional maximum for one header value, including cookies, forwarded headers, and trace context. | unset (unbounded) |
+| `REQUEST_COOKIE_MAX_COUNT` | Optional maximum number of syntactically valid cookie pairs across every `Cookie` header field. | unset (unbounded) |
+| `REQUEST_COOKIE_NAME_MAX_BYTES` | Optional maximum bytes in one syntactically valid cookie name. | unset (unbounded) |
+| `REQUEST_COOKIE_VALUE_MAX_BYTES` | Optional maximum bytes in one syntactically valid cookie value. | unset (unbounded) |
 | `REQUEST_PATH_SEGMENT_MAX_COUNT` | Optional maximum number of raw non-empty path segments before route parsing. | unset (unbounded) |
 | `REQUEST_PATH_SEGMENT_MAX_BYTES` | Optional maximum bytes in a raw path segment before route parsing. | unset (unbounded) |
 | `REQUEST_QUERY_FIELD_MAX_COUNT` | Optional maximum number of raw query-field slots, including empty slots separated by `&`. | unset (unbounded) |
@@ -125,6 +128,17 @@ endpoints have different valid sizes. The framework's client-action reader remai
 and the native subscription example uses an explicit 8 KiB incremental body reader; multipart body,
 field, and file bounds — including independent field-count and file-count limits — are enforced by
 `HarchWeb.Api.Multipart`'s `MultipartLimits`.
+
+Cookie budgets are an application-wide request-head policy, independent from the generic header
+budgets. `REQUEST_COOKIE_MAX_COUNT` counts only syntactically valid `name=value` pairs over every
+case-insensitive `Cookie` header field; repeated names and empty values remain valid, while malformed
+fragments remain ignored as they are by typed API decoding. Choose the count and byte limits from the
+largest legitimate session, preferences, and proxy-added cookies, then configure the reverse proxy's
+total-header allowance no higher than the application can safely accept. Keep the generic total and
+per-header-value budgets too: they run first and bound malformed cookie material, forwarded headers,
+and trace context that the cookie-specific policy intentionally does not reinterpret. A cookie
+rejection is a non-reflective `431` before routing, middleware, request observability, or cookie
+decoding.
 
 `REQUEST_NETWORK_TIMEOUT_SECONDS` and `REQUEST_SLOWLORIS_MAX_BYTES` are listener-level network
 controls, not application body budgets. They apply consistently to HTTP, manual TLS, and

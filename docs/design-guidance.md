@@ -826,6 +826,26 @@ it once the test also called `==`/`/=` as a direct boolean expression rather tha
 comparison through `shouldBe`/`shouldNotBe`'s polymorphic `Eq a =>` dictionary — restructuring the
 code to match a working precedent, not forcing a tick.
 
+### Follow-up decision — EM: bound valid cookie pairs at the existing request-head boundary (2026-08-25)
+
+**Decision: extend `RequestHeadLimits` with opt-in cookie count, name-byte, and value-byte budgets;
+do not add another cookie parser or make this an endpoint option.** A raw `Cookie` header can carry
+many application-visible pairs, so the existing generic per-header-value limit cannot express the
+separate resource ownership AF required. The framework already owns the pre-routing raw-header
+gate, while `HarchWeb.Api.Request` owns the later typed cookie projection. Extending the earlier
+boundary preserves that ownership sequence: configured cookie limits reject with the established
+non-reflective `431` before routing, middleware, observability, or a decoder can create a list of
+cookie values; an absent policy retains the previous compatibility behavior.
+
+The gate mirrors the projection's deliberately narrow syntax: it counts and measures only segments
+with a non-empty, valid cookie-token name and an `=` separator, across every case-insensitive
+`Cookie` header field. Empty values and repeated names remain valid, so downstream typed decoding
+still detects duplicate names as it did before; malformed or empty segments remain ignored rather
+than turning a resource budget into an accidental cookie-grammar policy change. The scanner walks
+raw `ByteString` segments without `split` or a retained pair list. Generic total-header and
+per-header-value limits run first and remain independent safeguards. This adds no new default and
+does not claim to solve the listener-time limits or per-route policy question retained by EN.
+
 ### Follow-up decision — AL: split `HarchWeb.Security.RequestLimits` out, not the rest (2026-08-13)
 
 **Decision: extract only the genuinely self-contained cluster; leave the coupled remainder unsplit.**
