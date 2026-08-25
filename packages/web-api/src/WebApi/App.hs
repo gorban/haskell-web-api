@@ -153,6 +153,7 @@ buildAppRouteDefinition config pageRepository accountWorkflow route =
       Site.RouteDefinition
         { Site.routeNavigationLabel = routeNavigationLabel route,
           Site.routeMethods = HarchWeb.routeMethodPolicyMethods (HarchWeb.routeMethods routeCodec route),
+          Site.routeExecutionPolicy = HarchWeb.unboundedRouteExecutionPolicy,
           Site.routeResponse =
             \_ -> selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow
         }

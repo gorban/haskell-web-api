@@ -51,7 +51,12 @@ import HarchWeb.Security
   )
 import HarchWeb.Server.Application
 import HarchWeb.Server.ClientAction
-import HarchWeb.Server.RequestAdmission (concurrencyLimitedMiddleware)
+import HarchWeb.Server.RequestAdmission
+  ( RouteConcurrencyGateCache,
+    concurrencyLimitedMiddleware,
+    newRouteConcurrencyGateCache,
+    routeConcurrencyMiddleware,
+  )
 import HarchWeb.Server.RequestBody (RequestBodyReadFailure (..), readRequestBodyUpTo)
 import HarchWeb.Server.RequestObservability
   ( RequestExecutionTimings (..),
@@ -111,6 +116,7 @@ runEarlyRequestStages webApplication request requestPath policyResponseHeaders =
 -- every stage.
 data RoutedRequestExecution route action context = RoutedRequestExecution
   { routedRequestApplication :: Application route action context,
+    routedRequestRouteGateCache :: RouteConcurrencyGateCache route,
     routedRequestWaiRequest :: Wai.Request,
     routedRequestRespond :: Wai.Response -> IO Wai.ResponseReceived,
     routedRequestPolicyConfig :: RequestPolicyConfig,
@@ -131,19 +137,20 @@ data RoutedRequestExecution route action context = RoutedRequestExecution
 toWaiApplication :: (Eq route) => Application route action context -> IO Wai.Application
 toWaiApplication webApplication = do
   gateMiddleware <- concurrencyLimitedMiddleware (requestConcurrencyLimit (applicationRequestPolicy webApplication)) id
-  pure (gateMiddleware (headLimitedWaiApplication webApplication))
+  routeGateCache <- newRouteConcurrencyGateCache
+  pure (gateMiddleware (headLimitedWaiApplication routeGateCache webApplication))
 
-headLimitedWaiApplication :: (Eq route) => Application route action context -> Wai.Application
-headLimitedWaiApplication webApplication request respond =
+headLimitedWaiApplication :: (Eq route) => RouteConcurrencyGateCache route -> Application route action context -> Wai.Application
+headLimitedWaiApplication routeGateCache webApplication request respond =
   case validateRequestHead (requestHeadLimits (applicationRequestPolicy webApplication)) request of
     Left limitFailure -> respond (requestHeadLimitResponse limitFailure)
-    Right () -> toValidatedWaiApplication webApplication request respond
+    Right () -> toValidatedWaiApplication routeGateCache webApplication request respond
 
 -- | Only valid, budgeted request heads reach the ordinary request pipeline.
 -- This keeps malformed target bytes and oversized metadata out of route
 -- parsing, application middleware, logs, and observability extraction.
-toValidatedWaiApplication :: (Eq route) => Application route action context -> Wai.Application
-toValidatedWaiApplication webApplication request respond = do
+toValidatedWaiApplication :: (Eq route) => RouteConcurrencyGateCache route -> Application route action context -> Wai.Application
+toValidatedWaiApplication routeGateCache webApplication request respond = do
   requestStartedAt <- getMonotonicTimeNSec
   let requestPolicyConfig = applicationRequestPolicy webApplication
       policyResponseHeaders = requestPolicyResponseHeaders requestPolicyConfig request
@@ -160,6 +167,7 @@ toValidatedWaiApplication webApplication request respond = do
         handleRoutedRequest
           RoutedRequestExecution
             { routedRequestApplication = webApplication,
+              routedRequestRouteGateCache = routeGateCache,
               routedRequestWaiRequest = request,
               routedRequestRespond = respond,
               routedRequestPolicyConfig = requestPolicyConfig,
@@ -215,6 +223,53 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
           (Routing.requestPath (waiRequestRouteTarget requestPolicyConfig request))
       routeRequest = routeDispatchRequest routeDispatch
   routeMatchedAt <- routeDispatch `seq` getMonotonicTimeNSec
+  routeMiddleware <- routeAdmissionMiddleware routedRequestExecution routeDispatch
+  routeMiddleware
+    ( \admittedRequest admittedRespond ->
+        continueRoutedRequest
+          (routedRequestExecution {routedRequestWaiRequest = admittedRequest, routedRequestRespond = admittedRespond})
+          requestStartedAt
+          policyEvaluatedAt
+          middlewareTiming
+          routeMatchingStartedAt
+          routeMatchedAt
+          routeDispatch
+          middlewareResult
+          routeRequest
+    )
+    request
+    (routedRequestRespond routedRequestExecution)
+
+-- | A route-local gate is available only for an already path-matched route.
+-- `RouteNotFound` deliberately has no route declaration whose policy it could
+-- claim; all other dispatch outcomes retain the selected route so their
+-- `HEAD`, `OPTIONS`, and 405 responses cannot bypass that route's gate.
+routeAdmissionMiddleware :: (Eq route) => RoutedRequestExecution route action context -> RouteDispatch route context -> IO Wai.Middleware
+routeAdmissionMiddleware routedRequestExecution routeDispatch =
+  case routeDispatch of
+    RouteNotFound _ -> pure id
+    _ ->
+      routeConcurrencyMiddleware
+        (routedRequestRouteGateCache routedRequestExecution)
+        selectedRoute
+        (routeExecutionConcurrencyLimit (routeExecutionPolicy (routedRequestApplication routedRequestExecution) selectedRoute))
+  where
+    selectedRoute = requestRoute (routeDispatchRequest routeDispatch)
+
+continueRoutedRequest ::
+  (Eq route) =>
+  RoutedRequestExecution route action context ->
+  Word64 ->
+  Word64 ->
+  [(Text, Word64, Word64)] ->
+  Word64 ->
+  Word64 ->
+  RouteDispatch route context ->
+  MiddlewareResult context ->
+  RouteRequest route context ->
+  IO Wai.ResponseReceived
+continueRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt middlewareTiming routeMatchingStartedAt routeMatchedAt routeDispatch middlewareResult routeRequest = do
+  let webApplication = routedRequestApplication routedRequestExecution
   renderStartedAt <- getMonotonicTimeNSec
   response <- dispatchRoutedRequest routedRequestExecution routeDispatch middlewareResult
   responseRenderedAt <- response `seq` getMonotonicTimeNSec

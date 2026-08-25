@@ -338,6 +338,30 @@ spec =
         HarchWeb.routeMethodPolicy (routeMethods (apiRouteEndpointFamilyDefinition testEndpointFamily (at "/api/status")))
           `shouldBe` HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointFamily) (at "/api/status")
 
+      it "leaves every generated endpoint route definition without additional execution admission" $ do
+        let contextDefinition =
+              testApiRouteDefinitionWithContext
+                ApiGet
+                (pure ())
+                ApiNoRequestBody
+                (textResponseEncoder :| [])
+                (\_ _ -> pure (Right (apiResponse "context")))
+                (\() -> apiResponse "unreachable")
+            totalContextDefinition =
+              testApiRouteDefinitionWithContextNeverFailing
+                ApiGet
+                (pure ())
+                ApiNoRequestBody
+                (textResponseEncoder :| [])
+                (\_ _ -> pure (apiResponse "total"))
+        expectAll
+          ( (routeExecutionPolicy (apiRouteDefinition (testEndpoint ApiGet (at "/api/direct") "direct")) `shouldBe` HarchWeb.unboundedRouteExecutionPolicy)
+              :| [ routeExecutionPolicy contextDefinition `shouldBe` HarchWeb.unboundedRouteExecutionPolicy,
+                   routeExecutionPolicy totalContextDefinition `shouldBe` HarchWeb.unboundedRouteExecutionPolicy,
+                   routeExecutionPolicy (apiRouteEndpointFamilyDefinition testEndpointFamily (at "/api/status")) `shouldBe` HarchWeb.unboundedRouteExecutionPolicy
+                 ]
+          )
+
       it "keeps the definition's navigation label unset like the single-endpoint adapter" $
         routeNavigationLabel (apiRouteEndpointFamilyDefinition testEndpointFamily (at "/api/status")) `shouldBe` Nothing
 

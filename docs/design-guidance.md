@@ -846,6 +846,32 @@ raw `ByteString` segments without `split` or a retained pair list. Generic total
 per-header-value limits run first and remain independent safeguards. This adds no new default and
 does not claim to solve the listener-time limits or per-route policy question retained by EN.
 
+### Follow-up decision — EN: route-local execution admission, not impossible per-route transport policy (2026-08-25)
+
+**Decision: extend `RouteDefinition` and the one shared `toWaiApplication` dispatcher with an
+opt-in `RouteExecutionPolicy` whose sole capability is a per-route concurrency gate.** Listener
+timeouts, slowloris controls, and wire-header allocation happen before a WAI request or route exists;
+the application's request-head validator and global admission gate also run before route selection.
+Putting those fields in a route record would promise protection the runtime cannot honor, so no
+per-route transport/head override or environment-variable map is added. Endpoint body budgets remain
+their already-declared endpoint-consumer capability, not a retroactive request-head policy.
+
+The route gate starts only after the existing middleware has supplied the context used for route and
+method selection, and it guards the selected route's remaining response lifetime. It is therefore an
+additional limiter, never a replacement for or loosening of the global gate: an application-wide
+limit always admits first and still covers middleware; the route gate covers every selected route
+outcome (`HEAD`, `OPTIONS`, and method-not-allowed included) until its WAI response completes. The
+implementation allocates one gate per bounded route per public WAI adapter, so direct adapters,
+local listeners, and runtime listeners share the same behavior without a parallel middleware or
+dispatcher. An unmatched path and framework early response have no route policy to select.
+
+Rejection uses the existing non-reflective `503` body and does not add a route name, limit, or
+untrusted value to request telemetry or logs; route identities are application ADTs and could be
+unbounded in other applications. Applications declare this typed policy alongside the route they own,
+while deployment configuration continues to own listener and application-wide budgets. A route policy
+may be redundant when wider than a configured global cap, but can never raise that cap because both
+gates must admit the request.
+
 ### Follow-up decision — AL: split `HarchWeb.Security.RequestLimits` out, not the rest (2026-08-13)
 
 **Decision: extract only the genuinely self-contained cluster; leave the coupled remainder unsplit.**

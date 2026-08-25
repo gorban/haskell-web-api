@@ -40,6 +40,7 @@ import HarchWeb.Api.Endpoint.Internal
 import HarchWeb.Api.Endpoint.Runtime
 import HarchWeb.Api.Request
 import HarchWeb.Api.Response
+import HarchWeb.Server (unboundedRouteExecutionPolicy)
 import HarchWeb.Site (RouteDefinition (..))
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
@@ -52,6 +53,7 @@ apiRouteDefinition endpoint =
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMethods = [toRouteMethod (apiRouteEndpointMethod endpoint)],
+      routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeResponse = \request _ -> HarchWeb.ProtocolResponseResult <$> runApiRouteEndpoint endpoint request
     }
 
@@ -69,6 +71,7 @@ apiRouteDefinitionWithContext contract contextAwareHandler failureResponse =
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMethods = [toRouteMethod method],
+      routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeResponse = \request routeRequest ->
         HarchWeb.ProtocolResponseResult
           <$> runApiRouteEndpointHandler
@@ -95,6 +98,7 @@ apiRouteDefinitionWithContextNeverFailing contract contextAwareHandler =
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMethods = [toRouteMethod method],
+      routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeResponse = \request routeRequest ->
         HarchWeb.ProtocolResponseResult
           <$> runApiRouteEndpointHandlerNeverFailing
@@ -211,6 +215,7 @@ apiRouteEndpointFamilyDefinition family (ApiPath pathText) =
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMethods = apiPathRouteMethods family pathText,
+      routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeResponse = \request _ ->
         case NonEmpty.nonEmpty (filter (endpointAtPath pathText) (endpointFamilyEndpoints family)) of
           Nothing -> pure (HarchWeb.ProtocolResponseResult (apiHttpResponseToProtocolResponse (ApiHttpResponse HttpTypes.status404 [] Nothing)))

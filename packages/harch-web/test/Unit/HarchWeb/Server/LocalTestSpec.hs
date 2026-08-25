@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {-# SPEC #-}
@@ -19,7 +20,7 @@ import Data.Maybe ()
 import Data.Text ()
 import Data.Text qualified as Text (isInfixOf, pack)
 import Data.Text.Encoding qualified as TextEncoding ()
-import HarchWeb (Application (renderRequestResponse), LocalTestServer (localServerBaseUrl, localServerHost, localServerPort), RequestHeadLimits (requestCookieCountLimit, requestHeaderByteLimit, requestHeaderCountLimit), RequestPolicyConfig (requestConcurrencyLimit, requestHeadLimits, requestTransportLimits), RequestTransportLimits (requestNetworkTimeout, requestSlowlorisByteLimit), RouteRequest (requestRoute), StaticAssetRoot (StaticAssetRoot, staticDirectory, staticUrlPrefix), StaticAssetsConfig (StaticAssetsConfig, staticAssetContentTypes, staticAssetRoots, staticCacheControlSeconds), defaultStaticAssetContentTypes, mkRequestConcurrencyLimit, mkRequestHeaderCountLimit, requestByteLimit, requestItemCountLimit, requestTimeoutSeconds, toWaiApplication, unboundedRequestHeadLimits, warpDefaultRequestTransportLimits, withLocalTestServer, withLocalTestServerForApplication)
+import HarchWeb (Application (renderRequestResponse, routeExecutionPolicy), LocalTestServer (localServerBaseUrl, localServerHost, localServerPort), RequestHeadLimits (requestCookieCountLimit, requestHeaderByteLimit, requestHeaderCountLimit), RequestPolicyConfig (requestConcurrencyLimit, requestHeadLimits, requestTransportLimits), RequestTransportLimits (requestNetworkTimeout, requestSlowlorisByteLimit), RouteExecutionPolicy (RouteExecutionPolicy), RouteRequest (requestRoute), ServerSentEventSource (ServerSentEventSource), StaticAssetRoot (StaticAssetRoot, staticDirectory, staticUrlPrefix), StaticAssetsConfig (StaticAssetsConfig, staticAssetContentTypes, staticAssetRoots, staticCacheControlSeconds), defaultStaticAssetContentTypes, eventStreamResponse, mkRequestConcurrencyLimit, mkRequestHeaderCountLimit, requestByteLimit, requestItemCountLimit, requestTimeoutSeconds, toWaiApplication, unboundedRequestHeadLimits, unboundedRouteExecutionPolicy, warpDefaultRequestTransportLimits, withLocalTestServer, withLocalTestServerForApplication)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -43,7 +44,7 @@ import System.Process ()
 import TestCore.CustomAssertions ()
 import TestCore.Wai ()
 import Text.Read ()
-import Unit.HarchWeb.TestSupport (TestRoute (KnownRoute), defaultRequestPolicy, emptyStaticAssets, readLocalTestServerResponse, readRawLoopbackHttpResponse, sampleApplication, sampleApplicationWithConfig, sampleApplicationWithStaticAssets, waitUntilIORefEquals)
+import Unit.HarchWeb.TestSupport (TestRoute (DataRoute, EventStreamRoute, KnownRoute), defaultRequestPolicy, emptyStaticAssets, readLocalTestServerResponse, readRawLoopbackHttpResponse, sampleApplication, sampleApplicationWithConfig, sampleApplicationWithStaticAssets, waitUntilIORefEquals)
 
 spec = do
   describe "withLocalTestServer" $ do
@@ -183,6 +184,80 @@ spec = do
               :| [ firstResponseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "200",
                    thirdResponseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "200"
                  ]
+          )
+
+    it "applies a route-local admission budget at the real listener without constraining another route" $ do
+      releaseSignal <- newEmptyMVar
+      admittedCount <- newIORef (0 :: Int)
+      let baseApplication = sampleApplicationWithConfig emptyStaticAssets defaultRequestPolicy
+          limitedApplication =
+            baseApplication
+              { routeExecutionPolicy =
+                  \case
+                    KnownRoute -> RouteExecutionPolicy (mkRequestConcurrencyLimit 1)
+                    DataRoute -> RouteExecutionPolicy (mkRequestConcurrencyLimit 1)
+                    _ -> unboundedRouteExecutionPolicy,
+                renderRequestResponse = \request routeRequest ->
+                  case requestRoute routeRequest of
+                    KnownRoute -> do
+                      atomicModifyIORef' admittedCount (\count -> (count + 1, ()))
+                      readMVar releaseSignal
+                      renderRequestResponse baseApplication request routeRequest
+                    _ -> renderRequestResponse baseApplication request routeRequest
+              }
+      withLocalTestServer limitedApplication $ \localTestServer -> do
+        firstResponseSignal <- newEmptyMVar
+        _ <-
+          forkIO $
+            readRawLoopbackHttpResponse (localServerPort localTestServer) "GET /known HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+              >>= putMVar firstResponseSignal
+        waitUntilIORefEquals admittedCount 1
+        blockedResponseBytes <- readRawLoopbackHttpResponse (localServerPort localTestServer) "GET /known HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        otherRouteResponseBytes <- readRawLoopbackHttpResponse (localServerPort localTestServer) "GET /data HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        putMVar releaseSignal ()
+        firstResponseBytes <- readMVar firstResponseSignal
+        releasedRouteResponseBytes <- readRawLoopbackHttpResponse (localServerPort localTestServer) "GET /known HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        expectAll
+          ( (blockedResponseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "503")
+              :| [ otherRouteResponseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "202",
+                   firstResponseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "200",
+                   releasedRouteResponseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "200"
+                 ]
+          )
+
+    it "holds a route-local admission slot until its real listener event stream completes" $ do
+      releaseSignal <- newEmptyMVar
+      streamStartedSignal <- newEmptyMVar
+      let baseApplication = sampleApplicationWithConfig emptyStaticAssets defaultRequestPolicy
+          eventSource =
+            ServerSentEventSource $ do
+              putMVar streamStartedSignal ()
+              readMVar releaseSignal
+              pure Nothing
+          limitedApplication =
+            baseApplication
+              { routeExecutionPolicy =
+                  \case
+                    EventStreamRoute -> RouteExecutionPolicy (mkRequestConcurrencyLimit 1)
+                    _ -> unboundedRouteExecutionPolicy,
+                renderRequestResponse = \request routeRequest ->
+                  case requestRoute routeRequest of
+                    EventStreamRoute -> pure (eventStreamResponse eventSource)
+                    _ -> renderRequestResponse baseApplication request routeRequest
+              }
+      withLocalTestServer limitedApplication $ \localTestServer -> do
+        firstResponseSignal <- newEmptyMVar
+        _ <-
+          forkIO $
+            readRawLoopbackHttpResponse (localServerPort localTestServer) "GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+              >>= putMVar firstResponseSignal
+        readMVar streamStartedSignal
+        blockedResponseBytes <- readRawLoopbackHttpResponse (localServerPort localTestServer) "GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        putMVar releaseSignal ()
+        firstResponseBytes <- readMVar firstResponseSignal
+        expectAll
+          ( (blockedResponseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "503")
+              :| [firstResponseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "200"]
           )
 
     it "releases an admitted slot when an asynchronous exception cancels its handler" $ do

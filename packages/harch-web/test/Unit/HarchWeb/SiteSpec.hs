@@ -192,6 +192,27 @@ spec = do
                ]
         )
 
+    it "carries each route's execution policy through the shared dispatcher" $ do
+      let boundedStatusRoute =
+            apiRouteDefinition
+              { routeExecutionPolicy = HarchWeb.RouteExecutionPolicy (HarchWeb.mkRequestConcurrencyLimit 1)
+              }
+          siteWithBoundedStatusRoute =
+            sampleSite
+              { siteRouteDefinition = \case
+                  StatusApiRoute -> boundedStatusRoute
+                  route -> sampleRouteDefinition route
+              }
+          siteApplication = buildSiteApplication siteWithBoundedStatusRoute
+      expectAll
+        ( ( HarchWeb.routeExecutionPolicy siteApplication StatusApiRoute
+              `shouldBe` HarchWeb.RouteExecutionPolicy (HarchWeb.mkRequestConcurrencyLimit 1)
+          )
+            :| [ HarchWeb.routeExecutionPolicy siteApplication HomeRoute
+                   `shouldBe` HarchWeb.unboundedRouteExecutionPolicy
+               ]
+        )
+
     it "binds each full HTML response to a fresh CSP nonce before body controls parse" $ do
       let application = buildSiteApplication sampleSite
       firstResponse <- performWaiRequest (toWaiApplication application) (waiRequest [])
@@ -356,6 +377,7 @@ apiRouteDefinition =
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMethods = [HarchWeb.RouteGet],
+      routeExecutionPolicy = HarchWeb.unboundedRouteExecutionPolicy,
       routeResponse =
         \_ _ ->
           pure

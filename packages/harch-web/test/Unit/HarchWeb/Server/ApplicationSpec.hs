@@ -14,12 +14,12 @@ import Data.Either ()
 import Data.Functor.Compose ()
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List ()
-import Data.List.NonEmpty ()
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe ()
 import Data.Text (Text)
 import Data.Text qualified as Text ()
 import Data.Text.Encoding qualified as TextEncoding ()
-import HarchWeb (Application (appName, renderRequestResponse), MiddlewareResult (ContinueMiddleware, HaltMiddleware), RequestMiddleware (RequestMiddleware, runRequestMiddleware), Response (BodyResponse), ResponseBody (ResponseBody, responseBody, responseContentType, responseDatabaseOperations, responseLogEntries, responseObservabilityAttributes, responseStatus), RouteRequest (RouteRequest, requestContext, requestRoute), application, renderResponse, runRequestMiddlewarePipeline)
+import HarchWeb (Application (appName, renderRequestResponse), MiddlewareResult (ContinueMiddleware, HaltMiddleware), RequestMiddleware (RequestMiddleware, runRequestMiddleware), Response (BodyResponse), ResponseBody (ResponseBody, responseBody, responseContentType, responseDatabaseOperations, responseLogEntries, responseObservabilityAttributes, responseStatus), RouteExecutionPolicy (RouteExecutionPolicy, routeExecutionConcurrencyLimit), RouteRequest (RouteRequest, requestContext, requestRoute), application, mkRequestConcurrencyLimit, renderResponse, runRequestMiddlewarePipeline, unboundedRouteExecutionPolicy)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -66,6 +66,18 @@ spec = do
         `shouldReturn` BodyResponse (ResponseBody Http.status200 "text/plain" "probe" [] [] [])
       capturedRequest <- readIORef observedRequest
       fmap Wai.rawPathInfo capturedRequest `shouldBe` Just ""
+
+    it "keeps route execution policy values explicit and unbounded by default" $ do
+      let boundedPolicy = RouteExecutionPolicy (mkRequestConcurrencyLimit 1)
+          differentPolicy = RouteExecutionPolicy (mkRequestConcurrencyLimit 2)
+      expectAll
+        ( (routeExecutionConcurrencyLimit unboundedRouteExecutionPolicy `shouldBe` Nothing)
+            :| [ boundedPolicy == boundedPolicy `shouldBe` True,
+                 boundedPolicy /= differentPolicy `shouldBe` True,
+                 show boundedPolicy `shouldBe` "RouteExecutionPolicy {routeExecutionConcurrencyLimit = Just (RequestConcurrencyLimit 1)}",
+                 show [boundedPolicy] `shouldBe` "[RouteExecutionPolicy {routeExecutionConcurrencyLimit = Just (RequestConcurrencyLimit 1)}]"
+               ]
+        )
 
   describe "runRequestMiddlewarePipeline" $ do
     it "runs in declaration order, carries context forward, and stops after a halt" $ do

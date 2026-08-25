@@ -140,6 +140,17 @@ and trace context that the cookie-specific policy intentionally does not reinter
 rejection is a non-reflective `431` before routing, middleware, request observability, or cookie
 decoding.
 
+Listener transport controls, request-head budgets, and the application-wide concurrency setting are
+deployment configuration because they apply before a route is selected. A route may opt into the typed
+`RouteExecutionPolicy`'s additional concurrency budget in its `RouteDefinition`; it is a second
+non-queueing `503` gate after existing middleware and route/method selection, held through the
+selected response stream. It cannot loosen the global admission budget or change request bytes,
+network deadlines, slowloris protection, proxy composition, or early framework responses. There is
+intentionally no route-name-to-environment-variable mapping: route identities are application code,
+and exposing them as request telemetry labels or deployment strings would create a potentially
+unbounded cardinality surface. Size listener and global limits for the whole deployment first; use
+a route policy only to reserve a smaller independent execution pool for a known expensive route.
+
 `REQUEST_NETWORK_TIMEOUT_SECONDS` and `REQUEST_SLOWLORIS_MAX_BYTES` are listener-level network
 controls, not application body budgets. They apply consistently to HTTP, manual TLS, and
 ACME-managed TLS listeners. Leaving either unset deliberately retains the installed Warp default;

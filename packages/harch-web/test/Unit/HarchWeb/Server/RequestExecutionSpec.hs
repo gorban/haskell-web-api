@@ -1,8 +1,9 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {-# SPEC #-}
 
-import Control.Concurrent ()
+import Control.Concurrent (forkIO, newEmptyMVar, putMVar, readMVar)
 import Control.Exception ()
 import Control.Monad (forM_)
 import Data.ByteString qualified as ByteString (drop, intercalate, isInfixOf, isPrefixOf, replicate, takeWhile)
@@ -19,7 +20,7 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text (isInfixOf, pack)
 import Data.Text.Encoding qualified as TextEncoding (decodeUtf8, encodeUtf8)
-import HarchWeb (Application (applicationNavigationRuntime, applicationRequestMiddleware, applicationRequestPolicy, authorizeClientActionCsrf, decodeClientAction, handleClientAction, pageCsrfToken, pageShell, renderRequestResponse, reportApplicationLog, reportRequestObservability, requestContextFromRequest), ClientActionDecodeResult (DecodedClientAction, UnrecognizedClientAction), ClientActionPayload (clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod), ClientActionRequest (ClientActionRequest, clientAction, clientActionContext, clientActionRequestIdempotencyKey), ClientActionResponse (ClientActionResponse, clientActionFocusId, clientActionHeaders, clientActionLogEntries, clientActionObservabilityAttributes, clientActionPatches, clientActionStatus), CorsPolicyConfig (CorsPolicyConfig, corsAllowedHeaders, corsAllowedMethods, corsAllowedOrigins, corsMaxAgeSeconds), Document (documentRuntimeDescriptors), ForwardedHeaderTrust (NeverTrustForwarded), MiddlewareResult (ContinueMiddleware, HaltMiddleware), Page (pageRoute), ProtocolResponse (ProtocolResponse, protocolResponseBody, protocolResponseDatabaseOperations, protocolResponseHeaders, protocolResponseLogEntries, protocolResponseObservabilityAttributes, protocolResponseStatus), ProtocolResponseBody (ProtocolResponseBytes, ProtocolResponseStream), RequestMiddleware (RequestMiddleware), RequestPolicyConfig (RequestPolicyConfig, corsPolicy, forwardedHeaderTrust, httpsRedirectAuthority, httpsRedirectPort, redirectHttpToHttps, requestConcurrencyLimit, requestHeadLimits, requestTransportLimits, responseSecurityHeaders, strictTransportSecurity), Response (BodyResponse, ClientActionBodyResponse, EventStreamResponse, PageResponse, PageResponseWithMetadata, ProtocolResponseResult), ResponseBody (ResponseBody, responseBody, responseContentType, responseDatabaseOperations, responseLogEntries, responseObservabilityAttributes, responseStatus), ResponseDiagnostics (diagnosticLogEntries, diagnosticObservabilityAttributes), ResponseSecurityHeadersConfig (ResponseSecurityHeadersConfig, contentSecurityPolicy, contentTypeOptionsNoSniff, frameOptions, permissionsPolicy, referrerPolicy, xssProtection), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (InlineBootstrap), ServerSentEvent (ServerSentEvent), StaticAssetRoot (StaticAssetRoot, staticDirectory, staticUrlPrefix), StaticAssetsConfig (StaticAssetsConfig, staticAssetContentTypes, staticAssetRoots, staticCacheControlSeconds), StrictTransportSecurityConfig (StrictTransportSecurityConfig, strictTransportSecurityIncludeSubDomains, strictTransportSecurityMaxAgeSeconds, strictTransportSecurityPreload), clientActionResponseBody, defaultContentSecurityPolicy, defaultCorsPolicyConfig, defaultNavigationRuntime, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, eventStreamResponse, isClientActionRequest, parseClientActionFields, redirectResponse, responseDiagnostics, responseKind, responseStatusCode, serverSentEventSourceFromList, toWaiApplication, toWaiResponse, unboundedRequestHeadLimits, warpDefaultRequestTransportLimits)
+import HarchWeb (Application (applicationNavigationRuntime, applicationRequestMiddleware, applicationRequestPolicy, authorizeClientActionCsrf, decodeClientAction, handleClientAction, pageCsrfToken, pageShell, renderRequestResponse, reportApplicationLog, reportRequestObservability, requestContextFromRequest, routeExecutionPolicy), ClientActionDecodeResult (DecodedClientAction, UnrecognizedClientAction), ClientActionPayload (clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod), ClientActionRequest (ClientActionRequest, clientAction, clientActionContext, clientActionRequestIdempotencyKey), ClientActionResponse (ClientActionResponse, clientActionFocusId, clientActionHeaders, clientActionLogEntries, clientActionObservabilityAttributes, clientActionPatches, clientActionStatus), CorsPolicyConfig (CorsPolicyConfig, corsAllowedHeaders, corsAllowedMethods, corsAllowedOrigins, corsMaxAgeSeconds), Document (documentRuntimeDescriptors), ForwardedHeaderTrust (NeverTrustForwarded), MiddlewareResult (ContinueMiddleware, HaltMiddleware), Page (pageRoute), ProtocolResponse (ProtocolResponse, protocolResponseBody, protocolResponseDatabaseOperations, protocolResponseHeaders, protocolResponseLogEntries, protocolResponseObservabilityAttributes, protocolResponseStatus), ProtocolResponseBody (ProtocolResponseBytes, ProtocolResponseStream), RequestMiddleware (RequestMiddleware), RequestPolicyConfig (RequestPolicyConfig, corsPolicy, forwardedHeaderTrust, httpsRedirectAuthority, httpsRedirectPort, redirectHttpToHttps, requestConcurrencyLimit, requestHeadLimits, requestTransportLimits, responseSecurityHeaders, strictTransportSecurity), Response (BodyResponse, ClientActionBodyResponse, EventStreamResponse, PageResponse, PageResponseWithMetadata, ProtocolResponseResult), ResponseBody (ResponseBody, responseBody, responseContentType, responseDatabaseOperations, responseLogEntries, responseObservabilityAttributes, responseStatus), ResponseDiagnostics (diagnosticLogEntries, diagnosticObservabilityAttributes), ResponseSecurityHeadersConfig (ResponseSecurityHeadersConfig, contentSecurityPolicy, contentTypeOptionsNoSniff, frameOptions, permissionsPolicy, referrerPolicy, xssProtection), RouteExecutionPolicy (RouteExecutionPolicy), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (InlineBootstrap), ServerSentEvent (ServerSentEvent), StaticAssetRoot (StaticAssetRoot, staticDirectory, staticUrlPrefix), StaticAssetsConfig (StaticAssetsConfig, staticAssetContentTypes, staticAssetRoots, staticCacheControlSeconds), StrictTransportSecurityConfig (StrictTransportSecurityConfig, strictTransportSecurityIncludeSubDomains, strictTransportSecurityMaxAgeSeconds, strictTransportSecurityPreload), clientActionResponseBody, defaultContentSecurityPolicy, defaultCorsPolicyConfig, defaultNavigationRuntime, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, eventStreamResponse, isClientActionRequest, mkRequestConcurrencyLimit, parseClientActionFields, redirectResponse, responseDiagnostics, responseKind, responseStatusCode, serverSentEventSourceFromList, toWaiApplication, toWaiResponse, unboundedRequestHeadLimits, unboundedRouteExecutionPolicy, warpDefaultRequestTransportLimits)
 import HarchWeb.Action qualified as Action (ActionDecoder, action, actionCodec, decodeAction, post)
 import HarchWeb.Database qualified as Database (DatabaseOperation (DatabaseOperation, databaseOperationEndedAtNanoseconds, databaseOperationName, databaseOperationStartedAtNanoseconds, databaseOperationSystem, databaseQueryTemplate))
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -44,7 +45,7 @@ import System.Process ()
 import TestCore.CustomAssertions ()
 import TestCore.Wai (nextRequestBodyChunk, performWaiRequest, readResponseBody, waiRequest)
 import Text.Read ()
-import Unit.HarchWeb.TestSupport (TestContext (requestLanguage, testContextPathPrefix), TestRoute (DataRoute, EventStreamRoute, KnownRoute, MissingRoute), defaultContext, defaultRequestPolicy, emptyStaticAssets, expectMeasuredRequestTiming, expectMeasuredRootRequestTiming, hasTextAttribute, renderDocument, renderSampleResponse, rootPathApplication, sampleApplication, sampleApplicationWithConfig, sampleApplicationWithStaticAssets, samplePage, sampleRequestContextFromRequest, spanishContext, stripVolatileRequestTiming, testActionCodec, testRegionPatch, testTrustedForwardedProxy, trustedForwardedApplication, waiRequestWithRemoteHostAndHeaders)
+import Unit.HarchWeb.TestSupport (TestContext (requestLanguage, testContextPathPrefix), TestRoute (DataRoute, EventStreamRoute, KnownRoute, MissingRoute), defaultContext, defaultRequestPolicy, emptyStaticAssets, expectMeasuredRequestTiming, expectMeasuredRootRequestTiming, hasTextAttribute, renderDocument, renderSampleResponse, rootPathApplication, sampleApplication, sampleApplicationWithConfig, sampleApplicationWithStaticAssets, samplePage, sampleRequestContextFromRequest, spanishContext, stripVolatileRequestTiming, testActionCodec, testRegionPatch, testTrustedForwardedProxy, trustedForwardedApplication, waiRequestWithRemoteHostAndHeaders, waitUntilIORefEquals)
 
 spec = do
   describe "toWaiApplication" $ do
@@ -68,6 +69,41 @@ spec = do
       Wai.responseStatus response `shouldBe` Http.status200
       responseBody <- readResponseBody response
       Text.isInfixOf "<a href=\"/es/known\" data-page-link=\"true\" aria-current=\"page\">Known</a>" responseBody `shouldBe` True
+
+    it "cannot bypass selected route admission through HEAD, OPTIONS, or a method mismatch" $ do
+      releaseSignal <- newEmptyMVar
+      admittedCount <- newIORef (0 :: Int)
+      let baseApplication = sampleApplication
+          limitedApplication =
+            baseApplication
+              { routeExecutionPolicy =
+                  \case
+                    KnownRoute -> RouteExecutionPolicy (mkRequestConcurrencyLimit 1)
+                    _ -> unboundedRouteExecutionPolicy,
+                renderRequestResponse = \request routeRequest ->
+                  case requestRoute routeRequest of
+                    KnownRoute -> do
+                      atomicModifyIORef' admittedCount (\count -> (count + 1, ()))
+                      readMVar releaseSignal
+                      renderRequestResponse baseApplication request routeRequest
+                    _ -> renderRequestResponse baseApplication request routeRequest
+              }
+      waiApplication <- toWaiApplication limitedApplication
+      firstResponseSignal <- newEmptyMVar
+      _ <- forkIO (performWaiRequest (pure waiApplication) (waiRequest ["known"]) >>= putMVar firstResponseSignal)
+      waitUntilIORefEquals admittedCount 1
+      headResponse <- performWaiRequest (pure waiApplication) ((waiRequest ["known"]) {Wai.requestMethod = "HEAD"})
+      optionsResponse <- performWaiRequest (pure waiApplication) ((waiRequest ["known"]) {Wai.requestMethod = "OPTIONS"})
+      methodMismatchResponse <- performWaiRequest (pure waiApplication) ((waiRequest ["known"]) {Wai.requestMethod = "DELETE"})
+      putMVar releaseSignal ()
+      firstResponse <- readMVar firstResponseSignal
+      expectAll
+        ( (Wai.responseStatus headResponse `shouldBe` Http.status503)
+            :| [ Wai.responseStatus optionsResponse `shouldBe` Http.status503,
+                 Wai.responseStatus methodMismatchResponse `shouldBe` Http.status503,
+                 Wai.responseStatus firstResponse `shouldBe` Http.status200
+               ]
+        )
 
     it "halts dynamic requests without bypassing framework response headers" $ do
       let responseBodyValue = ResponseBody {responseStatus = Http.status401, responseContentType = "text/plain; charset=utf-8", responseBody = "Sign in required", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}

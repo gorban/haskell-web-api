@@ -52,6 +52,7 @@ import HarchWeb
     replaceRegion,
     serverSentEventSourceFromList,
     unboundedRequestHeadLimits,
+    unboundedRouteExecutionPolicy,
     warpDefaultRequestTransportLimits,
   )
 import HarchWeb.Action (decodeAction)
@@ -103,6 +104,7 @@ liveDataEventsRouteDefinition =
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMethods = [RouteGet],
+      routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeResponse = \_ _ -> do
         eventSource <-
           serverSentEventSourceFromList

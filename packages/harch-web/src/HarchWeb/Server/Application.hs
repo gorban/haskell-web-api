@@ -13,9 +13,11 @@
 -- one route/action interpreter.
 module HarchWeb.Server.Application
   ( Application (..),
+    RouteExecutionPolicy (..),
     application,
     renderResponse,
     middlewareResultContext,
+    unboundedRouteExecutionPolicy,
     runRequestMiddlewarePipeline,
   )
 where
@@ -24,7 +26,7 @@ import Data.Text (Text)
 import HarchWeb.Document (Document, NavigationRuntime, Page)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Routing (RouteCodec, RouteRequest)
-import HarchWeb.Security (RequestPolicyConfig)
+import HarchWeb.Security (RequestConcurrencyLimit, RequestPolicyConfig)
 import HarchWeb.Server.Response
   ( ClientActionDecodeResult,
     ClientActionPayload,
@@ -38,6 +40,22 @@ import HarchWeb.Session (CsrfToken)
 import HarchWeb.StaticAssets (StaticAssetsConfig)
 import Network.Wai qualified as Wai
 
+-- | The only request policy a route can safely tighten after route/method
+-- selection. Listener transport controls, request-head budgets, and the
+-- application-wide admission gate have already acted by this point, so they
+-- deliberately do not appear here. A bounded route gate is additional to
+-- the global gate and remains held for the selected response lifetime. See
+-- the EN decision record in @docs/design-guidance.md@.
+newtype RouteExecutionPolicy = RouteExecutionPolicy
+  { routeExecutionConcurrencyLimit :: Maybe RequestConcurrencyLimit
+  }
+  deriving (Eq, Show)
+
+-- | Preserve the established default: a route has no additional execution
+-- admission budget unless its declaration opts in.
+unboundedRouteExecutionPolicy :: RouteExecutionPolicy
+unboundedRouteExecutionPolicy = RouteExecutionPolicy {routeExecutionConcurrencyLimit = Nothing}
+
 data Application route action context = Application
   { appName :: Text,
     defaultRequestContext :: context,
@@ -47,6 +65,9 @@ data Application route action context = Application
     applicationRequestPolicy :: RequestPolicyConfig,
     applicationRequestMiddleware :: [RequestMiddleware context],
     routeCodec :: RouteCodec route context,
+    -- | Selects the route-local policy only after the shared dispatcher has
+    -- matched a route and method. It is not a second request-policy parser.
+    routeExecutionPolicy :: route -> RouteExecutionPolicy,
     renderRequestResponse :: Wai.Request -> RouteRequest route context -> IO (Response route context),
     decodeClientAction :: ClientActionPayload context -> ClientActionDecodeResult action,
     -- | Supplies the token rendered in a page response's strict host cookie.

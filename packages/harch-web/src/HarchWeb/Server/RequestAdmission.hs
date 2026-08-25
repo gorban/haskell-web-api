@@ -10,9 +10,13 @@
 -- public request-execution facade.
 module HarchWeb.Server.RequestAdmission
   ( concurrencyLimitedMiddleware,
+    RouteConcurrencyGateCache,
+    newRouteConcurrencyGateCache,
+    routeConcurrencyMiddleware,
   )
 where
 
+import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
 import Control.Exception (finally, mask)
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import HarchWeb.Security (RequestConcurrencyLimit, requestConcurrencyLimitValue)
@@ -35,6 +39,26 @@ concurrencyLimitedMiddleware maybeLimit waiMiddleware =
     Just limit -> do
       gate <- newRequestConcurrencyGate limit
       pure (concurrencyGateMiddleware gate . waiMiddleware)
+
+-- | Per-public-WAI-adapter gate state for route-local execution limits. A
+-- gate is installed only when a bounded route is first selected, and then
+-- reused for that route's later requests. This cache is deliberately below
+-- the global gate: it cannot affect listener admission, request-head
+-- validation, or middleware that already ran to provide route context.
+newtype RouteConcurrencyGateCache route = RouteConcurrencyGateCache (MVar [(route, Wai.Middleware)])
+
+newRouteConcurrencyGateCache :: IO (RouteConcurrencyGateCache route)
+newRouteConcurrencyGateCache = RouteConcurrencyGateCache <$> newMVar []
+
+routeConcurrencyMiddleware :: (Eq route) => RouteConcurrencyGateCache route -> route -> Maybe RequestConcurrencyLimit -> IO Wai.Middleware
+routeConcurrencyMiddleware _ _ Nothing = pure id
+routeConcurrencyMiddleware (RouteConcurrencyGateCache cache) routeValue (Just limit) =
+  modifyMVar cache $ \entries ->
+    case lookup routeValue entries of
+      Just middleware -> pure (entries, middleware)
+      Nothing -> do
+        middleware <- concurrencyLimitedMiddleware (Just limit) id
+        pure ((routeValue, middleware) : entries, middleware)
 
 data RequestConcurrencyGate = RequestConcurrencyGate
   { concurrencyGateLimit :: Int,

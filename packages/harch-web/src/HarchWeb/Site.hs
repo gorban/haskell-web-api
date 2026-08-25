@@ -28,6 +28,7 @@ import HarchWeb
     RequestPolicyConfig (..),
     Response (..),
     RouteCodec,
+    RouteExecutionPolicy,
     RouteRequest,
     RuntimeDescriptor (..),
     StaticAssetRoot,
@@ -40,6 +41,7 @@ import HarchWeb
     defaultResponseSecurityHeadersConfig,
     navigationRuntimeScriptSource,
     unboundedRequestHeadLimits,
+    unboundedRouteExecutionPolicy,
     warpDefaultRequestTransportLimits,
   )
 import HarchWeb qualified
@@ -54,6 +56,10 @@ data RouteDefinition route context = RouteDefinition
     -- declaration into the shared route codec, making the site table the
     -- authoritative source for ordinary page and protocol dispatch alike.
     routeMethods :: [HarchWeb.RouteMethod],
+    -- | Optional additional admission for this route after the shared
+    -- dispatcher has selected its path and method. It cannot alter listener,
+    -- request-head, or application-wide policy; see 'RouteExecutionPolicy'.
+    routeExecutionPolicy :: RouteExecutionPolicy,
     routeResponse :: Wai.Request -> RouteRequest route context -> IO (Response route context)
   }
 
@@ -150,6 +156,7 @@ pageRoute navigationLabel renderPage =
   RouteDefinition
     { routeNavigationLabel = navigationLabel,
       routeMethods = [HarchWeb.RouteGet],
+      routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeResponse = \_ -> fmap PageResponse . renderPage
     }
 
@@ -165,6 +172,7 @@ buildSiteApplication site =
         applicationRequestPolicy = siteRequestPolicy site,
         applicationRequestMiddleware = siteRequestMiddleware site,
         routeCodec = (siteRouteCodec site) {HarchWeb.routeMethods = HarchWeb.routeMethodPolicy . routeMethods . siteRouteDefinition site},
+        HarchWeb.routeExecutionPolicy = routeDefinitionExecutionPolicy . siteRouteDefinition site,
         renderRequestResponse = renderSiteResponse site,
         decodeClientAction = siteDecodeClientAction site,
         pageCsrfToken = sitePageCsrfToken site,
@@ -182,6 +190,9 @@ renderSiteResponse site request routeRequest =
     (siteRouteDefinition site (HarchWeb.requestRoute routeRequest))
     request
     routeRequest
+
+routeDefinitionExecutionPolicy :: RouteDefinition route context -> RouteExecutionPolicy
+routeDefinitionExecutionPolicy (RouteDefinition _ _ executionPolicy _) = executionPolicy
 
 renderSitePageShell :: (Eq route) => Site route action context -> Page route context -> Document route
 renderSitePageShell site page =
