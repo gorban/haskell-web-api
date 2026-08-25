@@ -70,14 +70,14 @@ runDecodedApiRequest requestData fields body encoders fieldFailure onDecoded req
       case requestBody of
         ApiNoRequestBody -> decodeInitialFields (`onDecoded` ())
         ApiBufferedRequestBody missingContentTypePolicy maximumBytes decoders -> do
-          decodeInitialFields (decodeBufferedBody missingContentTypePolicy maximumBytes decoders . onDecoded)
+          decodeInitialFields (decodeBufferedBody missingContentTypePolicy (apiRequestBodyByteLimitValue maximumBytes) decoders . onDecoded)
         ApiUrlEncodedFormRequestBody missingContentTypePolicy maximumBytes maximumFields ->
           decodeBufferedBody
             missingContentTypePolicy
-            maximumBytes
+            (apiRequestBodyByteLimitValue maximumBytes)
             [urlEncodedFormBodyDecoder maximumFields]
             (\decodedForm -> decodeFormFields decodedForm (apiRequestDataWithForm decodedForm requestData))
-        ApiStreamingRequestBody maximumBytes -> decodeInitialFieldsWithBody (newApiStreamingRequest maximumBytes request)
+        ApiStreamingRequestBody maximumBytes -> decodeInitialFieldsWithBody (newApiStreamingRequest (apiRequestBodyByteLimitValue maximumBytes) request)
         ApiMultipartRequestBody storage limits -> decodeInitialFieldsWithBody (newApiMultipartRequest storage limits request)
 
     decodeInitialFieldsWithBody newBody =

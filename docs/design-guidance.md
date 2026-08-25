@@ -1663,6 +1663,18 @@ empty-list case becomes unrepresentable. Focused regressions exercise decoded va
 field rejection, ordered accumulation, form decoding, explicit invalid declarations, and
 field-failure rendering.
 
+### Follow-up decision — PR-F5: non-negative typed API body budgets (2026-08-25)
+
+**Decision: extend `ApiRequestBody` with one opaque `ApiRequestBodyByteLimit`, checked from a
+`Natural` against the private WAI reader's `Int` range.** Buffered, URL-encoded, and streaming
+declarations previously accepted raw signed `Int` budgets, leaving negative declarations to be
+interpreted incidentally and differently by readers. The endpoint declaration already owns body
+consumer selection and resource bounds, so a separate runtime validation layer would duplicate that
+ownership. The smart constructor rejects values beyond `maxBound :: Int`; only the three private
+reader adapters convert a valid value to `Int`. Thus zero and ordinary values remain valid, oversized
+bodies retain their existing typed 413 behavior, and neither negative nor overflowed public budgets
+can be authored.
+
 ### Follow-up decision — PR-S1: durable security time is Unix epoch time, not process uptime (2026-08-23)
 
 **Decision: extend the existing `AccountWorkflow` clock seam with

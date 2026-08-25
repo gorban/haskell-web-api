@@ -4,7 +4,12 @@
 -- | Private representation shared by the endpoint declaration, family, and
 -- runtime modules.  Keeping the constructors here lets the route-family
 -- interpreter inspect declarations without making 'ApiPath' or endpoint
--- constructors public API.
+-- constructors public API. Decision record (PR-F5, 2026-08-25): API body
+-- declarations use the opaque 'ApiRequestBodyByteLimit', checked from a
+-- 'Natural' against the private reader's 'Int' range. This extends the one
+-- endpoint declaration boundary instead of adding runtime validation; the
+-- three body readers convert it exactly once, so negative and overflowed
+-- budgets cannot be authored. See @docs/design-guidance.md@.
 module HarchWeb.Api.Endpoint.Internal
   ( ApiMethod (..),
     apiMethodText,
@@ -18,6 +23,10 @@ module HarchWeb.Api.Endpoint.Internal
     withApiMultipartRequest,
     ApiStreamingRequest (..),
     RequestBodyReadFailure (..),
+    ApiRequestBodyByteLimit,
+    apiRequestBodyByteLimit,
+    requireApiRequestBodyByteLimit,
+    apiRequestBodyByteLimitValue,
     ApiRequestBody (..),
     apiRouteEndpoint,
     apiRouteEndpointWithFieldFailure,
@@ -32,6 +41,7 @@ where
 
 import Data.ByteString qualified as ByteString
 import Data.List.NonEmpty (NonEmpty)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Typeable (Typeable)
 import HarchWeb.Api.Multipart
@@ -44,6 +54,27 @@ import HarchWeb.Api.Request
 import HarchWeb.Api.Response
 import HarchWeb.Server.RequestBody
 import Numeric.Natural (Natural)
+
+-- | A bounded API request body size that is non-negative and representable by
+-- the private WAI reader's 'Int' limit. Construct it with
+-- 'apiRequestBodyByteLimit'; the constructor stays private so endpoint
+-- declarations cannot introduce a negative or out-of-range budget.
+newtype ApiRequestBodyByteLimit = ApiRequestBodyByteLimit Natural
+
+apiRequestBodyByteLimit :: Natural -> Maybe ApiRequestBodyByteLimit
+apiRequestBodyByteLimit byteCount
+  | byteCount <= fromIntegral (maxBound :: Int) = Just (ApiRequestBodyByteLimit byteCount)
+  | otherwise = Nothing
+
+-- | Require a literal or otherwise independently validated byte limit. Use
+-- 'apiRequestBodyByteLimit' when untrusted configuration needs an ordinary
+-- recoverable validation result.
+requireApiRequestBodyByteLimit :: Natural -> ApiRequestBodyByteLimit
+requireApiRequestBodyByteLimit byteCount =
+  fromMaybe (error "API request body byte limit exceeds Int") (apiRequestBodyByteLimit byteCount)
+
+apiRequestBodyByteLimitValue :: ApiRequestBodyByteLimit -> Int
+apiRequestBodyByteLimitValue (ApiRequestBodyByteLimit byteCount) = fromIntegral byteCount
 
 -- | Methods an 'ApiRouteEndpoint' can declare. @HEAD@ is synthesized from
 -- @GET@ and @OPTIONS@ from the declared method table for a matched path.
@@ -153,16 +184,16 @@ data ApiRequestBody body where
   ApiNoRequestBody :: ApiRequestBody ()
   ApiBufferedRequestBody ::
     MissingContentTypePolicy ->
-    Int ->
+    ApiRequestBodyByteLimit ->
     [ApiBodyDecoder body] ->
     ApiRequestBody body
   ApiUrlEncodedFormRequestBody ::
     MissingContentTypePolicy ->
-    Int ->
+    ApiRequestBodyByteLimit ->
     Natural ->
     ApiRequestBody ApiForm
   ApiStreamingRequestBody ::
-    Int ->
+    ApiRequestBodyByteLimit ->
     ApiRequestBody ApiStreamingRequest
   ApiMultipartRequestBody ::
     MultipartStorage stored ->

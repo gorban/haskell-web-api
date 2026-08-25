@@ -8,7 +8,7 @@ import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -21,6 +21,7 @@ import HarchWeb.Server (ProtocolResponse (..), ProtocolResponseBody (..), Respon
 import HarchWeb.Site (RouteDefinition (..))
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
+import Numeric.Natural (Natural)
 
 testEndpointTable :: [SomeApiRouteEndpoint]
 testEndpointTable =
@@ -76,6 +77,9 @@ testHeaderName value = fromMaybe (error "expected test header name to be valid")
 
 testMediaType :: Text -> ApiMediaType
 testMediaType value = fromMaybe (error "expected test media type to be valid") (apiMediaType value)
+
+bodyByteLimit :: Natural -> ApiRequestBodyByteLimit
+bodyByteLimit value = fromMaybe (error "expected test body limit to be valid") (apiRequestBodyByteLimit value)
 
 requestWithBody :: HttpTypes.RequestHeaders -> [ByteString.ByteString] -> IO Wai.Request
 requestWithBody headers chunks = do
@@ -148,6 +152,19 @@ pullAllStreamingChunks streamingRequest accumulated = do
 
 spec =
   describe "HarchWeb.Api.Endpoint" $ do
+    describe "apiRequestBodyByteLimit" $ do
+      it "accepts zero and ordinary byte limits, and rejects a Natural too large for the private Int reader" $
+        expectAll
+          ( (apiRequestBodyByteLimitValue <$> apiRequestBodyByteLimit 0 `shouldBe` Just 0)
+              :| [ apiRequestBodyByteLimitValue (bodyByteLimit 0) `shouldBe` 0,
+                   (apiRequestBodyByteLimitValue <$> apiRequestBodyByteLimit 4) `shouldBe` Just 4,
+                   apiRequestBodyByteLimitValue (bodyByteLimit 4) `shouldBe` 4,
+                   isNothing (apiRequestBodyByteLimit (fromIntegral (maxBound :: Int) + 1)) `shouldBe` True,
+                   evaluate (requireApiRequestBodyByteLimit (fromIntegral (maxBound :: Int) + 1))
+                     `shouldThrow` \(ErrorCall message) -> message == "API request body byte limit exceeds Int"
+                 ]
+          )
+
     describe "apiEndpointFamily and its route interpreters" $ do
       it "rejects an empty endpoint family" $
         case apiEndpointFamily [] of
@@ -477,7 +494,7 @@ spec =
               apiRouteEndpoint
                 ApiPost
                 (pure ())
-                (ApiBufferedRequestBody RejectMissingContentType 4 [textBodyDecoder])
+                (ApiBufferedRequestBody RejectMissingContentType (bodyByteLimit 4) [textBodyDecoder])
                 (textResponseEncoder :| [])
                 (pure . Right . apiResponse . apiEndpointRequestBody)
                 (\() -> apiResponse "unreachable")
@@ -515,7 +532,7 @@ spec =
               apiRouteEndpoint
                 ApiPost
                 (pure ())
-                (ApiBufferedRequestBody (AssumeMediaType plainTextMediaType) 4 [textBodyDecoder])
+                (ApiBufferedRequestBody (AssumeMediaType plainTextMediaType) (bodyByteLimit 4) [textBodyDecoder])
                 (textResponseEncoder :| [])
                 (pure . Right . apiResponse . apiEndpointRequestBody)
                 (\() -> apiResponse "unreachable")
@@ -553,7 +570,7 @@ spec =
               apiRouteEndpoint
                 ApiPost
                 (pure ())
-                (ApiBufferedRequestBody (AssumeMediaType plainTextMediaType) 4 [textBodyDecoder])
+                (ApiBufferedRequestBody (AssumeMediaType plainTextMediaType) (bodyByteLimit 4) [textBodyDecoder])
                 (textResponseEncoder :| [])
                 (pure . Right . apiResponse . apiEndpointRequestBody)
                 (\() -> apiResponse "unreachable")
@@ -573,7 +590,7 @@ spec =
                     <$> requiredField (queryField "source" apiTextValue)
                     <*> requiredField (formField "name" apiTextValue)
                 )
-                (ApiUrlEncodedFormRequestBody RejectMissingContentType 64 2)
+                (ApiUrlEncodedFormRequestBody RejectMissingContentType (bodyByteLimit 64) 2)
                 (textResponseEncoder :| [])
                 ( \endpointRequest -> do
                     atomicModifyIORef' handlerCalls (\callCount -> (callCount + 1, ()))
@@ -613,7 +630,7 @@ spec =
               apiRouteEndpoint
                 ApiPost
                 (requiredField (formField "name" apiTextValue))
-                (ApiUrlEncodedFormRequestBody RejectMissingContentType 64 1)
+                (ApiUrlEncodedFormRequestBody RejectMissingContentType (bodyByteLimit 64) 1)
                 (textResponseEncoder :| [])
                 ( \endpointRequest -> do
                     atomicModifyIORef' handlerCalls (\callCount -> (callCount + 1, ()))
@@ -889,7 +906,7 @@ spec =
               apiRouteEndpoint
                 ApiPost
                 (pure ())
-                (ApiStreamingRequestBody 5)
+                (ApiStreamingRequestBody (bodyByteLimit 5))
                 (textResponseEncoder :| [])
                 (\endpointRequest -> pullAllStreamingChunks (apiEndpointRequestBody endpointRequest) "")
                 (const ((apiResponse "stream too large") {apiEndpointResponseStatus = HttpTypes.status413}))
@@ -906,7 +923,7 @@ spec =
               apiRouteEndpoint
                 ApiPost
                 (pure ())
-                (ApiStreamingRequestBody 5)
+                (ApiStreamingRequestBody (bodyByteLimit 5))
                 (textResponseEncoder :| [])
                 (\endpointRequest -> pullAllStreamingChunks (apiEndpointRequestBody endpointRequest) "")
                 (const ((apiResponse "stream too large") {apiEndpointResponseStatus = HttpTypes.status413}))
@@ -922,7 +939,7 @@ spec =
               apiRouteEndpoint
                 ApiPost
                 (pure ())
-                (ApiStreamingRequestBody 5)
+                (ApiStreamingRequestBody (bodyByteLimit 5))
                 (textResponseEncoder :| [])
                 (\endpointRequest -> pullAllStreamingChunks (apiEndpointRequestBody endpointRequest) "")
                 (const ((apiResponse "stream too large") {apiEndpointResponseStatus = HttpTypes.status413}))
@@ -1014,7 +1031,7 @@ spec =
             apiRouteDefinitionWithContextNeverFailing
               ApiPost
               (requiredField (queryField "greeting" apiTextValue))
-              (ApiBufferedRequestBody (AssumeMediaType plainTextMediaType) 64 [textBodyDecoder])
+              (ApiBufferedRequestBody (AssumeMediaType plainTextMediaType) (bodyByteLimit 64) [textBodyDecoder])
               (textResponseEncoder :| [])
               ( \contextValue endpointRequest ->
                   pure

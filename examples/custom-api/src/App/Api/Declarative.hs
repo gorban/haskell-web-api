@@ -142,8 +142,8 @@ submitGreetingEndpoint =
     greetingEncoders
     (pure . apiResponse . greetingFor . requestedName . apiEndpointRequestBody)
 
-maxGreetingBodyBytes :: Int
-maxGreetingBodyBytes = 16 * 1024
+maxGreetingBodyBytes :: ApiRequestBodyByteLimit
+maxGreetingBodyBytes = requireApiRequestBodyByteLimit (16 * 1024)
 
 uploadAvatarEndpoint :: ApiRouteEndpoint () (ApiMultipartRequest InMemoryUpload) AvatarUploadFailure Text
 uploadAvatarEndpoint =
