@@ -15,6 +15,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Foldable (for_)
+import Data.List.NonEmpty (NonEmpty)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
@@ -26,6 +27,7 @@ import HarchWeb.Observability qualified as Observability
 import HarchWeb.Routing
   ( RouteCodec (..),
     RouteDispatch (..),
+    RouteMethod,
     RouteRequest (..),
     matchRouteMethod,
     renderRoute,
@@ -259,6 +261,11 @@ middlewareTimingEntry webApplication startedAt completedAt =
     [] -> []
     _ -> [("middleware", startedAt, completedAt)]
 
+-- | Decision record (DR): route-method dispatch remains the authority for a
+-- route's synthesized @HEAD@ and @OPTIONS@ responses. Client-action endpoints
+-- are a distinct declared protocol table, so ordinary action methods may not
+-- appear in the page route table; however, a client-action header can never
+-- turn 'RouteMatchedHead' or 'RouteOptions' into a state-changing action.
 dispatchRoutedRequest ::
   RoutedRequestExecution route action context ->
   RouteDispatch route context ->
@@ -274,68 +281,87 @@ dispatchRoutedRequest
         requestPath = routedRequestPath routedRequestExecution
         requestPolicyConfig = routedRequestPolicyConfig routedRequestExecution
         RouteRequest {requestContext = routedRequestContext} = routeDispatchRequest routeDispatch
-     in if isClientActionRequest request
-          then do
-            let expectedOrigin =
-                  (\host -> requestScheme requestPolicyConfig request <> "://" <> host)
-                    <$> (lookup "Host" (Wai.requestHeaders request) >>= either (const Nothing) Just . TextEncoding.decodeUtf8')
-            case validateClientActionRequest expectedOrigin request of
-              Left protocolError -> pure (BodyResponse (clientActionProtocolErrorResponse protocolError))
-              Right () -> do
-                actionBody <- readClientActionBody request
-                case actionBody >>= parseClientActionFields of
-                  Left protocolError -> pure (BodyResponse (clientActionProtocolErrorResponse protocolError))
-                  Right actionFields -> do
-                    case validateClientActionCsrf request actionFields of
-                      Left protocolError -> pure (BodyResponse (clientActionProtocolErrorResponse protocolError))
-                      Right csrfToken -> do
-                        let actionPayload =
-                              ClientActionPayload
-                                { clientActionMethod = requestMethodText request,
-                                  clientActionPath = requestPath,
-                                  clientActionFields = actionFields,
-                                  clientActionCsrfToken = lookup "_harch_csrf" actionFields,
-                                  clientActionIdempotencyKey = requestIdempotencyKey request,
-                                  clientActionPayloadContext = routedRequestContext
-                                }
-                        case decodeClientAction webApplication actionPayload of
-                          UnrecognizedClientAction ->
-                            pure
-                              (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound))
-                          MethodNotAllowedClientAction allowedMethods ->
-                            pure
-                              (ClientActionBodyResponse (clientActionMethodNotAllowedResponse allowedMethods))
-                          MalformedClientAction _ ->
-                            pure
-                              (BodyResponse (clientActionProtocolErrorResponse ClientActionPayloadMalformed))
-                          InvalidClientActionDecoder ->
-                            pure
-                              (BodyResponse (clientActionProtocolErrorResponse ClientActionDecoderInvalid))
-                          DecodedClientAction action -> do
-                            let actionRequest =
-                                  ClientActionRequest
-                                    { clientAction = action,
-                                      clientActionRequestIdempotencyKey = requestIdempotencyKey request,
-                                      clientActionContext = routedRequestContext
-                                    }
-                            authorized <- authorizeClientActionCsrf webApplication actionRequest csrfToken
-                            case authorized of
-                              False -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionCsrfRejected))
-                              True -> do
-                                maybeActionResponse <- handleClientAction webApplication actionRequest
-                                pure
-                                  ( maybe
-                                      (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound))
-                                      ClientActionBodyResponse
-                                      maybeActionResponse
-                                  )
-          else renderRouteDispatch webApplication request routeDispatch
+     in case routeRenderDispatch routeDispatch of
+          Left declaredMethods -> routeOptionsResponse declaredMethods
+          Right renderDispatch@RenderMatchedHead {} -> renderRouteDispatch webApplication request renderDispatch
+          Right renderDispatch
+            | isClientActionRequest request ->
+                do
+                  let expectedOrigin =
+                        (\host -> requestScheme requestPolicyConfig request <> "://" <> host)
+                          <$> (lookup "Host" (Wai.requestHeaders request) >>= either (const Nothing) Just . TextEncoding.decodeUtf8')
+                  case validateClientActionRequest expectedOrigin request of
+                    Left protocolError -> pure (BodyResponse (clientActionProtocolErrorResponse protocolError))
+                    Right () -> do
+                      actionBody <- readClientActionBody request
+                      case actionBody >>= parseClientActionFields of
+                        Left protocolError -> pure (BodyResponse (clientActionProtocolErrorResponse protocolError))
+                        Right actionFields -> do
+                          case validateClientActionCsrf request actionFields of
+                            Left protocolError -> pure (BodyResponse (clientActionProtocolErrorResponse protocolError))
+                            Right csrfToken -> do
+                              let actionPayload =
+                                    ClientActionPayload
+                                      { clientActionMethod = requestMethodText request,
+                                        clientActionPath = requestPath,
+                                        clientActionFields = actionFields,
+                                        clientActionCsrfToken = lookup "_harch_csrf" actionFields,
+                                        clientActionIdempotencyKey = requestIdempotencyKey request,
+                                        clientActionPayloadContext = routedRequestContext
+                                      }
+                              case decodeClientAction webApplication actionPayload of
+                                UnrecognizedClientAction ->
+                                  pure
+                                    (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound))
+                                MethodNotAllowedClientAction allowedMethods ->
+                                  pure
+                                    (ClientActionBodyResponse (clientActionMethodNotAllowedResponse allowedMethods))
+                                MalformedClientAction _ ->
+                                  pure
+                                    (BodyResponse (clientActionProtocolErrorResponse ClientActionPayloadMalformed))
+                                InvalidClientActionDecoder ->
+                                  pure
+                                    (BodyResponse (clientActionProtocolErrorResponse ClientActionDecoderInvalid))
+                                DecodedClientAction action -> do
+                                  let actionRequest =
+                                        ClientActionRequest
+                                          { clientAction = action,
+                                            clientActionRequestIdempotencyKey = requestIdempotencyKey request,
+                                            clientActionContext = routedRequestContext
+                                          }
+                                  authorized <- authorizeClientActionCsrf webApplication actionRequest csrfToken
+                                  case authorized of
+                                    False -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionCsrfRejected))
+                                    True -> do
+                                      maybeActionResponse <- handleClientAction webApplication actionRequest
+                                      pure
+                                        ( maybe
+                                            (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound))
+                                            ClientActionBodyResponse
+                                            maybeActionResponse
+                                        )
+            | otherwise -> renderRouteDispatch webApplication request renderDispatch
 
-renderRouteDispatch :: Application route action context -> Wai.Request -> RouteDispatch route context -> IO (Response route context)
-renderRouteDispatch webApplication request routeDispatch =
+data RouteRenderDispatch route context
+  = RenderNotFound (RouteRequest route context)
+  | RenderMethodNotAllowed (NonEmpty RouteMethod)
+  | RenderMatched (RouteRequest route context)
+  | RenderMatchedHead (RouteRequest route context)
+
+routeRenderDispatch :: RouteDispatch route context -> Either (NonEmpty RouteMethod) (RouteRenderDispatch route context)
+routeRenderDispatch routeDispatch =
   case routeDispatch of
-    RouteNotFound routeRequest -> renderRequestResponse webApplication request routeRequest
-    RouteMethodNotAllowed _ declaredMethods ->
+    RouteNotFound routeRequest -> Right (RenderNotFound routeRequest)
+    RouteMethodNotAllowed _ declaredMethods -> Right (RenderMethodNotAllowed declaredMethods)
+    RouteMatched routeRequest -> Right (RenderMatched routeRequest)
+    RouteMatchedHead routeRequest -> Right (RenderMatchedHead routeRequest)
+    RouteOptions _ declaredMethods -> Left declaredMethods
+
+renderRouteDispatch :: Application route action context -> Wai.Request -> RouteRenderDispatch route context -> IO (Response route context)
+renderRouteDispatch webApplication request renderDispatch =
+  case renderDispatch of
+    RenderNotFound routeRequest -> renderRequestResponse webApplication request routeRequest
+    RenderMethodNotAllowed declaredMethods ->
       pure
         ( ProtocolResponseResult
             ProtocolResponse
@@ -347,20 +373,22 @@ renderRouteDispatch webApplication request routeDispatch =
                 protocolResponseDatabaseOperations = []
               }
         )
-    RouteMatched routeRequest -> renderRequestResponse webApplication request routeRequest
-    RouteMatchedHead routeRequest -> renderRequestResponse webApplication request routeRequest
-    RouteOptions _ declaredMethods ->
-      pure
-        ( ProtocolResponseResult
-            ProtocolResponse
-              { protocolResponseStatus = Http.status204,
-                protocolResponseHeaders = [(Http.hAllow, TextEncoding.encodeUtf8 (routeAllowHeaderValue declaredMethods))],
-                protocolResponseBody = ProtocolResponseBytes ByteString.empty,
-                protocolResponseObservabilityAttributes = [],
-                protocolResponseLogEntries = [],
-                protocolResponseDatabaseOperations = []
-              }
-        )
+    RenderMatched routeRequest -> renderRequestResponse webApplication request routeRequest
+    RenderMatchedHead routeRequest -> renderRequestResponse webApplication request routeRequest
+
+routeOptionsResponse :: NonEmpty RouteMethod -> IO (Response route context)
+routeOptionsResponse declaredMethods =
+  pure
+    ( ProtocolResponseResult
+        ProtocolResponse
+          { protocolResponseStatus = Http.status204,
+            protocolResponseHeaders = [(Http.hAllow, TextEncoding.encodeUtf8 (routeAllowHeaderValue declaredMethods))],
+            protocolResponseBody = ProtocolResponseBytes ByteString.empty,
+            protocolResponseObservabilityAttributes = [],
+            protocolResponseLogEntries = [],
+            protocolResponseDatabaseOperations = []
+          }
+    )
 
 requestIdempotencyKey :: Wai.Request -> Maybe ClientActionIdempotencyKey
 requestIdempotencyKey request =

@@ -401,6 +401,41 @@ spec = do
       map Wai.responseStatus [malformed, shortCookie, duplicateCookie, duplicateCookieValues, duplicateField] `shouldBe` replicate 5 Http.status403
       readIORef handlerCalled `shouldReturn` False
 
+    it "keeps HEAD and OPTIONS client-action-looking requests in route method dispatch" $ do
+      handlerCalled <- newIORef False
+      headBodyChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
+      optionsBodyChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
+      let actionApplication =
+            sampleApplication
+              { handleClientAction = \_ -> do
+                  writeIORef handlerCalled True
+                  pure (Just (ClientActionResponse Http.status204 [] Nothing [] [] []))
+              }
+          requestWith requestMethodValue bodyChunks =
+            Wai.setRequestBodyChunks
+              (nextRequestBodyChunk bodyChunks)
+              ( (waiRequest ["known"])
+                  { Wai.requestMethod = requestMethodValue,
+                    Wai.requestHeaders =
+                      [ ("X-Harch-Action", "1"),
+                        (Http.hContentType, "application/x-www-form-urlencoded"),
+                        ("Host", "example.test"),
+                        ("Origin", "http://example.test"),
+                        ("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                      ]
+                  }
+              )
+      headResponse <- performWaiRequest (toWaiApplication actionApplication) (requestWith "HEAD" headBodyChunks)
+      optionsResponse <- performWaiRequest (toWaiApplication actionApplication) (requestWith "OPTIONS" optionsBodyChunks)
+      expectAll
+        ( (Wai.responseStatus headResponse `shouldBe` Http.status200)
+            :| [ readResponseBody headResponse `shouldReturn` "",
+                 Wai.responseStatus optionsResponse `shouldBe` Http.status204,
+                 lookup Http.hAllow (Wai.responseHeaders optionsResponse) `shouldBe` Just "GET, HEAD, OPTIONS",
+                 readIORef handlerCalled `shouldReturn` False
+               ]
+        )
+
     it "runs CSRF authorization after decoding and before an action handler" $ do
       authorizationCalled <- newIORef False
       handlerCalled <- newIORef False

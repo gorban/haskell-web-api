@@ -291,7 +291,11 @@ applicative decoder. Render framework forms with `HarchWeb.Controls.actionForm` 
 repeat action paths, methods, or application-owned field lookups in the component and server layers.
 The codec rejects duplicate method/path identities at construction.
 
-Server dispatch first matches the rendered path and declared method, then runs only that endpoint's
+Server dispatch gives a page or API route's synthesized @HEAD@ and @OPTIONS@ result precedence over
+the client-action header, so a capability response cannot run a state-changing action. Ordinary
+client-action endpoints are a separate declared protocol table and may not appear in the page route
+table; their codec then owns the declared action method, path, and decoder. For a route endpoint, it
+first matches the rendered path and declared method, then runs only that endpoint's
 decoder. An unknown path is `404`; a known path with no declared method is `405` with `Allow`; malformed
 matched fields are `400`; and a successful decode stays on the application rail, where expected domain
 validation can return the existing localized `422` region patch. Independent fields use the accumulating
