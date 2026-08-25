@@ -1820,6 +1820,20 @@ has reached its authenticated MFA-enrollment workflow, and hashes server-generat
 it is not an unauthenticated caller-controlled KDF surface. No other production caller reaches
 `hashPassword`, `verifyPassword`, `hashRecoveryCode`, or `verifyRecoveryCode` outside those paths.
 
+### Decision record — DQ: peer-address attribution before a rejected TLS handshake (2026-08-25)
+
+**Decision: flag and stop (option 3) until the transport exposes the accepted peer address before
+TLS setup.** The existing FIFO bridge from Warp's `onOpen` hook to `setFork` is demonstrably
+incorrect: it associates a subsequent connection with the prior connection's address. Replacing it
+with a worker-thread map keyed by `onOpen` was investigated with a real source-bound loopback
+connection (`127.0.0.2` after a successful `127.0.0.1` handshake). WarpTLS rejects plaintext before
+it invokes `onOpen`, so the replacement correctly has no address at all for precisely the
+`InsecureConnectionDenied` telemetry DQ must preserve. The queue is not a safe fallback—it produces
+false peer identity—while silently omitting or inventing an address changes observability correctness.
+The framework needs a small, general primitive from Warp/WarpTLS (or a transport boundary that owns
+the accepted socket and peer address before handshake processing) before DQ can be completed and
+tested without a fabricated association. DQ remains open with that concrete prerequisite.
+
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
 the full designed scope shipped; a partial slice must say so and name its follow-up.
 
