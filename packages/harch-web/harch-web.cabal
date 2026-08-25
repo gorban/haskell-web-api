@@ -132,6 +132,7 @@ library
     HarchWeb.Server.RequestAdmission
     HarchWeb.Server.RequestBody
     HarchWeb.Server.RequestExecution
+    HarchWeb.Server.RequestObservability
     HarchWeb.Server.Response
     HarchWeb.Server.ResponseRendering
     HarchWeb.Server.Runtime

@@ -23,14 +23,11 @@ import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Document (NavigationRuntime)
 import HarchWeb.Document qualified as Document
-import HarchWeb.Observability qualified as Observability
 import HarchWeb.Routing
-  ( RouteCodec (..),
-    RouteDispatch (..),
+  ( RouteDispatch (..),
     RouteMethod,
     RouteRequest (..),
     matchRouteMethod,
-    renderRoute,
     routeAllowHeaderValue,
   )
 import HarchWeb.Routing qualified as Routing
@@ -43,14 +40,10 @@ import HarchWeb.Security
     httpsRedirectResponse,
     mkPathPrefix,
     mkUrlPath,
-    prependRequestLogContext,
-    requestContextObservabilityAttributes,
-    requestLogContextFields,
     requestPathPrefix,
     requestPolicyResponseHeaders,
     requestRedirectLocation,
     requestScheme,
-    requestTraceContext,
     urlPathText,
     validateRequestHead,
     waiRequestPath,
@@ -60,6 +53,11 @@ import HarchWeb.Server.Application
 import HarchWeb.Server.ClientAction
 import HarchWeb.Server.RequestAdmission (concurrencyLimitedMiddleware)
 import HarchWeb.Server.RequestBody (RequestBodyReadFailure (..), readRequestBodyUpTo)
+import HarchWeb.Server.RequestObservability
+  ( RequestExecutionTimings (..),
+    reportEarlyRequestObservability,
+    reportRoutedResponseObservability,
+  )
 import HarchWeb.Server.Response
 import HarchWeb.Server.ResponseRendering
 import HarchWeb.Server.StaticAssets (serveStaticAssetResponse)
@@ -106,16 +104,6 @@ runEarlyRequestStages webApplication request requestPath policyResponseHeaders =
           (applyRequestPathPrefix (mkPathPrefix (requestPathPrefix requestPolicyConfig request)) (mkUrlPath staticRoutePath))
       )
       staticResponse
-
-data RequestExecutionTimings = RequestExecutionTimings
-  { requestExecutionStartedAt :: Word64,
-    requestPolicyEvaluatedAt :: Word64,
-    requestMiddlewareTimings :: [(Text, Word64, Word64)],
-    requestRouteMatchingStartedAt :: Word64,
-    requestRouteMatchedAt :: Word64,
-    requestRenderingStartedAt :: Word64,
-    requestResponseRenderedAt :: Word64
-  }
 
 -- | Inputs that stay fixed after the framework has accepted a request for
 -- routing. Grouping them keeps the lifecycle helpers focused on their
@@ -424,19 +412,13 @@ finalizeRoutedResponse routedRequestExecution executionTimings routeRequest omit
       request = routedRequestWaiRequest routedRequestExecution
       respond = routedRequestRespond routedRequestExecution
       requestPolicyConfig = routedRequestPolicyConfig routedRequestExecution
-  let requestLogFields = requestLogContextFields requestPolicyConfig request
-      diagnosticValues = responseDiagnostics response
-      contextualizedLogs = map (prependRequestLogContext requestLogFields) (diagnosticLogEntries diagnosticValues)
-      observabilityValue = buildRoutedRequestObservability routedRequestExecution executionTimings routeRequest response diagnosticValues
   responseReceived <-
     respond
       ( omitResponseBodyWhen
           omitResponseBody
           (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request (fst <$> pageSecurity)) (toWaiResponse [] pageSecurity webApplication response))
       )
-  Observability.forceRequestObservability observabilityValue `seq`
-    reportRequestObservability webApplication observabilityValue
-      >> mapM_ (reportApplicationLog webApplication) contextualizedLogs
+  reportRoutedResponseObservability webApplication request requestPolicyConfig (routedRequestPath routedRequestExecution) executionTimings routeRequest response
   pure responseReceived
 
 omitResponseBodyWhen :: Bool -> Wai.Response -> Wai.Response
@@ -445,88 +427,5 @@ omitResponseBodyWhen omitResponseBody waiResponse =
     then Wai.responseStream (Wai.responseStatus waiResponse) (Wai.responseHeaders waiResponse) (\_write flush -> flush)
     else waiResponse
 
-buildRoutedRequestObservability ::
-  (Eq route) =>
-  RoutedRequestExecution route action context ->
-  RequestExecutionTimings ->
-  RouteRequest route context ->
-  Response route context ->
-  ResponseDiagnostics ->
-  Observability.RequestObservability
-buildRoutedRequestObservability routedRequestExecution executionTimings routeRequest response diagnosticValues =
-  let webApplication = routedRequestApplication routedRequestExecution
-      request = routedRequestWaiRequest routedRequestExecution
-      requestPolicyConfig = routedRequestPolicyConfig routedRequestExecution
-      requestPath = routedRequestPath routedRequestExecution
-   in Observability.withDatabaseOperations (diagnosticDatabaseOperations diagnosticValues) $
-        maybe id Observability.withRequestTraceContext (requestTraceContext request) $
-          Observability.buildRequestObservability
-            Observability.RequestIdentity
-              { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel (requestMethodText request),
-                Observability.requestIdentityScheme = requestScheme requestPolicyConfig request,
-                Observability.requestIdentityPath = requestPath,
-                Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath (renderRoute (routeCodec webApplication) routeRequest)
-              }
-            (responseStatusCode webApplication response)
-            (responseKind response)
-            ( requestContextObservabilityAttributes requestPolicyConfig request
-                <> diagnosticObservabilityAttributes diagnosticValues
-                <> requestTimingObservabilityAttributes
-                  (requestExecutionStartedAt executionTimings)
-                  (requestResponseRenderedAt executionTimings)
-                  ( [("request-policy", requestExecutionStartedAt executionTimings, requestPolicyEvaluatedAt executionTimings)]
-                      <> requestMiddlewareTimings executionTimings
-                      <> [ ("route-match", requestRouteMatchingStartedAt executionTimings, requestRouteMatchedAt executionTimings),
-                           ("render-response", requestRenderingStartedAt executionTimings, requestResponseRenderedAt executionTimings)
-                         ]
-                  )
-            )
-
-requestTimingObservabilityAttributes :: Word64 -> Word64 -> [(Text, Word64, Word64)] -> [Observability.ObservabilityAttribute]
-requestTimingObservabilityAttributes requestStartedAt requestCompletedAt phaseTimings =
-  intObservabilityAttribute "harch.request.start_monotonic_ns" (fromIntegral requestStartedAt)
-    : intObservabilityAttribute "harch.request.duration_ns" (nanosecondsBetween requestStartedAt requestCompletedAt)
-    : concatMap phaseTimingAttributes phaseTimings
-  where
-    phaseTimingAttributes (phaseName, phaseStartedAt, phaseEndedAt) =
-      [ intObservabilityAttribute ("harch.phase." <> phaseName <> ".start_offset_ns") (nanosecondsBetween requestStartedAt phaseStartedAt),
-        intObservabilityAttribute ("harch.phase." <> phaseName <> ".duration_ns") (nanosecondsBetween phaseStartedAt phaseEndedAt)
-      ]
-
-nanosecondsBetween :: Word64 -> Word64 -> Int
-nanosecondsBetween start end = fromIntegral (end - min start end)
-
-intObservabilityAttribute :: Text -> Int -> Observability.ObservabilityAttribute
-intObservabilityAttribute name value =
-  Observability.ObservabilityAttribute
-    { Observability.attributeName = name,
-      Observability.attributeValue = Observability.IntAttribute value
-    }
-
 requestMethodText :: Wai.Request -> Text
 requestMethodText = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode . Wai.requestMethod
-
-reportEarlyRequestObservability ::
-  Application route action context ->
-  Wai.Request ->
-  Word64 ->
-  Word64 ->
-  Text ->
-  Wai.Response ->
-  IO ()
-reportEarlyRequestObservability webApplication request requestStartedAt requestCompletedAt routePath response =
-  let requestPolicyConfig = applicationRequestPolicy webApplication
-      requestObservability =
-        maybe id Observability.withRequestTraceContext (requestTraceContext request) $
-          Observability.buildRequestObservability
-            Observability.RequestIdentity
-              { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel (requestMethodText request),
-                Observability.requestIdentityScheme = requestScheme requestPolicyConfig request,
-                Observability.requestIdentityPath = waiRequestPath requestPolicyConfig request,
-                Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath routePath
-              }
-            (Http.statusCode (Wai.responseStatus response))
-            Observability.BodyResponseKind
-            (requestContextObservabilityAttributes requestPolicyConfig request <> requestTimingObservabilityAttributes requestStartedAt requestCompletedAt [])
-   in Observability.forceRequestObservability requestObservability `seq`
-        reportRequestObservability webApplication requestObservability
