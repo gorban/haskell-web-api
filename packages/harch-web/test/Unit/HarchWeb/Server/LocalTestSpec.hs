@@ -2,8 +2,8 @@
 
 {-# SPEC #-}
 
-import Control.Concurrent (forkIO, newEmptyMVar, putMVar, readMVar, threadDelay)
-import Control.Exception (Exception (displayException), SomeException, try)
+import Control.Concurrent (forkIO, myThreadId, newEmptyMVar, putMVar, readMVar, threadDelay, throwTo)
+import Control.Exception (AsyncException (ThreadKilled), Exception (displayException), SomeException, try)
 import Control.Monad ()
 import Data.ByteString qualified as ByteString (ByteString, empty)
 import Data.ByteString.Builder qualified as Builder ()
@@ -172,6 +172,35 @@ spec = do
                    thirdResponseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "200"
                  ]
           )
+
+    it "releases an admitted slot when an asynchronous exception cancels its handler" $ do
+      admittedCount <- newIORef (0 :: Int)
+      let baseApplication = sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {requestConcurrencyLimit = mkRequestConcurrencyLimit 1})
+          interruptedApplication =
+            baseApplication
+              { renderRequestResponse = \request routeRequest ->
+                  case requestRoute routeRequest of
+                    KnownRoute -> do
+                      requestNumber <- atomicModifyIORef' admittedCount (\count -> let next = count + 1 in (next, next))
+                      if requestNumber == 1
+                        then do
+                          requestThread <- myThreadId
+                          _ <- forkIO (throwTo requestThread ThreadKilled)
+                          threadDelay 1000000
+                          renderRequestResponse baseApplication request routeRequest
+                        else renderRequestResponse baseApplication request routeRequest
+                    _ -> renderRequestResponse baseApplication request routeRequest
+              }
+      withLocalTestServer interruptedApplication $ \localTestServer -> do
+        firstResponseSignal <- newEmptyMVar
+        _ <-
+          forkIO $
+            try (readRawLoopbackHttpResponse (localServerPort localTestServer) "GET /known HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+              >>= putMVar firstResponseSignal
+        waitUntilIORefEquals admittedCount 1
+        _ <- readMVar firstResponseSignal :: IO (Either SomeException ByteString.ByteString)
+        secondResponseBytes <- readRawLoopbackHttpResponse (localServerPort localTestServer) "GET /known HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        secondResponseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "200"
 
   describe "withLocalTestServerForApplication" $ do
     it "serves an already-built Wai.Application over a real loopback HTTP listener" $ do

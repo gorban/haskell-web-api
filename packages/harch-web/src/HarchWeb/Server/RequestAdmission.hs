@@ -13,7 +13,7 @@ module HarchWeb.Server.RequestAdmission
   )
 where
 
-import Control.Exception (finally)
+import Control.Exception (finally, mask)
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import HarchWeb.Security (RequestConcurrencyLimit, requestConcurrencyLimitValue)
 import Network.HTTP.Types qualified as Http
@@ -51,13 +51,19 @@ newRequestConcurrencyGate limit =
 -- '503' before route parsing, middleware, observability, or body reads,
 -- rather than making a caller wait for a slot. A slot is held for the
 -- request's whole lifetime, including a streamed response, and always
--- released — on ordinary completion or any exception.
+-- released — on ordinary completion or any exception. Acquisition and
+-- installing that cleanup happen under 'mask', so an async exception cannot
+-- arrive in between and permanently consume capacity. In particular, an SSE
+-- response holds its slot for the lifetime of its stream: a finite
+-- 'requestConcurrencyLimit' therefore reserves that many connections across
+-- ordinary requests and streams together.
 concurrencyGateMiddleware :: RequestConcurrencyGate -> Wai.Middleware
-concurrencyGateMiddleware gate app request respond = do
-  admitted <- acquireConcurrencySlot gate
-  if admitted
-    then app request respond `finally` releaseConcurrencySlot gate
-    else respond concurrencyLimitResponse
+concurrencyGateMiddleware gate app request respond =
+  mask $ \restore -> do
+    admitted <- acquireConcurrencySlot gate
+    if admitted
+      then restore (app request respond) `finally` releaseConcurrencySlot gate
+      else restore (respond concurrencyLimitResponse)
 
 acquireConcurrencySlot :: RequestConcurrencyGate -> IO Bool
 acquireConcurrencySlot gate =
