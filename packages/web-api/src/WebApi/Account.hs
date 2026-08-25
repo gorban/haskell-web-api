@@ -11,6 +11,7 @@ module WebApi.Account
     PendingRegistrationStoragePolicy,
     RegistrationDeliveryTimeout,
     PendingAccount (..),
+    EmailVerificationEnvironment (..),
     RegistrationEnvironment (..),
     RegistrationRequest (..),
     ResendVerificationError (..),
@@ -209,29 +210,37 @@ data RegistrationRequest = RegistrationRequest
     registrationDisplayName :: Maybe Text
   }
 
--- | The dependencies and clock a registration attempt runs against.
--- Grouping these lets one call construct a single value instead of
--- threading eight independent, same-shaped-in-places arguments; a caller
--- that wants only @HarchWeb.Password.hashPassword@ can build this once and
--- reuse it, replacing the old default-hasher convenience functions.
+-- | The shared dependencies and clock for creating or replacing an email
+-- verification token.  Registration and a later resend have the same
+-- persistence, delivery, locale, URL, and expiry concerns, so this is one
+-- reusable context rather than forcing the resend path to thread them as
+-- seven positional inputs.
+data EmailVerificationEnvironment = EmailVerificationEnvironment
+  { verificationStore :: AccountStore,
+    verificationDeliveryTimeout :: RegistrationDeliveryTimeout,
+    verificationDelivery :: EmailDelivery,
+    verificationLocale :: EmailLocale,
+    verificationUrl :: EmailVerificationToken -> Text,
+    verificationNow :: UnixTimeNanoseconds,
+    verificationLifetime :: Word64
+  }
+
+-- | The dependencies specific to creating a pending registration.
+-- Password hashing and storage policy remain separate from the reusable
+-- verification lifecycle in 'EmailVerificationEnvironment', so callers name
+-- both roles instead of conflating registration-only work with a resend.
 data RegistrationEnvironment = RegistrationEnvironment
   { registrationPasswordHasher :: PasswordHashingPolicy -> Password -> IO (Maybe PasswordHash),
     registrationHashingPolicy :: PasswordHashingPolicy,
     registrationPasswordWorkGate :: PasswordWorkGate,
     registrationStoragePolicy :: PendingRegistrationStoragePolicy,
-    registrationDeliveryTimeout :: RegistrationDeliveryTimeout,
-    registrationStore :: AccountStore,
-    registrationDelivery :: EmailDelivery,
-    registrationLocale :: EmailLocale,
-    registrationVerificationUrl :: EmailVerificationToken -> Text,
-    registrationNow :: UnixTimeNanoseconds,
-    registrationLifetime :: Word64
+    registrationVerificationEnvironment :: EmailVerificationEnvironment
   }
 
 registerAccount :: RegistrationEnvironment -> RegistrationRequest -> IO (Either RegistrationError RegistrationResult)
 registerAccount environment request =
   runExceptT $ do
-    expiresAt <- fromMaybeError RegistrationClockOverflow (addNanoseconds now verificationLifetime)
+    expiresAt <- fromMaybeError RegistrationClockOverflow (addNanoseconds now verificationLifetimeNanoseconds)
     maybeInputs <-
       liftIO $
         withPasswordWork
@@ -272,13 +281,14 @@ registerAccount environment request =
     passwordHashingPolicy = registrationHashingPolicy environment
     passwordWorkGate = registrationPasswordWorkGate environment
     storagePolicy = registrationStoragePolicy environment
-    deliveryTimeout = registrationDeliveryTimeout environment
-    accountStore = registrationStore environment
-    emailDelivery = registrationDelivery environment
-    locale = registrationLocale environment
-    renderVerificationUrl = registrationVerificationUrl environment
-    now = registrationNow environment
-    verificationLifetime = registrationLifetime environment
+    verificationEnvironment = registrationVerificationEnvironment environment
+    deliveryTimeout = verificationDeliveryTimeout verificationEnvironment
+    accountStore = verificationStore verificationEnvironment
+    emailDelivery = verificationDelivery verificationEnvironment
+    locale = verificationLocale verificationEnvironment
+    renderVerificationUrl = verificationUrl verificationEnvironment
+    now = verificationNow verificationEnvironment
+    verificationLifetimeNanoseconds = verificationLifetime verificationEnvironment
     emailAddress = registrationEmail request
     password = registrationPassword request
 
@@ -318,24 +328,26 @@ confirmEmailVerificationAt accountStore now token =
       pure acceptedVerification
 
 resendEmailVerificationAt ::
-  AccountStore ->
-  RegistrationDeliveryTimeout ->
-  EmailDelivery ->
-  EmailLocale ->
-  (EmailVerificationToken -> Text) ->
-  UnixTimeNanoseconds ->
-  Word64 ->
+  EmailVerificationEnvironment ->
   AccountProfile ->
   IO (Either ResendVerificationError ())
-resendEmailVerificationAt accountStore deliveryTimeout emailDelivery locale renderVerificationUrl now verificationLifetime profile =
+resendEmailVerificationAt verificationEnvironment profile =
   runExceptT $ do
     guardError ResendVerificationNoLongerPending (not (accountProfileEmailVerified profile))
-    expiresAt <- fromMaybeError ResendVerificationClockOverflow (addNanoseconds now verificationLifetime)
+    expiresAt <- fromMaybeError ResendVerificationClockOverflow (addNanoseconds now verificationLifetimeNanoseconds)
     token <- liftIO generateEmailVerificationToken
     let verification = mkStoredEmailVerification (accountProfileId profile) (accountProfileEmail profile) expiresAt token
     replaced <- liftAccountStore ResendVerificationStoreError (replaceEmailVerification accountStore verification)
     guardError ResendVerificationNoLongerPending replaced
     deliverVerificationEmail (ResendVerificationDeliveryFailed . renderVerificationDeliveryFailure) deliveryTimeout emailDelivery locale (accountProfileEmail profile) renderVerificationUrl token
+  where
+    accountStore = verificationStore verificationEnvironment
+    deliveryTimeout = verificationDeliveryTimeout verificationEnvironment
+    emailDelivery = verificationDelivery verificationEnvironment
+    locale = verificationLocale verificationEnvironment
+    renderVerificationUrl = verificationUrl verificationEnvironment
+    now = verificationNow verificationEnvironment
+    verificationLifetimeNanoseconds = verificationLifetime verificationEnvironment
 
 liftAccountStore ::
   (AccountStoreError -> error) ->

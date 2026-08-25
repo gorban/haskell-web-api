@@ -416,7 +416,8 @@ unavailableAccountCredentialStore :: AccountCredentialStore
 unavailableAccountCredentialStore =
   AccountCredentialStore
     { findAccountCredentialByEmail = const (unavailableResult accountCredentialsUnavailable),
-      findAccountCredentialByUsername = const (unavailableResult accountCredentialsUnavailable)
+      findAccountCredentialByUsername = const (unavailableResult accountCredentialsUnavailable),
+      replacePasswordHashIfCurrent = \_ _ _ -> unavailableResult accountCredentialsUnavailable
     }
 
 unavailableLoginAttemptStore :: LoginAttemptStore

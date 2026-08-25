@@ -70,7 +70,7 @@ buildRuntimePostgresAccountCredentialStoreWithRunner ::
   source ->
   AccountCredentialStore
 buildRuntimePostgresAccountCredentialStoreWithRunner runQuery source =
-  AccountCredentialStore findCredentialByEmail findCredentialByUsername
+  AccountCredentialStore findCredentialByEmail findCredentialByUsername replacePasswordHash
   where
     findCredentialByEmail emailAddress =
       findCredential findAccountCredentialByEmailQuery [emailAddressText emailAddress]
@@ -82,6 +82,15 @@ buildRuntimePostgresAccountCredentialStoreWithRunner runQuery source =
           runStoreQuery AccountCredentialStoreUnavailable $
             runQuery source query parameters
         liftEither (decodeAccountCredentialRows rows)
+    replacePasswordHash accountId previousHash replacementHash =
+      runExceptT $ do
+        rows <-
+          runStoreQuery AccountCredentialStoreUnavailable $
+            runQuery
+              source
+              replacePasswordHashIfCurrentQuery
+              [accountIdText accountId, passwordHashText previousHash, passwordHashText replacementHash]
+        liftEither (decodePasswordHashReplacement accountId rows)
 
 buildRuntimePostgresAccountStoreWithRunner ::
   (source -> Text -> [Text] -> IO (Either Text [[Text]])) ->
@@ -184,6 +193,14 @@ decodeAccountCredentialRows rows =
       Right (Just (AccountCredential accountId passwordHash (verifiedAtValue /= "")))
     _ -> Left (AccountCredentialStoreCorruptData ("unexpected account credential lookup result: " <> Text.pack (show rows)))
 
+decodePasswordHashReplacement :: AccountId -> [[Text]] -> Either AccountCredentialStoreError Bool
+decodePasswordHashReplacement accountId rows =
+  case rows of
+    [] -> Right False
+    [[returnedAccountId]]
+      | returnedAccountId == accountIdText accountId -> Right True
+    _ -> Left (AccountCredentialStoreCorruptData ("unexpected password-hash replacement result: " <> Text.pack (show rows)))
+
 decodeAccountProfileRows :: AccountId -> [[Text]] -> Either AccountStoreError (Maybe AccountProfile)
 decodeAccountProfileRows accountId rows =
   case rows of
@@ -285,13 +302,14 @@ stagePendingRegistrationParameters storagePolicy pendingAccount =
         then now - pendingRegistrationClaimLeaseNanoseconds storagePolicy
         else 0
 
-stagePendingRegistrationQuery, completePendingRegistrationDeliveryQuery, releasePendingRegistrationDeliveryQuery, replaceEmailVerificationQuery, findEmailVerificationQuery, consumeEmailVerificationQuery :: Text
+stagePendingRegistrationQuery, completePendingRegistrationDeliveryQuery, releasePendingRegistrationDeliveryQuery, replaceEmailVerificationQuery, findEmailVerificationQuery, consumeEmailVerificationQuery, replacePasswordHashIfCurrentQuery :: Text
 stagePendingRegistrationQuery = "SELECT outcome, value FROM web_api.stage_pending_registration($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);"
 completePendingRegistrationDeliveryQuery = "UPDATE web_api.email_verifications SET delivery_state = 'delivered', delivery_claimed_at_nanoseconds = NULL WHERE account_id = $1 AND token_digest = $2 AND delivery_state = 'claimed' RETURNING account_id;"
 releasePendingRegistrationDeliveryQuery = "UPDATE web_api.email_verifications SET delivery_state = 'awaiting', delivery_claimed_at_nanoseconds = NULL WHERE account_id = $1 AND token_digest = $2 AND delivery_state = 'claimed' RETURNING account_id;"
 replaceEmailVerificationQuery = "WITH pending_account AS (SELECT account_id FROM web_api.accounts WHERE account_id = $1 AND email_verified_at_nanoseconds IS NULL FOR UPDATE), removed_verifications AS (DELETE FROM web_api.email_verifications WHERE account_id IN (SELECT account_id FROM pending_account)) INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds) SELECT $2, account_id, $3, $4 FROM pending_account RETURNING account_id;"
 findEmailVerificationQuery = "SELECT account_id, email_normalized, expires_at_nanoseconds FROM web_api.email_verifications WHERE token_digest = $1;"
 consumeEmailVerificationQuery = "WITH consumed_verification AS (DELETE FROM web_api.email_verifications WHERE token_digest = $1 AND expires_at_nanoseconds > $2 RETURNING account_id) UPDATE web_api.accounts SET email_verified_at_nanoseconds = $2 WHERE account_id IN (SELECT account_id FROM consumed_verification) RETURNING account_id;"
+replacePasswordHashIfCurrentQuery = "UPDATE web_api.accounts SET password_hash = $3 WHERE account_id = $1 AND password_hash = $2 RETURNING account_id;"
 
 findAccountCredentialByEmailQuery, findAccountCredentialByUsernameQuery, findAccountProfileQuery :: Text
 findAccountCredentialByEmailQuery = "SELECT account_id, password_hash, COALESCE(email_verified_at_nanoseconds::TEXT, '') FROM web_api.accounts WHERE email_normalized = $1;"

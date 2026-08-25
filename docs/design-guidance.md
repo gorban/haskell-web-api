@@ -1870,6 +1870,39 @@ has reached its authenticated MFA-enrollment workflow, and hashes server-generat
 it is not an unauthenticated caller-controlled KDF surface. No other production caller reaches
 `hashPassword`, `verifyPassword`, `hashRecoveryCode`, or `verifyRecoveryCode` outside those paths.
 
+### Decision record — DM: opportunistic password-hash migration (2026-08-25)
+
+**Decision: extend the existing account-credential store with an atomic
+compare-and-replace operation, rather than add a migration table, a background
+worker, or a second login path.** After a bounded, valid legacy Argon2id hash
+verifies, the password-login workflow may spend one separately admitted current-policy
+hash and asks the store to replace only the account's same old hash. A concurrent
+successful login or password change therefore produces a harmless no-op instead of
+overwriting newer credentials; only one request upgrades a particular old hash.
+The rehash happens before the existing email/MFA classification, but failures to
+admit the optional extra work, native-hash failures, and store failures do not alter
+the authentication result: accepted legacy hashes stay valid, and a later successful
+login can retry. A stored policy is eligible only when every Argon2 cost is no greater
+than the target and at least one is lower; a mixed stronger/weaker policy is retained
+so migration never lowers an existing cost. This is a narrow application credential
+lifecycle extension, not a new framework credential protocol.
+
+### Decision record — DM: ACME temporary-state ownership and runtime challenge authority (2026-08-25)
+
+**Decision: keep both protections at the existing ACME runtime/challenge boundaries, rather than
+adding a diagnostic retention path or a fallback challenge matcher.** Certbot's temporary state
+directory is created by `prepareCertbotManualTlsBindPlanWithLogger`, which is therefore the only
+layer that can guarantee deletion if directory setup, certificate-name validation, process launch,
+certbot, certificate validation, or certificate publication throws. The successful return transfers
+that directory's cleanup ownership to `RunningAcmeRuntimeServer`; every earlier exception removes it
+immediately. Failure diagnostics retain the directly relevant executable/exit/stdout/stderr result,
+but do not keep a directory containing the ACME account key or copy its log content into an exception.
+
+Runtime HTTP-01 challenges now require the configured domain to equal an actually supplied `Host`
+value (after the existing port stripping). A hostless request cannot establish entitlement to a
+domain-specific challenge, so it is an ordinary non-match. This is a narrow correction to the one
+existing challenge matcher; no new routing policy or hostname inference is introduced.
+
 ### Decision record — DQ: peer-address attribution before a rejected TLS handshake (2026-08-25)
 
 **Decision: flag and stop (option 3) until the transport exposes the accepted peer address before

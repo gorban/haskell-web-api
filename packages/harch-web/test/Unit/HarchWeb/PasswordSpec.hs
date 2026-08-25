@@ -101,10 +101,16 @@ spec = do
             :| [ passwordHashText (required "read password hash" (readPasswordHash (passwordHashText passwordHash)))
                    `shouldBe` passwordHashText passwordHash,
                  passwordHashWorkKibibytes passwordHash `shouldBe` Just 8,
+                 passwordHashNeedsRehash defaultPasswordHashingPolicy passwordHash `shouldBe` True,
                  verifyPassword samplePassword passwordHash `shouldBe` True,
                  verifyPassword (mkPassword "wrong password") passwordHash `shouldBe` False
                ]
         )
+
+    it "does not downgrade a mixed stronger and weaker stored policy" $ do
+      let mixedPolicy = required "mixed policy" (mkPasswordHashingPolicy (argon2Iterations 1) (argon2MemoryKib 131072) (argon2Parallelism 1))
+          mixedHash = required "mixed hash" (hashPasswordWithSalt mixedPolicy sampleSalt samplePassword)
+      passwordHashNeedsRehash defaultPasswordHashingPolicy mixedHash `shouldBe` False
 
     it "rejects malformed, unsupported, and truncated stored hashes" $ do
       expectAll

@@ -18,7 +18,7 @@ import Data.Text qualified as Text
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Acme
-import HarchWeb.Acme.Certbot.Runtime (runtimeAcmeBindPlans, startAcmeRuntimeServersWithRequestTransportLimits, stopAcmeRuntimeServers)
+import HarchWeb.Acme.Certbot.Runtime (RuntimeAcmeServerEnvironment (..), runtimeAcmeBindPlans, startAcmeRuntimeServersWithRequestTransportLimits, stopAcmeRuntimeServers)
 import HarchWeb.Acme.Challenge (acmeChallengeRoutePath)
 import HarchWeb.Observability (planObservabilityStartup)
 import HarchWeb.Security (RequestPolicyConfig, requestHeadLimits, requestTransportLimits)
@@ -91,7 +91,17 @@ runServerWithStartupPlan waiMiddleware outputHandle config webApplication startu
         stopRuntimeServers
         ( \httpServers ->
             bracket
-              (startAcmeRuntimeServersWithRequestTransportLimits webrootStore runtimeRequestHeadLimits runtimeRequestTransportLimits (runtimeAcmeBindPlans startupPlan) runtimeApplication connectionReporter (reportApplicationLog webApplication))
+              ( startAcmeRuntimeServersWithRequestTransportLimits
+                  RuntimeAcmeServerEnvironment
+                    { runtimeAcmeWebrootStore = webrootStore,
+                      runtimeAcmeRequestHeadLimits = runtimeRequestHeadLimits,
+                      runtimeAcmeRequestTransportLimits = runtimeRequestTransportLimits,
+                      runtimeAcmeApplication = runtimeApplication,
+                      runtimeAcmeConnectionReporter = connectionReporter,
+                      runtimeAcmeApplicationLogger = reportApplicationLog webApplication
+                    }
+                  (runtimeAcmeBindPlans startupPlan)
+              )
               stopAcmeRuntimeServers
               ( \acmeServers ->
                   bracket

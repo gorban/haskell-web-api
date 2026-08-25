@@ -8,10 +8,10 @@ import Control.Monad (unless)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import HarchWeb.Email (mkEmailAddress)
-import HarchWeb.Password (defaultPasswordHashingPolicy, hashPasswordWithSalt, mkPassword, passwordHashText)
+import HarchWeb.Password (defaultPasswordHashingPolicy, hashPasswordWithSalt, mkPassword, passwordHashText, readPasswordHash)
 import HarchWeb.Username (mkUsername)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
-import Unit.WebApi.TestSupport (accountId, databaseConfig, emailAddress, required)
+import Unit.WebApi.TestSupport (accountId, databaseConfig, emailAddress, required, shouldReturnEqual)
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Login
 import WebApi.Postgres.Testing (buildRuntimePostgresAccountCredentialStore, buildRuntimePostgresAccountCredentialStoreWithRunner, newPostgresPool, runPostgresMigrationsForRuntime)
@@ -45,6 +45,22 @@ spec = do
       findAccountCredentialByUsername store username `shouldSatisfyEqual` \case
         Right (Just credential) -> accountCredentialId credential == accountId
         _ -> False
+
+    it "conditionally replaces only the verified legacy hash" $ do
+      let replacementHash = required "replacement password hash" (hashPasswordWithSalt defaultPasswordHashingPolicy "fedcba9876543210" (mkPassword "correct horse battery staple"))
+          store = buildRuntimePostgresAccountCredentialStoreWithRunner runner databaseConfig
+          runner _ query parameters = do
+            expectAll
+              ( (query `shouldBe` "UPDATE web_api.accounts SET password_hash = $3 WHERE account_id = $1 AND password_hash = $2 RETURNING account_id;")
+                  :| [parameters `shouldBe` ["account_01", encodedPasswordHash, passwordHashText replacementHash]]
+              )
+            pure (Right [["account_01"]])
+      replacePasswordHashIfCurrent store accountId (required "legacy password hash" (readPasswordHash encodedPasswordHash)) replacementHash
+        `shouldReturnEqual` Right True
+
+      let unchangedStore = buildRuntimePostgresAccountCredentialStoreWithRunner (\_ _ _ -> pure (Right [])) databaseConfig
+      replacePasswordHashIfCurrent unchangedStore accountId (required "legacy password hash" (readPasswordHash encodedPasswordHash)) replacementHash
+        `shouldReturnEqual` Right False
 
     it "maps absent, malformed, and unavailable credential results to typed outcomes" $ do
       let storeFor result = buildRuntimePostgresAccountCredentialStoreWithRunner (\_ _ _ -> pure result) databaseConfig

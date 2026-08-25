@@ -76,7 +76,7 @@ spec =
       requestHostWithoutPort matchingRequest `shouldBe` Just "example.com"
       matchesRuntimeAcmeChallenge defaultRequestPolicy matchingRequest challenge `shouldBe` True
       matchesRuntimeAcmeChallenge defaultRequestPolicy mismatchedHostRequest challenge `shouldBe` False
-      matchesRuntimeAcmeChallenge defaultRequestPolicy hostlessRequest challenge `shouldBe` True
+      matchesRuntimeAcmeChallenge defaultRequestPolicy hostlessRequest challenge `shouldBe` False
       matchesRuntimeAcmeChallenge defaultRequestPolicy missingTokenRequest challenge `shouldBe` False
       registerAcmeChallenges challengeStore [challenge]
       registeredChallenges <- unwrapChallengeStore challengeStore

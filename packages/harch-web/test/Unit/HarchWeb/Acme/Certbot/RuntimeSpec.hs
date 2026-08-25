@@ -2,12 +2,13 @@
 
 {-# SPEC #-}
 
-import Control.Exception (evaluate, finally)
+import Control.Exception (evaluate, finally, try)
 import Data.List (isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Text qualified as Text
 import HarchWeb
-import System.Directory (removePathForcibly)
-import System.FilePath ((</>))
+import System.Directory (doesDirectoryExist, removePathForcibly)
+import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (callProcess)
 
@@ -202,3 +203,38 @@ spec =
                     readFile (sharedDirectory </> "privkey.pem") `shouldReturn` "FAKE KEY\n"
               )
               `finally` removePathForcibly certbotCleanupDirectory
+
+    it "removes the temporary ACME account-key directory when certbot preparation fails" $
+      withSystemTempDirectory "harch-web-certbot-capture" $ \captureDirectory -> do
+        let capturedConfigDirectory = captureDirectory </> "config-directory"
+            certbotConfig =
+              CertbotConfig
+                { certbotExecutable = "placeholder",
+                  certbotArguments = ["certonly", "--cert-name", "test-cert", "--capture-config-directory", Text.pack capturedConfigDirectory]
+                }
+        withFakeCertbotScript
+          [ "#!/bin/sh",
+            "set -eu",
+            "config_dir=''",
+            "capture_path=''",
+            "while [ \"$#\" -gt 0 ]; do",
+            "  case \"$1\" in",
+            "    --config-dir) config_dir=\"$2\"; shift 2 ;;",
+            "    --capture-config-directory) capture_path=\"$2\"; shift 2 ;;",
+            "    *) shift ;;",
+            "  esac",
+            "done",
+            "printf '%s' \"$config_dir\" > \"$capture_path\"",
+            "exit 42"
+          ]
+          $ \scriptPath -> do
+            webrootStore <- newCertbotWebrootStore
+            let failingConfig = certbotConfig {certbotExecutable = scriptPath}
+                failingPlan = runtimeAcmePlanWith (certbotConfigValue {acmeCertbotConfig = failingConfig})
+            result <-
+              try (prepareCertbotManualTlsBindPlan webrootStore failingPlan failingConfig) :: IO (Either IOError (Maybe ManualTlsBindPlan, FilePath))
+            case result of
+              Left _ -> pure ()
+              Right _ -> expectationFailure "expected the failing certbot process to abort preparation"
+            stateDirectory <- takeDirectory <$> readFile capturedConfigDirectory
+            doesDirectoryExist stateDirectory `shouldReturn` False

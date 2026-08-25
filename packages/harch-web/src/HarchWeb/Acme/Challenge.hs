@@ -5,6 +5,10 @@
 -- ACME protocol and certificate-management code use this module through the
 -- framework facade. It deliberately owns both in-process challenges and the
 -- temporary certbot webroots so request dispatch has one safe HTTP-01 path.
+-- Decision (DM, 2026-08-25): a runtime challenge is selected only when the
+-- request supplies the exact configured Host domain. A hostless HTTP/1.0
+-- request cannot prove which configured challenge it is entitled to read, so
+-- it fails closed rather than treating host absence as a wildcard.
 module HarchWeb.Acme.Challenge
   ( AcmeChallengeStore (..),
     ActiveAcmeChallenge (..),
@@ -73,7 +77,7 @@ matchesRuntimeAcmeChallenge requestPolicyConfig request challenge =
   case acmeHttp01ChallengeToken requestPolicyConfig request of
     Just challengeToken ->
       challengeToken == activeAcmeChallengeToken challenge
-        && maybe True (== activeAcmeChallengeDomain challenge) (requestHostWithoutPort request)
+        && requestHostWithoutPort request == Just (activeAcmeChallengeDomain challenge)
     Nothing -> False
 
 acmeHttp01ChallengeToken :: RequestPolicyConfig -> Wai.Request -> Maybe Text

@@ -24,6 +24,7 @@ module HarchWeb.Password
     passwordHashWorkKibibytes,
     passwordHashIterations,
     passwordHashMemoryKibibytes,
+    passwordHashNeedsRehash,
     passwordHashParallelism,
     passwordWorkBudgetKibibytes,
     readPasswordHash,
@@ -167,6 +168,30 @@ passwordHashWorkKibibytes (PasswordHash storedHash) =
   passwordHashMemoryKibibytes . firstOfThree <$> parsePasswordHash storedHash
   where
     firstOfThree (policy, _, _) = policy
+
+-- | Whether a valid stored hash is uniformly weaker than a replacement
+-- policy.  A mixed policy (stronger on one Argon2 cost and weaker on another)
+-- is deliberately not replaced: opportunistic migration must never silently
+-- lower a stored cost.  The login boundary verifies first and treats a failed
+-- best-effort replacement as non-fatal, while its persistence adapter uses a
+-- conditional update on the old hash to ensure concurrent successful logins
+-- upgrade at most once.
+passwordHashNeedsRehash :: PasswordHashingPolicy -> PasswordHash -> Bool
+passwordHashNeedsRehash replacementPolicy (PasswordHash storedHash) =
+  case parsePasswordHash storedHash of
+    Nothing -> False
+    Just (storedPolicy, _, _) ->
+      policyNotStrongerThan storedPolicy replacementPolicy
+        && policyDiffers storedPolicy replacementPolicy
+
+policyNotStrongerThan :: PasswordHashingPolicy -> PasswordHashingPolicy -> Bool
+policyNotStrongerThan storedPolicy replacementPolicy =
+  passwordHashIterations storedPolicy <= passwordHashIterations replacementPolicy
+    && passwordHashMemoryKibibytes storedPolicy <= passwordHashMemoryKibibytes replacementPolicy
+    && passwordHashParallelism storedPolicy <= passwordHashParallelism replacementPolicy
+
+policyDiffers :: PasswordHashingPolicy -> PasswordHashingPolicy -> Bool
+policyDiffers storedPolicy replacementPolicy = storedPolicy /= replacementPolicy
 
 readPasswordHash :: Text -> Maybe PasswordHash
 readPasswordHash = fmap fst . readPasswordHashWithWorkKibibytes

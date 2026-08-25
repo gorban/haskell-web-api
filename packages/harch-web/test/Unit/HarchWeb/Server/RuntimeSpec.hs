@@ -13,7 +13,7 @@ import Data.Char ()
 import Data.Either ()
 import Data.Functor.Compose ()
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
-import Data.List (find, isInfixOf, isPrefixOf, isSuffixOf)
+import Data.List (find, isInfixOf, isPrefixOf)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (isNothing)
 import Data.Text ()
@@ -1367,9 +1367,7 @@ spec = do
             runServer outputHandle acmeTlsConfig observingApplication
               `shouldThrow` ( \exception ->
                                 let rendered = show (exception :: IOError)
-                                 in "user error (Certbot failed for ACME listener on 127.0.0.1:5443 with exit code ExitFailure 42.\nstdout:\n\nstderr:\nfake certbot failure\n" `isPrefixOf` rendered
-                                      && "Certbot state directory was preserved for inspection: " `isInfixOf` rendered
-                                      && "letsencrypt.log tail:\nfake letsencrypt detail\n" `isInfixOf` rendered
+                                 in "user error (Certbot failed for ACME listener on 127.0.0.1:5443 with exit code ExitFailure 42.\nstdout:\n\nstderr:\nfake certbot failure\n)" == rendered
                             )
             readIORef logEntriesReference
               `shouldReturn` [ "ACME certbot webroot registered for listener 127.0.0.1:5443",
@@ -1378,7 +1376,7 @@ spec = do
                                "ACME certbot webroot unregistered for listener 127.0.0.1:5443"
                              ]
 
-    it "keeps certbot failure diagnostics useful when certbot exits without a logfile" $
+    it "reports certbot's direct failure output without retaining a temporary logfile" $
       withUnusedLoopbackPort $ \challengePort ->
         withCustomFakeCertbotExecutable ["#!/bin/sh", "echo fake certbot failure without log >&2", "exit 42"] $ \certbotExecutable ->
           withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
@@ -1399,9 +1397,7 @@ spec = do
             runServer outputHandle acmeTlsConfig sampleApplication
               `shouldThrow` ( \exception ->
                                 let rendered = show (exception :: IOError)
-                                 in "fake certbot failure without log" `isInfixOf` rendered
-                                      && "No certbot logfile was found at " `isInfixOf` rendered
-                                      && ".\n)" `isSuffixOf` rendered
+                                 in "user error (Certbot failed for ACME listener on 127.0.0.1:5443 with exit code ExitFailure 42.\nstdout:\n\nstderr:\nfake certbot failure without log\n)" == rendered
                             )
 
     it "fails explicitly when certbot-backed ACME listeners cannot launch the certbot executable" $

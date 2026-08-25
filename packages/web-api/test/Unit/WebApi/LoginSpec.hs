@@ -15,7 +15,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Account (accountIdText)
 import HarchWeb.LoginProtection (defaultLoginProtectionPolicy, loginProtectionLockoutNanoseconds, loginProtectionWindowNanoseconds)
-import HarchWeb.Password (PasswordHash (..), defaultPasswordHashingPolicy, hashPasswordWithSalt, mkPassword, mkPasswordWorkBudget, newPasswordWorkGate, withPasswordWork)
+import HarchWeb.Password (PasswordHash (..), argon2Iterations, argon2MemoryKib, argon2Parallelism, defaultPasswordHashingPolicy, hashPasswordWithSalt, mkPassword, mkPasswordHashingPolicy, mkPasswordWorkBudget, newPasswordWorkGate, passwordHashText, withPasswordWork)
 import HarchWeb.RecoveryCode (hashRecoveryCodeWithSalt, mkRecoveryCode, recoveryCodeHashText)
 import HarchWeb.Secret (SecretEncryptionKey, encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
 import HarchWeb.Time (unixTimeNanoseconds)
@@ -61,6 +61,73 @@ spec = do
     it "rejects an externally malformed stored password hash without native password work" $ do
       beginPasswordLogin (credentialStore (Right (Just (AccountCredential accountId (PasswordHash "malformed") True)))) unexpectedMfaStore permissiveThrottle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginRejected
+
+    it "upgrades a verified weaker hash once, without making a failed best-effort update a login failure" $ do
+      let password = mkPassword "correct horse battery staple"
+          legacyPolicy = required "legacy hashing policy" (mkPasswordHashingPolicy (argon2Iterations 1) (argon2MemoryKib 8) (argon2Parallelism 1))
+          legacyHash = required "legacy password hash" (hashPasswordWithSalt legacyPolicy "0123456789abcdef" password)
+          legacyCredential = AccountCredential accountId legacyHash True
+      storedHashReference <- newIORef legacyHash
+      replacementCallsReference <- newIORef (0 :: Int)
+      let upgradingStore =
+            AccountCredentialStore
+              ( \_ -> do
+                  currentHash <- readIORef storedHashReference
+                  pure (Right (Just (AccountCredential accountId currentHash True)))
+              )
+              (\_ -> error "unexpected username lookup")
+              ( \receivedAccountId expectedHash replacementHash -> do
+                  currentHash <- readIORef storedHashReference
+                  if receivedAccountId == accountId && passwordHashText currentHash == passwordHashText expectedHash
+                    then do
+                      modifyIORef' replacementCallsReference (+ 1)
+                      writeIORef storedHashReference replacementHash
+                      pure (Right True)
+                    else pure (Right False)
+              )
+      beginPasswordLogin upgradingStore confirmedMfaStore permissiveThrottle testPasswordWorkGate emailAddress password
+        `shouldReturnEqual` PasswordLoginMfaRequired accountId
+      beginPasswordLogin upgradingStore confirmedMfaStore permissiveThrottle testPasswordWorkGate emailAddress password
+        `shouldReturnEqual` PasswordLoginMfaRequired accountId
+      readIORef replacementCallsReference `shouldReturn` 1
+      upgradedHash <- readIORef storedHashReference
+      passwordHashText upgradedHash `shouldNotBe` passwordHashText legacyHash
+
+      failedUpdateCallsReference <- newIORef (0 :: Int)
+      let failedUpdateStore =
+            (credentialStore (Right (Just legacyCredential)))
+              { replacePasswordHashIfCurrent = \_ _ _ -> modifyIORef' failedUpdateCallsReference (+ 1) >> pure (Left (AccountCredentialStoreUnavailable "database unavailable"))
+              }
+      beginPasswordLogin failedUpdateStore confirmedMfaStore permissiveThrottle testPasswordWorkGate emailAddress password
+        `shouldReturnEqual` PasswordLoginMfaRequired accountId
+      readIORef failedUpdateCallsReference `shouldReturn` 1
+
+      failedHashCallsReference <- newIORef (0 :: Int)
+      let failedHashStore =
+            (credentialStore (Right (Just legacyCredential)))
+              { replacePasswordHashIfCurrent = \_ _ _ -> modifyIORef' failedHashCallsReference (+ 1) >> pure (Right True)
+              }
+          failedRehasher = PasswordRehasher defaultPasswordHashingPolicy (\_ _ -> pure Nothing)
+      beginPasswordLoginWithIdentifierAndRehasher failedRehasher failedHashStore confirmedMfaStore permissiveThrottle testPasswordWorkGate (LoginEmailAddress emailAddress) password
+        `shouldReturnEqual` PasswordLoginMfaRequired accountId
+      readIORef failedHashCallsReference `shouldReturn` 0
+
+      gate <- newPasswordWorkGate (required "rehash-admission budget" (mkPasswordWorkBudget 65544))
+      holderStarted <- newEmptyMVar
+      holderRelease <- newEmptyMVar
+      holderFinished <- newEmptyMVar
+      _ <- forkIO (withPasswordWork gate 65536 (putMVar holderStarted () >> takeMVar holderRelease) >>= putMVar holderFinished)
+      takeMVar holderStarted
+      unavailableRehashCallsReference <- newIORef (0 :: Int)
+      let unavailableRehashStore =
+            (credentialStore (Right (Just legacyCredential)))
+              { replacePasswordHashIfCurrent = \_ _ _ -> modifyIORef' unavailableRehashCallsReference (+ 1) >> pure (Right True)
+              }
+      beginPasswordLogin unavailableRehashStore confirmedMfaStore permissiveThrottle gate emailAddress password
+        `shouldReturnEqual` PasswordLoginMfaRequired accountId
+      readIORef unavailableRehashCallsReference `shouldReturn` 0
+      putMVar holderRelease ()
+      takeMVar holderFinished `shouldReturn` Just ()
 
     it "accepts a validated TOTP only after validating the password" $ do
       let secret = required "TOTP secret" (mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
@@ -322,7 +389,7 @@ spec = do
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = 500
               }
-          unexpectedCredentialStore = AccountCredentialStore (\_ -> error "unexpected credential lookup while throttled") (\_ -> error "unexpected credential lookup while throttled")
+          unexpectedCredentialStore = AccountCredentialStore (\_ -> error "unexpected credential lookup while throttled") (\_ -> error "unexpected credential lookup while throttled") (\_ _ _ -> error "unexpected password-hash replacement while throttled")
       beginPasswordLogin unexpectedCredentialStore unexpectedMfaStore (throttledStoreFor "email:person@example.test") testPasswordWorkGate emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordLoginThrottled expectedLockoutEnd
       completePasswordLogin unexpectedCredentialStore ((secondFactorContextFor unexpectedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456")))) {secondFactorThrottle = throttledStoreFor "email:person@example.test"}) emailAddress (mkPassword "irrelevant")
@@ -412,7 +479,7 @@ spec = do
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = 500
               }
-          unexpectedCredentialStore = AccountCredentialStore (\_ -> error "unexpected credential lookup") (\_ -> error "unexpected credential lookup")
+          unexpectedCredentialStore = AccountCredentialStore (\_ -> error "unexpected credential lookup") (\_ -> error "unexpected credential lookup") (\_ _ _ -> error "unexpected password-hash replacement")
       beginPasswordLogin unexpectedCredentialStore unexpectedMfaStore failingThrottle testPasswordWorkGate emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordLoginAttemptStoreError (LoginAttemptStoreUnavailable "database unavailable")
       completePasswordLogin unexpectedCredentialStore ((secondFactorContextFor unexpectedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456")))) {secondFactorThrottle = failingThrottle}) emailAddress (mkPassword "irrelevant")
@@ -474,6 +541,7 @@ spec = do
             AccountCredentialStore
               (\_ -> putMVar credentialLookupStarted () >> takeMVar blockedCredentialResult)
               (\_ -> error "unexpected username lookup")
+              (\_ _ _ -> error "unexpected password-hash replacement")
       worker <- forkIO $ do
         result <- (try (beginPasswordLogin blockedCredentialStore unexpectedMfaStore cancellationThrottle testPasswordWorkGate emailAddress (mkPassword "irrelevant")) :: IO (Either SomeException PasswordLoginResult))
         putMVar workerResult result
@@ -729,7 +797,7 @@ spec = do
         `shouldReturnEqual` PasswordMfaLoginAttemptStoreError settlementFailure
 
 credentialStore :: Either AccountCredentialStoreError (Maybe AccountCredential) -> AccountCredentialStore
-credentialStore result = AccountCredentialStore (\requestedEmail -> requestedEmail `seq` pure result) (\requestedUsername -> requestedUsername `seq` pure result)
+credentialStore result = AccountCredentialStore (\requestedEmail -> requestedEmail `seq` pure result) (\requestedUsername -> requestedUsername `seq` pure result) (\_ _ _ -> pure (Right False))
 
 mfaStore :: Either MfaStoreError (Maybe StoredTotpEnrollment) -> MfaStore
 mfaStore result =

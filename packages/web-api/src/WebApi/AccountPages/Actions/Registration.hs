@@ -35,6 +35,7 @@ import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
 import WebApi.Account
   ( AccountStoreError,
+    EmailVerificationEnvironment (..),
     RegistrationEnvironment (..),
     RegistrationError (..),
     RegistrationRequest (..),
@@ -104,13 +105,16 @@ registerAccountNow actionRequest (_, _, displayNameValue, passwordValue, usernam
           registrationHashingPolicy = Password.defaultPasswordHashingPolicy,
           registrationPasswordWorkGate = accountWorkflowPasswordWorkGate workflow,
           registrationStoragePolicy = defaultPendingRegistrationStoragePolicy,
-          registrationDeliveryTimeout = accountWorkflowRegistrationDeliveryTimeout workflow,
-          registrationStore = accountWorkflowStore workflow,
-          registrationDelivery = accountWorkflowEmailDelivery workflow,
-          registrationLocale = emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)),
-          registrationVerificationUrl = accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest),
-          registrationNow = now,
-          registrationLifetime = emailVerificationLifetimeNanoseconds
+          registrationVerificationEnvironment =
+            EmailVerificationEnvironment
+              { verificationStore = accountWorkflowStore workflow,
+                verificationDeliveryTimeout = accountWorkflowRegistrationDeliveryTimeout workflow,
+                verificationDelivery = accountWorkflowEmailDelivery workflow,
+                verificationLocale = emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)),
+                verificationUrl = accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest),
+                verificationNow = now,
+                verificationLifetime = emailVerificationLifetimeNanoseconds
+              }
         }
       RegistrationRequest
         { registrationEmail = emailAddress,

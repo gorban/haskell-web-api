@@ -20,6 +20,7 @@ import HarchWeb.Time (UnixTimeNanoseconds)
 import Network.HTTP.Types qualified as Http
 import WebApi.Account
   ( AccountProfile (..),
+    EmailVerificationEnvironment (..),
     ResendVerificationError (..),
     resendEmailVerificationAt,
   )
@@ -82,13 +83,15 @@ resendEmailVerificationNow actionRequest now profile = do
   workflow <- accountWorkflow
   liftIO $
     resendEmailVerificationAt
-      (accountWorkflowStore workflow)
-      (accountWorkflowRegistrationDeliveryTimeout workflow)
-      (accountWorkflowEmailDelivery workflow)
-      (emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)))
-      (accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest))
-      now
-      emailVerificationLifetimeNanoseconds
+      EmailVerificationEnvironment
+        { verificationStore = accountWorkflowStore workflow,
+          verificationDeliveryTimeout = accountWorkflowRegistrationDeliveryTimeout workflow,
+          verificationDelivery = accountWorkflowEmailDelivery workflow,
+          verificationLocale = emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)),
+          verificationUrl = accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest),
+          verificationNow = now,
+          verificationLifetime = emailVerificationLifetimeNanoseconds
+        }
       profile
 
 interpretProfileResendResult ::

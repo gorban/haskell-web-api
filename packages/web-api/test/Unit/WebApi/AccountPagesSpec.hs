@@ -1020,7 +1020,7 @@ spec = do
           passwordHash = fromMaybe (error "expected test password hash") (Password.hashPasswordWithSalt Password.defaultPasswordHashingPolicy (ByteString.replicate 16 7) password)
           totpSecret = fromMaybe (error "expected TOTP secret") (Totp.mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
           encryptedTotpSecret = requiredSecretEnvelope (Secret.encryptSecretWithNonce (totpEncryptionKey defaultAppEnvironmentConfig) (requiredSecretNonce (ByteString.replicate 12 7)) (Secret.mkSecretPlaintext (TextEncoding.encodeUtf8 (Totp.renderTotpSecret totpSecret))))
-          credentialStore = AccountCredentialStore (\email -> (email `shouldBe` emailAddress) >> pure (Right (Just (AccountCredential accountId passwordHash True)))) (\_ -> pure (error "unexpected username credential lookup"))
+          credentialStore = AccountCredentialStore (\email -> (email `shouldBe` emailAddress) >> pure (Right (Just (AccountCredential accountId passwordHash True)))) (\_ -> pure (error "unexpected username credential lookup")) (\_ _ _ -> pure (Right False))
           mfaStore =
             MfaStore
               { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (error "unexpected enrollment save"),
@@ -1102,7 +1102,7 @@ spec = do
           logoutRequest = typedAccountActionRequest "POST" "/logout" []
           workflowFor credentialResult enrollmentResult sessionSaveResult invalidationResult =
             unavailableAccountWorkflow
-              { accountWorkflowCredentialStore = AccountCredentialStore (\_ -> pure credentialResult) (\receivedUsername -> receivedUsername `seq` pure credentialResult),
+              { accountWorkflowCredentialStore = AccountCredentialStore (\_ -> pure credentialResult) (\receivedUsername -> receivedUsername `seq` pure credentialResult) (\_ _ _ -> pure (Right False)),
                 accountWorkflowMfaStore =
                   MfaStore
                     { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (error "unexpected enrollment save"),

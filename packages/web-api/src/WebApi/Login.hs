@@ -11,11 +11,13 @@ module WebApi.Login
     LoginIdentifier (..),
     LoginThrottleContext (..),
     MfaLoginProof (..),
+    PasswordRehasher (..),
     PasswordMfaLoginResult (..),
     PasswordLoginResult (..),
     SecondFactorContext (..),
     beginPasswordLogin,
     beginPasswordLoginWithIdentifier,
+    beginPasswordLoginWithIdentifierAndRehasher,
     completePasswordLogin,
     completePasswordLoginWithIdentifier,
     requiredPasswordHashOrDie,
@@ -23,7 +25,7 @@ module WebApi.Login
 where
 
 import Control.Exception (evaluate, onException)
-import Control.Monad (void)
+import Control.Monad (void, when)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Core.Control.Error (fromMaybeError, liftEitherWith)
 import Crypto.Error (maybeCryptoError)
@@ -33,7 +35,7 @@ import Data.Text qualified as Text
 import HarchWeb.Account (AccountId, accountIdText)
 import HarchWeb.Email (EmailAddress, emailAddressText)
 import HarchWeb.LoginProtection (LoginProtectionPolicy)
-import HarchWeb.Password (Password, PasswordHash (..), PasswordWorkGate, passwordHashWorkKibibytes, verifyPassword, withPasswordWork)
+import HarchWeb.Password (Password, PasswordHash (..), PasswordHashingPolicy, PasswordWorkGate, defaultPasswordHashingPolicy, hashPassword, passwordHashMemoryKibibytes, passwordHashNeedsRehash, passwordHashWorkKibibytes, verifyPassword, withPasswordWork)
 import HarchWeb.RecoveryCode (RecoveryCode, RecoveryCodeHash, readRecoveryCodeHash, recoveryCodeHashText, recoveryCodeHashWorkKibibytes, verifyRecoveryCode)
 import HarchWeb.Secret (SecretEncryptionKey, decryptSecretText)
 import HarchWeb.Time (UnixTimeNanoseconds, UnixTimeSeconds)
@@ -54,12 +56,28 @@ data AccountCredentialStoreError
 
 data AccountCredentialStore = AccountCredentialStore
   { findAccountCredentialByEmail :: EmailAddress -> IO (Either AccountCredentialStoreError (Maybe AccountCredential)),
-    findAccountCredentialByUsername :: Username -> IO (Either AccountCredentialStoreError (Maybe AccountCredential))
+    findAccountCredentialByUsername :: Username -> IO (Either AccountCredentialStoreError (Maybe AccountCredential)),
+    -- | Replace only the exact verified legacy hash.  @False@ means another
+    -- successful login (or a password change) has already superseded it;
+    -- that is a completed best-effort upgrade, not a login failure.
+    replacePasswordHashIfCurrent :: AccountId -> PasswordHash -> PasswordHash -> IO (Either AccountCredentialStoreError Bool)
   }
 
 data LoginIdentifier
   = LoginEmailAddress EmailAddress
   | LoginUsername Username
+
+-- | The current-policy hash operation used only after an existing credential
+-- has already verified.  Keeping it injectable makes the optional migration's
+-- native-failure behavior explicit and testable without making persistence
+-- responsible for Argon2 work.
+data PasswordRehasher = PasswordRehasher
+  { passwordRehashingPolicy :: PasswordHashingPolicy,
+    rehashVerifiedPassword :: PasswordHashingPolicy -> Password -> IO (Maybe PasswordHash)
+  }
+
+defaultPasswordRehasher :: PasswordRehasher
+defaultPasswordRehasher = PasswordRehasher defaultPasswordHashingPolicy hashPassword
 
 -- | Decision (AZ, 2026-08-19): a new capability record, not an extension of
 -- 'AccountCredentialStore' or 'MfaStore' — tracking throttle history is a
@@ -265,12 +283,15 @@ beginPasswordLogin credentialStore mfaStore throttle passwordWorkGate emailAddre
   beginPasswordLoginWithIdentifier credentialStore mfaStore throttle passwordWorkGate (LoginEmailAddress emailAddress)
 
 beginPasswordLoginWithIdentifier :: AccountCredentialStore -> MfaStore -> LoginThrottleContext -> PasswordWorkGate -> LoginIdentifier -> Password -> IO PasswordLoginResult
-beginPasswordLoginWithIdentifier credentialStore mfaStore throttle passwordWorkGate identifier password =
+beginPasswordLoginWithIdentifier = beginPasswordLoginWithIdentifierAndRehasher defaultPasswordRehasher
+
+beginPasswordLoginWithIdentifierAndRehasher :: PasswordRehasher -> AccountCredentialStore -> MfaStore -> LoginThrottleContext -> PasswordWorkGate -> LoginIdentifier -> Password -> IO PasswordLoginResult
+beginPasswordLoginWithIdentifierAndRehasher passwordRehasher credentialStore mfaStore throttle passwordWorkGate identifier password =
   runAdmittedLoginAttempt throttle key PasswordLoginThrottled PasswordLoginAttemptStoreError work
   where
     work = do
       credentialResult <- lookupCredential credentialStore identifier
-      outcome <- either (pure . CredentialCheckCredentialStoreError) (continueWithCredential mfaStore passwordWorkGate password) credentialResult
+      outcome <- either (pure . CredentialCheckCredentialStoreError) (continueWithCredential passwordRehasher credentialStore mfaStore passwordWorkGate password) credentialResult
       pure (credentialCheckToPasswordLoginAdmission outcome)
     key = loginIdentifierKey identifier
 
@@ -310,18 +331,19 @@ lookupCredential credentialStore identifier =
     LoginEmailAddress emailAddress -> findAccountCredentialByEmail credentialStore emailAddress
     LoginUsername username -> findAccountCredentialByUsername credentialStore username
 
-continueWithCredential :: MfaStore -> PasswordWorkGate -> Password -> Maybe AccountCredential -> IO CredentialCheckOutcome
-continueWithCredential mfaStore passwordWorkGate password maybeCredential =
+continueWithCredential :: PasswordRehasher -> AccountCredentialStore -> MfaStore -> PasswordWorkGate -> Password -> Maybe AccountCredential -> IO CredentialCheckOutcome
+continueWithCredential passwordRehasher credentialStore mfaStore passwordWorkGate password maybeCredential =
   case maybeCredential of
     Nothing -> credentialCheckFromPasswordWork passwordWorkGate password dummyPasswordHash (pure CredentialCheckRejected)
-    Just credential -> continueWithKnownCredential mfaStore passwordWorkGate password credential
+    Just credential -> continueWithKnownCredential passwordRehasher credentialStore mfaStore passwordWorkGate password credential
 
-continueWithKnownCredential :: MfaStore -> PasswordWorkGate -> Password -> AccountCredential -> IO CredentialCheckOutcome
-continueWithKnownCredential mfaStore passwordWorkGate password credential =
+continueWithKnownCredential :: PasswordRehasher -> AccountCredentialStore -> MfaStore -> PasswordWorkGate -> Password -> AccountCredential -> IO CredentialCheckOutcome
+continueWithKnownCredential passwordRehasher credentialStore mfaStore passwordWorkGate password credential =
   credentialCheckFromPasswordWork passwordWorkGate password (accountCredentialPasswordHash credential) acceptedCredential
   where
     accountId = accountCredentialId credential
-    acceptedCredential =
+    acceptedCredential = do
+      opportunisticallyRehashPassword passwordRehasher credentialStore passwordWorkGate password credential
       case accountCredentialEmailVerified credential of
         False -> pure (CredentialCheckEmailVerificationRequired accountId)
         True -> classifyMfaEnrollment accountId <$> loadTotpEnrollment mfaStore accountId
@@ -336,6 +358,35 @@ credentialCheckFromPasswordWork passwordWorkGate password passwordHash accepted 
         Nothing -> pure CredentialCheckPasswordWorkBudgetExhausted
         Just False -> pure CredentialCheckRejected
         Just True -> accepted
+
+-- | Decision (DM, 2026-08-25): extend the existing credential-store boundary
+-- with a compare-and-replace operation rather than introducing a password
+-- migration table or a second authentication path.  After the old hash has
+-- verified, a uniformly weaker policy is rehashed under the current bounded
+-- policy and conditionally replaced by account id plus the old hash.  This
+-- lets concurrent successful requests yield one update and one harmless
+-- no-op, and prevents a concurrent password change from being overwritten.
+-- Resource admission, native hash failure, and persistence failure are all
+-- deliberately best-effort: a legacy hash remains a valid credential, so an
+-- upgrade problem must not turn a successful login into an authentication
+-- failure.  Mixed stronger/weaker policies are retained to avoid lowering a
+-- stored Argon2 cost.
+opportunisticallyRehashPassword :: PasswordRehasher -> AccountCredentialStore -> PasswordWorkGate -> Password -> AccountCredential -> IO ()
+opportunisticallyRehashPassword passwordRehasher credentialStore passwordWorkGate password credential =
+  when (passwordHashNeedsRehash rehashPolicy previousHash) $ do
+    maybeReplacement <-
+      withPasswordWork
+        passwordWorkGate
+        (passwordHashMemoryKibibytes rehashPolicy)
+        (rehashVerifiedPassword passwordRehasher rehashPolicy password)
+    case maybeReplacement of
+      Just (Just replacementHash) ->
+        void (replacePasswordHashIfCurrent credentialStore accountId previousHash replacementHash)
+      _ -> pure ()
+  where
+    accountId = accountCredentialId credential
+    previousHash = accountCredentialPasswordHash credential
+    rehashPolicy = passwordRehashingPolicy passwordRehasher
 
 classifyMfaEnrollment :: AccountId -> Either MfaStoreError (Maybe StoredTotpEnrollment) -> CredentialCheckOutcome
 classifyMfaEnrollment accountId enrollmentResult =

@@ -4,10 +4,15 @@
 --
 -- The public facade re-exports the supported plan and preparation helpers, but
 -- this module owns temporary state, certbot process execution, and the TLS
--- server lifecycle that consumes the acquired certificate.
+-- server lifecycle that consumes the acquired certificate. Decision (DM,
+-- 2026-08-25): its temporary state directory (which contains the ACME account
+-- key) is removed on every failed preparation. A successful return transfers
+-- cleanup ownership to the running server; failure diagnostics never expose or
+-- preserve that private directory or its logs.
 module HarchWeb.Acme.Certbot.Runtime
   ( RunningAcmeRuntimeServer,
     RuntimeAcmeBindPlan (..),
+    RuntimeAcmeServerEnvironment (..),
     certbotCertificateName,
     prepareCertbotManualTlsBindPlan,
     runtimeAcmeBindPlans,
@@ -57,7 +62,7 @@ import HarchWeb.Server.Transport
     stopRuntimeServer,
   )
 import Network.Wai qualified as Wai
-import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, removePathForcibly)
+import System.Directory (copyFile, createDirectoryIfMissing, removePathForcibly)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO.Temp (createTempDirectory, getCanonicalTemporaryDirectory)
@@ -72,6 +77,20 @@ data RuntimeAcmeBindPlan = RuntimeAcmeBindPlan
   { runtimeAcmeEndpoint :: ListenerEndpoint,
     runtimeAcmeTlsEndpoint :: Maybe ListenerEndpoint,
     runtimeAcmeListenerConfig :: AcmeConfig
+  }
+
+-- | Dependencies shared by every ACME listener started for one application
+-- runtime.  The webroot store, request limits, application, and reporters
+-- all describe that runtime rather than an individual bind plan; keeping
+-- them together makes the multi-listener and single-listener startup paths
+-- use the same named configuration instead of seven positional arguments.
+data RuntimeAcmeServerEnvironment = RuntimeAcmeServerEnvironment
+  { runtimeAcmeWebrootStore :: CertbotWebrootStore,
+    runtimeAcmeRequestHeadLimits :: RequestHeadLimits,
+    runtimeAcmeRequestTransportLimits :: RequestTransportLimits,
+    runtimeAcmeApplication :: Wai.Application,
+    runtimeAcmeConnectionReporter :: Observability.ConnectionObservability -> IO (),
+    runtimeAcmeApplicationLogger :: Text -> IO ()
   }
 
 -- | The temporary certbot working directories, all derived from one state
@@ -96,25 +115,27 @@ runtimeAcmeBindPlans startupPlan =
   | acmePlan <- acmeBindPlans startupPlan
   ]
 
--- | Start ACME-managed TLS listeners with all opt-in Warp request transport
--- controls selected by the application runtime.
-startAcmeRuntimeServersWithRequestTransportLimits :: CertbotWebrootStore -> RequestHeadLimits -> RequestTransportLimits -> [RuntimeAcmeBindPlan] -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> (Text -> IO ()) -> IO [RunningAcmeRuntimeServer]
-startAcmeRuntimeServersWithRequestTransportLimits webrootStore requestHeadLimits transportLimits acmePlans waiApplication connectionReporter applicationLogger =
+-- | Start the given ACME-managed TLS listeners for one application runtime.
+startAcmeRuntimeServersWithRequestTransportLimits :: RuntimeAcmeServerEnvironment -> [RuntimeAcmeBindPlan] -> IO [RunningAcmeRuntimeServer]
+startAcmeRuntimeServersWithRequestTransportLimits environment acmePlans =
   connectionReporter `seq` applicationLogger `seq` go [] acmePlans
   where
+    connectionReporter = runtimeAcmeConnectionReporter environment
+    applicationLogger = runtimeAcmeApplicationLogger environment
+
     go runningServers remainingPlans =
       case remainingPlans of
         [] -> pure (reverse runningServers)
         acmePlan : remaining ->
           ( do
-              runningServer <- startAcmeRuntimeServer webrootStore requestHeadLimits transportLimits acmePlan waiApplication connectionReporter applicationLogger
+              runningServer <- startAcmeRuntimeServer environment acmePlan
               go (runningServer : runningServers) remaining
                 `onException` stopAcmeRuntimeServers (runningServer : runningServers)
           )
             `onException` stopAcmeRuntimeServers runningServers
 
-startAcmeRuntimeServer :: CertbotWebrootStore -> RequestHeadLimits -> RequestTransportLimits -> RuntimeAcmeBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> (Text -> IO ()) -> IO RunningAcmeRuntimeServer
-startAcmeRuntimeServer webrootStore requestHeadLimits transportLimits runtimeAcmePlan waiApplication connectionReporter applicationLogger = do
+startAcmeRuntimeServer :: RuntimeAcmeServerEnvironment -> RuntimeAcmeBindPlan -> IO RunningAcmeRuntimeServer
+startAcmeRuntimeServer environment runtimeAcmePlan = do
   let certbotConfig = acmeCertbotConfig (runtimeAcmeListenerConfig runtimeAcmePlan)
   (maybeManualTlsPlan, cleanupDirectory) <-
     prepareCertbotManualTlsBindPlanWithLogger webrootStore applicationLogger runtimeAcmePlan certbotConfig
@@ -127,6 +148,13 @@ startAcmeRuntimeServer webrootStore requestHeadLimits transportLimits runtimeAcm
       { runningAcmeRuntimeServer = maybeRunningServer,
         runningAcmeCleanupDirectory = cleanupDirectory
       }
+  where
+    webrootStore = runtimeAcmeWebrootStore environment
+    requestHeadLimits = runtimeAcmeRequestHeadLimits environment
+    transportLimits = runtimeAcmeRequestTransportLimits environment
+    waiApplication = runtimeAcmeApplication environment
+    connectionReporter = runtimeAcmeConnectionReporter environment
+    applicationLogger = runtimeAcmeApplicationLogger environment
 
 runtimeAcmeManualTlsBindPlan :: RuntimeAcmeBindPlan -> FilePath -> FilePath -> Maybe ManualTlsBindPlan
 runtimeAcmeManualTlsBindPlan runtimeAcmePlan resolvedCertificatePath resolvedPrivateKeyPath =
@@ -167,57 +195,58 @@ prepareCertbotManualTlsBindPlanWithLogger webrootStore applicationLogger runtime
   let endpointText = Text.pack (renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan))
   tempDirectory <- getCanonicalTemporaryDirectory
   stateDirectory <- createTempDirectory tempDirectory "harch-web-certbot"
-  let configDirectory = stateDirectory </> "config"
-      workDirectory = stateDirectory </> "work"
-      logsDirectory = stateDirectory </> "logs"
-      webrootDirectory = stateDirectory </> "webroot"
-      directories =
-        CertbotDirectories
-          { certbotStateDirectory = stateDirectory,
-            certbotConfigDirectory = configDirectory,
-            certbotWorkDirectory = workDirectory,
-            certbotLogsDirectory = logsDirectory,
-            certbotWebrootDirectory = webrootDirectory
-          }
-  mapM_
-    (createDirectoryIfMissing True)
-    [configDirectory, workDirectory, logsDirectory, webrootDirectory </> ".well-known" </> "acme-challenge"]
-  certificateName <-
-    either
-      (ioError . userError)
+  prepareWithStateDirectory stateDirectory endpointText `onException` removePathForcibly stateDirectory
+  where
+    prepareWithStateDirectory stateDirectory endpointText = do
+      let configDirectory = stateDirectory </> "config"
+          workDirectory = stateDirectory </> "work"
+          logsDirectory = stateDirectory </> "logs"
+          webrootDirectory = stateDirectory </> "webroot"
+          directories =
+            CertbotDirectories
+              { certbotStateDirectory = stateDirectory,
+                certbotConfigDirectory = configDirectory,
+                certbotWorkDirectory = workDirectory,
+                certbotLogsDirectory = logsDirectory,
+                certbotWebrootDirectory = webrootDirectory
+              }
+      mapM_
+        (createDirectoryIfMissing True)
+        [configDirectory, workDirectory, logsDirectory, webrootDirectory </> ".well-known" </> "acme-challenge"]
+      certificateName <-
+        either
+          (ioError . userError)
+          pure
+          (certbotCertificateName runtimeAcmePlan)
+      bracket_
+        ( applicationLogger ("ACME certbot webroot registered for listener " <> endpointText)
+            >> registerCertbotAcmeChallengeWebroot webrootStore webrootDirectory
+        )
+        ( (unregisterCertbotAcmeChallengeWebroot webrootStore $! webrootDirectory)
+            >> applicationLogger ("ACME certbot webroot unregistered for listener " <> endpointText)
+        )
+        (runCertbotAcmeChallengeWithLogger applicationLogger runtimeAcmePlan certbotConfig directories)
+      let certificateDirectory = configDirectory </> "live" </> Text.unpack certificateName
+          certificatePath = certificateDirectory </> "fullchain.pem"
+          privateKeyPath = certificateDirectory </> "privkey.pem"
+      ensureRuntimeFileExists "Certbot ACME certificate file does not exist: " certificatePath
+      ensureRuntimeFileExists "Certbot ACME private key file does not exist: " privateKeyPath
+      (resolvedCertificatePath, resolvedPrivateKeyPath) <-
+        case acmeCertificateDirectory (runtimeAcmeListenerConfig runtimeAcmePlan) of
+          Nothing ->
+            pure (certificatePath, privateKeyPath)
+          Just sharedDirectory -> do
+            publishedPaths <- publishCertificateFiles sharedDirectory certificatePath privateKeyPath
+            applicationLogger ("Published ACME certificate files to shared directory " <> Text.pack sharedDirectory)
+            pure publishedPaths
       pure
-      (certbotCertificateName runtimeAcmePlan)
-  bracket_
-    ( applicationLogger ("ACME certbot webroot registered for listener " <> endpointText)
-        >> registerCertbotAcmeChallengeWebroot webrootStore webrootDirectory
-    )
-    ( (unregisterCertbotAcmeChallengeWebroot webrootStore $! webrootDirectory)
-        >> applicationLogger ("ACME certbot webroot unregistered for listener " <> endpointText)
-    )
-    (runCertbotAcmeChallengeWithLogger applicationLogger runtimeAcmePlan certbotConfig directories)
-  let certificateDirectory = configDirectory </> "live" </> Text.unpack certificateName
-      certificatePath = certificateDirectory </> "fullchain.pem"
-      privateKeyPath = certificateDirectory </> "privkey.pem"
-  ensureRuntimeFileExists "Certbot ACME certificate file does not exist: " certificatePath
-  ensureRuntimeFileExists "Certbot ACME private key file does not exist: " privateKeyPath
-  (resolvedCertificatePath, resolvedPrivateKeyPath) <-
-    case acmeCertificateDirectory (runtimeAcmeListenerConfig runtimeAcmePlan) of
-      Nothing ->
-        pure (certificatePath, privateKeyPath)
-      Just sharedDirectory -> do
-        publishedPaths <- publishCertificateFiles sharedDirectory certificatePath privateKeyPath
-        applicationLogger ("Published ACME certificate files to shared directory " <> Text.pack sharedDirectory)
-        pure publishedPaths
-  pure
-    ( runtimeAcmeManualTlsBindPlan runtimeAcmePlan resolvedCertificatePath resolvedPrivateKeyPath,
-      stateDirectory
-    )
+        ( runtimeAcmeManualTlsBindPlan runtimeAcmePlan resolvedCertificatePath resolvedPrivateKeyPath,
+          stateDirectory
+        )
 
 runCertbotAcmeChallengeWithLogger :: (Text -> IO ()) -> RuntimeAcmeBindPlan -> CertbotConfig -> CertbotDirectories -> IO ()
 runCertbotAcmeChallengeWithLogger applicationLogger runtimeAcmePlan certbotConfig directories = do
   let endpointText = Text.pack (renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan))
-      stateDirectory = certbotStateDirectory directories
-      logsDirectory = certbotLogsDirectory directories
   applicationLogger ("Launching certbot for ACME listener on " <> endpointText)
   let commandArguments =
         certbotRuntimeArguments runtimeAcmePlan certbotConfig directories
@@ -236,7 +265,6 @@ runCertbotAcmeChallengeWithLogger applicationLogger runtimeAcmePlan certbotConfi
       void (evaluate (length stdoutText + length stderrText))
     Right (exitCode, stdoutText, stderrText) -> do
       applicationLogger ("Certbot failed for ACME listener on " <> endpointText <> " with exit code " <> Text.pack (show exitCode))
-      diagnostics <- certbotFailureDiagnostics stateDirectory logsDirectory
       ioError . userError $
         "Certbot failed for ACME listener on "
           <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
@@ -246,37 +274,9 @@ runCertbotAcmeChallengeWithLogger applicationLogger runtimeAcmePlan certbotConfi
           <> stdoutText
           <> "\nstderr:\n"
           <> stderrText
-          <> diagnostics
 
 ignoreTextLog :: Text -> IO ()
 ignoreTextLog textValue = void (evaluate (Text.length textValue))
-
-certbotFailureDiagnostics :: FilePath -> FilePath -> IO String
-certbotFailureDiagnostics stateDirectory logsDirectory = do
-  let logPath = logsDirectory </> "letsencrypt.log"
-  logExists <- doesFileExist logPath
-  if logExists
-    then do
-      logText <- readFile logPath
-      _ <- evaluate (length logText)
-      pure $
-        "\nCertbot state directory was preserved for inspection: "
-          <> stateDirectory
-          <> "\nletsencrypt.log tail:\n"
-          <> tailTextLines 80 logText
-    else
-      pure $
-        "\nCertbot state directory was preserved for inspection: "
-          <> stateDirectory
-          <> "\nNo certbot logfile was found at "
-          <> logPath
-          <> ".\n"
-
-tailTextLines :: Int -> String -> String
-tailTextLines lineCount textValue =
-  unlines (drop (max 0 (length textLines - lineCount)) textLines)
-  where
-    textLines = lines textValue
 
 certbotRuntimeArguments :: RuntimeAcmeBindPlan -> CertbotConfig -> CertbotDirectories -> [String]
 certbotRuntimeArguments runtimeAcmePlan certbotConfig directories =
