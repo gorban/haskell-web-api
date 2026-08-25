@@ -102,6 +102,7 @@ spec = do
                    `shouldBe` passwordHashText passwordHash,
                  passwordHashWorkKibibytes passwordHash `shouldBe` Just 8,
                  passwordHashNeedsRehash defaultPasswordHashingPolicy passwordHash `shouldBe` True,
+                 passwordHashNeedsRehash defaultPasswordHashingPolicy (PasswordHash "malformed") `shouldBe` False,
                  verifyPassword samplePassword passwordHash `shouldBe` True,
                  verifyPassword (mkPassword "wrong password") passwordHash `shouldBe` False
                ]

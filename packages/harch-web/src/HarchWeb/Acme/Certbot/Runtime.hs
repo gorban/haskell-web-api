@@ -98,8 +98,7 @@ data RuntimeAcmeServerEnvironment = RuntimeAcmeServerEnvironment
 -- for example, 'certbotConfigDirectory' (holding the ACME account private
 -- key) with 'certbotWebrootDirectory' (served publicly over HTTP).
 data CertbotDirectories = CertbotDirectories
-  { certbotStateDirectory :: FilePath,
-    certbotConfigDirectory :: FilePath,
+  { certbotConfigDirectory :: FilePath,
     certbotWorkDirectory :: FilePath,
     certbotLogsDirectory :: FilePath,
     certbotWebrootDirectory :: FilePath
@@ -204,8 +203,7 @@ prepareCertbotManualTlsBindPlanWithLogger webrootStore applicationLogger runtime
           webrootDirectory = stateDirectory </> "webroot"
           directories =
             CertbotDirectories
-              { certbotStateDirectory = stateDirectory,
-                certbotConfigDirectory = configDirectory,
+              { certbotConfigDirectory = configDirectory,
                 certbotWorkDirectory = workDirectory,
                 certbotLogsDirectory = logsDirectory,
                 certbotWebrootDirectory = webrootDirectory
