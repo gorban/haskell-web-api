@@ -1,10 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes #-}
 
 {-# SPEC #-}
 
 import Data.Int (Int64)
 import Data.List.NonEmpty (NonEmpty (..))
 import HarchWeb.Localization
+import HarchWeb.Localization.Quasi (message, validateMessageTemplate)
 
 data TestMessage = ItemCount
 
@@ -15,12 +17,16 @@ spec =
             case (messageKey, localeText requestedLocale) of
               (ItemCount, "is") -> Just (messageTemplate "{count, plural, one {# hlutur} other {# hlutir}}")
               _ -> Nothing
-      rendered <- renderLocalizedMessage (localizer catalog) ItemCount (locale "is") (messageArguments [("count", messageNumber (11 :: Int64))])
+      let rendered = renderLocalizedMessage (localizer catalog) ItemCount (locale "is") (messageArguments [("count", messageNumber (11 :: Int64))])
       rendered `shouldBe` Right "11 hlutir"
 
     it "keeps an unknown application key on the explicit lookup-failure rail" $ do
-      rendered <- renderLocalizedMessage (localizer (\_ _ -> Nothing)) ItemCount (locale "en") (messageArguments [])
+      let rendered = renderLocalizedMessage (localizer (\_ _ -> Nothing)) ItemCount (locale "en") (messageArguments [])
       rendered `shouldBe` Left MessageNotFound
+
+    it "provides an extendable empty default catalog while HarchWeb owns no end-user copy" $
+      renderLocalizedMessage defaultLocalizer NoDefaultMessage (locale "en") (messageArguments [])
+        `shouldBe` Left MessageNotFound
 
     it "formats named text and returns an explicit error for an invalid ICU template" $ do
       let catalog messageKey requestedLocale =
@@ -28,8 +34,8 @@ spec =
               (ItemCount, "en") -> Just (messageTemplate "Hello, {name}!")
               (ItemCount, "invalid") -> Just (messageTemplate "{count, plural")
               _ -> Nothing
-      rendered <- renderLocalizedMessage (localizer catalog) ItemCount (locale "en") (messageArguments [("name", messageText "Ada")])
-      malformed <- renderLocalizedMessage (localizer catalog) ItemCount (locale "invalid") (messageArguments [])
+      let rendered = renderLocalizedMessage (localizer catalog) ItemCount (locale "en") (messageArguments [("name", messageText "Ada")])
+          malformed = renderLocalizedMessage (localizer catalog) ItemCount (locale "invalid") (messageArguments [])
       expectAll
         ( (rendered `shouldBe` Right "Hello, Ada!")
             :| [ malformed `shouldBe` Left MessageFormatRejected,
@@ -66,5 +72,14 @@ spec =
                  renderedValue MessageFormatRejected `shouldBe` "MessageFormatRejected",
                  renderedWithPrecedence 11 MessageNotFound "" `shouldBe` "MessageNotFound",
                  renderedValueList [MessageNotFound, MessageFormatRejected] "" `shouldBe` "[MessageNotFound,MessageFormatRejected]"
+               ]
+        )
+
+    it "checks static ICU template brace structure before application compilation" $
+      expectAll
+        ( (validateMessageTemplate "{count, plural, one {# item} other {# items}}" `shouldBe` Right ())
+            :| [ validateMessageTemplate "{count, plural, one {# item}" `shouldBe` Left "unterminated ICU argument",
+                 validateMessageTemplate "{}" `shouldBe` Left "empty ICU argument",
+                 renderedValue ([message|Hello, {name}!|] :: MessageTemplate) `shouldBe` "MessageTemplate \"Hello, {name}!\""
                ]
         )

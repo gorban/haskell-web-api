@@ -61,6 +61,7 @@ import WebApi.AppEffect
     renderFailureCode,
     throwAppFailure,
   )
+import WebApi.Localization
 import WebApi.Login (AccountCredentialStoreError (..), LoginAttemptStoreError (..))
 import WebApi.Mfa (MfaStoreError (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
@@ -101,7 +102,7 @@ pendingProfileForm actionRequest profile message isError =
     }
 
 resendLabel :: AccountActionRequest -> Text
-resendLabel actionRequest = localized actionRequest "Resend verification email" "Reenviar correo de verificacion"
+resendLabel actionRequest = localized actionRequest ResendVerificationEmail
 
 profileLoadErrorType :: ProfileLoadError -> Text
 profileLoadErrorType loadError =
@@ -115,11 +116,8 @@ profileLoadErrorDetail loadError =
     ProfileSessionStoreError storeError -> sessionStoreErrorMessage storeError
     ProfileAccountStoreError storeError -> accountStoreErrorDetail storeError
 
-localized :: AccountActionRequest -> Text -> Text -> Text
-localized actionRequest english spanish =
-  case actionLocale actionRequest of
-    English -> english
-    Spanish -> spanish
+localized :: AccountActionRequest -> AppMessage -> Text
+localized actionRequest = localizedMessage (actionLocale actionRequest)
 
 actionLocale :: AccountActionRequest -> AppLocale
 actionLocale = requestLocale . HarchWeb.clientActionContext
@@ -127,11 +125,11 @@ actionLocale = requestLocale . HarchWeb.clientActionContext
 mfaErrorMessage :: AccountActionRequest -> MfaEnrollmentError -> Text
 mfaErrorMessage actionRequest errorValue =
   case errorValue of
-    MfaEnrollmentAccountIsNotEligible -> localized actionRequest "Verify your email address before enrolling an authenticator." "Verifica tu direccion de correo antes de registrar un autenticador."
-    MfaEnrollmentInvalidCode -> localized actionRequest "That authenticator code is invalid." "Ese codigo de autenticador no es valido."
-    MfaEnrollmentNotFound -> localized actionRequest "Start a new authenticator enrollment." "Inicia un nuevo registro de autenticador."
-    MfaEnrollmentConfirmationRejected -> localized actionRequest "That enrollment can no longer be confirmed." "Ese registro ya no se puede confirmar."
-    _ -> localized actionRequest "Authenticator enrollment is temporarily unavailable." "El registro del autenticador no esta disponible temporalmente."
+    MfaEnrollmentAccountIsNotEligible -> localized actionRequest VerifyEmailBeforeEnrollment
+    MfaEnrollmentInvalidCode -> localized actionRequest AuthenticatorCodeInvalid
+    MfaEnrollmentNotFound -> localized actionRequest StartAuthenticatorEnrollment
+    MfaEnrollmentConfirmationRejected -> localized actionRequest EnrollmentConfirmationUnavailable
+    _ -> localized actionRequest AuthenticatorEnrollmentUnavailable
 
 throwClientActionFailure :: HarchWeb.ClientActionResponse -> FailureCode -> Text -> Text -> AppM HarchWeb.ClientActionResponse value
 throwClientActionFailure publicResponse code typeName detail =

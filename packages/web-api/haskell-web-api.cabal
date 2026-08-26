@@ -90,6 +90,7 @@ library
     WebApi.Config
     WebApi.Database
     WebApi.DatabaseSetup
+    WebApi.Localization
     WebApi.Login
     WebApi.Mfa
     WebApi.MfaEnrollment

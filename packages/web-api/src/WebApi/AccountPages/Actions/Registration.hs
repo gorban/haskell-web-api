@@ -56,6 +56,7 @@ import WebApi.AppEffect
     AppM,
     FailureCode (..),
   )
+import WebApi.Localization (AppMessage (..))
 import WebApi.Route (AppRequestContext (..))
 import WebApi.Session (mfaEnrollmentSessionCookiePolicy)
 
@@ -135,9 +136,9 @@ parseRegistrationForm actionRequest submission =
       path = HarchWeb.clientActionContext actionRequest
       form = RegistrationForm usernameValue emailValue displayNameValue
    in case (Username.mkUsername usernameValue, Email.mkEmailAddress emailValue, validPassword passwordValue) of
-        (Nothing, _, _) -> Left (registrationResponse (actionLocale actionRequest) path Http.status422 (form (Just (localized actionRequest "Use a username with 3 to 20 letters, numbers, underscores, or hyphens." "Usa un nombre de usuario de 3 a 20 letras, numeros, guiones bajos o guiones.")) True) (Just "registration-username"))
-        (_, Nothing, _) -> Left (registrationResponse (actionLocale actionRequest) path Http.status422 (form (Just (localized actionRequest "Enter a valid email address." "Introduce una direccion de correo valida.")) True) (Just "registration-email"))
-        (_, _, False) -> Left (registrationResponse (actionLocale actionRequest) path Http.status422 (form (Just (localized actionRequest "Use a password with at least 12 characters." "Usa una contrasena de al menos 12 caracteres.")) True) (Just "registration-password"))
+        (Nothing, _, _) -> Left (registrationResponse (actionLocale actionRequest) path Http.status422 (form (Just (localized actionRequest UsernameInvalid)) True) (Just "registration-username"))
+        (_, Nothing, _) -> Left (registrationResponse (actionLocale actionRequest) path Http.status422 (form (Just (localized actionRequest EnterValidEmailAddress)) True) (Just "registration-email"))
+        (_, _, False) -> Left (registrationResponse (actionLocale actionRequest) path Http.status422 (form (Just (localized actionRequest PasswordTooShort)) True) (Just "registration-password"))
         (Just username, Just emailAddress, True) -> Right (usernameValue, emailValue, displayNameValue, passwordValue, username, emailAddress)
 
 interpretRegistrationResult ::
@@ -156,9 +157,9 @@ interpretRegistrationResult actionRequest usernameValue emailValue displayNameVa
     registrationSuccess stage =
       registrationLifecycleResponse
         stage
-        (response Http.status202 (localized actionRequest "If that address can register, check its inbox for a verification link." "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") False Nothing)
-    unavailableRegistration = response Http.status503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")
-    deliveryFailureResponse = response Http.status502 (localized actionRequest "We could not send the verification email. Try again shortly." "No pudimos enviar el correo de verificacion. Intentalo de nuevo en breve.") True (Just "registration-email")
+        (response Http.status202 (localized actionRequest RegistrationVerificationInbox) False Nothing)
+    unavailableRegistration = response Http.status503 (localized actionRequest RegistrationUnavailable) True (Just "registration-email")
+    deliveryFailureResponse = response Http.status502 (localized actionRequest VerificationDeliveryFailed) True (Just "registration-email")
 
     registrationResultResponse = \case
       -- A taken username is a recoverable, user-correctable input (the
@@ -167,7 +168,7 @@ interpretRegistrationResult actionRequest usernameValue emailValue displayNameVa
       -- own note found missing, and does not reopen the address-enumeration
       -- concern the branch below exists to close: usernames, unlike email
       -- addresses, are not privacy-sensitive to confirm as taken.
-      RegistrationUsernameTaken -> response Http.status422 (localized actionRequest "That username is already taken. Please choose another." "Ese nombre de usuario ya esta en uso. Elige otro.") True (Just "registration-username")
+      RegistrationUsernameTaken -> response Http.status422 (localized actionRequest UsernameTaken) True (Just "registration-username")
       -- Both remaining outcomes share this exact branch (not merely the
       -- same wording) so a registered-address probe cannot be
       -- distinguished from a genuine registration by response bytes: the
@@ -200,14 +201,14 @@ handleVerificationWorkflow input =
   let tokenValue = verificationTokenValue submission
       path = HarchWeb.clientActionContext actionRequest
    in case Account.mkEmailVerificationToken tokenValue of
-        Nothing -> pure (verificationResponse (actionLocale actionRequest) path Http.status422 (VerificationForm tokenValue (Just (localized actionRequest "The verification link is invalid." "El enlace de verificacion no es valido.")) True) (Just "verification-token") [])
+        Nothing -> pure (verificationResponse (actionLocale actionRequest) path Http.status422 (VerificationForm tokenValue (Just (localized actionRequest VerificationLinkInvalid)) True) (Just "verification-token") [])
         Just token -> do
           (now, confirmationResult) <- confirmEmailVerificationNow token
           case confirmationResult of
             Right (Account.EmailVerificationAccepted accountId _) -> issueVerificationEnrollmentSession actionRequest now accountId
-            Right Account.EmailVerificationExpired -> pure (verificationResponse (actionLocale actionRequest) path Http.status422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link has expired." "Ese enlace de verificacion ha caducado.")) True) (Just "verification-token") [])
-            Right Account.EmailVerificationRejected -> pure (verificationResponse (actionLocale actionRequest) path Http.status422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link is invalid or has already been used." "El enlace de verificacion no es valido o ya se ha utilizado.")) True) (Just "verification-token") [])
-            Left storeError -> throwClientActionFailure (verificationResponse (actionLocale actionRequest) path Http.status503 (VerificationForm tokenValue (Just (localized actionRequest "Verification is temporarily unavailable." "La verificacion no esta disponible temporalmente.")) True) (Just "verification-token") []) VerificationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
+            Right Account.EmailVerificationExpired -> pure (verificationResponse (actionLocale actionRequest) path Http.status422 (VerificationForm tokenValue (Just (localized actionRequest VerificationLinkExpired)) True) (Just "verification-token") [])
+            Right Account.EmailVerificationRejected -> pure (verificationResponse (actionLocale actionRequest) path Http.status422 (VerificationForm tokenValue (Just (localized actionRequest VerificationLinkUsed)) True) (Just "verification-token") [])
+            Left storeError -> throwClientActionFailure (verificationResponse (actionLocale actionRequest) path Http.status503 (VerificationForm tokenValue (Just (localized actionRequest VerificationUnavailable)) True) (Just "verification-token") []) VerificationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
   where
     actionRequest = verificationWorkflowRequest input
     submission = verificationWorkflowSubmission input
@@ -230,7 +231,7 @@ confirmEmailVerificationNow token = do
 issueVerificationEnrollmentSession :: AccountActionRequest -> UnixTimeNanoseconds -> Account.AccountId -> AccountActionWorkflow
 issueVerificationEnrollmentSession actionRequest now accountId = do
   let path = HarchWeb.clientActionContext actionRequest
-      successResponse = verificationResponse (actionLocale actionRequest) path Http.status200 (VerificationForm Text.empty (Just (localized actionRequest "Your email address is verified. Enroll your authenticator next." "Tu direccion de correo esta verificada. A continuacion, registra tu autenticador.")) False) Nothing
+      successResponse = verificationResponse (actionLocale actionRequest) path Http.status200 (VerificationForm Text.empty (Just (localized actionRequest EmailVerifiedEnrollAuthenticator)) False) Nothing
   issued <- issueMfaEnrollmentSessionNow accountId now
   case issued of
     Right opaqueSession -> pure (successResponse [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie mfaEnrollmentSessionCookiePolicy (sessionId opaqueSession)))])

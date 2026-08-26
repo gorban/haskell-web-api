@@ -10,6 +10,7 @@ core_test_support_files=(
 package_directories=(
   examples/custom-api
   examples/custom-db-adapter
+  examples/localization
   examples/multipart-upload
   examples/two-pages
   packages/core

@@ -25,11 +25,11 @@ import WebApi.AccountPages.Forms
     emptyRegistrationForm,
   )
 import WebApi.Database (PageRepository, defaultPageRepository)
+import WebApi.Localization (AppMessage (..), localizedMessage)
 import WebApi.Page.Model
 import WebApi.Profile (ProfileState (..))
 import WebApi.Route
-  ( AppLocale (..),
-    AppRequestContext (..),
+  ( AppRequestContext (..),
     AppRoute (..),
     renderRoutePath,
   )
@@ -56,8 +56,8 @@ buildPageModelFromRouteData routeRequest routeData =
     SpacesRouteDataResult ->
       SpacesPage
         SpacesPageModel
-          { spacesHeading = localizedText routeRequest "Site under construction" "Sitio en construcción",
-            spacesSummary = localizedText routeRequest "Follow this space." "Sigan este espacio."
+          { spacesHeading = localizedText routeRequest SiteUnderConstruction,
+            spacesSummary = localizedText routeRequest FollowThisSpace
           }
     RegistrationRouteDataResult ->
       RegistrationPage
@@ -88,9 +88,9 @@ buildPageModelFromRouteData routeRequest routeData =
     _ ->
       NotFoundPage
         NotFoundPageModel
-          { notFoundHeading = localizedText routeRequest "Not Found" "No encontrado",
-            notFoundSummary = localizedText routeRequest "The requested page could not be found." "No se pudo encontrar la pagina solicitada.",
-            notFoundPrimaryAction = buildCallToAction routeRequest HomeRoute (localizedText routeRequest "Return home" "Volver al inicio")
+          { notFoundHeading = localizedText routeRequest NotFound,
+            notFoundSummary = localizedText routeRequest NotFoundSummary,
+            notFoundPrimaryAction = buildCallToAction routeRequest HomeRoute (localizedText routeRequest ReturnHome)
           }
 
 buildProfilePageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> ProfileState -> ProfilePageModel
@@ -99,32 +99,32 @@ buildProfilePageModel routeRequest profileState =
     ProfileUnauthenticated ->
       SignedOutProfilePage
         SignedOutProfilePageDetails
-          { signedOutProfileHeading = localizedText routeRequest "Profile" "Perfil",
-            signedOutProfileSummary = localizedText routeRequest "Sign in to view and manage your profile." "Inicia sesión para ver y administrar tu perfil.",
-            signedOutProfileSignInAction = buildCallToAction routeRequest LoginRoute (localizedText routeRequest "Sign in" "Iniciar sesión"),
-            signedOutProfileRegistrationAction = buildCallToAction routeRequest RegistrationRoute (localizedText routeRequest "Create account" "Crear cuenta")
+          { signedOutProfileHeading = localizedText routeRequest Profile,
+            signedOutProfileSummary = localizedText routeRequest SignedOutProfileSummary,
+            signedOutProfileSignInAction = buildCallToAction routeRequest LoginRoute (localizedText routeRequest SignIn),
+            signedOutProfileRegistrationAction = buildCallToAction routeRequest RegistrationRoute (localizedText routeRequest CreateAccount)
           }
     ProfilePending profile ->
       PendingProfilePage
         PendingProfilePageDetails
-          { pendingProfileHeading = localizedText routeRequest "Profile" "Perfil",
-            pendingProfileSummary = localizedText routeRequest "Verify your email address before continuing." "Verifica tu dirección de correo antes de continuar.",
+          { pendingProfileHeading = localizedText routeRequest Profile,
+            pendingProfileSummary = localizedText routeRequest VerifyEmailBeforeContinuing,
             pendingProfileEmail = Email.emailAddressText (accountProfileEmail profile),
             pendingProfileUsername = Username.usernameText <$> accountProfileUsername profile,
             pendingProfileDisplayName = accountProfileDisplayName profile,
             pendingProfileResendPath = UpdateProfileTarget,
-            pendingProfileResendLabel = localizedText routeRequest "Resend verification email" "Reenviar correo de verificacion",
-            pendingProfileSignOutAction = buildCallToAction routeRequest LogoutRoute (localizedText routeRequest "Sign out" "Cerrar sesión")
+            pendingProfileResendLabel = localizedText routeRequest ResendVerificationEmail,
+            pendingProfileSignOutAction = buildCallToAction routeRequest LogoutRoute (localizedText routeRequest SignOut)
           }
     ProfileAuthenticated profile ->
       AuthenticatedProfilePage
         AuthenticatedProfilePageDetails
-          { authenticatedProfileHeading = localizedText routeRequest "Profile" "Perfil",
-            authenticatedProfileSummary = localizedText routeRequest "You are signed in." "Has iniciado sesión.",
+          { authenticatedProfileHeading = localizedText routeRequest Profile,
+            authenticatedProfileSummary = localizedText routeRequest AuthenticatedProfileSummary,
             authenticatedProfileEmail = Email.emailAddressText (accountProfileEmail profile),
             authenticatedProfileUsername = Username.usernameText <$> accountProfileUsername profile,
             authenticatedProfileDisplayName = accountProfileDisplayName profile,
-            authenticatedProfileSignOutAction = buildCallToAction routeRequest LogoutRoute (localizedText routeRequest "Sign out" "Cerrar sesión")
+            authenticatedProfileSignOutAction = buildCallToAction routeRequest LogoutRoute (localizedText routeRequest SignOut)
           }
 
 buildUnavailableProfilePageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> AppPageModel
@@ -132,20 +132,20 @@ buildUnavailableProfilePageModel routeRequest =
   ProfilePage
     ( UnavailableProfilePage
         UnavailableProfilePageDetails
-          { unavailableProfileHeading = localizedText routeRequest "Profile" "Perfil",
-            unavailableProfileSummary = localizedText routeRequest "Your profile is temporarily unavailable." "Tu perfil no está disponible temporalmente.",
-            unavailableProfileSignInAction = buildCallToAction routeRequest LoginRoute (localizedText routeRequest "Sign in" "Iniciar sesión")
+          { unavailableProfileHeading = localizedText routeRequest Profile,
+            unavailableProfileSummary = localizedText routeRequest UnavailableProfileSummary,
+            unavailableProfileSignInAction = buildCallToAction routeRequest LoginRoute (localizedText routeRequest SignIn)
           }
     )
 
 buildSecondPageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Either databaseError SecondRouteData -> AppPageModel
 buildSecondPageModel routeRequest secondRouteDataResult =
-  let returnHome = buildCallToAction routeRequest HomeRoute (localizedText routeRequest "Return home" "Volver al inicio")
+  let returnHome = buildCallToAction routeRequest HomeRoute (localizedText routeRequest ReturnHome)
    in case secondRouteDataResult of
         Right secondRouteData ->
           SecondPage
             SecondPageModel
-              { secondHeading = localizedText routeRequest "Second" "Segunda",
+              { secondHeading = localizedText routeRequest Second,
                 secondSummary = secondRouteSummary secondRouteData,
                 secondHighlights = secondRouteHighlights secondRouteData,
                 secondErrorMessage = Nothing,
@@ -154,10 +154,10 @@ buildSecondPageModel routeRequest secondRouteDataResult =
         Left _ ->
           SecondPage
             SecondPageModel
-              { secondHeading = localizedText routeRequest "Second" "Segunda",
-                secondSummary = localizedText routeRequest "Second page content is temporarily unavailable." "El contenido de la segunda pagina no esta disponible temporalmente.",
+              { secondHeading = localizedText routeRequest Second,
+                secondSummary = localizedText routeRequest SecondPageUnavailable,
                 secondHighlights = [],
-                secondErrorMessage = Just (localizedText routeRequest "Could not load second page data." "No se pudieron cargar los datos de la segunda pagina."),
+                secondErrorMessage = Just (localizedText routeRequest SecondPageLoadFailed),
                 secondPrimaryAction = returnHome
               }
 
@@ -203,8 +203,5 @@ buildCallToActionHref :: Text -> Maybe HarchWeb.SafeUrl -> HarchWeb.SafeUrl
 buildCallToActionHref renderedPath =
   HarchWeb.requiredSafeUrlOrDie ("buildCallToAction: rendered an unsafe URL: " <> renderedPath)
 
-localizedText :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Text -> Text -> Text
-localizedText routeRequest englishText spanishText =
-  case requestLocale (HarchWeb.requestContext routeRequest) of
-    English -> englishText
-    Spanish -> spanishText
+localizedText :: HarchWeb.RouteRequest AppRoute AppRequestContext -> AppMessage -> Text
+localizedText routeRequest = localizedMessage (requestLocale (HarchWeb.requestContext routeRequest))

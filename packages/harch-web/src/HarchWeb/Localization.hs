@@ -5,11 +5,16 @@
 --
 -- This is deliberately a new framework boundary rather than an extension of
 -- routing: routes choose a locale, while a 'Localizer' maps an application key
--- and that locale to a message template.  The first delivered slice owns the
--- general lookup and ICU MessageFormat execution only.  'web-api' still needs
--- to migrate its two-language call sites onto an application message catalog,
--- and the localization example still needs to demonstrate a third locale;
--- both gaps remain tracked as EI rather than being presented as complete.
+-- and that locale to a message template. ICU rendering is pure at this public
+-- boundary: the native implementation has no observable state, and all native
+-- allocation and release remains inside the implementation. That keeps the
+-- same catalog usable in pure SSR builders and effectful action handlers.
+--
+-- HarchWeb has no end-user copy today. 'DefaultMessageKey' retains one
+-- unrenderable sentinel so the empty default catalog is observable and tested;
+-- 'defaultMessage' and 'defaultLocalizer' establish the extend-not-replace
+-- layer now, so future framework keys can be added without applications
+-- replacing their own catalogs.
 module HarchWeb.Localization
   ( Locale,
     locale,
@@ -21,8 +26,11 @@ module HarchWeb.Localization
     messageArguments,
     MessageTemplate,
     messageTemplate,
+    DefaultMessageKey (..),
+    defaultMessage,
     Localizer,
     localizer,
+    defaultLocalizer,
     renderLocalizedMessage,
     MessageRenderError (..),
   )
@@ -43,6 +51,7 @@ import Foreign.Marshal.Array (withArray)
 import Foreign.Marshal.Utils (withMany)
 import Foreign.Ptr (Ptr, nullPtr)
 import Foreign.Storable (peek, poke)
+import System.IO.Unsafe (unsafePerformIO)
 
 newtype Locale = Locale Text
   deriving (Eq, Ord, Show)
@@ -75,10 +84,22 @@ newtype MessageTemplate = MessageTemplate Text
 messageTemplate :: Text -> MessageTemplate
 messageTemplate = MessageTemplate
 
+-- | The framework's currently-empty built-in message-key enum. Its sole
+-- sentinel has no corresponding template. Applications use their own closed
+-- key type and may fall back to 'defaultMessage' when a future framework key
+-- is embedded in it.
+data DefaultMessageKey = NoDefaultMessage
+
+defaultMessage :: DefaultMessageKey -> Locale -> Maybe MessageTemplate
+defaultMessage NoDefaultMessage _ = Nothing
+
 newtype Localizer messageKey = Localizer (messageKey -> Locale -> Maybe MessageTemplate)
 
 localizer :: (messageKey -> Locale -> Maybe MessageTemplate) -> Localizer messageKey
 localizer = Localizer
+
+defaultLocalizer :: Localizer DefaultMessageKey
+defaultLocalizer = localizer defaultMessage
 
 -- | An application catalog miss is distinct from malformed ICU source: callers
 -- may use the former to layer a fallback catalog, but must not silently render
@@ -88,11 +109,12 @@ data MessageRenderError
   | MessageFormatRejected
   deriving (Eq, Show)
 
-renderLocalizedMessage :: Localizer messageKey -> messageKey -> Locale -> MessageArguments -> IO (Either MessageRenderError Text)
+renderLocalizedMessage :: Localizer messageKey -> messageKey -> Locale -> MessageArguments -> Either MessageRenderError Text
 renderLocalizedMessage (Localizer lookupTemplate) messageKey requestedLocale (MessageArguments arguments) =
   case lookupTemplate messageKey requestedLocale of
-    Nothing -> pure (Left MessageNotFound)
-    Just (MessageTemplate template) -> renderIcuMessage requestedLocale template (Map.toAscList arguments)
+    Nothing -> Left MessageNotFound
+    Just (MessageTemplate template) -> unsafePerformIO (renderIcuMessage requestedLocale template (Map.toAscList arguments))
+{-# NOINLINE renderLocalizedMessage #-}
 
 renderIcuMessage :: Locale -> Text -> [(Text, MessageArgument)] -> IO (Either MessageRenderError Text)
 renderIcuMessage (Locale requestedLocale) template arguments =
