@@ -74,6 +74,7 @@ library
     HarchWeb.Email
     HarchWeb.Gmail
     HarchWeb.GoogleWorkspace
+    HarchWeb.Localization
     HarchWeb.LoginProtection
     HarchWeb.Markup
     HarchWeb.Markup.Unsafe
@@ -177,6 +178,12 @@ library
     wai ^>=3.2.5,
     warp ^>=3.4.12,
     warp-tls ^>=3.4.9,
+
+  cxx-sources: cbits/localization.cpp
+  extra-libraries:
+    icui18n
+    icuuc
+    stdc++
 
   -- Directories containing source files.
   hs-source-dirs: src

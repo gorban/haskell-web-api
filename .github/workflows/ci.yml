@@ -104,7 +104,7 @@ jobs:
             sleep 10
           done
 
-          timeout --foreground 5m sudo apt-get "${apt_options[@]}" install -y dos2unix lld postgresql-client
+          timeout --foreground 5m sudo apt-get "${apt_options[@]}" install -y dos2unix libicu-dev lld postgresql-client
 
       - name: Install Playwright Chromium
         if: steps.dos2unix.outcome == 'success'

@@ -3,6 +3,7 @@ module HarchWeb
     module HarchWeb.Controls,
     module HarchWeb.Document,
     module HarchWeb.Markup,
+    module HarchWeb.Localization,
     module HarchWeb.Observability,
     module HarchWeb.Routing,
     module HarchWeb.Security,
@@ -14,6 +15,7 @@ where
 import HarchWeb.Acme
 import HarchWeb.Controls
 import HarchWeb.Document
+import HarchWeb.Localization
 import HarchWeb.Markup hiding (RegionPatch)
 import HarchWeb.Observability hiding (attributeName, attributeValue)
 import HarchWeb.Routing
