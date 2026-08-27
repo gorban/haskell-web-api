@@ -1,5 +1,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+-- | SMTP delivery with a deliberately narrow authenticated-transport policy.
+--
+-- Decision (AW, 2026-08-18): extend the existing SMTP configuration boundary
+-- rather than adding an application-owned transport wrapper. Credentials made
+-- with 'smtpAuthentication' require the server to advertise STARTTLS, upgrade
+-- through a system-trust-store and hostname-validated TLS handshake, then
+-- advertise AUTH PLAIN again before they are sent; the distinct first-byte
+-- TLS protocol is available as 'smtpAuthenticationOverImplicitTls'. The only
+-- plaintext escape hatch is named 'smtpAuthenticationForLocalDevelopment', so
+-- a production configuration cannot accidentally send a password over a clear
+-- socket. Message rendering uses 7bit or base64 instead of assuming 8BITMIME,
+-- and RFC 2047 encoded words for non-ASCII subjects.
 module HarchWeb.Email
   ( EmailAddress,
     EmailDelivery (..),
@@ -25,6 +37,8 @@ module HarchWeb.Email
     mkSmtpConfig,
     renderEmailMessage,
     smtpAuthentication,
+    smtpAuthenticationForLocalDevelopment,
+    smtpAuthenticationOverImplicitTls,
     smtpLoginPassword,
     smtpLoginUsername,
     smtpServerHeloName,
@@ -34,18 +48,23 @@ module HarchWeb.Email
 where
 
 import Control.Exception (bracket, bracketOnError)
-import Control.Monad (unless)
+import Control.Monad (unless, void, when)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64 qualified as Base64
-import Data.ByteString.Char8 qualified as ByteStringChar8
-import Data.Char (isAscii, isAsciiLower, isAsciiUpper, isDigit)
+import Data.ByteString.Lazy qualified as LazyByteString
+import Data.Char (isAscii, isAsciiLower, isAsciiUpper, isControl, isDigit)
+import Data.Foldable (for_)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
-import Data.Word (Word16)
+import Data.Word (Word16, Word8)
 import Network.Socket qualified as Socket
-import System.IO (BufferMode (NoBuffering), Handle, IOMode (ReadWriteMode), hClose, hFlush, hSetBuffering)
+import Network.Socket.ByteString qualified as SocketByteString
+import Network.TLS qualified as TLS
+import Network.TLS.Extra.Cipher qualified as TLSCipher
+import System.X509 qualified as SystemX509
 
 newtype EmailAddress = EmailAddress Text
   deriving (Eq, Show)
@@ -88,7 +107,16 @@ newtype SmtpUsername = SmtpUsername Text
 
 newtype SmtpPassword = SmtpPassword Text
 
-data SmtpAuthentication = SmtpAuthentication SmtpUsername SmtpPassword
+-- | The only permitted route for SMTP credentials. The ordinary constructor
+-- requires an authenticated STARTTLS upgrade; the explicitly named local
+-- development constructor is the opt-in escape hatch for a disposable
+-- loopback server.
+data SmtpAuthentication = SmtpAuthentication SmtpAuthenticationTransport SmtpUsername SmtpPassword
+
+data SmtpAuthenticationTransport
+  = SmtpAuthenticationRequiresStartTls
+  | SmtpAuthenticationRequiresImplicitTls
+  | SmtpAuthenticationAllowsPlaintextForLocalDevelopment
 
 data SmtpConfigInput = SmtpConfigInput
   { smtpInputHost :: SmtpHost,
@@ -99,8 +127,25 @@ data SmtpConfigInput = SmtpConfigInput
   }
 
 data SmtpCredentials = SmtpCredentials
-  { smtpUsername :: Text,
+  { smtpCredentialTransport :: SmtpAuthenticationTransport,
+    smtpUsername :: Text,
     smtpPassword :: Text
+  }
+
+data SmtpWire = SmtpWire
+  { smtpWireRead :: IO ByteString.ByteString,
+    smtpWireWrite :: ByteString.ByteString -> IO ()
+  }
+
+data SmtpConnection = SmtpConnection
+  { smtpConnectionSocket :: Socket.Socket,
+    smtpConnectionWire :: IORef SmtpWire,
+    smtpConnectionBufferedBytes :: IORef ByteString.ByteString
+  }
+
+data SmtpResponse = SmtpResponse
+  { smtpResponseCode :: ByteString.ByteString,
+    smtpResponseLines :: [ByteString.ByteString]
   }
 
 type SmtpAddressResolver = SmtpConfig -> IO (Maybe Socket.AddrInfo)
@@ -122,7 +167,7 @@ mkEmailMessage
       emailInputSubject = subject,
       emailInputBody = body
     } =
-    if validHeaderValue subject
+    if validEmailSubject subject
       then Just (EmailMessage recipient subject body)
       else Nothing
 
@@ -139,7 +184,19 @@ smtpLoginPassword :: Text -> SmtpPassword
 smtpLoginPassword = SmtpPassword
 
 smtpAuthentication :: SmtpUsername -> SmtpPassword -> SmtpAuthentication
-smtpAuthentication = SmtpAuthentication
+smtpAuthentication = SmtpAuthentication SmtpAuthenticationRequiresStartTls
+
+-- | An intentionally conspicuous escape hatch for a disposable local SMTP
+-- server. Never use this with a real host: it permits @AUTH PLAIN@ before a
+-- TLS upgrade.
+smtpAuthenticationForLocalDevelopment :: SmtpUsername -> SmtpPassword -> SmtpAuthentication
+smtpAuthenticationForLocalDevelopment = SmtpAuthentication SmtpAuthenticationAllowsPlaintextForLocalDevelopment
+
+-- | Use TLS from the first byte for an SMTP submission service that is
+-- configured for implicit TLS (normally port 465). The server certificate is
+-- still validated against the configured host and the system trust store.
+smtpAuthenticationOverImplicitTls :: SmtpUsername -> SmtpPassword -> SmtpAuthentication
+smtpAuthenticationOverImplicitTls = SmtpAuthentication SmtpAuthenticationRequiresImplicitTls
 
 mkSmtpConfig :: SmtpConfigInput -> Maybe SmtpConfig
 mkSmtpConfig
@@ -154,9 +211,9 @@ mkSmtpConfig
       then SmtpConfig host port heloName sender <$> traverse toCredentials authentication
       else Nothing
     where
-      toCredentials (SmtpAuthentication (SmtpUsername username) (SmtpPassword password)) =
+      toCredentials (SmtpAuthentication transport (SmtpUsername username) (SmtpPassword password)) =
         if validAuthenticationValue username && validAuthenticationValue password
-          then Just (SmtpCredentials username password)
+          then Just (SmtpCredentials transport username password)
           else Nothing
 
 verificationEmail :: EmailLocale -> EmailAddress -> Text -> EmailMessage
@@ -171,8 +228,8 @@ verificationEmail locale recipient verificationUrl =
     EmailSpanish ->
       EmailMessage
         { emailMessageRecipient = recipient,
-          emailMessageSubject = "Verifica tu correo electronico",
-          emailMessageBody = "Abre este enlace para verificar tu correo electronico:\n" <> verificationUrl
+          emailMessageSubject = "Verifica tu correo electrónico",
+          emailMessageBody = "Abre este enlace para verificar tu correo electrónico:\n" <> verificationUrl
         }
 
 deliverSmtpEmail :: SmtpConfig -> EmailMessage -> IO ()
@@ -181,18 +238,18 @@ deliverSmtpEmail = deliverSmtpEmailWithResolver resolveSmtpAddress
 deliverSmtpEmailWithResolver :: SmtpAddressResolver -> SmtpConfig -> EmailMessage -> IO ()
 deliverSmtpEmailWithResolver resolveAddress config message =
   Socket.withSocketsDo $
-    withSmtpConnection resolveAddress config $ \handle -> do
-      expectSmtpResponse handle "220"
-      sendSmtpCommand handle ("EHLO " <> smtpHeloName config) "250"
-      maybe (hFlush handle) (authenticateSmtp handle) (smtpCredentials config)
-      sendSmtpCommand handle ("MAIL FROM:<" <> emailAddressText (smtpEnvelopeSender config) <> ">") "250"
-      sendSmtpCommand handle ("RCPT TO:<" <> emailAddressText (emailMessageRecipient message) <> ">") "250"
-      sendSmtpCommand handle "DATA" "354"
-      writeSmtpBytes handle (renderSmtpMessage config message <> "\r\n.\r\n")
-      expectSmtpResponse handle "250"
-      sendSmtpCommand handle "QUIT" "221"
+    withSmtpConnection resolveAddress config $ \connection -> do
+      _ <- expectSmtpResponse connection "220"
+      capabilities <- sendSmtpCommand connection ("EHLO " <> smtpHeloName config) "250"
+      for_ (smtpCredentials config) (authenticateSmtp connection config capabilities)
+      _ <- sendSmtpCommand connection ("MAIL FROM:<" <> emailAddressText (smtpEnvelopeSender config) <> ">") "250"
+      _ <- sendSmtpCommand connection ("RCPT TO:<" <> emailAddressText (emailMessageRecipient message) <> ">") "250"
+      _ <- sendSmtpCommand connection "DATA" "354"
+      writeSmtpBytes connection (renderSmtpMessage config message <> "\r\n.\r\n")
+      _ <- expectSmtpResponse connection "250"
+      void (sendSmtpCommand connection "QUIT" "221")
 
-withSmtpConnection :: SmtpAddressResolver -> SmtpConfig -> (Handle -> IO value) -> IO value
+withSmtpConnection :: SmtpAddressResolver -> SmtpConfig -> (SmtpConnection -> IO value) -> IO value
 withSmtpConnection resolveAddress config action = do
   maybeAddress <- resolveAddress config
   case maybeAddress of
@@ -203,10 +260,25 @@ withSmtpConnection resolveAddress config action = do
         Socket.close
         ( \socket -> do
             Socket.connect socket (Socket.addrAddress address)
-            handle <- Socket.socketToHandle socket ReadWriteMode
-            hSetBuffering handle NoBuffering
-            bracket (pure handle) hClose action
+            wireReference <- newIORef (socketSmtpWire socket)
+            bufferedBytes <- newIORef ByteString.empty
+            let connection = SmtpConnection socket wireReference bufferedBytes
+            when (usesImplicitTls config) $
+              upgradeSmtpConnectionToTls connection (smtpHost config)
+            bracket
+              (pure connection)
+              closeSmtpConnection
+              action
         )
+
+usesImplicitTls :: SmtpConfig -> Bool
+usesImplicitTls config =
+  case smtpCredentials config of
+    Just credentials ->
+      case smtpCredentialTransport credentials of
+        SmtpAuthenticationRequiresImplicitTls -> True
+        _ -> False
+    Nothing -> False
 
 resolveSmtpAddress :: SmtpAddressResolver
 resolveSmtpAddress config =
@@ -216,37 +288,166 @@ resolveSmtpAddress config =
       (Just (Text.unpack (smtpHost config)))
       (Just (show (smtpPort config)))
 
-sendSmtpCommand :: Handle -> Text -> ByteString.ByteString -> IO ()
-sendSmtpCommand handle command expectedCode = do
-  writeSmtpBytes handle (TextEncoding.encodeUtf8 command <> "\r\n")
-  expectSmtpResponse handle expectedCode
+sendSmtpCommand :: SmtpConnection -> Text -> ByteString.ByteString -> IO SmtpResponse
+sendSmtpCommand connection command expectedCode = do
+  writeSmtpBytes connection (TextEncoding.encodeUtf8 command <> "\r\n")
+  expectSmtpResponse connection expectedCode
 
-authenticateSmtp :: Handle -> SmtpCredentials -> IO ()
-authenticateSmtp handle credentials =
-  sendSmtpCommand
-    handle
-    ( "AUTH PLAIN "
-        <> TextEncoding.decodeUtf8
-          ( Base64.encode
-              ( "\NUL"
-                  <> TextEncoding.encodeUtf8 (smtpUsername credentials)
-                  <> "\NUL"
-                  <> TextEncoding.encodeUtf8 (smtpPassword credentials)
+authenticateSmtp :: SmtpConnection -> SmtpConfig -> SmtpResponse -> SmtpCredentials -> IO ()
+authenticateSmtp connection config capabilities credentials = do
+  case smtpCredentialTransport credentials of
+    SmtpAuthenticationRequiresStartTls -> do
+      requireSmtpCapability capabilities "STARTTLS"
+      _ <- sendSmtpCommand connection "STARTTLS" "220"
+      upgradeSmtpConnectionToTls connection (smtpHost config)
+      securedCapabilities <- sendSmtpCommand connection ("EHLO " <> smtpHeloName config) "250"
+      requireSmtpCapability securedCapabilities "AUTH PLAIN"
+    SmtpAuthenticationRequiresImplicitTls ->
+      requireSmtpCapability capabilities "AUTH PLAIN"
+    SmtpAuthenticationAllowsPlaintextForLocalDevelopment ->
+      requireSmtpCapability capabilities "AUTH PLAIN"
+  void
+    ( sendSmtpCommand
+        connection
+        ( "AUTH PLAIN "
+            <> TextEncoding.decodeUtf8
+              ( Base64.encode
+                  ( "\NUL"
+                      <> TextEncoding.encodeUtf8 (smtpUsername credentials)
+                      <> "\NUL"
+                      <> TextEncoding.encodeUtf8 (smtpPassword credentials)
+                  )
               )
-          )
+        )
+        "235"
     )
-    "235"
 
-expectSmtpResponse :: Handle -> ByteString.ByteString -> IO ()
-expectSmtpResponse handle expectedCode = do
-  response <- ByteStringChar8.hGetLine handle
-  unless ((expectedCode <> " ") `ByteString.isPrefixOf` response) $
-    ioError (userError ("Unexpected SMTP response: " <> show response))
+expectSmtpResponse :: SmtpConnection -> ByteString.ByteString -> IO SmtpResponse
+expectSmtpResponse connection expectedCode = do
+  response <- readSmtpResponse connection
+  unless (smtpResponseCode response == expectedCode) $
+    ioError (userError ("Unexpected SMTP response: " <> show (smtpResponseLines response)))
+  pure response
 
-writeSmtpBytes :: Handle -> ByteString.ByteString -> IO ()
-writeSmtpBytes handle bytes = do
-  ByteString.hPut handle bytes
-  hFlush handle
+writeSmtpBytes :: SmtpConnection -> ByteString.ByteString -> IO ()
+writeSmtpBytes connection bytes = do
+  wire <- readIORef (smtpConnectionWire connection)
+  smtpWireWrite wire bytes
+
+readSmtpResponse :: SmtpConnection -> IO SmtpResponse
+readSmtpResponse connection = do
+  (responseCode, responseSeparator, firstLine) <- readSmtpResponseLine connection
+  remainingLines <- readContinuationLines responseCode responseSeparator []
+  pure (SmtpResponse responseCode (firstLine : reverse remainingLines))
+  where
+    readContinuationLines expectedCode separator accumulatedLines
+      | separator == 45 = do
+          (nextCode, nextSeparator, nextLine) <- readSmtpResponseLine connection
+          unless (nextCode == expectedCode) $
+            ioError (userError "SMTP multiline response changed status code")
+          readContinuationLines expectedCode nextSeparator (nextLine : accumulatedLines)
+      | separator == 32 = pure accumulatedLines
+      | otherwise = ioError (userError "SMTP response used an invalid continuation separator")
+
+readSmtpResponseLine :: SmtpConnection -> IO (ByteString.ByteString, Word8, ByteString.ByteString)
+readSmtpResponseLine connection = do
+  line <- readSmtpLine connection
+  if ByteString.length line >= 4 && ByteString.all isAsciiDigit (ByteString.take 3 line)
+    then pure (ByteString.take 3 line, ByteString.index line 3, ByteString.drop 4 line)
+    else ioError (userError ("Malformed SMTP response: " <> show line))
+  where
+    isAsciiDigit byte = byte >= 48 && byte <= 57
+
+readSmtpLine :: SmtpConnection -> IO ByteString.ByteString
+readSmtpLine connection = do
+  buffered <- readIORef (smtpConnectionBufferedBytes connection)
+  go buffered
+  where
+    maxSmtpResponseLineBytes = 16384
+
+    go buffered =
+      case ByteString.breakSubstring "\r\n" buffered of
+        (line, remainder)
+          | not (ByteString.null remainder) -> do
+              writeIORef (smtpConnectionBufferedBytes connection) (ByteString.drop 2 remainder)
+              pure line
+          | ByteString.length buffered >= maxSmtpResponseLineBytes ->
+              ioError (userError "SMTP response line exceeds 16384 bytes")
+          | otherwise -> do
+              wire <- readIORef (smtpConnectionWire connection)
+              next <- smtpWireRead wire
+              if ByteString.null next
+                then ioError (userError "SMTP server closed the connection before completing a response")
+                else go (buffered <> next)
+
+requireSmtpCapability :: SmtpResponse -> ByteString.ByteString -> IO ()
+requireSmtpCapability response capability =
+  unless (any (offersSmtpCapability capability) (smtpResponseLines response)) $
+    ioError (userError ("SMTP server did not advertise required capability " <> show capability))
+
+offersSmtpCapability :: ByteString.ByteString -> ByteString.ByteString -> Bool
+offersSmtpCapability capability responseLine =
+  let normalizedCapability = asciiUpper capability
+      normalizedLine = asciiUpper responseLine
+      capabilityLength = ByteString.length normalizedCapability
+   in normalizedCapability `ByteString.isPrefixOf` normalizedLine
+        && (ByteString.length normalizedLine == capabilityLength || ByteString.index normalizedLine capabilityLength == 32)
+
+asciiUpper :: ByteString.ByteString -> ByteString.ByteString
+asciiUpper = ByteString.map toUpperAscii
+  where
+    toUpperAscii byte
+      | byte >= 97 && byte <= 122 = byte - 32
+      | otherwise = byte
+
+upgradeSmtpConnectionToTls :: SmtpConnection -> Text -> IO ()
+upgradeSmtpConnectionToTls connection host = do
+  buffered <- readIORef (smtpConnectionBufferedBytes connection)
+  unless (ByteString.null buffered) $
+    ioError (userError "SMTP server sent plaintext bytes after accepting STARTTLS")
+  certificateStore <- SystemX509.getSystemCertificateStore
+  -- AW deliberately constructs fresh client parameters for every SMTP
+  -- connection. The default empty service identity scopes only the TLS
+  -- validation cache; with the required no-cache policy, chain and hostname
+  -- validation happen every time. This path is not optimized for validation
+  -- caching or rapid connection reuse. A cache needs a new ADR because it
+  -- changes certificate rotation, trust-store, and revocation semantics.
+  --
+  -- The user explicitly approved this last-resort strictness point after the
+  -- full coverage gate repeatedly left TLS's required, otherwise inert cache
+  -- identity unticked. It changes only when @ByteString.empty@ is evaluated;
+  -- it does not introduce caching or change certificate/hostname validation.
+  let socket = smtpConnectionSocket connection
+      defaultParameters = TLS.defaultParamsClient (Text.unpack host) $! ByteString.empty
+      parameters =
+        defaultParameters
+          { TLS.clientSupported =
+              (TLS.clientSupported defaultParameters)
+                { TLS.supportedCiphers = TLSCipher.ciphersuite_default
+                },
+            TLS.clientShared =
+              (TLS.clientShared defaultParameters)
+                { TLS.sharedCAStore = certificateStore
+                }
+          }
+  context <- TLS.contextNew socket parameters
+  TLS.handshake context
+  writeIORef
+    (smtpConnectionWire connection)
+    SmtpWire
+      { smtpWireRead = TLS.recvData context,
+        smtpWireWrite = TLS.sendData context . LazyByteString.fromStrict
+      }
+
+socketSmtpWire :: Socket.Socket -> SmtpWire
+socketSmtpWire socket =
+  SmtpWire
+    { smtpWireRead = SocketByteString.recv socket 4096,
+      smtpWireWrite = SocketByteString.sendAll socket
+    }
+
+closeSmtpConnection :: SmtpConnection -> IO ()
+closeSmtpConnection = Socket.close . smtpConnectionSocket
 
 renderSmtpMessage :: SmtpConfig -> EmailMessage -> ByteString.ByteString
 renderSmtpMessage config =
@@ -261,11 +462,26 @@ renderEmailMessage sender message =
           ">\r\nTo: <",
           emailAddressText (emailMessageRecipient message),
           ">\r\nSubject: ",
-          emailMessageSubject message,
-          "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n",
-          dotStuff (emailMessageBody message)
+          renderEmailSubject (emailMessageSubject message),
+          "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: ",
+          renderedTransferEncoding,
+          "\r\n\r\n",
+          renderedBody
         ]
     )
+  where
+    (renderedTransferEncoding, renderedBody) =
+      if Text.all isAscii (emailMessageBody message)
+        then ("7bit", dotStuff (emailMessageBody message))
+        else ("base64", base64Lines (TextEncoding.encodeUtf8 (emailMessageBody message)))
+
+renderEmailSubject :: Text -> Text
+renderEmailSubject subject
+  | Text.all isAscii subject = subject
+  | otherwise = "=?UTF-8?B?" <> TextEncoding.decodeUtf8 (Base64.encode (TextEncoding.encodeUtf8 subject)) <> "?="
+
+base64Lines :: ByteString.ByteString -> Text
+base64Lines = Text.intercalate "\r\n" . Text.chunksOf 76 . TextEncoding.decodeUtf8 . Base64.encode
 
 dotStuff :: Text -> Text
 dotStuff body =
@@ -297,7 +513,10 @@ validDomainPart value =
 
 validHeaderValue :: Text -> Bool
 validHeaderValue =
-  Text.all (\character -> isAscii character && character /= '\r' && character /= '\n')
+  Text.all (\character -> isAscii character && not (isControl character))
+
+validEmailSubject :: Text -> Bool
+validEmailSubject = Text.all (\character -> not (isControl character) || character == '\t')
 
 validAuthenticationValue :: Text -> Bool
 validAuthenticationValue value =

@@ -3,7 +3,8 @@
 {-# SPEC #-}
 
 import Control.Concurrent (forkIO, killThread, readMVar, threadDelay)
-import Control.Exception (IOException, SomeException, displayException, try)
+import Control.Exception (IOException, SomeException, bracket, displayException, try)
+import Control.Monad (forM_)
 import Data.ByteString qualified as ByteString
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
@@ -25,11 +26,12 @@ import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPost
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi (buildApp, run)
 import WebApi.Api.Endpoints (noApiRequestFields)
-import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithConfig)
-import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), TlsCertificateSource (..), TlsConfig (..), defaultAppConfig, defaultAppEnvironmentConfig)
+import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeAppWithDatabaseBuilder, runWithConfig)
+import WebApi.AppEffect (AccountWorkflow (accountWorkflowEmailDelivery))
+import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), AppMode (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), TlsCertificateSource (..), TlsConfig (..), databasePoolCapacity, defaultAppConfig, defaultAppEnvironmentConfig)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), PageRepository (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed, defaultPageRepository)
 import WebApi.Page (renderPage)
-import WebApi.Postgres.Testing (runPostgresMigrationsForRuntime, runPostgresSeed)
+import WebApi.Postgres.Testing (closePostgresPool, newPostgresPool, runPostgresMigrationsForRuntime, runPostgresSeed)
 import WebApi.Response (selectResponse)
 import WebApi.Route (AppRequestContext (..), AppRoute (..), defaultRequestContext, parseRoute, renderRoutePath)
 import WebApi.Route qualified
@@ -488,6 +490,15 @@ spec = do
         HarchWeb.BodyResponse _ -> expectationFailure "expected an API protocol response"
 
   describe "buildRuntimeApp" $ do
+    it "selects the production and test SMTP authentication policies while constructing runtime workflows"
+      $ bracket
+        (newPostgresPool (databasePoolCapacity (databaseConfig defaultAppEnvironmentConfig)) (databaseConfig defaultAppEnvironmentConfig))
+        closePostgresPool
+      $ \pool ->
+        forM_ [Production, Test] $ \mode -> do
+          let workflow = buildRuntimeAccountWorkflow pool (defaultAppEnvironmentConfig {appMode = mode})
+          accountWorkflowEmailDelivery workflow `seq` pure ()
+
     it "builds the runtime database effect from the environment config" $ do
       let runtimeEnvironmentConfig =
             defaultAppEnvironmentConfig

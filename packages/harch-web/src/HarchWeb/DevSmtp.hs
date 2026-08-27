@@ -79,7 +79,7 @@ receiveDevSmtpEmail socket = do
   hSetBuffering handle NoBuffering
   flip finally (hClose handle) $ do
     writeHandle handle "220 harch development SMTP ready\r\n"
-    expectCommand handle "250 harch development SMTP\r\n"
+    expectCommand handle "250-harch development SMTP\r\n250 AUTH PLAIN\r\n"
     sender <- receiveSender handle
     (recipients, rawMessage) <- receiveRecipients handle []
     writeHandle handle "250 message accepted\r\n"

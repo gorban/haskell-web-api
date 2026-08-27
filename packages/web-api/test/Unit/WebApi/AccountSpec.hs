@@ -109,8 +109,8 @@ spec = do
           Account.emailVerificationTokenDigestText (Account.storedVerificationTokenDigest (pendingAccountVerification pendingAccount)) `shouldSatisfy` (not . Text.null)
           Password.verifyPassword (Password.mkPassword "correct horse battery staple") (pendingAccountPasswordHash pendingAccount) `shouldBe` True
           Email.emailMessageRecipient message `shouldBe` emailAddress
-          Email.emailMessageSubject message `shouldBe` "Verifica tu correo electronico"
-          Email.emailMessageBody message `shouldSatisfy` Text.isPrefixOf "Abre este enlace para verificar tu correo electronico:\nhttps://account.example.test/es/verify?token="
+          Email.emailMessageSubject message `shouldBe` "Verifica tu correo electrónico"
+          Email.emailMessageBody message `shouldSatisfy` Text.isPrefixOf "Abre este enlace para verificar tu correo electrónico:\nhttps://account.example.test/es/verify?token="
           case settledClaims of
             [claim] -> do
               pendingRegistrationClaimAccountId claim `shouldBe` pendingAccountId pendingAccount
@@ -292,8 +292,8 @@ spec = do
           Account.storedVerificationEmail verification `shouldBe` emailAddress
           Account.storedVerificationExpiresAtNanoseconds verification `shouldBe` 300
           Email.emailMessageRecipient message `shouldBe` emailAddress
-          Email.emailMessageSubject message `shouldBe` "Verifica tu correo electronico"
-          Email.emailMessageBody message `shouldSatisfy` Text.isPrefixOf "Abre este enlace para verificar tu correo electronico:\nhttps://account.example.test/es/verify?token="
+          Email.emailMessageSubject message `shouldBe` "Verifica tu correo electrónico"
+          Email.emailMessageBody message `shouldSatisfy` Text.isPrefixOf "Abre este enlace para verificar tu correo electrónico:\nhttps://account.example.test/es/verify?token="
         _ -> expectationFailure "expected a rotated verification and one email"
       resend unavailableStore delivery pendingProfile 100 200 >>= (`shouldSatisfy` \case Left (ResendVerificationStoreError storeError) -> isUnavailable "database unavailable" storeError; _ -> False)
       resend noLongerPendingStore delivery pendingProfile 100 200 >>= (`shouldSatisfy` \case Left ResendVerificationNoLongerPending -> True; _ -> False)

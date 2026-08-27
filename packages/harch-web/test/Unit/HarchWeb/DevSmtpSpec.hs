@@ -35,7 +35,7 @@ spec =
         let sender = required (mkEmailAddress "noreply@example.test")
             recipient = required (mkEmailAddress "ada@example.test")
             message = required (mkEmailMessage (EmailMessageInput recipient "Authenticated" "Body"))
-            config = required (mkSmtpConfig (smtpConfigInput "127.0.0.1" (devSmtpPort server) "account.example.test" sender (Just (smtpAuthentication (smtpLoginUsername "local-user") (smtpLoginPassword "local-password")))))
+            config = required (mkSmtpConfig (smtpConfigInput "127.0.0.1" (devSmtpPort server) "account.example.test" sender (Just (smtpAuthenticationForLocalDevelopment (smtpLoginUsername "local-user") (smtpLoginPassword "local-password")))))
         deliverSmtpEmail config message
         delivered <- awaitEmail server "ada@example.test"
         devSmtpEnvelopeSender delivered `shouldBe` "noreply@example.test"

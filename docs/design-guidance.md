@@ -1927,6 +1927,21 @@ The framework needs a small, general primitive from Warp/WarpTLS (or a transport
 the accepted socket and peer address before handshake processing) before DQ can be completed and
 tested without a fabricated association. DQ remains open with that concrete prerequisite.
 
+### Decision record — AW: authenticated SMTP uses fresh TLS validation (2026-08-26)
+
+**Decision: keep certificate-chain and hostname validation fresh for every SMTP connection, rather
+than add a validation-result cache or weaken the exact coverage gate.** The expected SMTP connection
+rate does not justify a cache's trust-store, revocation, certificate-rotation, ownership, expiry, and
+invalidation semantics. The TLS setup must say beside the client construction that it deliberately is
+not optimized for validation caching or rapid reuse, and a future cache requires a new ADR. A local
+SMTP/TLS listener belongs in the verification path for actual STARTTLS/implicit-TLS, multiline, and
+capability behavior, never as a fabricated coverage mechanism. If fresh validation cannot be
+represented in a coverage-safe supported API shape, record the missing capability or seek it
+upstream; do not introduce a coverage exception or semantically empty cache. The one explicitly
+approved exception is the documented @ByteString.empty@ strictness at the TLS library boundary:
+it evaluates the library-required service-identity argument without creating a cache or changing
+certificate validation, after the supported construction and real-listener tests had been tried.
+
 ### Decision record — DS: static representation metadata and file-backed delivery (2026-08-25)
 
 **Decision: keep static-file ownership at the configured root boundary, and extend that one

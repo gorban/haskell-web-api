@@ -48,6 +48,7 @@ import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config
   ( AppConfig (..),
     AppEnvironmentConfig (..),
+    AppMode (..),
     AppStartupConfig (..),
     AppStartupConfigLoadError,
     DatabaseConfig,
@@ -213,7 +214,7 @@ buildRuntimeAccountWorkflow :: PostgresPool -> AppEnvironmentConfig -> AccountWo
 buildRuntimeAccountWorkflow pool !environmentConfig =
   AccountWorkflow
     { accountWorkflowStore = buildRuntimePostgresAccountStore pool,
-      accountWorkflowEmailDelivery = runtimeEmailDelivery (smtpDeliveryConfig environmentConfig),
+      accountWorkflowEmailDelivery = runtimeEmailDelivery (appMode environmentConfig) (smtpDeliveryConfig environmentConfig),
       accountWorkflowPasswordHasher = Password.hashPassword,
       accountWorkflowPasswordWorkGate = runtimePasswordWorkGate,
       accountWorkflowRegistrationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
@@ -229,8 +230,8 @@ buildRuntimeAccountWorkflow pool !environmentConfig =
       accountWorkflowVerificationUrl = runtimeVerificationUrl (publicBaseUrl environmentConfig)
     }
 
-runtimeEmailDelivery :: SmtpDeliveryConfig -> Email.EmailDelivery
-runtimeEmailDelivery smtpConfig =
+runtimeEmailDelivery :: AppMode -> SmtpDeliveryConfig -> Email.EmailDelivery
+runtimeEmailDelivery mode smtpConfig =
   case Email.mkEmailAddress (smtpDeliverySender smtpConfig) of
     Just sender ->
       case Email.mkSmtpConfig
@@ -241,7 +242,8 @@ runtimeEmailDelivery smtpConfig =
             Email.smtpInputEnvelopeSender = sender,
             Email.smtpInputAuthentication =
               Just
-                ( Email.smtpAuthentication
+                ( smtpAuthenticationForMode
+                    mode
                     (Email.smtpLoginUsername (smtpDeliveryUsername smtpConfig))
                     (Email.smtpLoginPassword (smtpDeliveryPassword smtpConfig))
                 )
@@ -251,6 +253,17 @@ runtimeEmailDelivery smtpConfig =
     Nothing -> unavailableEmailDelivery
   where
     unavailableEmailDelivery = Email.EmailDelivery (\_ -> ioError (userError "SMTP delivery configuration is invalid"))
+
+-- | Only production delivery may use the ordinary credential constructor,
+-- which requires STARTTLS and fresh system-store certificate validation.  The
+-- development/test SMTP sink is a deliberately named cleartext-only fixture,
+-- never an accidental production fallback.
+smtpAuthenticationForMode :: AppMode -> Email.SmtpUsername -> Email.SmtpPassword -> Email.SmtpAuthentication
+smtpAuthenticationForMode mode =
+  case mode of
+    Production -> Email.smtpAuthentication
+    Development -> Email.smtpAuthenticationForLocalDevelopment
+    Test -> Email.smtpAuthenticationForLocalDevelopment
 
 runtimeVerificationUrl :: Text.Text -> AppRequestContext -> HarchAccount.EmailVerificationToken -> Text.Text
 runtimeVerificationUrl baseUrl requestContext verificationToken =

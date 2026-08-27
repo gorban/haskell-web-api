@@ -106,6 +106,19 @@ Runtime startup has no compiled defaults for `DATABASE_PASSWORD`, `SMTP_PASSWORD
 environment injector, or a secret manager. For deployment, prefer process environment injection or
 a secret manager over a file.
 
+## SMTP transport security
+
+In production, configured SMTP credentials require the server to advertise `STARTTLS`; the client
+upgrades before it sends `AUTH PLAIN`, then validates the certificate chain and configured host on
+every connection against the current system trust store. A server that lacks `STARTTLS` or does not
+re-advertise `AUTH PLAIN` after the upgrade fails delivery. The framework API also supports an
+explicit implicit-TLS submission transport for applications that need it.
+
+Development and test mode use the deliberately named plaintext escape hatch only for the local
+development SMTP sink. It is not a production fallback. SMTP connections are not pooled and do not
+cache certificate-validation results: certificate rotation, trust-store, and revocation changes are
+observed on the next connection.
+
 ## Request resource limits
 
 The request-head settings are deliberately opt-in: no framework-wide production default is imposed
