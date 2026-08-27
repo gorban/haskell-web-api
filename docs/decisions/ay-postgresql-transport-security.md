@@ -1,6 +1,6 @@
 # ADR-AY: Require authenticated PostgreSQL transport
 
-- Status: **Implemented — local CI-equivalent gates passed; GitHub Actions pending**
+- Status: **Implemented and verified**
 - Task: [AY — PostgreSQL connection lifecycle and transport](../../TASKS/pr-3-correctness-and-security-defects.md)
 - Date: 2026-08-26
 
@@ -32,8 +32,8 @@ encryption-only choice explicit.
 - **Name the selected guarantee accurately.** A closed mode ADT prevents misspelling or silently
   inventing libpq semantics, but lets the deployment select the documented guarantee it owns.
 - **Name partial delivery honestly.** Pooling, timeouts, and the real TLS proof are complete; the
-  local CI-equivalent gate sequence has passed, with GitHub Actions providing the remaining
-  release evidence.
+  local CI-equivalent gate sequence has passed. GitHub Actions also passed for the implementation
+  commit (`118984c`, [run 33126747936](https://github.com/gorban/haskell-web-api/actions/runs/33126747936)).
 
 ## Current evidence
 
