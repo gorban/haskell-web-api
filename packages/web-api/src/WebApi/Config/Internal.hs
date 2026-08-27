@@ -15,6 +15,8 @@ module WebApi.Config.Internal
     CorsPolicyConfig (..),
     DatabaseConfig (..),
     DatabasePoolCapacity,
+    DatabaseSslMode (..),
+    DatabaseTransportSecurity (..),
     ForwardedHeaderTrust (..),
     ListenerConfig (..),
     ListenerScheme (..),
@@ -46,6 +48,7 @@ module WebApi.Config.Internal
     loadAppStartupConfigWithFiles,
     parseAppEnvironmentConfig,
     parseRuntimeDatabaseConfig,
+    parseDatabaseTransportSecurity,
     parseAppStartupConfig,
     parseRuntimeAppConfig,
     databasePoolCapacityValue,
@@ -161,8 +164,29 @@ data DatabaseConfig = DatabaseConfig
     databaseUser :: Text,
     databasePassword :: Text,
     databaseConnectTimeoutSeconds :: Int,
-    databasePoolCapacity :: DatabasePoolCapacity
+    databasePoolCapacity :: DatabasePoolCapacity,
+    databaseTransportSecurity :: DatabaseTransportSecurity
   }
+
+-- | The closed set of libpq @sslmode@ values.  'DatabaseTransportLibpqDefault'
+-- deliberately emits no @sslmode@ parameter, preserving libpq's documented
+-- default when the deployment has not configured a transport policy.
+data DatabaseSslMode
+  = DatabaseSslDisable
+  | DatabaseSslAllow
+  | DatabaseSslPrefer
+  | DatabaseSslRequire
+  | DatabaseSslVerifyCa
+  | DatabaseSslVerifyFull
+  deriving (Eq, Show)
+
+-- | Database transport is configured once and passed to every libpq caller.
+-- A root certificate is meaningful only with an explicit TLS mode; omitting
+-- it leaves libpq to use its documented default certificate location.
+data DatabaseTransportSecurity
+  = DatabaseTransportLibpqDefault
+  | DatabaseTransportSsl DatabaseSslMode (Maybe Text)
+  deriving (Eq, Show)
 
 instance Eq DatabaseConfig where
   left == right =
@@ -173,6 +197,7 @@ instance Eq DatabaseConfig where
       && databasePassword left == databasePassword right
       && databaseConnectTimeoutSeconds left == databaseConnectTimeoutSeconds right
       && databasePoolCapacityValue (databasePoolCapacity left) == databasePoolCapacityValue (databasePoolCapacity right)
+      && databaseTransportSecurity left == databaseTransportSecurity right
 
 -- | Redacted: a derived 'Show' would print 'databasePassword' in the clear,
 -- and this value is reachable from ordinary diagnostics ('AppEnvironmentConfig'\'s
@@ -191,6 +216,8 @@ instance Show DatabaseConfig where
       <> show (databaseConnectTimeoutSeconds config)
       <> ", databasePoolCapacity = "
       <> show (databasePoolCapacityValue (databasePoolCapacity config))
+      <> ", databaseTransportSecurity = "
+      <> show (databaseTransportSecurity config)
       <> "}"
 
 data AppEnvironmentConfig = AppEnvironmentConfig
@@ -363,7 +390,8 @@ defaultAppEnvironmentConfig =
             databaseUser = "web_api_runtime",
             databasePassword = "web_api",
             databaseConnectTimeoutSeconds = defaultDatabaseConnectTimeoutSeconds,
-            databasePoolCapacity = defaultDatabasePoolCapacity
+            databasePoolCapacity = defaultDatabasePoolCapacity,
+            databaseTransportSecurity = DatabaseTransportLibpqDefault
           },
       smtpDeliveryConfig =
         SmtpDeliveryConfig
@@ -554,6 +582,12 @@ parseConnectTimeout = parseNonNegativeInt $! databaseConnectTimeoutSecondsKey
 databasePoolCapacityKey :: Text
 databasePoolCapacityKey = "DATABASE_POOL_CAPACITY"
 
+databaseSslModeKey :: Text
+databaseSslModeKey = "DATABASE_SSL_MODE"
+
+databaseSslRootCertKey :: Text
+databaseSslRootCertKey = "DATABASE_SSL_ROOT_CERT"
+
 -- | Positive, not non-negative: a zero-capacity pool can never hand out a
 -- connection, so every database-backed request would block forever.
 --
@@ -568,6 +602,45 @@ databasePoolCapacityKey = "DATABASE_POOL_CAPACITY"
 -- invocation does not flag this line, so no ignore pragma is added.
 parsePoolCapacity :: Text -> Either ConfigParseError DatabasePoolCapacity
 parsePoolCapacity = fmap DatabasePoolCapacity . (parsePositiveInt $! databasePoolCapacityKey)
+
+-- | Parse libpq TLS configuration without translating an absent value into an
+-- application default.  In that case 'DatabaseTransportLibpqDefault' causes
+-- the conninfo encoder to omit TLS parameters and libpq retains its own
+-- documented default.  A root certificate without a mode is rejected rather
+-- than accidentally combining an operator-supplied trust anchor with libpq's
+-- permissive default mode.
+parseDatabaseTransportSecurity :: Text -> Text -> Maybe Text -> Maybe Text -> Either ConfigParseError DatabaseTransportSecurity
+parseDatabaseTransportSecurity sslModeKey sslRootCertKey configuredMode configuredRootCert =
+  case configuredMode of
+    Nothing ->
+      case configuredRootCert of
+        Nothing -> Right DatabaseTransportLibpqDefault
+        Just rootCert -> Left (InvalidConfigValue sslRootCertKey rootCert)
+    Just mode ->
+      DatabaseTransportSsl
+        <$> parseSslMode sslModeKey mode
+        <*> traverse (parseNonEmpty sslRootCertKey) configuredRootCert
+
+parseSslMode :: Text -> Text -> Either ConfigParseError DatabaseSslMode
+parseSslMode key value =
+  maybe
+    (Left (InvalidConfigValue key value))
+    Right
+    ( lookup
+        value
+        [ ("disable", DatabaseSslDisable),
+          ("allow", DatabaseSslAllow),
+          ("prefer", DatabaseSslPrefer),
+          ("require", DatabaseSslRequire),
+          ("verify-ca", DatabaseSslVerifyCa),
+          ("verify-full", DatabaseSslVerifyFull)
+        ]
+    )
+
+parseNonEmpty :: Text -> Text -> Either ConfigParseError Text
+parseNonEmpty key value
+  | Text.null value = Left (InvalidConfigValue key value)
+  | otherwise = Right value
 
 parseSmtpPort :: Text -> Either ConfigParseError Int
 parseSmtpPort value = do
@@ -624,6 +697,11 @@ parseRuntimeDatabaseConfig committedDefaults localOverrides environmentOverrides
     <*> requiredConfigValue "DATABASE_PASSWORD"
     <*> (parseConnectTimeout =<< requiredConfigValue databaseConnectTimeoutSecondsKey)
     <*> (parsePoolCapacity =<< requiredConfigValue databasePoolCapacityKey)
+    <*> parseDatabaseTransportSecurity
+      databaseSslModeKey
+      databaseSslRootCertKey
+      (lookupConfigValue databaseSslModeKey configLayers)
+      (lookupConfigValue databaseSslRootCertKey configLayers)
   where
     requiredConfigValue key =
       maybe (Left (MissingConfigValue key)) Right (lookupConfigValue key configLayers)

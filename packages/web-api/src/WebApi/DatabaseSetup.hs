@@ -22,7 +22,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import System.Environment (getEnvironment)
 import System.IO (Handle, hPutStrLn)
-import WebApi.Config (DatabaseConfig (..), committedEnvDefaults, parseRuntimeDatabaseConfig, singletonDatabasePoolCapacity)
+import WebApi.Config (DatabaseConfig (..), committedEnvDefaults, parseDatabaseTransportSecurity, parseRuntimeDatabaseConfig, singletonDatabasePoolCapacity)
 import WebApi.Postgres.Migration
   ( runPostgresMigrationsForRuntime,
     runPostgresSeed,
@@ -78,6 +78,11 @@ parseDatabaseSetupConfig environmentEntries =
     -- Migrations own one short-lived connection rather than the application's
     -- runtime pool, so this required record field is inert on this path.
     <*> pure singletonDatabasePoolCapacity
+    <*> parseDatabaseTransportSecurity
+      "WEB_API_MIGRATION_DATABASE_SSL_MODE"
+      "WEB_API_MIGRATION_DATABASE_SSL_ROOT_CERT"
+      (lookup "WEB_API_MIGRATION_DATABASE_SSL_MODE" environmentEntries)
+      (lookup "WEB_API_MIGRATION_DATABASE_SSL_ROOT_CERT" environmentEntries)
   where
     requiredConfigValue key =
       case lookup key environmentEntries of

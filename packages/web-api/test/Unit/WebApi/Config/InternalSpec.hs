@@ -18,7 +18,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi.AccountPages (AccountWorkflow (..))
 import WebApi.App (buildRuntimeAccountWorkflow, buildRuntimeApp, runtimeRequestObservabilityReporter)
-import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ForwardedHeaderTrust (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SharedTlsCertificateFiles (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, databasePoolCapacityValue, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, mkDatabasePoolCapacity, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
+import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), DatabaseSslMode (..), DatabaseTransportSecurity (..), ForwardedHeaderTrust (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SharedTlsCertificateFiles (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, databasePoolCapacityValue, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, mkDatabasePoolCapacity, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Postgres.Testing (newPostgresPool)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), defaultRequestContext)
 
@@ -1472,7 +1472,7 @@ spec = do
               }
           dynamicEnvironmentConfig = defaultAppEnvironmentConfig {smtpDeliveryConfig = dynamicSmtpConfig}
       show dynamicEnvironmentConfig
-        `shouldBe` ( "AppEnvironmentConfig {appMode = Development, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10, databasePoolCapacity = 10}, smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = "
+        `shouldBe` ( "AppEnvironmentConfig {appMode = Development, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10, databasePoolCapacity = 10, databaseTransportSecurity = DatabaseTransportLibpqDefault}, smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = "
                        <> show dynamicSmtpPort
                        <> ", smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = <redacted>}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>}"
                    )
@@ -1575,7 +1575,8 @@ spec = do
                 databaseUser = "web_api_app",
                 databasePassword = "super-secret",
                 databaseConnectTimeoutSeconds = 10,
-                databasePoolCapacity = requiredDatabasePoolCapacity 10
+                databasePoolCapacity = requiredDatabasePoolCapacity 10,
+                databaseTransportSecurity = DatabaseTransportLibpqDefault
               }
           productionEnvironmentConfig =
             defaultAppEnvironmentConfig
@@ -1608,9 +1609,9 @@ spec = do
       show Production `shouldBe` "Production"
       show [Development, Test, Production] `shouldBe` "[Development,Test,Production]"
       show productionDatabaseConfig
-        `shouldBe` "DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10, databasePoolCapacity = 10}"
+        `shouldBe` "DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10, databasePoolCapacity = 10, databaseTransportSecurity = DatabaseTransportLibpqDefault}"
       show [productionDatabaseConfig]
-        `shouldBe` "[DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10, databasePoolCapacity = 10}]"
+        `shouldBe` "[DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10, databasePoolCapacity = 10, databaseTransportSecurity = DatabaseTransportLibpqDefault}]"
       show productionDatabaseConfig `shouldNotContain` "super-secret"
       show productionEnvironmentConfig
         `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = <redacted>}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>}"
@@ -1635,6 +1636,68 @@ spec = do
       parseAppEnvironmentConfig committedEnvDefaults developmentEnvironmentSecrets []
         `shouldBe` Right defaultAppEnvironmentConfig
 
+    it "parses only PostgreSQL's closed SSL modes and preserves libpq defaults when absent" $ do
+      let parseTransport entries =
+            databaseTransportSecurity . databaseConfig
+              <$> parseAppEnvironmentConfig committedEnvDefaults developmentEnvironmentSecrets entries
+          expectedModes =
+            [ ("disable", DatabaseSslDisable),
+              ("allow", DatabaseSslAllow),
+              ("prefer", DatabaseSslPrefer),
+              ("require", DatabaseSslRequire),
+              ("verify-ca", DatabaseSslVerifyCa),
+              ("verify-full", DatabaseSslVerifyFull)
+            ]
+      parseTransport [] `shouldBe` Right DatabaseTransportLibpqDefault
+      forM_ expectedModes $ \(identifier, sslMode) ->
+        parseTransport [("DATABASE_SSL_MODE", identifier)]
+          `shouldBe` Right (DatabaseTransportSsl sslMode Nothing)
+      parseTransport
+        [ ("DATABASE_SSL_MODE", "verify-full"),
+          ("DATABASE_SSL_ROOT_CERT", "/run/secrets/postgres-ca.pem")
+        ]
+        `shouldBe` Right (DatabaseTransportSsl DatabaseSslVerifyFull (Just "/run/secrets/postgres-ca.pem"))
+
+    it "keeps every closed PostgreSQL transport-policy value comparable and inspectable" $ do
+      let sslModes =
+            [ (DatabaseSslDisable, "DatabaseSslDisable"),
+              (DatabaseSslAllow, "DatabaseSslAllow"),
+              (DatabaseSslPrefer, "DatabaseSslPrefer"),
+              (DatabaseSslRequire, "DatabaseSslRequire"),
+              (DatabaseSslVerifyCa, "DatabaseSslVerifyCa"),
+              (DatabaseSslVerifyFull, "DatabaseSslVerifyFull")
+            ]
+      forM_ sslModes $ \(sslMode, renderedMode) -> do
+        let differentSslMode =
+              case sslMode of
+                DatabaseSslDisable -> DatabaseSslAllow
+                _ -> DatabaseSslDisable
+            transport = DatabaseTransportSsl sslMode Nothing
+        show sslMode `shouldBe` renderedMode
+        shows sslMode "!" `shouldBe` renderedMode <> "!"
+        show [sslMode] `shouldBe` "[" <> renderedMode <> "]"
+        sslMode `shouldNotBe` differentSslMode
+        transport `shouldBe` transport
+        transport `shouldNotBe` DatabaseTransportLibpqDefault
+        show transport `shouldBe` "DatabaseTransportSsl " <> renderedMode <> " Nothing"
+        show [transport] `shouldBe` "[DatabaseTransportSsl " <> renderedMode <> " Nothing]"
+
+    it "rejects invalid PostgreSQL SSL mode and root-certificate combinations" $ do
+      let parseTransport entries =
+            databaseTransportSecurity . databaseConfig
+              <$> parseAppEnvironmentConfig committedEnvDefaults developmentEnvironmentSecrets entries
+      parseTransport [("DATABASE_SSL_MODE", "verified")]
+        `shouldBe` Left (InvalidConfigValue "DATABASE_SSL_MODE" "verified")
+      parseTransport [("DATABASE_SSL_MODE", "")]
+        `shouldBe` Left (InvalidConfigValue "DATABASE_SSL_MODE" "")
+      parseTransport [("DATABASE_SSL_ROOT_CERT", "/run/secrets/postgres-ca.pem")]
+        `shouldBe` Left (InvalidConfigValue "DATABASE_SSL_ROOT_CERT" "/run/secrets/postgres-ca.pem")
+      parseTransport
+        [ ("DATABASE_SSL_MODE", "verify-full"),
+          ("DATABASE_SSL_ROOT_CERT", "")
+        ]
+        `shouldBe` Left (InvalidConfigValue "DATABASE_SSL_ROOT_CERT" "")
+
     it "lets .env.local override committed .env defaults" $ do
       let localOverrides =
             [ ("APP_MODE", "test"),
@@ -1656,7 +1719,8 @@ spec = do
                     databaseUser = "local_user",
                     databasePassword = "local_password",
                     databaseConnectTimeoutSeconds = 10,
-                    databasePoolCapacity = requiredDatabasePoolCapacity 10
+                    databasePoolCapacity = requiredDatabasePoolCapacity 10,
+                    databaseTransportSecurity = DatabaseTransportLibpqDefault
                   }
             }
 
@@ -1686,7 +1750,8 @@ spec = do
                     databaseUser = "local_user",
                     databasePassword = "runtime_password",
                     databaseConnectTimeoutSeconds = 10,
-                    databasePoolCapacity = requiredDatabasePoolCapacity 10
+                    databasePoolCapacity = requiredDatabasePoolCapacity 10,
+                    databaseTransportSecurity = DatabaseTransportLibpqDefault
                   }
             }
 
@@ -1743,7 +1808,8 @@ spec = do
                         databaseUser = "shared_user",
                         databasePassword = "local_password",
                         databaseConnectTimeoutSeconds = 10,
-                        databasePoolCapacity = requiredDatabasePoolCapacity 10
+                        databasePoolCapacity = requiredDatabasePoolCapacity 10,
+                        databaseTransportSecurity = DatabaseTransportLibpqDefault
                       }
                 }
 
@@ -1770,7 +1836,8 @@ spec = do
                               databaseUser = "shared_user",
                               databasePassword = "runtime_password",
                               databaseConnectTimeoutSeconds = 10,
-                              databasePoolCapacity = requiredDatabasePoolCapacity 10
+                              databasePoolCapacity = requiredDatabasePoolCapacity 10,
+                              databaseTransportSecurity = DatabaseTransportLibpqDefault
                             }
                       }
 
@@ -1828,7 +1895,8 @@ spec = do
                           databaseUser = "shared_user",
                           databasePassword = "local_password",
                           databaseConnectTimeoutSeconds = 10,
-                          databasePoolCapacity = requiredDatabasePoolCapacity 10
+                          databasePoolCapacity = requiredDatabasePoolCapacity 10,
+                          databaseTransportSecurity = DatabaseTransportLibpqDefault
                         }
                   }
 
@@ -1881,7 +1949,8 @@ spec = do
                                 databaseUser = "web_api_runtime",
                                 databasePassword = "local_password",
                                 databaseConnectTimeoutSeconds = 10,
-                                databasePoolCapacity = requiredDatabasePoolCapacity 10
+                                databasePoolCapacity = requiredDatabasePoolCapacity 10,
+                                databaseTransportSecurity = DatabaseTransportLibpqDefault
                               }
                         },
                     startupAppConfig =
@@ -1925,7 +1994,8 @@ spec = do
                                       databaseUser = "web_api_runtime",
                                       databasePassword = "local_password",
                                       databaseConnectTimeoutSeconds = 10,
-                                      databasePoolCapacity = requiredDatabasePoolCapacity 10
+                                      databasePoolCapacity = requiredDatabasePoolCapacity 10,
+                                      databaseTransportSecurity = DatabaseTransportLibpqDefault
                                     }
                               },
                           startupAppConfig =

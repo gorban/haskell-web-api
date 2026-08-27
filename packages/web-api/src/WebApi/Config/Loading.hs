@@ -5,6 +5,7 @@ module WebApi.Config.Loading
     loadAppStartupConfigWithFiles,
     parseAppEnvironmentConfig,
     parseRuntimeDatabaseConfig,
+    parseDatabaseTransportSecurity,
     parseAppStartupConfig,
     parseRuntimeAppConfig,
   )

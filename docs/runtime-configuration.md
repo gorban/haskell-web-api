@@ -22,11 +22,15 @@ The smaller `two-pages-example` has its own fixed local configuration and does n
 | `DATABASE_NAME` | Runtime database name. | `web_api_dev` |
 | `DATABASE_USER` | Runtime database username. | `web_api_runtime` |
 | `DATABASE_PASSWORD` | Runtime database password. Required from `.env.local` or the process environment. | required |
+| `DATABASE_SSL_MODE` | Optional closed libpq `sslmode`: `disable`, `allow`, `prefer`, `require`, `verify-ca`, or `verify-full`. `verify-full` is PostgreSQL's recommendation for security-sensitive deployments. | unset; libpq's own default is used (currently `prefer`) |
+| `DATABASE_SSL_ROOT_CERT` | Optional PEM root-CA file passed as libpq `sslrootcert`. It requires an explicit `DATABASE_SSL_MODE`; if omitted, libpq uses its own configured default root-certificate location. | unset |
 | `WEB_API_MIGRATION_DATABASE_HOST` | Migration-only PostgreSQL host, read by setup and migration commands rather than the runtime request path. | unset |
 | `WEB_API_MIGRATION_DATABASE_PORT` | Migration-only PostgreSQL port. | unset |
 | `WEB_API_MIGRATION_DATABASE_NAME` | Migration-only PostgreSQL database name. | unset |
 | `WEB_API_MIGRATION_DATABASE_USER` | Migration-only PostgreSQL user. | unset |
 | `WEB_API_MIGRATION_DATABASE_PASSWORD` | Migration-only PostgreSQL password. | unset |
+| `WEB_API_MIGRATION_DATABASE_SSL_MODE` | Migration-only equivalent of `DATABASE_SSL_MODE`. | unset; libpq's own default is used |
+| `WEB_API_MIGRATION_DATABASE_SSL_ROOT_CERT` | Migration-only equivalent of `DATABASE_SSL_ROOT_CERT`. | unset |
 | `SMTP_HOST` | SMTP server host for application email delivery. | `127.0.0.1` |
 | `SMTP_PORT` | SMTP server port. | `5025` |
 | `SMTP_HELO_NAME` | HELO/EHLO name sent to the SMTP server. | `localhost` |
@@ -95,9 +99,20 @@ The smaller `two-pages-example` has its own fixed local configuration and does n
 The `SETUP_AUTOSTART_*` values and `WEB_API_MIGRATION_DATABASE_*` credentials belong to setup and
 migration planning, not the runtime request path read by `cabal run exe:haskell-web-api`. Setup hooks
 and verification paths read them from the same four layers. Migration overrides are all-or-nothing:
-setting any one `WEB_API_MIGRATION_DATABASE_*` value requires all five. Runtime and migration PostgreSQL
+setting any one `WEB_API_MIGRATION_DATABASE_*` value requires the five identity values; the two TLS
+values are then optional but use the same validation rules as runtime. Runtime and migration PostgreSQL
 identities are deliberately separate; see [SETUP.md](../SETUP.md) for database creation, migration, and
 test prerequisites. The supported PostgreSQL major version is currently 17.
+
+## PostgreSQL transport policy
+
+The application emits no `sslmode` or `sslrootcert` conninfo value when `DATABASE_SSL_MODE` is unset,
+so libpq retains its documented defaults. Set `DATABASE_SSL_MODE=verify-full` and provide
+`DATABASE_SSL_ROOT_CERT` (or configure libpq's default root-certificate location) for authenticated
+server TLS; the configured `DATABASE_HOST` must match the server certificate. `require` encrypts but
+does not authenticate the server, while `prefer` can fall back to plaintext. Use those weaker modes
+only when their deployment-level trust assumptions are explicit. The same policy reaches pooled runtime,
+migration, and `psql` command paths; no password or certificate content is logged.
 
 Runtime startup has no compiled defaults for `DATABASE_PASSWORD`, `SMTP_PASSWORD`, or
 `TOTP_ENCRYPTION_KEY`. It requires each one even when `APP_MODE` is omitted or set to

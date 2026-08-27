@@ -161,7 +161,7 @@ import Text.Read (readMaybe)
 import WebApi (buildApp)
 import WebApi.Account (AccountStore (..), AccountStoreError (..), EmailVerificationEnvironment (..), RegistrationEnvironment (..), RegistrationError (..), RegistrationRequest (..), RegistrationResult (..), defaultPendingRegistrationStoragePolicy, defaultRegistrationDeliveryTimeout)
 import WebApi.AccountPages (AccountAction, accountActions)
-import WebApi.Config (AppConfig (..), DatabaseConfig (..), DatabasePoolCapacity, ForwardedHeaderTrust (..), RequestPolicyConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes, mkDatabasePoolCapacity)
+import WebApi.Config (AppConfig (..), DatabaseConfig (..), DatabasePoolCapacity, DatabaseTransportSecurity (..), ForwardedHeaderTrust (..), RequestPolicyConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes, mkDatabasePoolCapacity)
 import WebApi.Database (DatabaseError (..), DatabaseResult (..), PageRepository (..), SecondPageData (..))
 import WebApi.Login (LoginAttemptAdmission (..), LoginAttemptReservation (..), LoginAttemptStore (..), LoginThrottleContext (..))
 import WebApi.Page (AppPageModel (..), ProfilePageModel (..), renderPage)
@@ -195,7 +195,8 @@ databaseConfig =
       databaseUser = "web_api_runtime",
       databasePassword = "password",
       databaseConnectTimeoutSeconds = 10,
-      databasePoolCapacity = requiredDatabasePoolCapacity 10
+      databasePoolCapacity = requiredDatabasePoolCapacity 10,
+      databaseTransportSecurity = DatabaseTransportLibpqDefault
     }
 
 accountId :: AccountId
@@ -460,7 +461,8 @@ postgresTestConfig =
       databaseUser = "web_api_app",
       databasePassword = "super-secret",
       databaseConnectTimeoutSeconds = 10,
-      databasePoolCapacity = requiredDatabasePoolCapacity 10
+      databasePoolCapacity = requiredDatabasePoolCapacity 10,
+      databaseTransportSecurity = DatabaseTransportLibpqDefault
     }
 
 -- | An independently written decoder for libpq's single-quoted conninfo
@@ -694,7 +696,8 @@ setupMigrationPostgresTestConfig =
       databaseUser = "web_api_owner",
       databasePassword = "owner-secret",
       databaseConnectTimeoutSeconds = 10,
-      databasePoolCapacity = requiredDatabasePoolCapacity 10
+      databasePoolCapacity = requiredDatabasePoolCapacity 10,
+      databaseTransportSecurity = DatabaseTransportLibpqDefault
     }
 
 successfulPostgresResult :: Text -> PostgresCommandResult

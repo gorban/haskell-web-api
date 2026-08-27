@@ -1260,7 +1260,7 @@ tests can prove ordering, version skipping, reconciliation, rollback, and error 
 preserving the obsolete one-`psql`-process-per-statement fixture contract. This is a precise
 extension of the existing migration boundary, not a parallel runtime query API.
 
-### Follow-up decision — AY: add `connect_timeout` now, defer `sslmode=require` to a deployment decision this codebase can't make alone (2026-08-21)
+### Follow-up decision — AY: add `connect_timeout` now, defer a hard TLS default until a deployment decision (2026-08-21)
 
 **Decision: implement `DATABASE_CONNECT_TIMEOUT_SECONDS`/`connect_timeout` unconditionally, but do
 not default `sslmode` to `require`.** AY's own text proposed both changes as one step ("Add
@@ -1308,6 +1308,21 @@ becomes safely defaultable to `require` only once that follow-up (or a separate 
 actually provisions TLS on the Postgres server(s) this project deploys against — until then,
 defaulting it on would be optimizing for a security property this project cannot yet exercise in
 its own test suite.
+
+### Follow-up decision — AY: closed libpq transport policy with omitted-value defaults (2026-08-26)
+
+**Decision: extend the existing `DatabaseConfig` and shared connection encoders with a closed libpq
+transport-policy ADT; when the operator provides no mode, emit neither `sslmode` nor `sslrootcert`
+and preserve libpq's documented defaults.** The configuration accepts only PostgreSQL's six named
+`sslmode` values, so `verify-full` is available for deployments that want authenticated TLS and
+`require` remains visibly encryption-only. An optional root-certificate path requires an explicit
+mode; otherwise libpq uses its own default trust location. The same policy flows to pooled runtime,
+migration, and `psql` paths (`PGSSLMODE`/`PGSSLROOTCERT`), rather than creating a parallel client
+or a command-path downgrade. This respects application/deployment ownership: the application makes
+each available guarantee unambiguous, while the deployment owns which guarantee, CA, hostname, and
+server lifecycle are appropriate. The real PostgreSQL 17 fixture now exercises that deployment
+contract through libpq: verified success, a valid untrusted CA, hostname mismatch, and a
+TLS-disabled listener all have distinct outcomes.
 
 ### Follow-up decision — AY: the connection pool, kept separate from AX's migration runtime (2026-08-21)
 
@@ -2008,7 +2023,7 @@ the full designed scope shipped; a partial slice must say so and name its follow
 | Configured static assets | Implemented | Successful assets are canonical-root-checked file responses with weak ETags, `Last-Modified`, conditional 304s, single-range 206/416 semantics, and `HEAD` metadata; static 404s are never cacheable. |
 | Declarative client actions and region patches | Implemented | Declare `ActionCodec` endpoints once; render forms and dispatch from it, then mutate with typed action responses and `RegionPatch`, not page POST/reload workflows. |
 | SSE live updates | Implemented | Start from meaningful SSR content; treat streaming as an enhancement. |
-| PostgreSQL and custom adapters | Implemented (partial — see AY) | Keep operations typed and interpreters app-selectable. Runtime queries now share a bounded `WebApi.Postgres.Pool` instead of one connection per query (2026-08-21). `sslmode` still defaults to `prefer` (deferred to a deployment decision, not this codebase's to make unilaterally) and migrations still run one `psql` subprocess per statement with no transaction or advisory lock (tracked by AX). |
+| PostgreSQL and custom adapters | Implemented | Keep operations typed and interpreters app-selectable. Runtime queries share a bounded `WebApi.Postgres.Pool` instead of one connection per query. `DatabaseTransportSecurity` exposes the closed libpq TLS modes; an omitted setting deliberately preserves libpq's own resolution/default (currently `prefer`), while an explicit `verify-full`/CA policy flows to runtime, migration, and `psql`. A real PostgreSQL 17 fixture proves verified success and the untrusted-CA, hostname-mismatch, and TLS-disabled failures. Migrations no longer run per-statement `psql` subprocesses (AX). |
 | Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Auth, sessions, MFA, telemetry, TLS, and proxy support are complete. `HarchWeb.Localization` provides ICU-backed application lookup, CLDR rendering, a structural compile-time template quasiquoter, and an extendable empty framework-default layer; `web-api` uses its closed catalog and `examples/localization` proves Icelandic SSR pluralization plus a localized in-memory-adapter API error (EI, 2026-08-26). Login-attempt reservations retain only the application-owned 15-minute window, delete successful/cancelled rows, cap storage at 100,000 rows, and reject oversized keys before persistence (PR-S5, 2026-08-24). Argon2 admission is a shared, non-queueing 512-MiB KiB-weighted gate with an eight-operation CPU-concurrency ceiling across registration, password login, and recovery-code verification (EJ, 2026-08-24). |
 | `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints (buffered, URL-encoded form, multipart, and streaming request bodies) and closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`) | Implemented | `examples/custom-api` and `examples/multipart-upload` use the route-family registry; `web-api` uses its existing single dispatcher with `apiRouteDefinitionWithContext` for `/api/status` and `/api/second`. `ApiEndpointContract` groups method, fields/body, representations, and field-failure policy; a path-owning `ApiRouteEndpointDeclaration` is used only for context-free routes, while context-aware definitions reuse the contract (PR-F6, 2026-08-25). `ApiResponse` carries observability attributes/log entries. The unused compatibility middleware/table was deleted, and `HarchWeb.Api.Endpoint` is now a public facade over private declaration, family, and runtime modules. |
 | `HarchWeb.Api.Multipart` bounded streaming consumer, in-memory default, and native upload form | Implemented | Storage ownership/cleanup, bounded in-memory default, media-type/boundary validation, preamble/header/body/declared-length bounds, bounded scanner state, untrusted filenames, and scripts-enabled/disabled native-upload cleanup are implemented. The consumer deliberately stops reading after cleanup rather than draining; that is the documented WAI transport policy, to be revisited only if a concrete backpressure problem is observed—not an unowned partial implementation. |

@@ -12,6 +12,8 @@ module WebApi.Config.Types
     CorsPolicyConfig (..),
     DatabaseConfig (..),
     DatabasePoolCapacity,
+    DatabaseSslMode (..),
+    DatabaseTransportSecurity (..),
     ForwardedHeaderTrust (..),
     ListenerConfig (..),
     ListenerScheme (..),

@@ -6,7 +6,7 @@
 import Data.Text qualified as Text
 import System.IO.Temp (withSystemTempDirectory)
 import Unit.WebApi.TestSupport hiding (databaseConfig)
-import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), AppMode (..), DatabaseConfig (..), ObservabilityConfig (..), OtlpExporter (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultStaticAssetContentTypes)
+import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), AppMode (..), DatabaseConfig (..), DatabaseTransportSecurity (..), ObservabilityConfig (..), OtlpExporter (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultStaticAssetContentTypes)
 import WebApi.SetupConfig (AppSetupConfig (..), AppSetupConfigLoadError (..), SetupAutostartConfig (..), committedSetupDefaults, defaultAppSetupConfig, defaultSetupAutostartConfig, loadAppSetupConfig, loadAppSetupConfigWithFiles, parseAppSetupConfig)
 
 testRuntimeSecrets :: [(Text.Text, Text.Text)]
@@ -120,7 +120,8 @@ spec = do
                           databaseUser = "web_api_runtime",
                           databasePassword = "web_api",
                           databaseConnectTimeoutSeconds = 10,
-                          databasePoolCapacity = requiredDatabasePoolCapacity 10
+                          databasePoolCapacity = requiredDatabasePoolCapacity 10,
+                          databaseTransportSecurity = DatabaseTransportLibpqDefault
                         }
                   },
               setupAppConfig = defaultAppConfig,
@@ -133,7 +134,8 @@ spec = do
                       databaseUser = "web_api_owner",
                       databasePassword = "owner-secret",
                       databaseConnectTimeoutSeconds = 10,
-                      databasePoolCapacity = requiredDatabasePoolCapacity 1
+                      databasePoolCapacity = requiredDatabasePoolCapacity 1,
+                      databaseTransportSecurity = DatabaseTransportLibpqDefault
                     },
               setupAutostartConfig = defaultSetupAutostartConfig
             }
@@ -250,7 +252,8 @@ spec = do
                                   databaseUser = "web_api_runtime",
                                   databasePassword = "web_api",
                                   databaseConnectTimeoutSeconds = 10,
-                                  databasePoolCapacity = requiredDatabasePoolCapacity 10
+                                  databasePoolCapacity = requiredDatabasePoolCapacity 10,
+                                  databaseTransportSecurity = DatabaseTransportLibpqDefault
                                 }
                           },
                       setupAppConfig = defaultAppConfig,
@@ -263,7 +266,8 @@ spec = do
                               databaseUser = "web_api_owner",
                               databasePassword = "owner-secret",
                               databaseConnectTimeoutSeconds = 10,
-                              databasePoolCapacity = requiredDatabasePoolCapacity 1
+                              databasePoolCapacity = requiredDatabasePoolCapacity 1,
+                              databaseTransportSecurity = DatabaseTransportLibpqDefault
                             },
                       setupAutostartConfig = defaultSetupAutostartConfig
                     }
@@ -343,7 +347,8 @@ spec = do
                         databaseUser = "web_api_owner",
                         databasePassword = "owner-secret",
                         databaseConnectTimeoutSeconds = 10,
-                        databasePoolCapacity = requiredDatabasePoolCapacity 10
+                        databasePoolCapacity = requiredDatabasePoolCapacity 10,
+                        databaseTransportSecurity = DatabaseTransportLibpqDefault
                       },
                 setupAutostartConfig =
                   SetupAutostartConfig
@@ -364,7 +369,8 @@ spec = do
               databaseUser = "web_api_owner",
               databasePassword = "owner-secret",
               databaseConnectTimeoutSeconds = 10,
-              databasePoolCapacity = requiredDatabasePoolCapacity 10
+              databasePoolCapacity = requiredDatabasePoolCapacity 10,
+              databaseTransportSecurity = DatabaseTransportLibpqDefault
             }
       setupAutostartConfig setupConfig
         `shouldBe` SetupAutostartConfig

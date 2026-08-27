@@ -156,7 +156,9 @@ parseOptionalMigrationDatabaseConfig committedDefaults localOverrides environmen
         "WEB_API_MIGRATION_DATABASE_PORT",
         "WEB_API_MIGRATION_DATABASE_NAME",
         "WEB_API_MIGRATION_DATABASE_USER",
-        "WEB_API_MIGRATION_DATABASE_PASSWORD"
+        "WEB_API_MIGRATION_DATABASE_PASSWORD",
+        "WEB_API_MIGRATION_DATABASE_SSL_MODE",
+        "WEB_API_MIGRATION_DATABASE_SSL_ROOT_CERT"
       ]
 
 parseSetupAutostartConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError SetupAutostartConfig

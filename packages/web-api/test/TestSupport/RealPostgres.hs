@@ -10,17 +10,22 @@ module TestSupport.RealPostgres
     ensureDefaultPostgresAvailableScript,
     supportedPostgresMajorVersions,
     withContainerizedPsqlOnPath,
+    withPostgresTlsFixtures,
   )
 where
 
-import Control.Exception (finally)
+import Control.Applicative ((<|>))
+import Control.Concurrent (threadDelay)
+import Control.Exception (bracket, bracket_, finally, onException, try)
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
+import Network.Socket qualified as Socket
 import System.Directory (findExecutable)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
+import System.FilePath (takeFileName)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (callProcess)
-import WebApi.Config (AppEnvironmentConfig (..), DatabaseConfig (..), defaultAppEnvironmentConfig)
+import WebApi.Config (AppEnvironmentConfig (..), DatabaseConfig (..), DatabaseSslMode (DatabaseSslVerifyFull), DatabaseTransportSecurity (DatabaseTransportSsl), defaultAppEnvironmentConfig)
 
 defaultPostgresContainerImage :: String
 defaultPostgresContainerImage = "docker.io/library/postgres:17"
@@ -235,6 +240,134 @@ ensureDefaultPostgresAvailable =
       "-c",
       ensureDefaultPostgresAvailableScript
     ]
+
+-- | Starts isolated PostgreSQL 17 listeners with and without TLS. The TLS
+-- listener's self-signed certificate is deliberately trusted only by the
+-- returned verified configuration, while the other returned configurations
+-- prove bad-CA, hostname-mismatch, and TLS-disabled failures through libpq.
+withPostgresTlsFixtures :: (DatabaseConfig -> DatabaseConfig -> DatabaseConfig -> DatabaseConfig -> IO value) -> IO value
+withPostgresTlsFixtures action = do
+  containerRuntime <- requireContainerRuntime
+  withSystemTempDirectory "web-api-postgres-tls" $ \certificateDirectory -> do
+    callProcess "chmod" ["755", certificateDirectory]
+    let fixtureName = "web-api-postgres-tls-" <> takeFileName certificateDirectory
+        tlsContainerName = fixtureName <> "-tls"
+        plainContainerName = fixtureName <> "-plain"
+        certificateMount = certificateDirectory <> ":/tls:Z"
+    withUnusedLoopbackPort $ \tlsPort ->
+      withUnusedLoopbackPort $ \plainPort -> do
+        callProcess
+          containerRuntime
+          [ "run",
+            "--rm",
+            "--volume",
+            certificateMount,
+            "--entrypoint",
+            "sh",
+            defaultPostgresContainerImage,
+            "-c",
+            "openssl req -new -x509 -nodes -subj '/CN=127.0.0.1' -addext 'subjectAltName=IP:127.0.0.1' -keyout /tls/server.key -out /tls/root.crt -days 1 && cp /tls/root.crt /tls/server.crt && openssl req -new -x509 -nodes -subj '/CN=untrusted.example' -keyout /tls/untrusted.key -out /tls/untrusted.crt -days 1 && chmod 600 /tls/server.key && chown 999:999 /tls/server.key /tls/server.crt /tls/root.crt /tls/untrusted.crt"
+          ]
+        let startTls =
+              callProcess
+                containerRuntime
+                [ "run",
+                  "--rm",
+                  "--detach",
+                  "--name",
+                  tlsContainerName,
+                  "--env",
+                  "POSTGRES_USER=web_api_runtime",
+                  "--env",
+                  "POSTGRES_PASSWORD=web_api",
+                  "--env",
+                  "POSTGRES_DB=web_api_tls",
+                  "--publish",
+                  "127.0.0.1:" <> show tlsPort <> ":5432",
+                  "--volume",
+                  certificateDirectory <> ":/tls:ro,Z",
+                  defaultPostgresContainerImage,
+                  "postgres",
+                  "-c",
+                  "ssl=on",
+                  "-c",
+                  "ssl_cert_file=/tls/server.crt",
+                  "-c",
+                  "ssl_key_file=/tls/server.key"
+                ]
+            startPlain =
+              callProcess
+                containerRuntime
+                [ "run",
+                  "--rm",
+                  "--detach",
+                  "--name",
+                  plainContainerName,
+                  "--env",
+                  "POSTGRES_USER=web_api_runtime",
+                  "--env",
+                  "POSTGRES_PASSWORD=web_api",
+                  "--env",
+                  "POSTGRES_DB=web_api_tls",
+                  "--publish",
+                  "127.0.0.1:" <> show plainPort <> ":5432",
+                  defaultPostgresContainerImage
+                ]
+            stopContainer containerName = do
+              _ <- try (callProcess containerRuntime ["rm", "--force", containerName]) :: IO (Either IOError ())
+              pure ()
+            fixtureConfig port rootCertificate =
+              defaultRealPostgresConfig
+                { databasePort = port,
+                  databaseName = "web_api_tls",
+                  databaseUser = "web_api_runtime",
+                  databasePassword = "web_api",
+                  databaseTransportSecurity = DatabaseTransportSsl DatabaseSslVerifyFull (Just (Text.pack rootCertificate))
+                }
+            verifiedConfig = fixtureConfig tlsPort (certificateDirectory <> "/root.crt")
+            untrustedCaConfig = fixtureConfig tlsPort (certificateDirectory <> "/untrusted.crt")
+            hostnameMismatchConfig = verifiedConfig {databaseHost = "localhost"}
+            tlsDisabledConfig = fixtureConfig plainPort (certificateDirectory <> "/root.crt")
+        bracket_
+          ( (startTls >> startPlain >> waitForPostgres containerRuntime tlsContainerName >> waitForPostgres containerRuntime plainContainerName)
+              `onException` (stopContainer plainContainerName >> stopContainer tlsContainerName)
+          )
+          (stopContainer plainContainerName >> stopContainer tlsContainerName)
+          (action verifiedConfig untrustedCaConfig hostnameMismatchConfig tlsDisabledConfig)
+
+requireContainerRuntime :: IO FilePath
+requireContainerRuntime = do
+  podman <- findExecutable "podman"
+  docker <- findExecutable "docker"
+  case podman <|> docker of
+    Just executable -> pure executable
+    Nothing -> ioError (userError "A podman or docker runtime is required for PostgreSQL TLS integration tests")
+
+waitForPostgres :: FilePath -> String -> IO ()
+waitForPostgres containerRuntime containerName = go (30 :: Int)
+  where
+    go attempts = do
+      ready <- try (callProcess containerRuntime ["exec", containerName, "pg_isready", "--username=web_api_runtime", "--dbname=web_api_tls"]) :: IO (Either IOError ())
+      case ready of
+        Right () -> pure ()
+        Left _
+          | attempts > 0 -> threadDelay 1000000 >> go (attempts - 1)
+          | otherwise -> ioError (userError "PostgreSQL TLS fixture did not become ready")
+
+withUnusedLoopbackPort :: (Int -> IO value) -> IO value
+withUnusedLoopbackPort action = do
+  port <-
+    bracket
+      (Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol)
+      Socket.close
+      ( \listeningSocket -> do
+          Socket.bind listeningSocket (Socket.SockAddrInet 0 (Socket.tupleToHostAddress (127, 0, 0, 1)))
+          socketAddress <- Socket.getSocketName listeningSocket
+          case socketAddress of
+            Socket.SockAddrInet availablePort _ -> pure (fromIntegral availablePort)
+            _ -> ioError (userError "Expected an IPv4 loopback socket")
+      )
+  action port
 
 withTemporaryEnvironment :: String -> Maybe String -> IO a -> IO a
 withTemporaryEnvironment key maybeValue action = do

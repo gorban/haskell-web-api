@@ -5,10 +5,12 @@
 {-# SPEC #-}
 
 import Data.ByteString qualified as ByteString
+import Data.Foldable (for_)
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
 import HarchWeb.Account qualified as Account
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
@@ -16,17 +18,22 @@ import HarchWeb.Password qualified as Password
 import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
 import System.Exit (ExitCode (..))
-import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath)
+import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath, withPostgresTlsFixtures)
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), defaultPendingRegistrationStoragePolicy, mkPendingRegistrationStoragePolicy)
 import WebApi.App (buildAppWithDatabase)
-import WebApi.Config (DatabaseConfig (..), defaultAppConfig)
+import WebApi.Config (DatabaseConfig (..), DatabaseSslMode (..), DatabaseTransportSecurity (..), defaultAppConfig)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), SecondPageData (..))
 import WebApi.Mfa (MfaStore (..), StoredTotpEnrollment (..))
 import WebApi.Postgres (buildPostgresPageRepository)
-import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresMigrationExecutor (..), PostgresMigrationResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStore, buildRuntimePostgresPageRepositoryWithRunner, decodeRuntimeQueryValue, libpqConnectionValue, migrationStatementsFor, newPostgresPool, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithExecutor, runPostgresSeed, runPostgresSeedWithRunner, runRequiredScalarCommand, runRowsCommand, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
+import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresMigrationExecutor (..), PostgresMigrationResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStore, buildRuntimePostgresPageRepositoryWithRunner, databaseTransportEnvironment, decodeRuntimeQueryValue, libpqConnectionValue, migrationStatementsFor, newPostgresPool, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithExecutor, runPostgresSeed, runPostgresSeedWithRunner, runRequiredScalarCommand, runRowsCommand, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, runtimeConnectionString, seedStatements)
 import WebApi.Route (AppRoute (..), defaultRequestContext)
 import WebApi.SetupPlan (TcpEndpoint (..))
+
+isConnectionFailure :: Either Text.Text Text.Text -> Bool
+isConnectionFailure = \case
+  Left _ -> True
+  Right _ -> False
 
 spec = do
   describe "WebApi.Postgres" $ do
@@ -548,6 +555,51 @@ spec = do
                  unescapeLibpqConnectionValue (libpqConnectionValue "") `shouldBe` Just ""
                ]
         )
+
+    it "omits TLS parameters for libpq defaults and encodes explicit TLS policy consistently" $ do
+      let defaultConninfo = TextEncoding.decodeUtf8 (runtimeConnectionString postgresTestConfig)
+          verifiedConfig =
+            postgresTestConfig
+              { databaseTransportSecurity =
+                  DatabaseTransportSsl DatabaseSslVerifyFull (Just "/run/secrets/postgres-ca.pem")
+              }
+          verifiedConninfo = TextEncoding.decodeUtf8 (runtimeConnectionString verifiedConfig)
+      Text.isInfixOf "sslmode=" defaultConninfo `shouldBe` False
+      Text.isInfixOf "sslrootcert=" defaultConninfo `shouldBe` False
+      Text.isInfixOf "sslmode=verify-full" verifiedConninfo `shouldBe` True
+      Text.isInfixOf "sslrootcert='/run/secrets/postgres-ca.pem'" verifiedConninfo `shouldBe` True
+      databaseTransportEnvironment DatabaseTransportLibpqDefault `shouldBe` []
+      for_
+        [ (DatabaseSslDisable, "disable"),
+          (DatabaseSslAllow, "allow"),
+          (DatabaseSslPrefer, "prefer"),
+          (DatabaseSslRequire, "require"),
+          (DatabaseSslVerifyCa, "verify-ca"),
+          (DatabaseSslVerifyFull, "verify-full")
+        ]
+        $ \(sslMode, identifier) -> do
+          let config = postgresTestConfig {databaseTransportSecurity = DatabaseTransportSsl sslMode Nothing}
+              conninfo = TextEncoding.decodeUtf8 (runtimeConnectionString config)
+          Text.isInfixOf ("sslmode=" <> identifier) conninfo `shouldBe` True
+          Text.isInfixOf "sslrootcert=" conninfo `shouldBe` False
+          databaseTransportEnvironment (DatabaseTransportSsl sslMode Nothing)
+            `shouldBe` [("PGSSLMODE", Text.unpack identifier)]
+      databaseTransportEnvironment (DatabaseTransportSsl DatabaseSslVerifyFull (Just "/run/secrets/postgres-ca.pem"))
+        `shouldBe` [("PGSSLMODE", "verify-full"), ("PGSSLROOTCERT", "/run/secrets/postgres-ca.pem")]
+
+    it "uses verify-full against a real PostgreSQL listener and fails closed for untrusted, mismatched, or TLS-disabled peers" $
+      withPostgresTlsFixtures $ \verifiedConfig untrustedCaConfig hostnameMismatchConfig tlsDisabledConfig -> do
+        verifiedResult <- runRuntimeScalarQuery verifiedConfig "SELECT ssl::text FROM pg_stat_ssl WHERE pid = pg_backend_pid();"
+        untrustedCaResult <- runRuntimeScalarQuery untrustedCaConfig "SELECT 'unreachable'::text;"
+        hostnameMismatchResult <- runRuntimeScalarQuery hostnameMismatchConfig "SELECT 'unreachable'::text;"
+        tlsDisabledResult <- runRuntimeScalarQuery tlsDisabledConfig "SELECT 'unreachable'::text;"
+        expectAll
+          ( (verifiedResult `shouldBe` Right "true")
+              :| [ untrustedCaResult `shouldSatisfy` isConnectionFailure,
+                   hostnameMismatchResult `shouldSatisfy` isConnectionFailure,
+                   tlsDisabledResult `shouldSatisfy` isConnectionFailure
+                 ]
+          )
 
     it "runs direct runtime libpq queries and surfaces malformed-row, syntax, and connection failures explicitly" $ do
       ensureDefaultPostgresAvailable

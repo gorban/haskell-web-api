@@ -12,7 +12,7 @@ import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, withContainerizedPsqlOnPath)
 import Unit.WebApi.TestSupport hiding (databaseConfig)
-import WebApi.Config (DatabaseConfig (..))
+import WebApi.Config (DatabaseConfig (..), DatabaseSslMode (..), DatabaseTransportSecurity (..))
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
 import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), seedStatements)
 
@@ -108,7 +108,30 @@ spec = do
               databaseUser = "web_api_owner",
               databasePassword = "owner-secret",
               databaseConnectTimeoutSeconds = 10,
-              databasePoolCapacity = requiredDatabasePoolCapacity 1
+              databasePoolCapacity = requiredDatabasePoolCapacity 1,
+              databaseTransportSecurity = DatabaseTransportLibpqDefault
+            }
+
+    it "parses migration PostgreSQL TLS settings through the shared transport policy" $
+      parseDatabaseSetupConfig
+        [ ("WEB_API_MIGRATION_DATABASE_HOST", "db.internal"),
+          ("WEB_API_MIGRATION_DATABASE_PORT", "5432"),
+          ("WEB_API_MIGRATION_DATABASE_NAME", "web_api"),
+          ("WEB_API_MIGRATION_DATABASE_USER", "web_api_owner"),
+          ("WEB_API_MIGRATION_DATABASE_PASSWORD", "owner-secret"),
+          ("WEB_API_MIGRATION_DATABASE_SSL_MODE", "verify-full"),
+          ("WEB_API_MIGRATION_DATABASE_SSL_ROOT_CERT", "/run/secrets/postgres-ca.pem")
+        ]
+        `shouldBe` Right
+          DatabaseConfig
+            { databaseHost = "db.internal",
+              databasePort = 5432,
+              databaseName = "web_api",
+              databaseUser = "web_api_owner",
+              databasePassword = "owner-secret",
+              databaseConnectTimeoutSeconds = 10,
+              databasePoolCapacity = requiredDatabasePoolCapacity 1,
+              databaseTransportSecurity = DatabaseTransportSsl DatabaseSslVerifyFull (Just "/run/secrets/postgres-ca.pem")
             }
 
     it "fails missing or invalid migration environment values explicitly" $ do
@@ -127,6 +150,24 @@ spec = do
           ("WEB_API_MIGRATION_DATABASE_PASSWORD", "owner-secret")
         ]
         `shouldBe` Left (InvalidConfigValue "WEB_API_MIGRATION_DATABASE_PORT" "0")
+      parseDatabaseSetupConfig
+        [ ("WEB_API_MIGRATION_DATABASE_HOST", "127.0.0.1"),
+          ("WEB_API_MIGRATION_DATABASE_PORT", "5432"),
+          ("WEB_API_MIGRATION_DATABASE_NAME", "web_api_dev"),
+          ("WEB_API_MIGRATION_DATABASE_USER", "web_api_owner"),
+          ("WEB_API_MIGRATION_DATABASE_PASSWORD", "owner-secret"),
+          ("WEB_API_MIGRATION_DATABASE_SSL_MODE", "verified")
+        ]
+        `shouldBe` Left (InvalidConfigValue "WEB_API_MIGRATION_DATABASE_SSL_MODE" "verified")
+      parseDatabaseSetupConfig
+        [ ("WEB_API_MIGRATION_DATABASE_HOST", "127.0.0.1"),
+          ("WEB_API_MIGRATION_DATABASE_PORT", "5432"),
+          ("WEB_API_MIGRATION_DATABASE_NAME", "web_api_dev"),
+          ("WEB_API_MIGRATION_DATABASE_USER", "web_api_owner"),
+          ("WEB_API_MIGRATION_DATABASE_PASSWORD", "owner-secret"),
+          ("WEB_API_MIGRATION_DATABASE_SSL_ROOT_CERT", "/run/secrets/postgres-ca.pem")
+        ]
+        `shouldBe` Left (InvalidConfigValue "WEB_API_MIGRATION_DATABASE_SSL_ROOT_CERT" "/run/secrets/postgres-ca.pem")
 
   describe "loadDatabaseSetupConfig" $
     it "reads dedicated migration credentials from the process environment" $
@@ -144,7 +185,8 @@ spec = do
                         databaseUser = "web_api_owner",
                         databasePassword = "owner-secret",
                         databaseConnectTimeoutSeconds = 10,
-                        databasePoolCapacity = requiredDatabasePoolCapacity 1
+                        databasePoolCapacity = requiredDatabasePoolCapacity 1,
+                        databaseTransportSecurity = DatabaseTransportLibpqDefault
                       }
 
   describe "runDatabaseSetupCommand" $ do

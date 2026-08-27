@@ -43,7 +43,7 @@ import WebApi.Database
   ( PageRepository,
   )
 import WebApi.Postgres.PageRepository qualified as PageRepository
-import WebApi.Postgres.Pool (PostgresPool, libpqConnectionValue, runtimeConnectionString, withPooledConnection)
+import WebApi.Postgres.Pool (PostgresPool, databaseTransportEnvironment, libpqConnectionValue, runtimeConnectionString, withPooledConnection)
 import WebApi.Postgres.QueryRunner (PageQueryRunner (..))
 
 data PostgresCommand = PostgresCommand
@@ -342,6 +342,7 @@ commonPsqlArguments databaseConfig =
 passwordEnvironment :: DatabaseConfig -> [(String, String)]
 passwordEnvironment databaseConfig =
   [("PGPASSWORD", Text.unpack (databasePassword databaseConfig))]
+    <> databaseTransportEnvironment (databaseTransportSecurity databaseConfig)
 
 normalizeQueryResult :: Text -> PostgresCommandResult -> Either PostgresRunnerError [Text]
 normalizeQueryResult sql commandResult =

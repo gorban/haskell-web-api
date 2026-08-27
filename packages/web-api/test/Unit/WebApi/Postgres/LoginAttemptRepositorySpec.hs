@@ -14,7 +14,7 @@ import HarchWeb.LoginProtection (LoginProtectionPolicy (..), defaultLoginProtect
 import HarchWeb.Time (unixTimeNanoseconds)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
 import Unit.WebApi.TestSupport (requiredDatabasePoolCapacity)
-import WebApi.Config (DatabaseConfig (..))
+import WebApi.Config (DatabaseConfig (..), DatabaseTransportSecurity (..))
 import WebApi.Login (LoginAttemptAdmission (..), LoginAttemptReservation (..), LoginAttemptStore (..), LoginAttemptStoreError (..))
 import WebApi.Postgres.Testing (buildRuntimePostgresLoginAttemptStore, buildRuntimePostgresLoginAttemptStoreWithRunner, buildRuntimePostgresLoginAttemptStoreWithRunnerAndStoragePolicy, buildRuntimePostgresLoginAttemptStoreWithStoragePolicy, mkLoginAttemptStoragePolicy, newPostgresPool, runPostgresMigrationsForRuntime, runRuntimeRowsQuery)
 
@@ -169,5 +169,6 @@ databaseConfig =
       databaseUser = "web_api_runtime",
       databasePassword = "password",
       databaseConnectTimeoutSeconds = 10,
-      databasePoolCapacity = requiredDatabasePoolCapacity 10
+      databasePoolCapacity = requiredDatabasePoolCapacity 10,
+      databaseTransportSecurity = DatabaseTransportLibpqDefault
     }

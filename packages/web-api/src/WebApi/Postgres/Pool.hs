@@ -6,6 +6,7 @@ module WebApi.Postgres.Pool
     newPostgresPoolWithConnector,
     closePostgresPool,
     withPooledConnection,
+    databaseTransportEnvironment,
     libpqConnectionValue,
     runtimeConnectionString,
   )
@@ -21,7 +22,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Database.PostgreSQL.LibPQ qualified as LibPQ
-import WebApi.Config (DatabaseConfig (..), DatabasePoolCapacity, databasePoolCapacityValue)
+import WebApi.Config (DatabaseConfig (..), DatabasePoolCapacity, DatabaseSslMode (..), DatabaseTransportSecurity (..), databasePoolCapacityValue)
 
 -- | A bounded set of live libpq connections against one 'DatabaseConfig',
 -- shared across every runtime query the process makes instead of the
@@ -184,13 +185,45 @@ runtimeConnectionString :: DatabaseConfig -> ByteString.ByteString
 runtimeConnectionString databaseConfig =
   TextEncoding.encodeUtf8 $
     Text.unwords
-      [ "host=" <> libpqConnectionValue (databaseHost databaseConfig),
-        "port=" <> Text.pack (show (databasePort databaseConfig)),
-        "dbname=" <> libpqConnectionValue (databaseName databaseConfig),
-        "user=" <> libpqConnectionValue (databaseUser databaseConfig),
-        "password=" <> libpqConnectionValue (databasePassword databaseConfig),
-        "connect_timeout=" <> Text.pack (show (databaseConnectTimeoutSeconds databaseConfig))
-      ]
+      ( [ "host=" <> libpqConnectionValue (databaseHost databaseConfig),
+          "port=" <> Text.pack (show (databasePort databaseConfig)),
+          "dbname=" <> libpqConnectionValue (databaseName databaseConfig),
+          "user=" <> libpqConnectionValue (databaseUser databaseConfig),
+          "password=" <> libpqConnectionValue (databasePassword databaseConfig),
+          "connect_timeout=" <> Text.pack (show (databaseConnectTimeoutSeconds databaseConfig))
+        ]
+          <> databaseTransportConnectionParameters (databaseTransportSecurity databaseConfig)
+      )
+
+databaseTransportConnectionParameters :: DatabaseTransportSecurity -> [Text]
+databaseTransportConnectionParameters transportSecurity =
+  case transportSecurity of
+    DatabaseTransportLibpqDefault -> []
+    DatabaseTransportSsl sslMode rootCert ->
+      ["sslmode=" <> databaseSslModeIdentifier sslMode]
+        <> maybe [] (pure . ("sslrootcert=" <>) . libpqConnectionValue) rootCert
+
+databaseSslModeIdentifier :: DatabaseSslMode -> Text
+databaseSslModeIdentifier sslMode =
+  case sslMode of
+    DatabaseSslDisable -> "disable"
+    DatabaseSslAllow -> "allow"
+    DatabaseSslPrefer -> "prefer"
+    DatabaseSslRequire -> "require"
+    DatabaseSslVerifyCa -> "verify-ca"
+    DatabaseSslVerifyFull -> "verify-full"
+
+-- | The @psql@ command path is also backed by libpq, but takes its TLS
+-- settings through libpq's documented environment names rather than a
+-- conninfo string.  Keep it derived from the same closed policy so seed and
+-- administrative commands cannot silently use a different transport mode.
+databaseTransportEnvironment :: DatabaseTransportSecurity -> [(String, String)]
+databaseTransportEnvironment transportSecurity =
+  case transportSecurity of
+    DatabaseTransportLibpqDefault -> []
+    DatabaseTransportSsl sslMode rootCert ->
+      [("PGSSLMODE", Text.unpack (databaseSslModeIdentifier sslMode))]
+        <> maybe [] (pure . ("PGSSLROOTCERT",) . Text.unpack) rootCert
 
 -- | Quote a value for libpq's connection-string syntax. Backslashes must be
 -- escaped before quotes: escaping in the other order turns each escaped
