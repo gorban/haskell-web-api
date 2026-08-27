@@ -41,11 +41,13 @@ module HarchWeb.Markup.Implementation
     inputTag,
     inputType,
     inputMode,
+    lang,
     labelFor,
     labelTag,
     literalElementId,
     listItemTag,
     listTag,
+    mainTag,
     metaTag,
     maxLength,
     method,
@@ -255,6 +257,17 @@ inputType = attribute (AttributeName "type")
 inputMode :: Text -> Attribute
 inputMode = attribute (AttributeName "inputmode")
 
+-- | The document language of a native HTML element.  This is a closed,
+-- escaping attribute primitive rather than an arbitrary-attribute escape
+-- hatch: dynamic language values remain escaped by the shared renderer.
+--
+-- Decision (MX, 2026-08-27): @main@ and @lang@ are standard, general HTML
+-- vocabulary squarely owned by this existing markup AST and quasiquoter.
+-- Extend that closed vocabulary rather than adding an application-only raw
+-- HTML path or a parallel arbitrary-attribute abstraction.
+lang :: Text -> Attribute
+lang = attribute (AttributeName "lang")
+
 labelFor :: ElementId -> Attribute
 labelFor elementIdentifier =
   attribute (AttributeName "for") (Internal.elementIdText elementIdentifier)
@@ -328,6 +341,9 @@ listItemTag = NormalTag "li"
 
 listTag :: NormalTag
 listTag = NormalTag "ul"
+
+mainTag :: NormalTag
+mainTag = NormalTag "main"
 
 codeTag :: NormalTag
 codeTag = NormalTag "code"

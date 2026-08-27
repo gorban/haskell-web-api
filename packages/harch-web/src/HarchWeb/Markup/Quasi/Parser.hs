@@ -138,6 +138,7 @@ nativeTagConstructors =
     ("input", "inputTag"),
     ("label", "labelTag"),
     ("li", "listItemTag"),
+    ("main", "mainTag"),
     ("meta", "metaTag"),
     ("option", "optionTag"),
     ("p", "paragraphTag"),

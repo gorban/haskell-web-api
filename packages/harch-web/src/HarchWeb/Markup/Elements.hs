@@ -20,6 +20,7 @@ module HarchWeb.Markup.Elements
     labelTag,
     listItemTag,
     listTag,
+    mainTag,
     metaTag,
     optionTag,
     paragraphTag,

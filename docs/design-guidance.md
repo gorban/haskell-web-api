@@ -84,6 +84,16 @@ message and this document before continuing:
 Never make this choice invisibly inside an unrelated commit. A reviewer must be able to find the
 decision without reconstructing it from an implementation diff.
 
+### Decision record — native main element and language attribute (MX, 2026-08-27)
+
+**Decision: extend the existing closed `Html` AST and `harch` quasiquoter with `mainTag` and
+`lang`.** The localization example needs a semantic document-main landmark and a dynamic language
+attribute. Both are standard HTML vocabulary, general to every application, and belong to the
+framework's existing typed markup boundary; adding an application-only raw-HTML fallback or a
+general arbitrary-attribute escape hatch would create a parallel, less-safe authoring path. The
+new primitive continues to use the central renderer, so dynamic text and language values are
+escaped exactly as for every existing typed attribute.
+
 **Worked example.** A native file-upload form needed to set a `Set-Cookie` header from a plain page
 response for a double-submit CSRF cookie, and the response type had no header field at all. The gap
 was worked around silently: a single-use, server-held token replaced the cookie-based scheme the

@@ -17,6 +17,7 @@ module HarchWeb.Markup.Attributes
     href,
     inputMode,
     inputType,
+    lang,
     labelFor,
     literalElementId,
     maxLength,

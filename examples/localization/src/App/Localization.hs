@@ -22,6 +22,7 @@ import Data.Int (Int64)
 import Data.Text (Text)
 import HarchWeb qualified
 import HarchWeb.Localization.Quasi (message)
+import HarchWeb.Markup (harch)
 
 data ExampleLocale = English | Spanish | Icelandic
   deriving (Eq, Show)
@@ -46,13 +47,13 @@ renderFavoritesPage requestedLocale count = do
   title <- localized requestedLocale FavoritesTitle []
   favoriteCount <- localized requestedLocale FavoriteCount [("count", HarchWeb.messageNumber count)]
   pure
-    ( "<main lang=\""
-        <> localeCode requestedLocale
-        <> "\"><h1>"
-        <> title
-        <> "</h1><p data-favorite-count=\"true\">"
-        <> favoriteCount
-        <> "</p></main>"
+    ( HarchWeb.renderHtml
+        [harch|
+          <main lang={localeCode requestedLocale}>
+            <h1>{title}</h1>
+            <p data-favorite-count="true">{favoriteCount}</p>
+          </main>
+        |]
     )
 
 saveFavorite :: FavoritesDatabase -> Text -> IO (Either FavoriteSaveError ())

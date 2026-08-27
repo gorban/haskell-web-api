@@ -287,6 +287,20 @@ or the direct call `authorAvatar (AuthorIdentity "HW") CompactAvatar children`. 
 `Html` AST; only
 the final renderer serializes tags, centrally escaped text, and centrally escaped attributes.
 
+Native elements lower to the same ordinary builders. For example, these two forms are equivalent:
+
+```hs
+[harch|<main lang={localeCode}><h1>{title}</h1></main>|]
+
+element mainTag [lang localeCode]
+  [element headingOneTag [] [text title]]
+```
+
+Both construct the same escaping-by-default `Html` AST: interpolation in element text becomes
+`text`, interpolation in `lang` becomes the typed `lang` attribute, and only `renderHtml` turns
+that AST into response text. Use the quasiquoter for ordinary page/component bodies; use the
+builder form when composition is more naturally expressed as Haskell data.
+
 Computed children are the same typed `[Html]` value in compiled quasiquoter coverage:
 
 ```hs

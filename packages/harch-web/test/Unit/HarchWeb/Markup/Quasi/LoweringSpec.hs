@@ -112,6 +112,14 @@ spec =
           quoted = [harch|<p>Literal &amp; unsafe &lt;literal&gt; {interpolatedText} {safeChild}</p>|]
       renderHtml quoted `shouldBe` "<p>Literal &amp; unsafe &lt;literal&gt; &lt;reviewed&gt; <code>safe</code></p>"
 
+    it "lowers main and lang through the same escaping AST as ordinary builders" $ do
+      let localeCode = "en\" onload=\"unsafe" :: Text.Text
+          title = "<reviewed>" :: Text.Text
+          quoted = [harch|<main lang={localeCode}><h1>{title}</h1></main>|]
+          direct = element mainTag [lang localeCode] [element headingOneTag [] [text title]]
+      renderHtml quoted `shouldBe` renderHtml direct
+      renderHtml quoted `shouldBe` "<main lang=\"en&quot; onload=&quot;unsafe\"><h1>&lt;reviewed&gt;</h1></main>"
+
     it "composes a list of Html children in a root-level markup fragment" $ do
       let children = [element codeTag [] [text "safe"], element paragraphTag [] [text "after"]]
           quoted = [harch|<label for="email">Email address</label>{children}|]
