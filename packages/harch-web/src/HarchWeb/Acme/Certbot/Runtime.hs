@@ -52,6 +52,7 @@ import HarchWeb.Server.Config
     ManualTlsBindPlan (..),
     ServerStartupPlan (..),
     TlsCredentialSourceKind (..),
+    TlsPolicy,
     TlsStartupMode (..),
     sharedCertificatePaths,
   )
@@ -76,7 +77,8 @@ data RunningAcmeRuntimeServer = RunningAcmeRuntimeServer
 data RuntimeAcmeBindPlan = RuntimeAcmeBindPlan
   { runtimeAcmeEndpoint :: ListenerEndpoint,
     runtimeAcmeTlsEndpoint :: Maybe ListenerEndpoint,
-    runtimeAcmeListenerConfig :: AcmeConfig
+    runtimeAcmeListenerConfig :: AcmeConfig,
+    runtimeAcmeTlsPolicy :: TlsPolicy
   }
 
 -- | Dependencies shared by every ACME listener started for one application
@@ -109,7 +111,8 @@ runtimeAcmeBindPlans startupPlan =
   [ RuntimeAcmeBindPlan
       { runtimeAcmeEndpoint = acmeEndpoint acmePlan,
         runtimeAcmeTlsEndpoint = acmeTlsEndpoint acmePlan,
-        runtimeAcmeListenerConfig = acmeListenerConfig acmePlan
+        runtimeAcmeListenerConfig = acmeListenerConfig acmePlan,
+        runtimeAcmeTlsPolicy = acmeTlsPolicy acmePlan
       }
   | acmePlan <- acmeBindPlans startupPlan
   ]
@@ -164,7 +167,8 @@ runtimeAcmeManualTlsBindPlan runtimeAcmePlan resolvedCertificatePath resolvedPri
             tlsCertificateFile = resolvedCertificatePath,
             tlsPrivateKeyFile = resolvedPrivateKeyPath,
             tlsCredentialSourceKind = ManualTlsCredentials,
-            tlsStartupMode = RequireCertificateFiles
+            tlsStartupMode = RequireCertificateFiles,
+            tlsBindPolicy = runtimeAcmeTlsPolicy runtimeAcmePlan
           }
     )
     (runtimeAcmeTlsEndpoint runtimeAcmePlan)

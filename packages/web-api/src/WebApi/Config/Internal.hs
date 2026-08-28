@@ -31,8 +31,11 @@ module WebApi.Config.Internal
     StaticAssetRoot (..),
     StrictTransportSecurityConfig (..),
     TlsCertificateSource (..),
+    TlsCipherSuite (..),
     TlsStartupMode (..),
     TlsConfig (..),
+    TlsPolicy (..),
+    TlsProtocolVersion (..),
     committedEnvDefaults,
     committedRuntimeDefaults,
     defaultAppConfig,
@@ -42,6 +45,7 @@ module WebApi.Config.Internal
     defaultCorsPolicyConfig,
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
+    defaultTlsPolicy,
     loadAppEnvironmentConfig,
     loadAppEnvironmentConfigWithFiles,
     loadAppStartupConfig,
@@ -78,7 +82,7 @@ import Core.Config
   )
 import Data.Bifunctor (bimap, first)
 import Data.ByteString qualified as ByteString
-import Data.Foldable (traverse_)
+import Data.Foldable (toList, traverse_)
 import Data.List (nub)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromJust, fromMaybe, isJust, listToMaybe)
@@ -111,13 +115,17 @@ import HarchWeb
     StaticAssetsConfig (..),
     StrictTransportSecurityConfig (..),
     TlsCertificateSource (..),
+    TlsCipherSuite (..),
     TlsConfig (..),
+    TlsPolicy (..),
+    TlsProtocolVersion (..),
     TlsStartupMode (..),
     certbotOptionValues,
     defaultContentSecurityPolicy,
     defaultCorsPolicyConfig,
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
+    defaultTlsPolicy,
     firstCertbotDomain,
     mkRequestConcurrencyLimit,
     mkRequestHeaderCountLimit,
@@ -125,6 +133,8 @@ import HarchWeb
     requestByteLimit,
     requestItemCountLimit,
     requestTimeoutSeconds,
+    tlsCipherSuiteFromIdentifier,
+    tlsPolicySupports,
     unboundedRequestHeadLimits,
     warpDefaultRequestTransportLimits,
   )
@@ -792,7 +802,101 @@ parseListenerTlsConfigP :: Int -> ListenerScheme -> ConfigParser (Maybe TlsConfi
 parseListenerTlsConfigP _ Http = pure Nothing
 parseListenerTlsConfigP listenerIndex Https = do
   tlsSource <- requiredIndexedConfigValueP "LISTENER" listenerIndex "TLS_SOURCE"
-  Just . TlsConfig <$> parseTlsCertificateSourceP listenerIndex tlsSource
+  certificateSource <- parseTlsCertificateSourceP listenerIndex tlsSource
+  configuredTlsPolicy <- parseTlsPolicyP listenerIndex
+  pure (Just TlsConfig {certificateSource = certificateSource, tlsPolicy = configuredTlsPolicy})
+
+-- | Listener TLS policy is parsed at the configuration boundary, before a
+-- socket is opened.  DT deliberately extends the existing TLS declaration and
+-- bind plan rather than adding an ad-hoc runtime override: invalid or
+-- incompatible protocol/cipher selections therefore fail safely at startup.
+parseTlsPolicyP :: Int -> ConfigParser TlsPolicy
+parseTlsPolicyP listenerIndex = do
+  allowedVersions <- parseTlsProtocolVersionsP listenerIndex
+  cipherSuites <- parseTlsCipherSuitesP listenerIndex
+  let configuredTlsPolicy = TlsPolicy {tlsAllowedVersions = allowedVersions, tlsCipherSuites = cipherSuites}
+  if tlsPolicySupports configuredTlsPolicy
+    then pure configuredTlsPolicy
+    else
+      throwError
+        ( InvalidConfigValue
+            (indexedConfigKey "LISTENER" listenerIndex "TLS_CIPHER_SUITES")
+            (Text.intercalate "," (map showTlsCipherSuite (toList cipherSuites)))
+        )
+
+parseTlsProtocolVersionsP :: Int -> ConfigParser (NonEmpty TlsProtocolVersion)
+parseTlsProtocolVersionsP listenerIndex = do
+  let key = indexedConfigKey "LISTENER" listenerIndex "TLS_ALLOWED_VERSIONS"
+  maybeValue <- optionalConfigValueP key
+  case maybeValue of
+    Nothing -> pure (tlsAllowedVersions defaultTlsPolicy)
+    Just value -> liftEitherP (parseTlsProtocolVersions key value)
+
+parseTlsProtocolVersions :: Text -> Text -> Either ConfigParseError (NonEmpty TlsProtocolVersion)
+parseTlsProtocolVersions key value = do
+  parsedValues <- parseDelimitedTexts key value
+  parsedVersions <- traverse (maybe (Left (InvalidConfigValue key value)) Right . tlsProtocolVersionFromIdentifier) parsedValues
+  uniqueNonEmpty key value parsedVersions
+
+parseTlsCipherSuitesP :: Int -> ConfigParser (NonEmpty TlsCipherSuite)
+parseTlsCipherSuitesP listenerIndex = do
+  let key = indexedConfigKey "LISTENER" listenerIndex "TLS_CIPHER_SUITES"
+  maybeValue <- optionalConfigValueP key
+  case maybeValue of
+    Nothing -> pure (tlsCipherSuites defaultTlsPolicy)
+    Just value -> liftEitherP (parseTlsCipherSuites key value)
+
+parseTlsCipherSuites :: Text -> Text -> Either ConfigParseError (NonEmpty TlsCipherSuite)
+parseTlsCipherSuites key value = do
+  parsedValues <- parseDelimitedTexts key value
+  parsedSuites <- traverse (maybe (Left (InvalidConfigValue key value)) Right . tlsCipherSuiteFromIdentifier) parsedValues
+  uniqueNonEmpty key value parsedSuites
+
+uniqueNonEmpty :: (Eq value) => Text -> Text -> NonEmpty value -> Either ConfigParseError (NonEmpty value)
+uniqueNonEmpty key rawValue parsedValues =
+  if nub (toList parsedValues) == toList parsedValues
+    then Right parsedValues
+    else Left (InvalidConfigValue key rawValue)
+
+tlsProtocolVersionFromIdentifier :: Text -> Maybe TlsProtocolVersion
+tlsProtocolVersionFromIdentifier identifier =
+  case identifier of
+    "1.0" -> Just Tls10
+    "1.1" -> Just Tls11
+    "1.2" -> Just Tls12
+    "1.3" -> Just Tls13
+    _ -> Nothing
+
+showTlsCipherSuite :: TlsCipherSuite -> Text
+showTlsCipherSuite tlsCipherSuite =
+  case tlsCipherSuite of
+    TlsEcdheEcdsaAes256GcmSha384 -> "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"
+    TlsEcdheEcdsaChacha20Poly1305Sha256 -> "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256"
+    TlsEcdheEcdsaAes256CcmSha256 -> "TLS_ECDHE_ECDSA_WITH_AES_256_CCM"
+    TlsEcdheEcdsaAes128GcmSha256 -> "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
+    TlsEcdheEcdsaAes128CcmSha256 -> "TLS_ECDHE_ECDSA_WITH_AES_128_CCM"
+    TlsEcdheRsaAes256GcmSha384 -> "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+    TlsEcdheRsaChacha20Poly1305Sha256 -> "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
+    TlsEcdheRsaAes128GcmSha256 -> "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+    TlsDheRsaAes256GcmSha384 -> "TLS_DHE_RSA_WITH_AES_256_GCM_SHA384"
+    TlsDheRsaChacha20Poly1305Sha256 -> "TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
+    TlsDheRsaAes256CcmSha256 -> "TLS_DHE_RSA_WITH_AES_256_CCM"
+    TlsDheRsaAes128GcmSha256 -> "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256"
+    TlsDheRsaAes128CcmSha256 -> "TLS_DHE_RSA_WITH_AES_128_CCM"
+    TlsEcdheEcdsaAes256CbcSha384 -> "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384"
+    TlsEcdheRsaAes256CbcSha384 -> "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384"
+    TlsDheRsaAes256CbcSha256 -> "TLS_DHE_RSA_WITH_AES_256_CBC_SHA256"
+    TlsEcdheEcdsaAes256CbcSha -> "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA"
+    TlsEcdheRsaAes256CbcSha -> "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"
+    TlsDheRsaAes256CbcSha -> "TLS_DHE_RSA_WITH_AES_256_CBC_SHA"
+    TlsRsaAes256GcmSha384 -> "TLS_RSA_WITH_AES_256_GCM_SHA384"
+    TlsRsaAes256CcmSha256 -> "TLS_RSA_WITH_AES_256_CCM"
+    TlsRsaAes256CbcSha256 -> "TLS_RSA_WITH_AES_256_CBC_SHA256"
+    TlsRsaAes256CbcSha -> "TLS_RSA_WITH_AES_256_CBC_SHA"
+    Tls13Aes256GcmSha384 -> "TLS_AES_256_GCM_SHA384"
+    Tls13Chacha20Poly1305Sha256 -> "TLS_CHACHA20_POLY1305_SHA256"
+    Tls13Aes128GcmSha256 -> "TLS_AES_128_GCM_SHA256"
+    Tls13Aes128CcmSha256 -> "TLS_AES_128_CCM_SHA256"
 
 parseTlsCertificateSourceP :: Int -> Text -> ConfigParser TlsCertificateSource
 parseTlsCertificateSourceP listenerIndex tlsSource =
@@ -823,7 +927,7 @@ parseAcmeConfigP :: Int -> Int -> ConfigParser AcmeConfig
 parseAcmeConfigP listenerIndex parsedPort = do
   rejectRemovedCertbotConfigP listenerIndex
   parsedDirectoryUrl <- fromMaybe defaultAcmeDirectoryUrl <$> optionalIndexedConfigValueP "LISTENER" listenerIndex "ACME_DIRECTORY_URL"
-  parsedContactEmails <- parseRequiredIndexedP listenerIndex "ACME_CONTACT_EMAILS" parseDelimitedTexts
+  parsedContactEmails <- parseRequiredIndexedP listenerIndex "ACME_CONTACT_EMAILS" (\key value -> fmap toList (parseDelimitedTexts key value))
   parsedDomains <- parseConfiguredAcmeDomainsP listenerIndex
   parsedCertbotConfig <- parseAcmeCertbotConfigP listenerIndex
   resolvedCertificateDirectory <- resolveAcmeCertificateDirectoryP listenerIndex parsedDomains parsedCertbotConfig
@@ -833,7 +937,7 @@ parseConfiguredAcmeDomainsP :: Int -> ConfigParser [Text]
 parseConfiguredAcmeDomainsP listenerIndex = do
   let key = indexedConfigKey "LISTENER" listenerIndex "ACME_DOMAINS"
   maybeValue <- optionalConfigValueP key
-  liftEitherP (maybe (Right []) (parseDelimitedTexts key) maybeValue)
+  liftEitherP (maybe (Right []) (fmap toList . parseDelimitedTexts key) maybeValue)
 
 resolveSharedCertificateDirectoryP :: Int -> ConfigParser FilePath
 resolveSharedCertificateDirectoryP listenerIndex = do
@@ -1068,7 +1172,11 @@ parseCorsPolicyConfigP =
     <*> (optionalConfigValueP "CORS_MAX_AGE_SECONDS" >>= liftEitherP . traverse (parseNonNegativeInt "CORS_MAX_AGE_SECONDS"))
 
 parseOptionalDelimitedTextListP :: Text -> [Text] -> ConfigParser [Text]
-parseOptionalDelimitedTextListP key defaultValues = optionalConfigValueP key >>= maybe (pure defaultValues) (liftEitherP . parseDelimitedTexts key)
+parseOptionalDelimitedTextListP key defaultValues = do
+  maybeValue <- optionalConfigValueP key
+  case maybeValue of
+    Nothing -> pure defaultValues
+    Just value -> liftEitherP (fmap toList (parseDelimitedTexts key value))
 
 parseResponseSecurityHeadersConfigP :: ConfigParser ResponseSecurityHeadersConfig
 parseResponseSecurityHeadersConfigP =

@@ -4,7 +4,7 @@
 
 import Data.Text qualified as Text
 import WebApi.AccountPages (AccountActionTarget (..), LoginForm (..), MfaEnrollmentForm (..), VerificationForm (..), emptyRegistrationForm)
-import WebApi.Config (AcmeConfig (..), AppConfig (..), CertbotConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), SharedTlsCertificateFiles (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), defaultAppConfig, defaultStaticAssetContentTypes)
+import WebApi.Config (AcmeConfig (..), AppConfig (..), CertbotConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), SharedTlsCertificateFiles (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), defaultAppConfig, defaultStaticAssetContentTypes, defaultTlsPolicy)
 import WebApi.Page (AppPageModel (..), CallToAction (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), SpacesPageModel (..), UnavailableProfilePageDetails (..))
 import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), RouteSelectionError (..), defaultRequestContext)
 import WebApi.Route qualified
@@ -38,8 +38,8 @@ spec = do
               { otlpEndpoint = "http://otel-collector:4318",
                 otlpHeaders = [("x-api-key", "secret")]
               }
-      TlsConfig {certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}}
-        `shouldBe` TlsConfig {certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}}
+      TlsConfig {certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}, tlsPolicy = defaultTlsPolicy}
+        `shouldBe` TlsConfig {certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}, tlsPolicy = defaultTlsPolicy}
       show sharedCertificateSource
         `shouldBe` "SharedCertificateFiles (SharedTlsCertificateFiles {certificateDirectory = \"/var/lib/web-api/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles Nothing})"
       show tlsSource
@@ -73,7 +73,7 @@ spec = do
                 { certificateDirectory = "/var/lib/web-api/shared-certs",
                   sharedCertificateStartupMode = AwaitCertificateFiles Nothing
                 }
-          tlsConfig = TlsConfig {certificateSource = manualCertificateSource}
+          tlsConfig = TlsConfig {certificateSource = manualCertificateSource, tlsPolicy = defaultTlsPolicy}
           listenerConfig =
             ListenerConfig
               { listenerHost = "0.0.0.0",
@@ -254,8 +254,8 @@ spec = do
       Https `shouldBe` Https
       certbotConfig `shouldBe` certbotConfig
       certbotConfig `shouldBe` certbotConfig
-      TlsConfig {certificateSource = manualCertificateSource}
-        `shouldBe` TlsConfig {certificateSource = manualCertificateSource}
+      TlsConfig {certificateSource = manualCertificateSource, tlsPolicy = defaultTlsPolicy}
+        `shouldBe` TlsConfig {certificateSource = manualCertificateSource, tlsPolicy = defaultTlsPolicy}
       sharedCertificateSource `shouldBe` sharedCertificateSource
       acmeCertificateSource `shouldBe` acmeCertificateSource
       staticRoot `shouldBe` staticRoot
@@ -287,8 +287,8 @@ spec = do
         `shouldBe` "AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}"
       show acmeCertificateSource
         `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})"
-      show (TlsConfig {certificateSource = manualCertificateSource})
-        `shouldBe` "TlsConfig {certificateSource = ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"})}"
+      show (TlsConfig {certificateSource = manualCertificateSource, tlsPolicy = defaultTlsPolicy})
+        `shouldBe` "TlsConfig {certificateSource = ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}), tlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}"
       show sharedCertificateSource
         `shouldBe` "SharedCertificateFiles (SharedTlsCertificateFiles {certificateDirectory = \"/var/lib/web-api/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles Nothing})"
       show manualCertificateSource
@@ -405,7 +405,7 @@ spec = do
                   privateKeyFile = "key.pem"
                 }
           acmeCertificateSource = AcmeCertificateSource acmeConfig
-          tlsConfig = TlsConfig {certificateSource = manualCertificateSource}
+          tlsConfig = TlsConfig {certificateSource = manualCertificateSource, tlsPolicy = defaultTlsPolicy}
           listenerConfig =
             ListenerConfig
               { listenerHost = "127.0.0.1",
@@ -497,7 +497,7 @@ spec = do
       acmeCertificateSource `shouldBe` acmeCertificateSource
       acmeCertificateSource `shouldNotBe` AcmeCertificateSource otherAcmeConfig
       tlsConfig `shouldBe` tlsConfig
-      tlsConfig `shouldNotBe` TlsConfig {certificateSource = acmeCertificateSource}
+      tlsConfig `shouldNotBe` TlsConfig {certificateSource = acmeCertificateSource, tlsPolicy = defaultTlsPolicy}
       listenerConfig `shouldBe` listenerConfig
       listenerConfig `shouldNotBe` secureListenerConfig
       staticRoot `shouldBe` staticRoot
@@ -569,7 +569,7 @@ spec = do
                   privateKeyFile = "key.pem"
                 }
           acmeCertificateSource = AcmeCertificateSource acmeConfig
-          tlsConfig = TlsConfig {certificateSource = acmeCertificateSource}
+          tlsConfig = TlsConfig {certificateSource = acmeCertificateSource, tlsPolicy = defaultTlsPolicy}
           listenerConfig =
             ListenerConfig
               { listenerHost = "0.0.0.0",
@@ -698,7 +698,7 @@ spec = do
                   privateKeyFile = "key.pem"
                 }
           acmeCertificateSource = AcmeCertificateSource acmeConfig
-          tlsConfig = TlsConfig {certificateSource = acmeCertificateSource}
+          tlsConfig = TlsConfig {certificateSource = acmeCertificateSource, tlsPolicy = defaultTlsPolicy}
           listenerConfig =
             ListenerConfig
               { listenerHost = "0.0.0.0",
@@ -776,9 +776,9 @@ spec = do
       show [manualCertificateSource, acmeCertificateSource]
         `shouldBe` "[ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}),AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})]"
       show [tlsConfig]
-        `shouldBe` "[TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})}]"
+        `shouldBe` "[TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}), tlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}]"
       show [listenerConfig]
-        `shouldBe` "[ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 5443, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})})}]"
+        `shouldBe` "[ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 5443, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}), tlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}})}]"
       show [staticRoot] `shouldBe` "[StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}]"
       show [staticAssetsConfig]
         `shouldBe` ( "[StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticAssetContentTypes = "

@@ -19,7 +19,7 @@ import Data.Maybe ()
 import Data.Text ()
 import Data.Text qualified as Text ()
 import Data.Text.Encoding qualified as TextEncoding ()
-import HarchWeb (ListenerEndpoint (ListenerEndpoint, endpointHost, endpointPort), ManualTlsBindPlan (ManualTlsBindPlan, tlsCertificateFile, tlsCredentialSourceKind, tlsEndpoint, tlsPrivateKeyFile, tlsStartupMode), TlsCredentialSourceKind (ManualTlsCredentials, SharedTlsCredentials), TlsStartupMode (AwaitCertificateFiles, RequireCertificateFiles), startHttpRuntimeServerWithStarter, startManualTlsRuntimeServerWithStarter, startWarpRuntimeServerOnSocket, toWaiApplication)
+import HarchWeb (ListenerEndpoint (ListenerEndpoint, endpointHost, endpointPort), ManualTlsBindPlan (ManualTlsBindPlan, tlsBindPolicy, tlsCertificateFile, tlsCredentialSourceKind, tlsEndpoint, tlsPrivateKeyFile, tlsStartupMode), TlsCredentialSourceKind (ManualTlsCredentials, SharedTlsCredentials), TlsStartupMode (AwaitCertificateFiles, RequireCertificateFiles), defaultTlsPolicy, startHttpRuntimeServerWithStarter, startManualTlsRuntimeServerWithStarter, startWarpRuntimeServerOnSocket, toWaiApplication)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -29,8 +29,10 @@ import Network.HTTP.Client qualified as HttpClient ()
 import Network.HTTP.Types qualified as Http ()
 import Network.Socket qualified as Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, socket, tupleToHostAddress)
 import Network.Socket.ByteString qualified as SocketByteString ()
+import Network.TLS qualified as TLS
 import Network.Wai qualified as Wai ()
 import Network.Wai.Handler.Warp qualified as Warp ()
+import Network.Wai.Handler.WarpTLS qualified as WarpTLS
 import System.Directory ()
 import System.Environment ()
 import System.Exit ()
@@ -52,6 +54,45 @@ spec = do
         `shouldThrow` (\exception -> show (exception :: IOError) == "user error (synthetic runtime startup failure)")
 
   describe "startManualTlsRuntimeServerWithStarter" $ do
+    it "applies the validated modern TLS policy to WarpTLS settings" $
+      withUnusedLoopbackPort $ \httpsPort ->
+        withManualTlsFiles $ \certificatePath privateKeyPath -> do
+          observedSettings <- newIORef Nothing
+          let manualTlsPlan =
+                ManualTlsBindPlan
+                  { tlsEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = httpsPort},
+                    tlsCertificateFile = certificatePath,
+                    tlsPrivateKeyFile = privateKeyPath,
+                    tlsCredentialSourceKind = ManualTlsCredentials,
+                    tlsStartupMode = RequireCertificateFiles,
+                    tlsBindPolicy = defaultTlsPolicy
+                  }
+          gatedApplication <- toWaiApplication sampleApplication
+          _ <-
+            startManualTlsRuntimeServerWithStarter
+              ( \_ tlsSettings listeningSocket _ _ -> do
+                  writeIORef observedSettings (Just tlsSettings)
+                  Socket.close listeningSocket
+                  forkIO (pure ())
+              )
+              manualTlsPlan
+              gatedApplication
+              (const (pure ()))
+          maybeSettings <- readIORef observedSettings
+          fmap WarpTLS.tlsAllowedVersions maybeSettings `shouldBe` Just [TLS.TLS12, TLS.TLS13]
+          fmap (map show . WarpTLS.tlsCiphers) maybeSettings
+            `shouldBe` Just
+              [ "ECDHE-ECDSA-AES256GCM-SHA384",
+                "ECDHE-ECDSA-CHACHA20POLY1305-SHA256",
+                "ECDHE-ECDSA-AES128GCM-SHA256",
+                "ECDHE-RSA-AES256GCM-SHA384",
+                "ECDHE-RSA-CHACHA20POLY1305-SHA256",
+                "ECDHE-RSA-AES128GCM-SHA256",
+                "AES256GCM-SHA384",
+                "CHACHA20POLY1305-SHA256",
+                "AES128GCM-SHA256"
+              ]
+
     it "closes the listener socket when TLS startup throws before the server thread starts" $
       withUnusedLoopbackPort $ \httpsPort ->
         withManualTlsFiles $ \certificatePath privateKeyPath -> do
@@ -61,7 +102,8 @@ spec = do
                     tlsCertificateFile = certificatePath,
                     tlsPrivateKeyFile = privateKeyPath,
                     tlsCredentialSourceKind = ManualTlsCredentials,
-                    tlsStartupMode = RequireCertificateFiles
+                    tlsStartupMode = RequireCertificateFiles,
+                    tlsBindPolicy = defaultTlsPolicy
                   }
           gatedApplication <- toWaiApplication sampleApplication
           startManualTlsRuntimeServerWithStarter
@@ -84,7 +126,8 @@ spec = do
                     tlsCertificateFile = certificatePath,
                     tlsPrivateKeyFile = privateKeyPath,
                     tlsCredentialSourceKind = SharedTlsCredentials,
-                    tlsStartupMode = RequireCertificateFiles
+                    tlsStartupMode = RequireCertificateFiles,
+                    tlsBindPolicy = defaultTlsPolicy
                   }
           gatedApplication <- toWaiApplication sampleApplication
           startManualTlsRuntimeServerWithStarter
@@ -104,7 +147,8 @@ spec = do
                     tlsCertificateFile = certificatePath,
                     tlsPrivateKeyFile = privateKeyPath,
                     tlsCredentialSourceKind = SharedTlsCredentials,
-                    tlsStartupMode = AwaitCertificateFiles (Just 0)
+                    tlsStartupMode = AwaitCertificateFiles (Just 0),
+                    tlsBindPolicy = defaultTlsPolicy
                   }
           gatedApplication <- toWaiApplication sampleApplication
           startManualTlsRuntimeServerWithStarter
@@ -124,7 +168,8 @@ spec = do
                     tlsCertificateFile = certificatePath,
                     tlsPrivateKeyFile = privateKeyPath,
                     tlsCredentialSourceKind = SharedTlsCredentials,
-                    tlsStartupMode = AwaitCertificateFiles (Just 0)
+                    tlsStartupMode = AwaitCertificateFiles (Just 0),
+                    tlsBindPolicy = defaultTlsPolicy
                   }
           writeFile certificatePath "not a certificate"
           writeFile privateKeyPath "not a private key"
@@ -154,7 +199,8 @@ spec = do
                     tlsCertificateFile = certificatePath,
                     tlsPrivateKeyFile = privateKeyPath,
                     tlsCredentialSourceKind = SharedTlsCredentials,
-                    tlsStartupMode = AwaitCertificateFiles (Just 1)
+                    tlsStartupMode = AwaitCertificateFiles (Just 1),
+                    tlsBindPolicy = defaultTlsPolicy
                   }
           writeFile certificatePath "not a certificate"
           writeFile privateKeyPath "not a private key"
@@ -185,7 +231,8 @@ spec = do
                     tlsCertificateFile = certificatePath,
                     tlsPrivateKeyFile = privateKeyPath,
                     tlsCredentialSourceKind = SharedTlsCredentials,
-                    tlsStartupMode = AwaitCertificateFiles Nothing
+                    tlsStartupMode = AwaitCertificateFiles Nothing,
+                    tlsBindPolicy = defaultTlsPolicy
                   }
           _ <- forkIO $ do
             threadDelay 100000

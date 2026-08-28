@@ -245,3 +245,4 @@ test-suite harch-web-tests
     unix ^>=2.8.8.0,
     wai ^>=3.2.5,
     warp ^>=3.4.12,
+    warp-tls ^>=3.4.9,

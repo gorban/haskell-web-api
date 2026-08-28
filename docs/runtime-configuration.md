@@ -48,6 +48,8 @@ The smaller `two-pages-example` has its own fixed local configuration and does n
 | `LISTENER_<n>_TLS_PRIVATE_KEY_FILE` | Private-key path for manual TLS. | unset |
 | `LISTENER_<n>_TLS_CERTIFICATE_DIRECTORY` | Directory containing `fullchain.pem` and `privkey.pem` for shared TLS. With exactly one ACME publisher, an unset consumer reuses its effective directory. | listener-aware |
 | `LISTENER_<n>_TLS_SHARED_WAIT_SECONDS` | Optional `shared`/`shared-wait` startup timeout. Unset waits indefinitely. `shared-fail-fast` rejects this setting. | unset |
+| `LISTENER_<n>_TLS_ALLOWED_VERSIONS` | Comma-delimited TLS versions: `1.0`, `1.1`, `1.2`, `1.3`. Every selected version must have a compatible selected cipher suite. | `1.2,1.3` |
+| `LISTENER_<n>_TLS_CIPHER_SUITES` | Comma-delimited IANA cipher-suite names from the supported list below. The default is AEAD/PFS only; selecting TLS 1.0/1.1 requires an explicit compatible legacy suite. | modern AEAD/PFS set |
 | `LISTENER_<n>_ACME_DIRECTORY_URL` | ACME directory for a certificate-publishing listener. Prefer the HTTP listener serving `http-01`. | Let's Encrypt production directory |
 | `LISTENER_<n>_ACME_CONTACT_EMAILS` | Comma-delimited ACME contact addresses. | unset |
 | `LISTENER_<n>_ACME_DOMAINS` | Comma-delimited certificate domains. | unset |
@@ -133,6 +135,37 @@ Development and test mode use the deliberately named plaintext escape hatch only
 development SMTP sink. It is not a production fallback. SMTP connections are not pooled and do not
 cache certificate-validation results: certificate rotation, trust-store, and revocation changes are
 observed on the next connection.
+
+## TLS protocol and cipher policy
+
+Every HTTPS listener defaults to TLS 1.2 and 1.3. Its default ciphers are
+`TLS_AES_256_GCM_SHA384`, `TLS_CHACHA20_POLY1305_SHA256`, `TLS_AES_128_GCM_SHA256`,
+`TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384`, `TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256`,
+`TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256`, `TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384`,
+`TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256`, and
+`TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256`. This excludes CBC, static-RSA, SHA-1, RC4, and 3DES.
+
+`LISTENER_<n>_TLS_CIPHER_SUITES` additionally accepts the installed `tls-1.9` strong inventory:
+`TLS_ECDHE_ECDSA_WITH_AES_256_CCM`, `TLS_ECDHE_ECDSA_WITH_AES_128_CCM`,
+`TLS_DHE_RSA_WITH_AES_256_GCM_SHA384`, `TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256`,
+`TLS_DHE_RSA_WITH_AES_256_CCM`, `TLS_DHE_RSA_WITH_AES_128_GCM_SHA256`,
+`TLS_DHE_RSA_WITH_AES_128_CCM`, `TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384`,
+`TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384`, `TLS_DHE_RSA_WITH_AES_256_CBC_SHA256`,
+`TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA`, `TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA`,
+`TLS_DHE_RSA_WITH_AES_256_CBC_SHA`, `TLS_RSA_WITH_AES_256_GCM_SHA384`,
+`TLS_RSA_WITH_AES_256_CCM`, `TLS_RSA_WITH_AES_256_CBC_SHA256`,
+`TLS_RSA_WITH_AES_256_CBC_SHA`, and `TLS_AES_128_CCM_SHA256`.
+
+For a legacy integration, select both the older version and its needed suite explicitly:
+
+```sh
+LISTENER_0_TLS_ALLOWED_VERSIONS=1.0,1.2
+LISTENER_0_TLS_CIPHER_SUITES=TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+```
+
+This is a deliberate compatibility/security trade-off. Empty, duplicate, unknown, or incompatible
+lists stop startup and identify the offending environment key/value; they do not restore a library
+default. Keep the modern defaults whenever possible.
 
 ## Request resource limits
 

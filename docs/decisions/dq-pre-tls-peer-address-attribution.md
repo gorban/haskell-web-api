@@ -1,6 +1,6 @@
 # ADR-DQ: Attribute peer addresses before TLS setup
 
-- Status: **Implemented — local CI-equivalent validation passed; GitHub Actions pending**
+- Status: **Implemented — local CI-equivalent validation and GitHub Actions passed**
 - Task: [DQ — connection-address attribution](../../TASKS/pr-3-request-pipeline-transport-and-static-assets.md)
 - Date: 2026-08-26
 

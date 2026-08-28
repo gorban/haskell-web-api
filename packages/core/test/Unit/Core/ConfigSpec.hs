@@ -163,7 +163,7 @@ spec = do
   describe "parseDelimitedTexts" $ do
     it "parses comma-delimited values" $
       CoreConfig.parseDelimitedTexts "EMAILS" "ops@example.com, alerts@example.com"
-        `shouldBe` Right ["ops@example.com", "alerts@example.com"]
+        `shouldBe` Right ("ops@example.com" :| ["alerts@example.com"])
 
     it "rejects empty results" $
       CoreConfig.parseDelimitedTexts "EMAILS" " , "

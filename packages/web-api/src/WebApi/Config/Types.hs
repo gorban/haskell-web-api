@@ -28,9 +28,13 @@ module WebApi.Config.Types
     StaticAssetsConfig (..),
     StrictTransportSecurityConfig (..),
     TlsCertificateSource (..),
+    TlsCipherSuite (..),
     TlsConfig (..),
+    TlsPolicy (..),
+    TlsProtocolVersion (..),
     TlsStartupMode (..),
     databasePoolCapacityValue,
+    defaultTlsPolicy,
     mkDatabasePoolCapacity,
     singletonDatabasePoolCapacity,
   )

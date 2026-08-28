@@ -60,7 +60,8 @@ runtimeAcmePlanWith acmeConfig =
   RuntimeAcmeBindPlan
     { runtimeAcmeEndpoint = sampleEndpoint,
       runtimeAcmeTlsEndpoint = Just sampleEndpoint,
-      runtimeAcmeListenerConfig = acmeConfig
+      runtimeAcmeListenerConfig = acmeConfig,
+      runtimeAcmeTlsPolicy = defaultTlsPolicy
     }
 
 isLeftWith :: String -> Either String a -> Bool

@@ -10,7 +10,7 @@ import Data.ByteString.Builder qualified as Builder ()
 import Data.ByteString.Char8 qualified as ByteStringChar8 ()
 import Data.ByteString.Lazy qualified as LazyByteString ()
 import Data.Char ()
-import Data.Either ()
+import Data.Either (isLeft, isRight)
 import Data.Functor.Compose ()
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find, isInfixOf, isPrefixOf)
@@ -19,7 +19,7 @@ import Data.Maybe (isNothing)
 import Data.Text ()
 import Data.Text qualified as Text (Text, isInfixOf, isPrefixOf, pack, unpack)
 import Data.Text.Encoding qualified as TextEncoding ()
-import HarchWeb (AcmeChallengeStore (AcmeChallengeStore), AcmeConfig (AcmeConfig, acmeCertbotConfig, acmeCertificateDirectory, acmeContactEmails, acmeDirectoryUrl, acmeDomains, acmeHttp01Port), Application (applicationRequestPolicy, reportApplicationLog, reportConnectionObservability, reportRequestObservability, requestContextFromRequest), CertbotConfig (CertbotConfig, certbotArguments, certbotExecutable), ListenerConfig (ListenerConfig, listenerAcme, listenerHost, listenerPort, listenerScheme, listenerTls), ListenerScheme (Http, Https), ManualTlsBindPlan, ManualTlsCertificateFiles (ManualTlsCertificateFiles, certificateFile, privateKeyFile), RequestPolicyConfig (forwardedHeaderTrust), TlsCertificateSource (AcmeCertificateSource, ManualCertificateFiles), TlsConfig (TlsConfig, certificateSource), acmeChallengeResponseForRequest, newCertbotWebrootStore, prepareCertbotManualTlsBindPlan, runServer, runServerWithWaiMiddleware, validAcmeHttp01ChallengeToken)
+import HarchWeb (AcmeChallengeStore (AcmeChallengeStore), AcmeConfig (AcmeConfig, acmeCertbotConfig, acmeCertificateDirectory, acmeContactEmails, acmeDirectoryUrl, acmeDomains, acmeHttp01Port), Application (applicationRequestPolicy, reportApplicationLog, reportConnectionObservability, reportRequestObservability, requestContextFromRequest), CertbotConfig (CertbotConfig, certbotArguments, certbotExecutable), ListenerConfig (ListenerConfig, listenerAcme, listenerHost, listenerPort, listenerScheme, listenerTls), ListenerScheme (Http, Https), ManualTlsBindPlan, ManualTlsCertificateFiles (ManualTlsCertificateFiles, certificateFile, privateKeyFile), RequestPolicyConfig (forwardedHeaderTrust), TlsCertificateSource (AcmeCertificateSource, ManualCertificateFiles), TlsCipherSuite (TlsEcdheEcdsaAes256CbcSha), TlsConfig (TlsConfig, certificateSource, tlsPolicy), TlsPolicy (TlsPolicy, tlsAllowedVersions, tlsCipherSuites), TlsProtocolVersion (Tls10), acmeChallengeResponseForRequest, defaultTlsPolicy, newCertbotWebrootStore, prepareCertbotManualTlsBindPlan, runServer, runServerWithWaiMiddleware, tlsCipherSuiteValue, validAcmeHttp01ChallengeToken)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -28,8 +28,10 @@ import HarchWeb.Security qualified as Security ()
 import HarchWeb.Server.Transport.Internal (acceptTrackedConnection, clearPendingAddressForAcceptLoopFailure, forkTrackedConnection, newActiveConnectionAddresses, openLoopbackSocket, recordAcceptLoopThread, socketPort)
 import Network.HTTP.Client qualified as HttpClient ()
 import Network.HTTP.Types qualified as Http (status200)
-import Network.Socket qualified as Socket (AddrInfo (addrAddress, addrFlags), AddrInfoFlag (AI_PASSIVE), SockAddr, Socket, SocketOption (ReuseAddr), bind, close, defaultHints, getAddrInfo, listen, maxListenQueue, openSocket, setSocketOption, tupleToHostAddress)
-import Network.Socket.ByteString qualified as SocketByteString ()
+import Network.Socket qualified as Socket (AddrInfo (addrAddress, addrFlags), AddrInfoFlag (AI_PASSIVE), Family (AF_INET), SockAddr (SockAddrInet), Socket, SocketOption (ReuseAddr), SocketType (Stream), bind, close, connect, defaultHints, defaultProtocol, getAddrInfo, listen, maxListenQueue, openSocket, setSocketOption, socket, tupleToHostAddress, withSocketsDo)
+import Network.Socket.ByteString qualified as SocketByteString (recv, sendAll)
+import Network.TLS qualified as TLS
+import Network.TLS.Extra.Cipher qualified as TLSCipher
 import Network.Wai qualified as Wai (Request (rawPathInfo, requestHeaders), defaultRequest, responseLBS)
 import Network.Wai.Handler.Warp qualified as Warp ()
 import System.Directory (doesFileExist, removePathForcibly)
@@ -215,7 +217,8 @@ spec = do
                                       ManualTlsCertificateFiles
                                         { certificateFile = certificatePath,
                                           privateKeyFile = privateKeyPath
-                                        }
+                                        },
+                                  tlsPolicy = defaultTlsPolicy
                                 },
                           listenerAcme = Nothing
                         }
@@ -234,6 +237,75 @@ spec = do
             waitForServerExit completionReference
             hClose outputHandle
             readFile outputPath `shouldReturn` ("HTTPS Server listening at https://127.0.0.1:" <> show unusedPort <> "\n")
+
+    it "accepts TLS 1.2/1.3 with modern suites, rejects legacy default attempts, and permits an explicit compatible legacy policy" $
+      withUnusedLoopbackPort $ \modernPort ->
+        withUnusedLoopbackPort $ \legacyPort ->
+          withManualTlsFiles $ \certificatePath privateKeyPath ->
+            withSystemTempFile "harch-web-tls-policy-output.txt" $ \_ outputHandle -> do
+              modernCompletionReference <- newIORef Nothing
+              let manualTlsListener port tlsPolicy =
+                    ListenerConfig
+                      { listenerHost = "127.0.0.1",
+                        listenerPort = port,
+                        listenerScheme = Https,
+                        listenerTls =
+                          Just
+                            TlsConfig
+                              { certificateSource =
+                                  ManualCertificateFiles
+                                    ManualTlsCertificateFiles
+                                      { certificateFile = certificatePath,
+                                        privateKeyFile = privateKeyPath
+                                      },
+                                tlsPolicy = tlsPolicy
+                              },
+                        listenerAcme = Nothing
+                      }
+                  legacyCipher = tlsCipherSuiteValue TlsEcdheEcdsaAes256CbcSha
+                  legacyPolicy =
+                    TlsPolicy
+                      { tlsAllowedVersions = Tls10 :| [],
+                        tlsCipherSuites = TlsEcdheEcdsaAes256CbcSha :| []
+                      }
+              modernServerThreadId <- forkIO $ do
+                result <-
+                  try
+                    ( runServer
+                        outputHandle
+                        ( serverConfigWithListeners
+                            [ manualTlsListener modernPort defaultTlsPolicy,
+                              manualTlsListener legacyPort legacyPolicy
+                            ]
+                        )
+                        sampleApplication
+                    ) ::
+                    IO (Either SomeException ())
+                writeIORef modernCompletionReference (Just result)
+              _ <- waitForHttpsServerResponse modernCompletionReference modernPort "/known"
+              tls12Result <- attemptLoopbackTlsHandshake modernPort [TLS.TLS12] TLSCipher.ciphersuite_default
+              tls13Result <- attemptLoopbackTlsHandshake modernPort [TLS.TLS13] TLSCipher.ciphersuite_default
+              tls10Result <- attemptLoopbackTlsHandshake modernPort [TLS.TLS10] [legacyCipher]
+              tls11Result <- attemptLoopbackTlsHandshake modernPort [TLS.TLS11] [legacyCipher]
+              tls12CbcResult <-
+                attemptLoopbackTlsHandshake
+                  modernPort
+                  [TLS.TLS12]
+                  [legacyCipher]
+              expectAll
+                ( (tls12Result `shouldSatisfy` isRight)
+                    :| [ tls13Result `shouldSatisfy` isRight,
+                         tls10Result `shouldSatisfy` isLeft,
+                         tls11Result `shouldSatisfy` isLeft,
+                         tls12CbcResult `shouldSatisfy` isLeft
+                       ]
+                )
+              legacyTls10Result <- attemptLoopbackTlsHandshake legacyPort [TLS.TLS10] [legacyCipher]
+              legacyTls10Result `shouldSatisfy` isRight
+              modernCompletionResult <- readIORef modernCompletionReference
+              modernCompletionResult `shouldSatisfy` isNothing
+              killThread modernServerThreadId
+              waitForServerExit modernCompletionReference
 
     it "reports plaintext connections to an HTTPS listener as connection observability with peer addresses" $
       withUnusedLoopbackPort $ \unusedPort ->
@@ -260,7 +332,8 @@ spec = do
                                       ManualTlsCertificateFiles
                                         { certificateFile = certificatePath,
                                           privateKeyFile = privateKeyPath
-                                        }
+                                        },
+                                  tlsPolicy = defaultTlsPolicy
                                 },
                           listenerAcme = Nothing
                         }
@@ -312,7 +385,8 @@ spec = do
                                       ManualTlsCertificateFiles
                                         { certificateFile = certificatePath,
                                           privateKeyFile = privateKeyPath
-                                        }
+                                        },
+                                  tlsPolicy = defaultTlsPolicy
                                 },
                           listenerAcme = Nothing
                         }
@@ -375,7 +449,8 @@ spec = do
                                       ManualTlsCertificateFiles
                                         { certificateFile = certificatePath,
                                           privateKeyFile = privateKeyPath
-                                        }
+                                        },
+                                  tlsPolicy = defaultTlsPolicy
                                 },
                           listenerAcme = Nothing
                         }
@@ -451,7 +526,8 @@ spec = do
                                     ManualTlsCertificateFiles
                                       { certificateFile = "missing-cert.pem",
                                         privateKeyFile = privateKeyPath
-                                      }
+                                      },
+                                tlsPolicy = defaultTlsPolicy
                               },
                         listenerAcme = Nothing
                       }
@@ -476,7 +552,8 @@ spec = do
                                     ManualTlsCertificateFiles
                                       { certificateFile = certificatePath,
                                         privateKeyFile = "missing-key.pem"
-                                      }
+                                      },
+                                tlsPolicy = defaultTlsPolicy
                               },
                         listenerAcme = Nothing
                       }
@@ -503,7 +580,8 @@ spec = do
                                     ManualTlsCertificateFiles
                                       { certificateFile = certificatePath,
                                         privateKeyFile = privateKeyPath
-                                      }
+                                      },
+                                tlsPolicy = defaultTlsPolicy
                               },
                         listenerAcme = Nothing
                       }
@@ -580,7 +658,8 @@ spec = do
                                 listenerTls =
                                   Just
                                     TlsConfig
-                                      { certificateSource = AcmeCertificateSource acmeConfig
+                                      { certificateSource = AcmeCertificateSource acmeConfig,
+                                        tlsPolicy = defaultTlsPolicy
                                       },
                                 listenerAcme = Nothing
                               }
@@ -724,7 +803,8 @@ spec = do
                           listenerTls =
                             Just
                               TlsConfig
-                                { certificateSource = AcmeCertificateSource acmeConfig
+                                { certificateSource = AcmeCertificateSource acmeConfig,
+                                  tlsPolicy = defaultTlsPolicy
                                 },
                           listenerAcme = Nothing
                         }
@@ -1407,7 +1487,8 @@ spec = do
                                     listenerTls =
                                       Just
                                         TlsConfig
-                                          { certificateSource = AcmeCertificateSource acmeConfig
+                                          { certificateSource = AcmeCertificateSource acmeConfig,
+                                            tlsPolicy = defaultTlsPolicy
                                           },
                                     listenerAcme = Nothing
                                   }
@@ -1734,7 +1815,8 @@ spec = do
                                         ManualTlsCertificateFiles
                                           { certificateFile = certificatePath,
                                             privateKeyFile = privateKeyPath
-                                          }
+                                          },
+                                    tlsPolicy = defaultTlsPolicy
                                   },
                             listenerAcme = Nothing
                           }
@@ -1762,7 +1844,8 @@ spec = do
                                         ManualTlsCertificateFiles
                                           { certificateFile = certificatePath,
                                             privateKeyFile = privateKeyPath
-                                          }
+                                          },
+                                    tlsPolicy = defaultTlsPolicy
                                   },
                             listenerAcme = Nothing
                           },
@@ -1778,7 +1861,8 @@ spec = do
                                         ManualTlsCertificateFiles
                                           { certificateFile = certificatePath,
                                             privateKeyFile = privateKeyPath
-                                          }
+                                          },
+                                    tlsPolicy = defaultTlsPolicy
                                   },
                             listenerAcme = Nothing
                           }
@@ -1847,3 +1931,38 @@ waitForConnectionObservabilityAtPeer connectionObservabilityReference expectedEv
               (Observability.observabilityConnectionSpan connectionObservabilityValue)
        in hasTextAttribute "harch.connection.event" expectedEventName attributes
             && hasTextAttribute "network.peer.address" expectedPeerAddress attributes
+
+attemptLoopbackTlsHandshake :: Int -> [TLS.Version] -> [TLS.Cipher] -> IO (Either SomeException ())
+attemptLoopbackTlsHandshake port versions ciphers =
+  Socket.withSocketsDo $ do
+    clientSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
+    try
+      ( do
+          Socket.connect clientSocket (Socket.SockAddrInet (fromIntegral port) (Socket.tupleToHostAddress (127, 0, 0, 1)))
+          let defaultParameters = TLS.defaultParamsClient "127.0.0.1" ByteString.empty
+              parameters =
+                defaultParameters
+                  { TLS.clientSupported =
+                      (TLS.clientSupported defaultParameters)
+                        { TLS.supportedVersions = versions,
+                          TLS.supportedCiphers = ciphers
+                        },
+                    TLS.clientHooks =
+                      (TLS.clientHooks defaultParameters)
+                        { TLS.onServerCertificate = \_ _ _ _ -> pure []
+                        }
+                  }
+          tlsContext <- TLS.contextNew (loopbackTlsClientBackend clientSocket) parameters
+          TLS.handshake tlsContext
+          TLS.bye tlsContext
+      )
+      `finally` Socket.close clientSocket
+
+loopbackTlsClientBackend :: Socket.Socket -> TLS.Backend
+loopbackTlsClientBackend clientSocket =
+  TLS.Backend
+    { TLS.backendFlush = pure (),
+      TLS.backendClose = pure (),
+      TLS.backendSend = SocketByteString.sendAll clientSocket,
+      TLS.backendRecv = SocketByteString.recv clientSocket
+    }

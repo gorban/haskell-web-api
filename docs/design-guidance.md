@@ -1943,6 +1943,18 @@ Warp, pinning an unreleased revision, or changing TLS/HTTP2 ownership. Real dist
 sequential, concurrent, plaintext-on-TLS, premature-close, and asynchronous-worker regressions
 prove the peer attributes remain tied to their accepted TCP connection.
 
+### Decision record — DT: configurable modern TLS server policy (2026-08-26)
+
+**Decision: extend the existing listener `TlsConfig` and its manual/ACME bind plans with one closed
+protocol-and-cipher policy, rather than rely on package defaults or add a separate runtime override.**
+The default permits only TLS 1.2/1.3 and a browser-oriented AEAD/PFS set. Environment configuration
+may explicitly select an older protocol and one of the installed library's closed cipher identifiers,
+but parsing rejects empty, duplicate, unknown, and version-incompatible selections before a socket is
+opened. This keeps untrusted deployment text at the existing configuration boundary and makes manual,
+shared-certificate, and ACME listeners obey exactly the same policy. The explicit legacy escape hatch
+is deliberate compatibility authority, not a silent fallback to `tls` defaults; future package upgrades
+remain HSEC-driven work instead of a blocked dependency-pin task.
+
 ### Decision record — AW: authenticated SMTP uses fresh TLS validation (2026-08-26)
 
 **Decision: keep certificate-chain and hostname validation fresh for every SMTP connection, rather

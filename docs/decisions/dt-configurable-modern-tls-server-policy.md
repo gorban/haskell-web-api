@@ -1,6 +1,6 @@
 # ADR-DT: Configurable modern TLS server policy
 
-- Status: **Accepted and approved — completes after DQ integration**
+- Status: **Implemented — local CI-equivalent validation passed; GitHub Actions pending**
 - Task: [DT — configurable modern TLS policy](../../TASKS/pr-3-correctness-and-security-defects.md)
 - Date: 2026-08-26
 
@@ -50,13 +50,13 @@ explicit compatible legacy cipher. Package upgrades remain separately HSEC-drive
 
 Configuration tests prove defaults, a compatible legacy override, and empty/duplicate/unknown/
 incompatible rejection. Runtime transport settings are derived exclusively from the validated bind
-plan. Future transport tests must prove allowed TLS 1.2/1.3 handshakes and default rejection of
-legacy protocol/CBC attempts with a real client.
+plan. Real-listener transport tests prove TLS 1.2/1.3 success, rejected TLS 1.0/1.1 and TLS 1.2
+CBC attempts under the default, and a TLS 1.0 ECDSA-CBC handshake only when an operator explicitly
+supplies that compatible legacy policy.
 
 ## Required cross-task ordering
 
 All design and implementation work is approved. Follow [ADR-DQ](dq-pre-tls-peer-address-attribution.md)
-in this required order: the peer-aware Warp hook reaches a compatible published release, DQ is
-integrated and regression-proven, this TLS/cipher policy receives its real transport proof, then the
-normal gates run and the affected task groups close. The Warp release is a technical prerequisite,
-not a remaining architectural approval.
+in this required order: DQ passes its full integration and regression gates, this TLS/cipher policy
+receives its real transport proof, then the normal gates run and the affected task groups close.
+No architectural approval remains outstanding.

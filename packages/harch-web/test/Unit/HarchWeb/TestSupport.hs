@@ -372,7 +372,8 @@ acmeHttpsListenerWithDomainsAndChallengePort challengePort host port contactEmai
                       acmeHttp01Port = challengePort,
                       acmeCertificateDirectory = Nothing,
                       acmeCertbotConfig = challengeBackend
-                    }
+                    },
+              tlsPolicy = defaultTlsPolicy
             },
       listenerAcme = Nothing
     }
@@ -395,7 +396,8 @@ sharedHttpsListenerWithStartupMode host port certificateDirectory startupMode =
                   SharedTlsCertificateFiles
                     { certificateDirectory = certificateDirectory,
                       sharedCertificateStartupMode = startupMode
-                    }
+                    },
+              tlsPolicy = defaultTlsPolicy
             },
       listenerAcme = Nothing
     }
@@ -432,7 +434,8 @@ runtimeAcmePlanWithCertbotConfig certbotConfig =
             acmeHttp01Port = 80,
             acmeCertificateDirectory = Just ".tls/example.com",
             acmeCertbotConfig = certbotConfig
-          }
+          },
+      runtimeAcmeTlsPolicy = defaultTlsPolicy
     }
 
 withCustomFakeCertbotExecutable :: [String] -> (FilePath -> IO a) -> IO a

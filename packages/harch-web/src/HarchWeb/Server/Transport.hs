@@ -46,6 +46,7 @@ import Control.Concurrent (MVar, ThreadId, forkFinally, forkIOWithUnmask, killTh
 import Control.Exception (SomeException, displayException, evaluate, finally, fromException, onException, throwIO)
 import Control.Monad (unless, void, when)
 import Data.Either (lefts)
+import Data.Foldable (toList)
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Maybe (catMaybes)
@@ -188,7 +189,9 @@ startManualTlsRuntimeServerWithStarterAndRequestTransportLimits startTlsServer m
           (tlsPrivateKeyFile manualTlsPlan)
       tlsSettings =
         baseTlsSettings
-          { WarpTLS.tlsCredentials = Just initialTlsCredentials,
+          { WarpTLS.tlsAllowedVersions = map tlsProtocolVersionValue (toList (tlsAllowedVersions (tlsBindPolicy manualTlsPlan))),
+            WarpTLS.tlsCiphers = map tlsCipherSuiteValue (toList (tlsCipherSuites (tlsBindPolicy manualTlsPlan))),
+            WarpTLS.tlsCredentials = Just initialTlsCredentials,
             WarpTLS.tlsServerHooks =
               (WarpTLS.tlsServerHooks baseTlsSettings)
                 { TLS.onServerNameIndication = const (reloadTlsCredentialsIfChanged reloadingTlsCredentials)

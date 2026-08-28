@@ -21,6 +21,7 @@ where
 import Control.Exception (IOException, displayException, evaluate, try)
 import Data.Char (isDigit)
 import Data.Foldable (asum)
+import Data.List.NonEmpty (NonEmpty, nonEmpty)
 import Data.Maybe (mapMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -122,11 +123,15 @@ parseBoolean key value =
     "no" -> Right False
     _ -> Left (InvalidConfigValue key value)
 
-parseDelimitedTexts :: Text -> Text -> Either ConfigParseError [Text]
+-- | Parse a comma-delimited configuration value into at least one non-empty,
+-- trimmed entry.  The non-empty result is part of the contract: callers need
+-- not recover from an empty list after this parser has accepted the input.
+parseDelimitedTexts :: Text -> Text -> Either ConfigParseError (NonEmpty Text)
 parseDelimitedTexts key value =
-  case parseDelimitedTextsUnsafe "," value of
-    [] -> Left (InvalidConfigValue key value)
-    parsedValues -> Right parsedValues
+  maybe
+    (Left (InvalidConfigValue key value))
+    Right
+    (nonEmpty (parseDelimitedTextsUnsafe "," value))
 
 parseDelimitedTextsUnsafe :: Text -> Text -> [Text]
 parseDelimitedTextsUnsafe delimiter =

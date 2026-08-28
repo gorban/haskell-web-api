@@ -6,7 +6,7 @@
 import Control.Exception (IOException, bracket, displayException, try)
 import Control.Monad (forM_)
 import Data.ByteString qualified as ByteString
-import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty (NonEmpty (..), toList)
 import Data.Maybe (isNothing)
 import Data.Text qualified as Text
 import HarchWeb qualified
@@ -18,7 +18,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi.AccountPages (AccountWorkflow (..))
 import WebApi.App (buildRuntimeAccountWorkflow, buildRuntimeApp, runtimeRequestObservabilityReporter)
-import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), DatabaseSslMode (..), DatabaseTransportSecurity (..), ForwardedHeaderTrust (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SharedTlsCertificateFiles (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, databasePoolCapacityValue, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, mkDatabasePoolCapacity, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
+import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), DatabaseSslMode (..), DatabaseTransportSecurity (..), ForwardedHeaderTrust (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SharedTlsCertificateFiles (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsCipherSuite (..), TlsConfig (..), TlsPolicy (..), TlsProtocolVersion (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, databasePoolCapacityValue, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, defaultTlsPolicy, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, mkDatabasePoolCapacity, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Postgres.Testing (newPostgresPool)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), defaultRequestContext)
 
@@ -34,9 +34,13 @@ developmentEnvironmentSecrets =
 spec = do
   describe "DatabasePoolCapacity" $ do
     it "accepts only positive capacities" $ do
-      fmap databasePoolCapacityValue (mkDatabasePoolCapacity 1) `shouldBe` Just 1
-      fmap databasePoolCapacityValue (mkDatabasePoolCapacity 0) `shouldBe` Nothing
-      fmap databasePoolCapacityValue (mkDatabasePoolCapacity (-1)) `shouldBe` Nothing
+      forM_
+        [ (1, Just 1),
+          (0, Nothing),
+          (-1, Nothing)
+        ]
+        $ \(capacity, expectedCapacity) ->
+          fmap databasePoolCapacityValue (mkDatabasePoolCapacity capacity) `shouldBe` expectedCapacity
 
   describe "defaultAppConfig" $ do
     it "reserves structured listener, static asset, and observability settings" $ do
@@ -77,6 +81,162 @@ spec = do
                   metricsExporter = Nothing
                 }
           }
+
+  describe "listener TLS policy" $ do
+    it "defaults HTTPS listeners to TLS 1.2/1.3 with the modern AEAD/PFS suite set" $ do
+      let parsedConfig =
+            parseRuntimeAppConfig
+              [ ("APP_TITLE_PREFIX", "runtime-test"),
+                ("LISTENER_0_HOST", "127.0.0.1"),
+                ("LISTENER_0_PORT", "5443"),
+                ("LISTENER_0_SCHEME", "https"),
+                ("LISTENER_0_TLS_SOURCE", "manual"),
+                ("LISTENER_0_TLS_CERTIFICATE_FILE", "cert.pem"),
+                ("LISTENER_0_TLS_PRIVATE_KEY_FILE", "key.pem")
+              ]
+              []
+              []
+      parsedConfig
+        `shouldBe` Right
+          defaultAppConfig
+            { appTitlePrefix = "runtime-test",
+              listenerConfigs =
+                [ ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 5443,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"},
+                              tlsPolicy = defaultTlsPolicy
+                            },
+                      listenerAcme = Nothing
+                    }
+                ]
+            }
+
+    it "accepts an explicit legacy protocol and compatible cipher override" $ do
+      let parsedConfig =
+            parseRuntimeAppConfig
+              [ ("APP_TITLE_PREFIX", "runtime-test"),
+                ("LISTENER_0_HOST", "127.0.0.1"),
+                ("LISTENER_0_PORT", "5443"),
+                ("LISTENER_0_SCHEME", "https"),
+                ("LISTENER_0_TLS_SOURCE", "manual"),
+                ("LISTENER_0_TLS_CERTIFICATE_FILE", "cert.pem"),
+                ("LISTENER_0_TLS_PRIVATE_KEY_FILE", "key.pem"),
+                ("LISTENER_0_TLS_ALLOWED_VERSIONS", "1.0,1.2"),
+                ("LISTENER_0_TLS_CIPHER_SUITES", "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384")
+              ]
+              []
+              []
+      parsedConfig
+        `shouldBe` Right
+          defaultAppConfig
+            { appTitlePrefix = "runtime-test",
+              listenerConfigs =
+                [ ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 5443,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"},
+                              tlsPolicy = TlsPolicy {tlsAllowedVersions = Tls10 :| [Tls12], tlsCipherSuites = TlsEcdheRsaAes256CbcSha :| [TlsEcdheRsaAes256GcmSha384]}
+                            },
+                      listenerAcme = Nothing
+                    }
+                ]
+            }
+
+    it "accepts every documented cipher-suite override and reports each incompatible cipher precisely" $ do
+      let configuredCipherSuites =
+            [ ("TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384", TlsEcdheEcdsaAes256GcmSha384),
+              ("TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256", TlsEcdheEcdsaChacha20Poly1305Sha256),
+              ("TLS_ECDHE_ECDSA_WITH_AES_256_CCM", TlsEcdheEcdsaAes256CcmSha256),
+              ("TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256", TlsEcdheEcdsaAes128GcmSha256),
+              ("TLS_ECDHE_ECDSA_WITH_AES_128_CCM", TlsEcdheEcdsaAes128CcmSha256),
+              ("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384", TlsEcdheRsaAes256GcmSha384),
+              ("TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256", TlsEcdheRsaChacha20Poly1305Sha256),
+              ("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", TlsEcdheRsaAes128GcmSha256),
+              ("TLS_DHE_RSA_WITH_AES_256_GCM_SHA384", TlsDheRsaAes256GcmSha384),
+              ("TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256", TlsDheRsaChacha20Poly1305Sha256),
+              ("TLS_DHE_RSA_WITH_AES_256_CCM", TlsDheRsaAes256CcmSha256),
+              ("TLS_DHE_RSA_WITH_AES_128_GCM_SHA256", TlsDheRsaAes128GcmSha256),
+              ("TLS_DHE_RSA_WITH_AES_128_CCM", TlsDheRsaAes128CcmSha256),
+              ("TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384", TlsEcdheEcdsaAes256CbcSha384),
+              ("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384", TlsEcdheRsaAes256CbcSha384),
+              ("TLS_DHE_RSA_WITH_AES_256_CBC_SHA256", TlsDheRsaAes256CbcSha256),
+              ("TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA", TlsEcdheEcdsaAes256CbcSha),
+              ("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA", TlsEcdheRsaAes256CbcSha),
+              ("TLS_DHE_RSA_WITH_AES_256_CBC_SHA", TlsDheRsaAes256CbcSha),
+              ("TLS_RSA_WITH_AES_256_GCM_SHA384", TlsRsaAes256GcmSha384),
+              ("TLS_RSA_WITH_AES_256_CCM", TlsRsaAes256CcmSha256),
+              ("TLS_RSA_WITH_AES_256_CBC_SHA256", TlsRsaAes256CbcSha256),
+              ("TLS_RSA_WITH_AES_256_CBC_SHA", TlsRsaAes256CbcSha),
+              ("TLS_AES_256_GCM_SHA384", Tls13Aes256GcmSha384),
+              ("TLS_CHACHA20_POLY1305_SHA256", Tls13Chacha20Poly1305Sha256),
+              ("TLS_AES_128_GCM_SHA256", Tls13Aes128GcmSha256),
+              ("TLS_AES_128_CCM_SHA256", Tls13Aes128CcmSha256)
+            ]
+          listener =
+            [ ("APP_TITLE_PREFIX", "runtime-test"),
+              ("LISTENER_0_HOST", "127.0.0.1"),
+              ("LISTENER_0_PORT", "5443"),
+              ("LISTENER_0_SCHEME", "https"),
+              ("LISTENER_0_TLS_SOURCE", "manual"),
+              ("LISTENER_0_TLS_CERTIFICATE_FILE", "cert.pem"),
+              ("LISTENER_0_TLS_PRIVATE_KEY_FILE", "key.pem"),
+              ("LISTENER_0_TLS_ALLOWED_VERSIONS", "1.0,1.1,1.2,1.3"),
+              ("LISTENER_0_TLS_CIPHER_SUITES", Text.intercalate "," (map fst configuredCipherSuites))
+            ]
+          listenerWithoutTlsPolicy = take 7 listener
+          incompatibleTlsVersion cipherSuite =
+            case cipherSuite of
+              Tls13Aes256GcmSha384 -> "1.0"
+              Tls13Chacha20Poly1305Sha256 -> "1.0"
+              Tls13Aes128GcmSha256 -> "1.0"
+              Tls13Aes128CcmSha256 -> "1.0"
+              _ -> "1.3"
+      case parseRuntimeAppConfig listener [] [] of
+        Right AppConfig {listenerConfigs = [ListenerConfig {listenerTls = Just TlsConfig {tlsPolicy = parsedPolicy}}]} -> do
+          tlsAllowedVersions parsedPolicy `shouldBe` Tls10 :| [Tls11, Tls12, Tls13]
+          toList (tlsCipherSuites parsedPolicy) `shouldBe` map snd configuredCipherSuites
+          forM_ configuredCipherSuites $ \(identifier, cipherSuite) -> do
+            let allowedVersions = incompatibleTlsVersion cipherSuite
+            parseRuntimeAppConfig
+              ( listenerWithoutTlsPolicy
+                  <> [ ("LISTENER_0_TLS_ALLOWED_VERSIONS", allowedVersions),
+                       ("LISTENER_0_TLS_CIPHER_SUITES", identifier)
+                     ]
+              )
+              []
+              []
+              `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_CIPHER_SUITES" identifier)
+        parsedConfig -> expectationFailure ("expected complete cipher-suite override to parse, got " <> show parsedConfig)
+
+    it "rejects empty, duplicate, unknown, and incompatible TLS policy overrides" $ do
+      let listener =
+            [ ("APP_TITLE_PREFIX", "runtime-test"),
+              ("LISTENER_0_HOST", "127.0.0.1"),
+              ("LISTENER_0_PORT", "5443"),
+              ("LISTENER_0_SCHEME", "https"),
+              ("LISTENER_0_TLS_SOURCE", "manual"),
+              ("LISTENER_0_TLS_CERTIFICATE_FILE", "cert.pem"),
+              ("LISTENER_0_TLS_PRIVATE_KEY_FILE", "key.pem")
+            ]
+      expectAll $
+        (parseRuntimeAppConfig (listener <> [("LISTENER_0_TLS_ALLOWED_VERSIONS", "")]) [] [] `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_ALLOWED_VERSIONS" ""))
+          :| [ parseRuntimeAppConfig (listener <> [("LISTENER_0_TLS_ALLOWED_VERSIONS", "1.4")]) [] [] `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_ALLOWED_VERSIONS" "1.4"),
+               parseRuntimeAppConfig (listener <> [("LISTENER_0_TLS_ALLOWED_VERSIONS", "1.2,1.2")]) [] [] `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_ALLOWED_VERSIONS" "1.2,1.2"),
+               parseRuntimeAppConfig (listener <> [("LISTENER_0_TLS_CIPHER_SUITES", "")]) [] [] `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_CIPHER_SUITES" ""),
+               parseRuntimeAppConfig (listener <> [("LISTENER_0_TLS_CIPHER_SUITES", "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384")]) [] [] `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_CIPHER_SUITES" "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"),
+               parseRuntimeAppConfig (listener <> [("LISTENER_0_TLS_CIPHER_SUITES", "TLS_FAKE")]) [] [] `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_CIPHER_SUITES" "TLS_FAKE"),
+               parseRuntimeAppConfig (listener <> [("LISTENER_0_TLS_ALLOWED_VERSIONS", "1.0"), ("LISTENER_0_TLS_CIPHER_SUITES", "TLS_AES_256_GCM_SHA384,TLS_CHACHA20_POLY1305_SHA256")]) [] [] `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_CIPHER_SUITES" "TLS_AES_256_GCM_SHA384,TLS_CHACHA20_POLY1305_SHA256"),
+               parseRuntimeAppConfig (listener <> [("LISTENER_0_TLS_ALLOWED_VERSIONS", "1.0"), ("LISTENER_0_TLS_CIPHER_SUITES", "TLS_AES_256_GCM_SHA384")]) [] [] `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_CIPHER_SUITES" "TLS_AES_256_GCM_SHA384")
+             ]
       let serverConfig = HarchWeb.toServerConfig defaultAppConfig
       HarchWeb.listenerConfigs serverConfig `shouldBe` listenerConfigs defaultAppConfig
       HarchWeb.staticAssets serverConfig `shouldBe` staticAssets defaultAppConfig
@@ -188,7 +348,8 @@ spec = do
                                   ManualTlsCertificateFiles
                                     { certificateFile = "cert.pem",
                                       privateKeyFile = "key.pem"
-                                    }
+                                    },
+                              tlsPolicy = defaultTlsPolicy
                             },
                       listenerAcme = Nothing
                     }
@@ -243,7 +404,8 @@ spec = do
                                   SharedTlsCertificateFiles
                                     { certificateDirectory = "/var/lib/web-api/shared-certs",
                                       sharedCertificateStartupMode = AwaitCertificateFiles Nothing
-                                    }
+                                    },
+                              tlsPolicy = defaultTlsPolicy
                             },
                       listenerAcme = Nothing
                     },
@@ -267,7 +429,8 @@ spec = do
                                           { certbotExecutable = "certbot",
                                             certbotArguments = []
                                           }
-                                    }
+                                    },
+                              tlsPolicy = defaultTlsPolicy
                             },
                       listenerAcme = Nothing
                     }
@@ -308,7 +471,8 @@ spec = do
                                   SharedTlsCertificateFiles
                                     { certificateDirectory = ".tls/example.com",
                                       sharedCertificateStartupMode = AwaitCertificateFiles Nothing
-                                    }
+                                    },
+                              tlsPolicy = defaultTlsPolicy
                             },
                       listenerAcme = Nothing
                     },
@@ -332,7 +496,8 @@ spec = do
                                           { certbotExecutable = "certbot",
                                             certbotArguments = []
                                           }
-                                    }
+                                    },
+                              tlsPolicy = defaultTlsPolicy
                             },
                       listenerAcme = Nothing
                     }
@@ -375,7 +540,8 @@ spec = do
                                           { certbotExecutable = "certbot",
                                             certbotArguments = ["certonly", "--webroot", "--cert-name", "prod/example"]
                                           }
-                                    }
+                                    },
+                              tlsPolicy = defaultTlsPolicy
                             },
                       listenerAcme = Nothing
                     }
@@ -440,7 +606,8 @@ spec = do
                                   SharedTlsCertificateFiles
                                     { certificateDirectory = "/var/lib/web-api/shared-certs",
                                       sharedCertificateStartupMode = AwaitCertificateFiles (Just 15)
-                                    }
+                                    },
+                              tlsPolicy = defaultTlsPolicy
                             },
                       listenerAcme = Nothing
                     },
@@ -456,7 +623,8 @@ spec = do
                                   SharedTlsCertificateFiles
                                     { certificateDirectory = "/var/lib/web-api/preprovisioned-certs",
                                       sharedCertificateStartupMode = RequireCertificateFiles
-                                    }
+                                    },
+                              tlsPolicy = defaultTlsPolicy
                             },
                       listenerAcme = Nothing
                     }
@@ -540,7 +708,8 @@ spec = do
                                   SharedTlsCertificateFiles
                                     { certificateDirectory = ".tls/example.com",
                                       sharedCertificateStartupMode = AwaitCertificateFiles (Just 120)
-                                    }
+                                    },
+                              tlsPolicy = defaultTlsPolicy
                             },
                       listenerAcme = Nothing
                     }
@@ -603,7 +772,8 @@ spec = do
                                   ManualTlsCertificateFiles
                                     { certificateFile = "cert.pem",
                                       privateKeyFile = "key.pem"
-                                    }
+                                    },
+                              tlsPolicy = defaultTlsPolicy
                             },
                       listenerAcme = Nothing
                     },
@@ -627,7 +797,8 @@ spec = do
                                           { certbotExecutable = "certbot",
                                             certbotArguments = []
                                           }
-                                    }
+                                    },
+                              tlsPolicy = defaultTlsPolicy
                             },
                       listenerAcme = Nothing
                     },
@@ -651,7 +822,8 @@ spec = do
                                           { certbotExecutable = "certbot",
                                             certbotArguments = ["certonly", "--webroot", "--agree-tos"]
                                           }
-                                    }
+                                    },
+                              tlsPolicy = defaultTlsPolicy
                             },
                       listenerAcme = Nothing
                     }
@@ -1036,7 +1208,8 @@ spec = do
                                   ManualTlsCertificateFiles
                                     { certificateFile = "cert.pem",
                                       privateKeyFile = "key.pem"
-                                    }
+                                    },
+                              tlsPolicy = defaultTlsPolicy
                             },
                       listenerAcme = Nothing
                     }
@@ -1100,7 +1273,8 @@ spec = do
                                   ManualTlsCertificateFiles
                                     { certificateFile = "https-443-cert.pem",
                                       privateKeyFile = "https-443-key.pem"
-                                    }
+                                    },
+                              tlsPolicy = defaultTlsPolicy
                             },
                       listenerAcme = Nothing
                     },
@@ -1116,7 +1290,8 @@ spec = do
                                   ManualTlsCertificateFiles
                                     { certificateFile = "https-5443-cert.pem",
                                       privateKeyFile = "https-5443-key.pem"
-                                    }
+                                    },
+                              tlsPolicy = defaultTlsPolicy
                             },
                       listenerAcme = Nothing
                     }
@@ -1281,7 +1456,8 @@ spec = do
                                           { certbotExecutable = "certbot",
                                             certbotArguments = []
                                           }
-                                    }
+                                    },
+                              tlsPolicy = defaultTlsPolicy
                             },
                       listenerAcme = Nothing
                     }
@@ -1336,7 +1512,8 @@ spec = do
                                           { certbotExecutable = "certbot",
                                             certbotArguments = []
                                           }
-                                    }
+                                    },
+                              tlsPolicy = defaultTlsPolicy
                             },
                       listenerAcme = Nothing
                     }
@@ -1390,7 +1567,8 @@ spec = do
                                           { certbotExecutable = "certbot",
                                             certbotArguments = []
                                           }
-                                    }
+                                    },
+                              tlsPolicy = defaultTlsPolicy
                             },
                       listenerAcme = Nothing
                     }

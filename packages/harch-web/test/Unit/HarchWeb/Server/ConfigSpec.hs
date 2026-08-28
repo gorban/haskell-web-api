@@ -4,7 +4,7 @@
 
 import Control.Concurrent ()
 import Control.Exception ()
-import Control.Monad ()
+import Control.Monad (forM_)
 import Data.ByteString qualified as ByteString ()
 import Data.ByteString.Builder qualified as Builder ()
 import Data.ByteString.Char8 qualified as ByteStringChar8 ()
@@ -14,12 +14,12 @@ import Data.Either ()
 import Data.Functor.Compose ()
 import Data.IORef ()
 import Data.List ()
-import Data.List.NonEmpty ()
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe ()
 import Data.Text ()
 import Data.Text qualified as Text ()
 import Data.Text.Encoding qualified as TextEncoding ()
-import HarchWeb (AcmeBindPlan (AcmeBindPlan, acmeEndpoint, acmeListenerConfig, acmeTlsEndpoint), AcmeConfig (AcmeConfig, acmeCertbotConfig, acmeCertificateDirectory, acmeContactEmails, acmeDirectoryUrl, acmeDomains, acmeHttp01Port), CertbotConfig (CertbotConfig, certbotArguments, certbotExecutable), CorsPolicyConfig (corsAllowedOrigins, corsMaxAgeSeconds), ForwardedHeaderTrust (NeverTrustForwarded), HasServerConfig (toServerConfig), HttpBindPlan (HttpBindPlan, httpEndpoints), ListenerConfig (ListenerConfig, listenerAcme, listenerHost, listenerPort, listenerScheme, listenerTls), ListenerEndpoint (ListenerEndpoint, endpointHost, endpointPort), ListenerScheme (Http, Https), ListenerStartupError (DuplicateListenerEndpoint, InvalidListenerAcmeConfiguration, InvalidListenerTlsConfiguration), ManualTlsBindPlan (ManualTlsBindPlan, tlsCertificateFile, tlsCredentialSourceKind, tlsEndpoint, tlsPrivateKeyFile, tlsStartupMode), ManualTlsCertificateFiles (ManualTlsCertificateFiles, certificateFile, privateKeyFile), ObservabilityConfig (ObservabilityConfig, metricsExporter, tracingExporter), ObservabilityStartupPlan (ObservabilityStartupPlan, startupExporters), OtlpExporter (OtlpExporter, otlpEndpoint, otlpHeaders), OtlpExporterStartup (OtlpExporterStartup, startupEndpoint, startupHeaders, startupSignal), RequestPolicyConfig (RequestPolicyConfig, corsPolicy, forwardedHeaderTrust, httpsRedirectAuthority, httpsRedirectPort, redirectHttpToHttps, requestConcurrencyLimit, requestHeadLimits, requestTransportLimits, responseSecurityHeaders, strictTransportSecurity), ResponseSecurityHeadersConfig (contentSecurityPolicy, frameOptions), ServerConfig (ServerConfig, listenerConfigs, observability, requestPolicy, staticAssets), ServerStartupPlan (ServerStartupPlan, acmeBindPlans, httpBindPlan, manualTlsBindPlans), SharedTlsCertificateFiles (SharedTlsCertificateFiles, certificateDirectory, sharedCertificateStartupMode), StaticAssetRoot (StaticAssetRoot, staticDirectory, staticUrlPrefix), StaticAssetsConfig (StaticAssetsConfig, staticAssetContentTypes, staticAssetRoots, staticCacheControlSeconds), StrictTransportSecurityConfig (StrictTransportSecurityConfig, strictTransportSecurityIncludeSubDomains, strictTransportSecurityMaxAgeSeconds, strictTransportSecurityPreload), TelemetrySignal (MetricsSignal, TracingSignal), TlsCertificateSource (AcmeCertificateSource, ManualCertificateFiles, SharedCertificateFiles), TlsConfig (TlsConfig, certificateSource), TlsCredentialSourceKind (ManualTlsCredentials, SharedTlsCredentials), TlsStartupMode (AwaitCertificateFiles, RequireCertificateFiles), defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, planServerStartup, unboundedRequestHeadLimits, warpDefaultRequestTransportLimits)
+import HarchWeb (AcmeBindPlan (AcmeBindPlan, acmeEndpoint, acmeListenerConfig, acmeTlsEndpoint, acmeTlsPolicy), AcmeConfig (AcmeConfig, acmeCertbotConfig, acmeCertificateDirectory, acmeContactEmails, acmeDirectoryUrl, acmeDomains, acmeHttp01Port), CertbotConfig (CertbotConfig, certbotArguments, certbotExecutable), CorsPolicyConfig (corsAllowedOrigins, corsMaxAgeSeconds), ForwardedHeaderTrust (NeverTrustForwarded), HasServerConfig (toServerConfig), HttpBindPlan (HttpBindPlan, httpEndpoints), ListenerConfig (ListenerConfig, listenerAcme, listenerHost, listenerPort, listenerScheme, listenerTls), ListenerEndpoint (ListenerEndpoint, endpointHost, endpointPort), ListenerScheme (Http, Https), ListenerStartupError (DuplicateListenerEndpoint, InvalidListenerAcmeConfiguration, InvalidListenerTlsConfiguration), ManualTlsBindPlan (ManualTlsBindPlan, tlsBindPolicy, tlsCertificateFile, tlsCredentialSourceKind, tlsEndpoint, tlsPrivateKeyFile, tlsStartupMode), ManualTlsCertificateFiles (ManualTlsCertificateFiles, certificateFile, privateKeyFile), ObservabilityConfig (ObservabilityConfig, metricsExporter, tracingExporter), ObservabilityStartupPlan (ObservabilityStartupPlan, startupExporters), OtlpExporter (OtlpExporter, otlpEndpoint, otlpHeaders), OtlpExporterStartup (OtlpExporterStartup, startupEndpoint, startupHeaders, startupSignal), RequestPolicyConfig (RequestPolicyConfig, corsPolicy, forwardedHeaderTrust, httpsRedirectAuthority, httpsRedirectPort, redirectHttpToHttps, requestConcurrencyLimit, requestHeadLimits, requestTransportLimits, responseSecurityHeaders, strictTransportSecurity), ResponseSecurityHeadersConfig (contentSecurityPolicy, frameOptions), ServerConfig (ServerConfig, listenerConfigs, observability, requestPolicy, staticAssets), ServerStartupPlan (ServerStartupPlan, acmeBindPlans, httpBindPlan, manualTlsBindPlans), SharedTlsCertificateFiles (SharedTlsCertificateFiles, certificateDirectory, sharedCertificateStartupMode), StaticAssetRoot (StaticAssetRoot, staticDirectory, staticUrlPrefix), StaticAssetsConfig (StaticAssetsConfig, staticAssetContentTypes, staticAssetRoots, staticCacheControlSeconds), StrictTransportSecurityConfig (StrictTransportSecurityConfig, strictTransportSecurityIncludeSubDomains, strictTransportSecurityMaxAgeSeconds, strictTransportSecurityPreload), TelemetrySignal (MetricsSignal, TracingSignal), TlsCertificateSource (AcmeCertificateSource, ManualCertificateFiles, SharedCertificateFiles), TlsCipherSuite (..), TlsConfig (TlsConfig, certificateSource, tlsPolicy), TlsCredentialSourceKind (ManualTlsCredentials, SharedTlsCredentials), TlsPolicy (TlsPolicy, tlsAllowedVersions, tlsCipherSuites), TlsProtocolVersion (..), TlsStartupMode (AwaitCertificateFiles, RequireCertificateFiles), defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, defaultTlsPolicy, planServerStartup, tlsCipherSuiteFromIdentifier, tlsCipherSuiteValue, tlsPolicySupports, tlsProtocolVersionValue, unboundedRequestHeadLimits, warpDefaultRequestTransportLimits)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -29,6 +29,7 @@ import Network.HTTP.Client qualified as HttpClient ()
 import Network.HTTP.Types qualified as Http ()
 import Network.Socket qualified as Socket ()
 import Network.Socket.ByteString qualified as SocketByteString ()
+import Network.TLS qualified as TLS
 import Network.Wai qualified as Wai ()
 import Network.Wai.Handler.Warp qualified as Warp ()
 import System.Directory ()
@@ -46,6 +47,55 @@ import Text.Read ()
 import Unit.HarchWeb.TestSupport (certbotHttp01Backend, serverConfigWithListeners)
 
 spec = do
+  describe "TLS policy vocabulary" $ do
+    it "resolves every documented cipher identifier to an installed cipher usable by a supported protocol" $ do
+      let supportedCipherSuites =
+            [ ("TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384", TlsEcdheEcdsaAes256GcmSha384),
+              ("TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256", TlsEcdheEcdsaChacha20Poly1305Sha256),
+              ("TLS_ECDHE_ECDSA_WITH_AES_256_CCM", TlsEcdheEcdsaAes256CcmSha256),
+              ("TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256", TlsEcdheEcdsaAes128GcmSha256),
+              ("TLS_ECDHE_ECDSA_WITH_AES_128_CCM", TlsEcdheEcdsaAes128CcmSha256),
+              ("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384", TlsEcdheRsaAes256GcmSha384),
+              ("TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256", TlsEcdheRsaChacha20Poly1305Sha256),
+              ("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", TlsEcdheRsaAes128GcmSha256),
+              ("TLS_DHE_RSA_WITH_AES_256_GCM_SHA384", TlsDheRsaAes256GcmSha384),
+              ("TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256", TlsDheRsaChacha20Poly1305Sha256),
+              ("TLS_DHE_RSA_WITH_AES_256_CCM", TlsDheRsaAes256CcmSha256),
+              ("TLS_DHE_RSA_WITH_AES_128_GCM_SHA256", TlsDheRsaAes128GcmSha256),
+              ("TLS_DHE_RSA_WITH_AES_128_CCM", TlsDheRsaAes128CcmSha256),
+              ("TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384", TlsEcdheEcdsaAes256CbcSha384),
+              ("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384", TlsEcdheRsaAes256CbcSha384),
+              ("TLS_DHE_RSA_WITH_AES_256_CBC_SHA256", TlsDheRsaAes256CbcSha256),
+              ("TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA", TlsEcdheEcdsaAes256CbcSha),
+              ("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA", TlsEcdheRsaAes256CbcSha),
+              ("TLS_DHE_RSA_WITH_AES_256_CBC_SHA", TlsDheRsaAes256CbcSha),
+              ("TLS_RSA_WITH_AES_256_GCM_SHA384", TlsRsaAes256GcmSha384),
+              ("TLS_RSA_WITH_AES_256_CCM", TlsRsaAes256CcmSha256),
+              ("TLS_RSA_WITH_AES_256_CBC_SHA256", TlsRsaAes256CbcSha256),
+              ("TLS_RSA_WITH_AES_256_CBC_SHA", TlsRsaAes256CbcSha),
+              ("TLS_AES_256_GCM_SHA384", Tls13Aes256GcmSha384),
+              ("TLS_CHACHA20_POLY1305_SHA256", Tls13Chacha20Poly1305Sha256),
+              ("TLS_AES_128_GCM_SHA256", Tls13Aes128GcmSha256),
+              ("TLS_AES_128_CCM_SHA256", Tls13Aes128CcmSha256)
+            ]
+          supportedVersions = [Tls10, Tls11, Tls12, Tls13]
+      forM_ supportedCipherSuites $ \(identifier, cipherSuite) -> do
+        tlsCipherSuiteFromIdentifier identifier `shouldBe` Just cipherSuite
+        any (\tlsVersion -> TLS.cipherAllowedForVersion (tlsProtocolVersionValue tlsVersion) (tlsCipherSuiteValue cipherSuite)) supportedVersions `shouldBe` True
+      show supportedVersions `shouldBe` "[Tls10,Tls11,Tls12,Tls13]"
+      show Tls10 `shouldBe` "Tls10"
+      show (map snd supportedCipherSuites) `shouldContain` "Tls13Aes128CcmSha256"
+      show Tls13Aes128CcmSha256 `shouldBe` "Tls13Aes128CcmSha256"
+      Tls10 `shouldNotBe` Tls11
+      TlsEcdheRsaAes256CbcSha `shouldNotBe` Tls13Aes256GcmSha384
+      tlsPolicySupports (TlsPolicy {tlsAllowedVersions = Tls10 :| [], tlsCipherSuites = TlsEcdheRsaAes256CbcSha :| []}) `shouldBe` True
+      tlsPolicySupports (TlsPolicy {tlsAllowedVersions = Tls10 :| [], tlsCipherSuites = Tls13Aes256GcmSha384 :| []}) `shouldBe` False
+      let legacyTlsPolicy = TlsPolicy {tlsAllowedVersions = Tls10 :| [], tlsCipherSuites = TlsEcdheRsaAes256CbcSha :| []}
+      legacyTlsPolicy `shouldBe` legacyTlsPolicy
+      legacyTlsPolicy `shouldNotBe` TlsPolicy {tlsAllowedVersions = Tls13 :| [], tlsCipherSuites = Tls13Aes256GcmSha384 :| []}
+      show legacyTlsPolicy `shouldContain` "TlsEcdheRsaAes256CbcSha"
+      show [legacyTlsPolicy] `shouldContain` "TlsEcdheRsaAes256CbcSha"
+
   describe "shared config coverage" $ do
     it "reads exported selectors from the shared server config records" $ do
       let certbotConfig = CertbotConfig {certbotExecutable = "certbot", certbotArguments = ["certonly", "--webroot"]}
@@ -66,7 +116,7 @@ spec = do
                   sharedCertificateStartupMode = AwaitCertificateFiles Nothing
                 }
           tlsSource = AcmeCertificateSource acmeConfig
-          tlsConfig = TlsConfig {certificateSource = tlsSource}
+          tlsConfig = TlsConfig {certificateSource = tlsSource, tlsPolicy = defaultTlsPolicy}
           staticRoot = StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}
           tracingConfig =
             OtlpExporter
@@ -271,7 +321,7 @@ spec = do
                   sharedCertificateStartupMode = AwaitCertificateFiles Nothing
                 }
           acmeCertificateSource = AcmeCertificateSource acmeConfig
-          tlsConfig = TlsConfig {certificateSource = acmeCertificateSource}
+          tlsConfig = TlsConfig {certificateSource = acmeCertificateSource, tlsPolicy = defaultTlsPolicy}
           listenerConfig =
             ListenerConfig
               { listenerHost = "127.0.0.1",
@@ -285,7 +335,7 @@ spec = do
               { listenerHost = "0.0.0.0",
                 listenerPort = 5443,
                 listenerScheme = Https,
-                listenerTls = Just (TlsConfig {certificateSource = manualCertificateSource}),
+                listenerTls = Just (TlsConfig {certificateSource = manualCertificateSource, tlsPolicy = defaultTlsPolicy}),
                 listenerAcme = Nothing
               }
           httpAcmeListenerConfig =
@@ -351,8 +401,8 @@ spec = do
       acmeCertificateSource `shouldBe` acmeCertificateSource
       acmeCertificateSource `shouldNotBe` AcmeCertificateSource otherAcmeConfig
       tlsConfig `shouldBe` tlsConfig
-      tlsConfig `shouldNotBe` TlsConfig {certificateSource = manualCertificateSource}
-      tlsConfig `shouldNotBe` TlsConfig {certificateSource = sharedCertificateSource}
+      tlsConfig `shouldNotBe` TlsConfig {certificateSource = manualCertificateSource, tlsPolicy = defaultTlsPolicy}
+      tlsConfig `shouldNotBe` TlsConfig {certificateSource = sharedCertificateSource, tlsPolicy = defaultTlsPolicy}
       listenerConfig `shouldBe` listenerConfig
       listenerConfig `shouldNotBe` otherListenerConfig
       httpAcmeListenerConfig `shouldNotBe` listenerConfig
@@ -425,8 +475,8 @@ spec = do
       show [SharedTlsCertificateFiles {certificateDirectory = "/var/lib/harch-web/shared-certs", sharedCertificateStartupMode = AwaitCertificateFiles Nothing}]
         `shouldBe` "[SharedTlsCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles Nothing}]"
       show acmeCertificateSource `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})"
-      show (TlsConfig {certificateSource = manualCertificateSource}) `shouldBe` "TlsConfig {certificateSource = ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"})}"
-      show listenerConfig `shouldBe` "ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})})}"
+      show (TlsConfig {certificateSource = manualCertificateSource, tlsPolicy = defaultTlsPolicy}) `shouldBe` "TlsConfig {certificateSource = ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}), tlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}"
+      show listenerConfig `shouldBe` "ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}), tlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}})}"
       show httpAcmeListenerConfig `shouldBe` "ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 80, listenerScheme = Http, listenerTls = Nothing, listenerAcme = AcmeConfig {acmeDirectoryUrl = \"https://acme-staging-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"staging.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Just \"/var/lib/harch-web/staging-certs\", acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"renew\"]}}}"
       show staticRoot `shouldBe` "StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}"
       show staticAssetsConfig
@@ -473,8 +523,8 @@ spec = do
       show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
       show [acmeConfig] `shouldBe` "[AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}]"
       show [manualCertificateSource, sharedCertificateSource, acmeCertificateSource] `shouldBe` "[ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}),SharedCertificateFiles (SharedTlsCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles Nothing}),AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})]"
-      show [tlsConfig] `shouldBe` "[TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})}]"
-      show [listenerConfig] `shouldBe` "[ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})})}]"
+      show [tlsConfig] `shouldBe` "[TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}), tlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}]"
+      show [listenerConfig] `shouldBe` "[ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}), tlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}})}]"
       show [httpAcmeListenerConfig] `shouldBe` "[ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 80, listenerScheme = Http, listenerTls = Nothing, listenerAcme = AcmeConfig {acmeDirectoryUrl = \"https://acme-staging-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"staging.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Just \"/var/lib/harch-web/staging-certs\", acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"renew\"]}}}]"
       show [staticRoot] `shouldBe` "[StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}]"
       show [staticAssetsConfig]
@@ -516,6 +566,33 @@ spec = do
       show startupPlan `shouldBe` "ServerStartupPlan {httpBindPlan = HttpBindPlan {httpEndpoints = [ListenerEndpoint {endpointHost = \"127.0.0.1\", endpointPort = 5001},ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5002}]}, manualTlsBindPlans = [], acmeBindPlans = []}"
       show [startupPlan] `shouldBe` "[ServerStartupPlan {httpBindPlan = HttpBindPlan {httpEndpoints = [ListenerEndpoint {endpointHost = \"127.0.0.1\", endpointPort = 5001},ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5002}]}, manualTlsBindPlans = [], acmeBindPlans = []}]"
 
+    it "gives HTTP-01 ACME plans the same default TLS policy" $ do
+      let endpoint = ListenerEndpoint {endpointHost = "0.0.0.0", endpointPort = 80}
+          acmeConfig =
+            AcmeConfig
+              { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                acmeContactEmails = ["ops@example.com"],
+                acmeDomains = ["example.com"],
+                acmeHttp01Port = 80,
+                acmeCertificateDirectory = Nothing,
+                acmeCertbotConfig = CertbotConfig {certbotExecutable = "certbot", certbotArguments = ["certonly", "--webroot"]}
+              }
+          listener =
+            ListenerConfig
+              { listenerHost = endpointHost endpoint,
+                listenerPort = endpointPort endpoint,
+                listenerScheme = Http,
+                listenerTls = Nothing,
+                listenerAcme = Just acmeConfig
+              }
+      planServerStartup (serverConfigWithListeners [listener])
+        `shouldBe` Right
+          ServerStartupPlan
+            { httpBindPlan = HttpBindPlan {httpEndpoints = [endpoint]},
+              manualTlsBindPlans = [],
+              acmeBindPlans = [AcmeBindPlan {acmeEndpoint = endpoint, acmeTlsEndpoint = Nothing, acmeListenerConfig = acmeConfig, acmeTlsPolicy = defaultTlsPolicy}]
+            }
+
     it "translates manual certificate files into TLS startup parameters" $ do
       let endpoint = ListenerEndpoint {endpointHost = "0.0.0.0", endpointPort = 5443}
           certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}
@@ -524,7 +601,7 @@ spec = do
               { listenerHost = endpointHost endpoint,
                 listenerPort = endpointPort endpoint,
                 listenerScheme = Https,
-                listenerTls = Just (TlsConfig {certificateSource = certificateSource}),
+                listenerTls = Just (TlsConfig {certificateSource = certificateSource, tlsPolicy = defaultTlsPolicy}),
                 listenerAcme = Nothing
               }
           manualPlan =
@@ -533,7 +610,8 @@ spec = do
                 tlsCertificateFile = "cert.pem",
                 tlsPrivateKeyFile = "key.pem",
                 tlsCredentialSourceKind = ManualTlsCredentials,
-                tlsStartupMode = RequireCertificateFiles
+                tlsStartupMode = RequireCertificateFiles,
+                tlsBindPolicy = defaultTlsPolicy
               }
       planServerStartup (serverConfigWithListeners [listener])
         `shouldBe` Right
@@ -544,8 +622,8 @@ spec = do
             }
       manualPlan `shouldBe` manualPlan
       manualPlan `shouldNotBe` manualPlan {tlsCertificateFile = "other.pem"}
-      show manualPlan `shouldBe` "ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5443}, tlsCertificateFile = \"cert.pem\", tlsPrivateKeyFile = \"key.pem\", tlsCredentialSourceKind = ManualTlsCredentials, tlsStartupMode = RequireCertificateFiles}"
-      show [manualPlan] `shouldBe` "[ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5443}, tlsCertificateFile = \"cert.pem\", tlsPrivateKeyFile = \"key.pem\", tlsCredentialSourceKind = ManualTlsCredentials, tlsStartupMode = RequireCertificateFiles}]"
+      show manualPlan `shouldBe` "ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5443}, tlsCertificateFile = \"cert.pem\", tlsPrivateKeyFile = \"key.pem\", tlsCredentialSourceKind = ManualTlsCredentials, tlsStartupMode = RequireCertificateFiles, tlsBindPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}"
+      show [manualPlan] `shouldBe` "[ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5443}, tlsCertificateFile = \"cert.pem\", tlsPrivateKeyFile = \"key.pem\", tlsCredentialSourceKind = ManualTlsCredentials, tlsStartupMode = RequireCertificateFiles, tlsBindPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}]"
 
     it "translates shared certificate directories into TLS startup parameters" $ do
       let endpoint = ListenerEndpoint {endpointHost = "0.0.0.0", endpointPort = 5444}
@@ -560,7 +638,7 @@ spec = do
               { listenerHost = endpointHost endpoint,
                 listenerPort = endpointPort endpoint,
                 listenerScheme = Https,
-                listenerTls = Just (TlsConfig {certificateSource = certificateSource}),
+                listenerTls = Just (TlsConfig {certificateSource = certificateSource, tlsPolicy = defaultTlsPolicy}),
                 listenerAcme = Nothing
               }
           manualPlan =
@@ -569,7 +647,8 @@ spec = do
                 tlsCertificateFile = "/var/lib/harch-web/shared-certs/fullchain.pem",
                 tlsPrivateKeyFile = "/var/lib/harch-web/shared-certs/privkey.pem",
                 tlsCredentialSourceKind = SharedTlsCredentials,
-                tlsStartupMode = AwaitCertificateFiles Nothing
+                tlsStartupMode = AwaitCertificateFiles Nothing,
+                tlsBindPolicy = defaultTlsPolicy
               }
       planServerStartup (serverConfigWithListeners [listener])
         `shouldBe` Right
@@ -580,8 +659,8 @@ spec = do
             }
       manualPlan `shouldBe` manualPlan
       manualPlan `shouldNotBe` manualPlan {tlsPrivateKeyFile = "other-privkey.pem"}
-      show manualPlan `shouldBe` "ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, tlsCertificateFile = \"/var/lib/harch-web/shared-certs/fullchain.pem\", tlsPrivateKeyFile = \"/var/lib/harch-web/shared-certs/privkey.pem\", tlsCredentialSourceKind = SharedTlsCredentials, tlsStartupMode = AwaitCertificateFiles Nothing}"
-      show [manualPlan] `shouldBe` "[ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, tlsCertificateFile = \"/var/lib/harch-web/shared-certs/fullchain.pem\", tlsPrivateKeyFile = \"/var/lib/harch-web/shared-certs/privkey.pem\", tlsCredentialSourceKind = SharedTlsCredentials, tlsStartupMode = AwaitCertificateFiles Nothing}]"
+      show manualPlan `shouldBe` "ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, tlsCertificateFile = \"/var/lib/harch-web/shared-certs/fullchain.pem\", tlsPrivateKeyFile = \"/var/lib/harch-web/shared-certs/privkey.pem\", tlsCredentialSourceKind = SharedTlsCredentials, tlsStartupMode = AwaitCertificateFiles Nothing, tlsBindPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}"
+      show [manualPlan] `shouldBe` "[ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, tlsCertificateFile = \"/var/lib/harch-web/shared-certs/fullchain.pem\", tlsPrivateKeyFile = \"/var/lib/harch-web/shared-certs/privkey.pem\", tlsCredentialSourceKind = SharedTlsCredentials, tlsStartupMode = AwaitCertificateFiles Nothing, tlsBindPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}]"
 
     it "translates fail-fast shared certificate directories into immediate TLS startup parameters" $ do
       let endpoint = ListenerEndpoint {endpointHost = "0.0.0.0", endpointPort = 5445}
@@ -596,7 +675,7 @@ spec = do
               { listenerHost = endpointHost endpoint,
                 listenerPort = endpointPort endpoint,
                 listenerScheme = Https,
-                listenerTls = Just (TlsConfig {certificateSource = certificateSource}),
+                listenerTls = Just (TlsConfig {certificateSource = certificateSource, tlsPolicy = defaultTlsPolicy}),
                 listenerAcme = Nothing
               }
       planServerStartup (serverConfigWithListeners [listener])
@@ -609,7 +688,8 @@ spec = do
                       tlsCertificateFile = "/var/lib/harch-web/preprovisioned-certs/fullchain.pem",
                       tlsPrivateKeyFile = "/var/lib/harch-web/preprovisioned-certs/privkey.pem",
                       tlsCredentialSourceKind = SharedTlsCredentials,
-                      tlsStartupMode = RequireCertificateFiles
+                      tlsStartupMode = RequireCertificateFiles,
+                      tlsBindPolicy = defaultTlsPolicy
                     }
                 ],
               acmeBindPlans = []
@@ -644,14 +724,15 @@ spec = do
               { listenerHost = endpointHost endpoint,
                 listenerPort = endpointPort endpoint,
                 listenerScheme = Https,
-                listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource acmeConfig}),
+                listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource acmeConfig, tlsPolicy = defaultTlsPolicy}),
                 listenerAcme = Nothing
               }
           acmePlan =
             AcmeBindPlan
               { acmeEndpoint = endpoint,
                 acmeTlsEndpoint = Just endpoint,
-                acmeListenerConfig = acmeConfig
+                acmeListenerConfig = acmeConfig,
+                acmeTlsPolicy = defaultTlsPolicy
               }
       planServerStartup (serverConfigWithListeners [httpListener, listener])
         `shouldBe` Right
@@ -662,8 +743,8 @@ spec = do
             }
       acmePlan `shouldBe` acmePlan
       acmePlan `shouldNotBe` acmePlan {acmeEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = 5444}}
-      show acmePlan `shouldBe` "AcmeBindPlan {acmeEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, acmeTlsEndpoint = Just (ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}), acmeListenerConfig = AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}}"
-      show [acmePlan] `shouldBe` "[AcmeBindPlan {acmeEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, acmeTlsEndpoint = Just (ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}), acmeListenerConfig = AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}}]"
+      show acmePlan `shouldBe` "AcmeBindPlan {acmeEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, acmeTlsEndpoint = Just (ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}), acmeListenerConfig = AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}, acmeTlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}"
+      show [acmePlan] `shouldBe` "[AcmeBindPlan {acmeEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, acmeTlsEndpoint = Just (ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}), acmeListenerConfig = AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}, acmeTlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}]"
 
     it "rejects listeners whose TLS mode does not match their scheme" $ do
       let httpTlsListener =
@@ -671,7 +752,7 @@ spec = do
               { listenerHost = "127.0.0.1",
                 listenerPort = 5001,
                 listenerScheme = Http,
-                listenerTls = Just (TlsConfig {certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}}),
+                listenerTls = Just (TlsConfig {certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}, tlsPolicy = defaultTlsPolicy}),
                 listenerAcme = Nothing
               }
           httpsWithoutTls =
@@ -688,7 +769,7 @@ spec = do
         `shouldBe` Left (InvalidListenerTlsConfiguration httpsWithoutTls)
       InvalidListenerTlsConfiguration httpTlsListener `shouldNotBe` InvalidListenerTlsConfiguration httpsWithoutTls
       show (InvalidListenerTlsConfiguration httpTlsListener)
-        `shouldBe` "InvalidListenerTlsConfiguration (ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Just (TlsConfig {certificateSource = ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"})})})"
+        `shouldBe` "InvalidListenerTlsConfiguration (ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Just (TlsConfig {certificateSource = ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}), tlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}})})"
       show [InvalidListenerTlsConfiguration httpsWithoutTls]
         `shouldBe` "[InvalidListenerTlsConfiguration (ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5443, listenerScheme = Https, listenerTls = Nothing})]"
 
@@ -730,7 +811,8 @@ spec = do
                 listenerTls =
                   Just
                     TlsConfig
-                      { certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}
+                      { certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"},
+                        tlsPolicy = defaultTlsPolicy
                       },
                 listenerAcme = Nothing
               }
