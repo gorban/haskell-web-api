@@ -45,16 +45,17 @@ spec = do
         Left failure -> displayException failure `shouldContain` "access-token provider returned an invalid token"
         Right () -> expectationFailure "Expected token validation failure"
 
-    it "surfaces API failures without including the bearer token" $ do
+    it "surfaces API failures without including bearer tokens or provider bodies" $ do
       let sender = requiredEmailAddress "sender@example.com"
           message = requiredEmailMessage "recipient@example.com" "Welcome" "Body"
           config = mkGmailApiConfig sender (pure "private-token")
-          runner _ = pure (GmailHttpResponse 403 "delegation is not configured")
+          runner _ = pure (GmailHttpResponse 403 "gmail-provider-body-sentinel")
       result <- try (deliverGmailApiEmailWithRunner runner config message) :: IO (Either SomeException ())
       case result of
         Left failure -> do
           displayException failure `shouldContain` "Gmail API send failed with status 403"
           displayException failure `shouldNotContain` "private-token"
+          displayException failure `shouldNotContain` "gmail-provider-body-sentinel"
         Right () -> expectationFailure "Expected Gmail API failure"
 
     it "uses URL-safe base64 replacements" $ do

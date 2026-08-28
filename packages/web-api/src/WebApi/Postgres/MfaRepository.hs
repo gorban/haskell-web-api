@@ -21,7 +21,7 @@ import WebApi.Mfa
     StoredTotpEnrollment (..),
   )
 import WebApi.Postgres.Pool (PostgresPool)
-import WebApi.Postgres.Runtime (runPooledParameterizedRowsQuery)
+import WebApi.Postgres.Runtime (renderUnexpectedResultShape, runPooledParameterizedRowsQuery)
 
 buildRuntimePostgresMfaStore :: PostgresPool -> MfaStore
 buildRuntimePostgresMfaStore !pool =
@@ -83,7 +83,7 @@ decodeMatchingAccount errorPrefix accountId rows =
     [] -> Right False
     [[returnedAccountId]]
       | returnedAccountId == accountIdText accountId -> Right True
-    _ -> Left (MfaStoreCorruptData (errorPrefix <> Text.pack (show rows)))
+    _ -> Left (MfaStoreCorruptData (errorPrefix <> renderUnexpectedResultShape rows))
 
 -- | Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the @$!@
 -- below on the second field label is a last resort, confirmed directly
@@ -101,7 +101,7 @@ decodeTotpEnrollment rows =
                 <$> decodeOptionalUnixTimeNanoseconds "confirmation timestamp" confirmedAtValue
                 <*> (decodeOptionalWord64 $! "last-used counter") lastUsedCounterValue
             )
-    _ -> Left (MfaStoreCorruptData ("unexpected TOTP enrollment lookup result: " <> Text.pack (show rows)))
+    _ -> Left (MfaStoreCorruptData ("unexpected TOTP enrollment lookup result: " <> renderUnexpectedResultShape rows))
 
 decodeOptionalWord64 :: Text -> Text -> Either MfaStoreError (Maybe Word64)
 decodeOptionalWord64 _ "" = Right Nothing
@@ -118,7 +118,7 @@ decodeOptionalUnixTimeNanoseconds label value =
 decodeRecoveryCodeHashes :: [[Text]] -> Either MfaStoreError [Text]
 decodeRecoveryCodeHashes rows =
   maybe
-    (Left (MfaStoreCorruptData ("unexpected recovery-code lookup result: " <> Text.pack (show rows))))
+    (Left (MfaStoreCorruptData ("unexpected recovery-code lookup result: " <> renderUnexpectedResultShape rows)))
     Right
     (traverse decodeSingleColumn rows)
 

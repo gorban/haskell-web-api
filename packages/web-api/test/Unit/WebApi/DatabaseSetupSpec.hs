@@ -53,9 +53,12 @@ spec = do
       show runtimeConfigSetupError
         `shouldBe` "DatabaseSetupRuntimeConfigLoadError (MissingConfigValue \"DATABASE_PASSWORD\")"
       show migrationSetupError
-        `shouldBe` "DatabaseSetupMigrationError (UnexpectedQueryRows \"expected exactly one row\" [\"first\",\"second\"])"
+        `shouldBe` "DatabaseSetupMigrationError (UnexpectedQueryRows \"expected exactly one row\" \"row-count=2\")"
       show seedSetupError
-        `shouldBe` "DatabaseSetupSeedError (UnexpectedQueryRows \"expected exactly one row\" [\"seed\"])"
+        `shouldBe` "DatabaseSetupSeedError (UnexpectedQueryRows \"expected exactly one row\" \"row-count=1\")"
+      show migrationSetupError `shouldNotContain` "first"
+      show migrationSetupError `shouldNotContain` "second"
+      show seedSetupError `shouldNotContain` "seed"
       show [configSetupError]
         `shouldBe` "[DatabaseSetupConfigLoadError (InvalidConfigValue \"WEB_API_MIGRATION_DATABASE_PORT\" \"0\")]"
 
@@ -70,11 +73,11 @@ spec = do
       renderDatabaseSetupError (DatabaseSetupRuntimeConfigLoadError runtimeLoadError)
         `shouldBe` "Failed to load runtime database config: MissingConfigValue \"DATABASE_PASSWORD\""
       renderDatabaseSetupError (DatabaseSetupMigrationError migrationRunnerError)
-        `shouldBe` "Failed to apply database migrations: expected exactly one row: first, second"
+        `shouldBe` "Failed to apply database migrations: expected exactly one row: row-count=2"
       renderDatabaseSetupError (DatabaseSetupMigrationError nativeMigrationRunnerError)
         `shouldBe` "Failed to apply database migrations: PostgreSQL migration command failed"
       renderDatabaseSetupError (DatabaseSetupSeedError seedRunnerError)
-        `shouldBe` "Failed to apply database seed data: expected exactly one row: seed"
+        `shouldBe` "Failed to apply database seed data: expected exactly one row: row-count=1"
       let failedCommandRunnerError =
             PostgresCommandFailed
               PostgresCommand

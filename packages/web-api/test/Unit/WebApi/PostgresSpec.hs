@@ -176,23 +176,23 @@ spec = do
         _ -> expectationFailure "expected a retried pending-registration claim"
       assertAccountStoreError (createPendingAccount (storeFor (Right [["created", "invalid id"]])) defaultPendingRegistrationStoragePolicy pendingAccount) (isCorrupt "pending-registration staging returned an invalid account id")
       assertAccountStoreError (createPendingAccount (storeFor (Right [["retried", "invalid id"]])) defaultPendingRegistrationStoragePolicy pendingAccount) (isCorrupt "pending-registration staging returned an invalid account id")
-      assertAccountStoreError (createPendingAccount (storeFor (Right [["other_account"]])) defaultPendingRegistrationStoragePolicy pendingAccount) (isCorrupt "unexpected pending-registration staging result: [[\"other_account\"]]")
+      assertAccountStoreError (createPendingAccount (storeFor (Right [["other_account"]])) defaultPendingRegistrationStoragePolicy pendingAccount) (isCorrupt "unexpected pending-registration staging result: row-count=1, column-counts=[1]")
       assertAccountStoreSuccess (completePendingRegistrationDelivery (storeFor (Right [])) claim) not
       assertAccountStoreSuccess (releasePendingRegistrationDelivery (storeFor (Right [])) claim) not
-      assertAccountStoreError (completePendingRegistrationDelivery (storeFor (Right [["other_account"]])) claim) (isCorrupt "unexpected pending-registration delivery update result: [[\"other_account\"]]")
+      assertAccountStoreError (completePendingRegistrationDelivery (storeFor (Right [["other_account"]])) claim) (isCorrupt "unexpected pending-registration delivery update result: row-count=1, column-counts=[1]")
       assertAccountStoreError (replaceEmailVerification (storeFor (Left "connection failed")) (pendingAccountVerification pendingAccount)) (isUnavailable "connection failed")
       assertAccountStoreSuccess (replaceEmailVerification (storeFor (Right [])) (pendingAccountVerification pendingAccount)) not
-      assertAccountStoreError (replaceEmailVerification (storeFor (Right [["other_account"]])) (pendingAccountVerification pendingAccount)) (isCorrupt "unexpected email-verification replacement result: [[\"other_account\"]]")
+      assertAccountStoreError (replaceEmailVerification (storeFor (Right [["other_account"]])) (pendingAccountVerification pendingAccount)) (isCorrupt "unexpected email-verification replacement result: row-count=1, column-counts=[1]")
       assertAccountStoreError (findEmailVerification (storeFor (Left "connection failed")) (Account.emailVerificationTokenDigest token)) (isUnavailable "connection failed")
       assertAccountStoreSuccess (findEmailVerification (storeFor (Right [])) (Account.emailVerificationTokenDigest token)) (\case Nothing -> True; Just _ -> False)
       assertAccountStoreError (findEmailVerification (storeFor (Right [["invalid id", "person@example.test", "500"]])) (Account.emailVerificationTokenDigest token)) (isCorrupt "email verification has an invalid account id")
       assertAccountStoreError (findEmailVerification (storeFor (Right [["account_01", "invalid email", "500"]])) (Account.emailVerificationTokenDigest token)) (isCorrupt "email verification has an invalid email address")
       assertAccountStoreError (findEmailVerification (storeFor (Right [["account_01", "person@example.test", "invalid"]])) (Account.emailVerificationTokenDigest token)) (isCorrupt "email verification has an invalid expiry")
-      assertAccountStoreError (findEmailVerification (storeFor (Right [["account_01"]])) (Account.emailVerificationTokenDigest token)) (isCorrupt "unexpected email-verification result: [[\"account_01\"]]")
+      assertAccountStoreError (findEmailVerification (storeFor (Right [["account_01"]])) (Account.emailVerificationTokenDigest token)) (isCorrupt "unexpected email-verification result: row-count=1, column-counts=[1]")
       assertAccountStoreError (consumeEmailVerification (storeFor (Right [["invalid id"]])) (Account.emailVerificationTokenDigest token) 499) (isCorrupt "email verification was consumed for an invalid account id")
       assertAccountStoreError (consumeEmailVerification (storeFor (Left "connection failed")) (Account.emailVerificationTokenDigest token) 499) (isUnavailable "connection failed")
       assertAccountStoreSuccess (consumeEmailVerification (storeFor (Right [])) (Account.emailVerificationTokenDigest token) 499) (\case Nothing -> True; Just _ -> False)
-      assertAccountStoreError (consumeEmailVerification (storeFor (Right [["account_01", "extra"]])) (Account.emailVerificationTokenDigest token) 499) (isCorrupt "unexpected email-verification consumption result: [[\"account_01\",\"extra\"]]")
+      assertAccountStoreError (consumeEmailVerification (storeFor (Right [["account_01", "extra"]])) (Account.emailVerificationTokenDigest token) 499) (isCorrupt "unexpected email-verification consumption result: row-count=1, column-counts=[2]")
 
     it "loads safe account profiles and rejects malformed profile rows" $ do
       let accountId = requiredAccountId "account_01"
@@ -226,7 +226,7 @@ spec = do
       assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_01", "invalid email", "", "", ""]])) accountId) (isCorrupt "account profile lookup has an invalid email address")
       assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_01", "person@example.test", "invalid username", "", ""]])) accountId) (isCorrupt "account profile lookup has an invalid username")
       assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_02", "person@example.test", "", "", ""]])) accountId) (isCorrupt "account profile lookup returned a different account id")
-      assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_01"]])) accountId) (isCorrupt "unexpected account profile lookup result: [[\"account_01\"]]")
+      assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_01"]])) accountId) (isCorrupt "unexpected account profile lookup result: row-count=1, column-counts=[1]")
       testPool <- newPostgresPool (databasePoolCapacity postgresTestConfig) postgresTestConfig
       buildRuntimePostgresAccountProfileStore testPool `seq` pure ()
 
@@ -611,7 +611,7 @@ spec = do
       runRuntimeRowsQuery defaultRealPostgresConfig "SELECT value FROM (VALUES ('Fast SSR'::text), ('Shared route data'::text)) AS runtime_rows(value);"
         `shouldReturn` Right ["Fast SSR", "Shared route data"]
       runRuntimeScalarQuery defaultRealPostgresConfig "SELECT value FROM (VALUES ('first'::text), ('second'::text)) AS runtime_rows(value);"
-        `shouldReturn` Left "expected exactly one row: first, second"
+        `shouldReturn` Left "expected exactly one row: row-count=2"
       runRuntimeRowsQuery defaultRealPostgresConfig "SELECT NULL::text;"
         `shouldReturn` Left "unexpected NULL column value"
       runRuntimeParameterizedRowsQuery defaultRealPostgresConfig "SELECT $1::text, $2::text;" ["first value", "second value"]
@@ -988,6 +988,7 @@ spec = do
                 postgresStderr = "boom"
               }
           runnerError = PostgresCommandFailed command commandResult
+          migrationError = PostgresMigrationFailed "migration protocol failed"
           unexpectedRowsError = UnexpectedQueryRows "expected exactly one row" ["first", "second"]
       command `shouldBe` command
       command `shouldNotBe` command {postgresArguments = ["--command", "SELECT 2;"]}
@@ -995,6 +996,8 @@ spec = do
       commandResult `shouldNotBe` commandResult {postgresStdout = "2"}
       runnerError `shouldBe` runnerError
       runnerError `shouldNotBe` PostgresCommandFailed command failedCommandResult
+      migrationError `shouldBe` migrationError
+      migrationError `shouldNotBe` PostgresMigrationFailed "other migration failure"
       unexpectedRowsError `shouldBe` unexpectedRowsError
       unexpectedRowsError `shouldNotBe` UnexpectedQueryRows "expected exactly one row" ["first"]
       show command
@@ -1008,8 +1011,18 @@ spec = do
       show runnerError
         `shouldBe` "PostgresCommandFailed (PostgresCommand {postgresExecutable = \"psql\", postgresArguments = <redacted>, postgresEnvironment = <redacted>}) (PostgresCommandResult {postgresExitCode = ExitSuccess, postgresStdout = \"1\", postgresStderr = \"\"})"
       show runnerError `shouldNotContain` "secret"
+      show migrationError
+        `shouldBe` "PostgresMigrationFailed \"migration protocol failed\""
       show unexpectedRowsError
-        `shouldBe` "UnexpectedQueryRows \"expected exactly one row\" [\"first\",\"second\"]"
+        `shouldBe` "UnexpectedQueryRows \"expected exactly one row\" \"row-count=2\""
+      show unexpectedRowsError `shouldNotContain` "first"
+      show unexpectedRowsError `shouldNotContain` "second"
+      showsPrec 11 runnerError ""
+        `shouldBe` "(PostgresCommandFailed (PostgresCommand {postgresExecutable = \"psql\", postgresArguments = <redacted>, postgresEnvironment = <redacted>}) (PostgresCommandResult {postgresExitCode = ExitSuccess, postgresStdout = \"1\", postgresStderr = \"\"}))"
+      showsPrec 11 migrationError ""
+        `shouldBe` "(PostgresMigrationFailed \"migration protocol failed\")"
+      showsPrec 11 unexpectedRowsError ""
+        `shouldBe` "(UnexpectedQueryRows \"expected exactly one row\" \"row-count=2\")"
       show [command]
         `shouldBe` "[PostgresCommand {postgresExecutable = \"psql\", postgresArguments = <redacted>, postgresEnvironment = <redacted>}]"
       show [commandResult]

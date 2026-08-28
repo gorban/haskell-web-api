@@ -32,6 +32,7 @@ import HarchWeb.Totp qualified as Totp
 import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress, opaqueSession, sessionIdValue, testSessionId)
+import Unit.WebApi.TestSupport qualified as TestSupport (databaseConfig)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), defaultPendingRegistrationStoragePolicy, mkRegistrationDeliveryTimeout, pendingRegistrationClaimLeaseNanoseconds, pendingRegistrationMaximumAccounts)
 import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), VerificationForm (..), accountActions, authorizeAccountActionCsrf, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, pageCsrfTokenForAccountPage, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderPendingProfileRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buildActionCodecOrDie)
@@ -44,6 +45,7 @@ import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), Accoun
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), ProfilePageModel (..), SignedOutProfilePageDetails (..), buildPageModelFromRouteData, renderPageFromRouteData)
+import WebApi.Postgres.Testing (buildRuntimePostgresAccountCredentialStoreWithRunner, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStoreWithRunner)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), defaultRequestContext, renderRoutePath)
 import WebApi.RouteData (RouteDataResult (..), RouteDataSelection (..), selectRouteData, selectRouteDataSelectionWithDatabase)
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..), MfaEnrollmentSessionStore (..), MfaEnrollmentSessionStoreError (..))
@@ -884,6 +886,23 @@ spec = do
                 && any (Text.isInfixOf "bad") (HarchWeb.clientActionLogEntries response)
                 && any (\attribute -> Observability.attributeName attribute == "app.failure.code" && Observability.attributeValue attribute == Observability.TextAttribute "account.registration.store") (HarchWeb.clientActionObservabilityAttributes response)
           )
+      let redactedRegistrationStore =
+            buildRuntimePostgresAccountStoreWithRunner
+              (\_ _ _ -> pure (Right [["registration-email-profile-sentinel"]]))
+              TestSupport.databaseConfig
+      redactedRegistration <- handleAccountAction (workflowFor redactedRegistrationStore 100 delivery) (request "/register" validRegistration)
+      redactedRegistration
+        `shouldSatisfy` maybe
+          False
+          ( \response ->
+              not
+                ( any
+                    (Text.isInfixOf "registration-email-profile-sentinel")
+                    ( HarchWeb.clientActionLogEntries response
+                        <> map HarchWeb.regionPatchHtml (HarchWeb.clientActionPatches response)
+                    )
+                )
+          )
       deliveryFailure <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 (Email.EmailDelivery (\_ -> ioError (userError "mail down")))) (request "/register" validRegistration)
       deliveryFailure `shouldSatisfy` actionHasStatusAndFocus 502 (Just "registration-email") "could not send"
       spanishDeliveryFailure <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 (Email.EmailDelivery (\_ -> ioError (userError "mail down")))) (spanishAction "/register" validRegistration)
@@ -1280,6 +1299,15 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
       handleAccountAction (workflowFor (Left (AccountCredentialStoreCorruptData "bad credential")) (Right Nothing) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
+      let redactedCredentialStore =
+            buildRuntimePostgresAccountCredentialStoreWithRunner
+              (\_ _ _ -> pure (Right [["password-hash-sentinel"]]))
+              TestSupport.databaseConfig
+      redactedCredentialFailure <- handleAccountAction (validWorkflow {accountWorkflowCredentialStore = redactedCredentialStore}) (loginRequest defaultRequestContext validFields)
+      redactedCredentialFailure
+        `shouldSatisfy` maybe
+          False
+          (not . any (Text.isInfixOf "password-hash-sentinel") . HarchWeb.clientActionLogEntries)
       handleAccountAction (workflowFor (Left (AccountCredentialStoreUnavailable "down")) (Right Nothing) (Right True) (Right True)) (spanishLoginRequest validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "no esta disponible")
       handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Left (MfaStoreUnavailable "down")) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
@@ -1535,3 +1563,17 @@ spec = do
               AppEffect.failureCode diagnostics `shouldBe` AppEffect.MfaEnrollmentConfirmFailure
               AppEffect.failureType diagnostics `shouldBe` expectedType
               AppEffect.failureLogEntries diagnostics `shouldSatisfy` any (Text.isInfixOf expectedDetail)
+      let redactedMfaStore =
+            buildRuntimePostgresMfaStoreWithRunner
+              (\_ _ _ -> pure (Right [["encrypted-mfa-recovery-sentinel"]]))
+              TestSupport.databaseConfig
+      redactedMfaResult <- saveUnconfirmedTotpEnrollment redactedMfaStore accountId "encrypted-mfa-recovery-sentinel" 100
+      case redactedMfaResult of
+        Left storeError ->
+          case mfaEnrollmentFailureDiagnostics AppEffect.MfaEnrollmentStartFailure (MfaEnrollmentStoreError storeError) of
+            Nothing -> expectationFailure "expected diagnostics for the redacted MFA-store failure"
+            Just diagnostics ->
+              AppEffect.failureLogEntries diagnostics
+                `shouldSatisfy` not
+                . any (Text.isInfixOf "encrypted-mfa-recovery-sentinel")
+        Right _ -> expectationFailure "expected malformed MFA persistence output to fail"

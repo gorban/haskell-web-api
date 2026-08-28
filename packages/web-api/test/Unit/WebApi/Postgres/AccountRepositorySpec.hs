@@ -66,7 +66,7 @@ spec = do
         `shouldReturnEqual` Left (AccountCredentialStoreUnavailable "connection failed")
       let corruptStore = buildRuntimePostgresAccountCredentialStoreWithRunner (\_ _ _ -> pure (Right [["another-account"]])) databaseConfig
       replacePasswordHashIfCurrent corruptStore accountId (required "legacy password hash" (readPasswordHash encodedPasswordHash)) replacementHash
-        `shouldReturnEqual` Left (AccountCredentialStoreCorruptData "unexpected password-hash replacement result: [[\"another-account\"]]")
+        `shouldReturnEqual` Left (AccountCredentialStoreCorruptData "unexpected password-hash replacement result: row-count=1, column-counts=[1]")
 
     it "maps absent, malformed, and unavailable credential results to typed outcomes" $ do
       let storeFor result = buildRuntimePostgresAccountCredentialStoreWithRunner (\_ _ _ -> pure result) databaseConfig
@@ -90,7 +90,7 @@ spec = do
           _ -> False
       findAccountCredentialByEmail (storeFor (Right [["account_01"]])) emailAddress
         `shouldSatisfyEqual` \case
-          Left (AccountCredentialStoreCorruptData "unexpected account credential lookup result: [[\"account_01\"]]") -> True
+          Left (AccountCredentialStoreCorruptData "unexpected account credential lookup result: row-count=1, column-counts=[1]") -> True
           _ -> False
 
     it "executes the native libpq credential adapter against a migrated PostgreSQL database" $ do

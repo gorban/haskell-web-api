@@ -74,8 +74,8 @@ spec = do
           wrongAccountStore = buildRuntimePostgresMfaStoreWithRunner (\_ _ _ -> pure (Right [["other-account"]])) databaseConfig
       saveUnconfirmedTotpEnrollment unavailableStore accountId "encrypted-envelope" 100 `shouldReturnEqual` Left (MfaStoreUnavailable "database unavailable")
       saveUnconfirmedTotpEnrollment declinedStore accountId "encrypted-envelope" 100 `shouldReturnEqual` Right False
-      saveUnconfirmedTotpEnrollment malformedStore accountId "encrypted-envelope" 100 `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected TOTP enrollment result: [[\"account_01\",\"not-a-timestamp\",\"\"]]")
-      saveUnconfirmedTotpEnrollment wrongAccountStore accountId "encrypted-envelope" 100 `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected TOTP enrollment result: [[\"other-account\"]]")
+      saveUnconfirmedTotpEnrollment malformedStore accountId "encrypted-envelope" 100 `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected TOTP enrollment result: row-count=1, column-counts=[3]")
+      saveUnconfirmedTotpEnrollment wrongAccountStore accountId "encrypted-envelope" 100 `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected TOTP enrollment result: row-count=1, column-counts=[1]")
       loadTotpEnrollment unavailableStore accountId `shouldReturnEqual` Left (MfaStoreUnavailable "database unavailable")
       loadTotpEnrollment declinedStore accountId `shouldReturnEqual` Right Nothing
       loadTotpEnrollment (buildRuntimePostgresMfaStoreWithRunner (\_ _ _ -> pure (Right [["encrypted-envelope", "", ""]])) databaseConfig) accountId
@@ -83,23 +83,23 @@ spec = do
       loadTotpEnrollment (buildRuntimePostgresMfaStoreWithRunner (\_ _ _ -> pure (Right [["encrypted-envelope", "500", "42"]])) databaseConfig) accountId
         `shouldReturnEqual` Right (Just (StoredTotpEnrollment "encrypted-envelope" (Just 500) (Just 42)))
       loadTotpEnrollment (buildRuntimePostgresMfaStoreWithRunner (\_ _ _ -> pure (Right [["encrypted-envelope"]])) databaseConfig) accountId
-        `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected TOTP enrollment lookup result: [[\"encrypted-envelope\"]]")
+        `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected TOTP enrollment lookup result: row-count=1, column-counts=[1]")
       confirmTotpEnrollment declinedStore accountId ("hash" :| []) 500 `shouldReturnEqual` Right False
       confirmTotpEnrollment unavailableStore accountId ("hash" :| []) 500 `shouldReturnEqual` Left (MfaStoreUnavailable "database unavailable")
-      confirmTotpEnrollment malformedStore accountId ("hash" :| []) 500 `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected TOTP confirmation result: [[\"account_01\",\"not-a-timestamp\",\"\"]]")
-      confirmTotpEnrollment wrongAccountStore accountId ("hash" :| []) 500 `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected TOTP confirmation result: [[\"other-account\"]]")
+      confirmTotpEnrollment malformedStore accountId ("hash" :| []) 500 `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected TOTP confirmation result: row-count=1, column-counts=[3]")
+      confirmTotpEnrollment wrongAccountStore accountId ("hash" :| []) 500 `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected TOTP confirmation result: row-count=1, column-counts=[1]")
       loadTotpEnrollment malformedStore accountId `shouldReturnEqual` Left (MfaStoreCorruptData "TOTP enrollment has an invalid confirmation timestamp")
       loadUnusedRecoveryCodeHashes unavailableStore accountId `shouldReturnEqual` Left (MfaStoreUnavailable "database unavailable")
       loadUnusedRecoveryCodeHashes (buildRuntimePostgresMfaStoreWithRunner (\_ _ _ -> pure (Right [["hash"], ["wrong", "row"]])) databaseConfig) accountId
-        `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected recovery-code lookup result: [[\"hash\"],[\"wrong\",\"row\"]]")
+        `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected recovery-code lookup result: row-count=2, column-counts=[1,2]")
       consumeRecoveryCodeHash declinedStore accountId "hash" 500 `shouldReturnEqual` Right False
       consumeRecoveryCodeHash unavailableStore accountId "hash" 500 `shouldReturnEqual` Left (MfaStoreUnavailable "database unavailable")
-      consumeRecoveryCodeHash malformedStore accountId "hash" 500 `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected recovery-code consumption result: [[\"account_01\",\"not-a-timestamp\",\"\"]]")
-      consumeRecoveryCodeHash wrongAccountStore accountId "hash" 500 `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected recovery-code consumption result: [[\"other-account\"]]")
+      consumeRecoveryCodeHash malformedStore accountId "hash" 500 `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected recovery-code consumption result: row-count=1, column-counts=[3]")
+      consumeRecoveryCodeHash wrongAccountStore accountId "hash" 500 `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected recovery-code consumption result: row-count=1, column-counts=[1]")
       markTotpCodeUsed declinedStore accountId 700 `shouldReturnEqual` Right False
       markTotpCodeUsed unavailableStore accountId 700 `shouldReturnEqual` Left (MfaStoreUnavailable "database unavailable")
-      markTotpCodeUsed malformedStore accountId 700 `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected TOTP counter update result: [[\"account_01\",\"not-a-timestamp\",\"\"]]")
-      markTotpCodeUsed wrongAccountStore accountId 700 `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected TOTP counter update result: [[\"other-account\"]]")
+      markTotpCodeUsed malformedStore accountId 700 `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected TOTP counter update result: row-count=1, column-counts=[3]")
+      markTotpCodeUsed wrongAccountStore accountId 700 `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected TOTP counter update result: row-count=1, column-counts=[1]")
 
     it "keeps secret-bearing values non-renderable while exposing stable equality and errors" $ do
       let pendingEnrollment = StoredTotpEnrollment "encrypted-envelope" Nothing Nothing

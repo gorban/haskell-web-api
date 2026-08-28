@@ -59,11 +59,11 @@ spec = do
           malformedSettlementStore = buildRuntimePostgresLoginAttemptStoreWithRunner (\_ _ _ -> pure (Right [])) databaseConfig
       reserveLoginAttempt unavailableStore "key" defaultLoginProtectionPolicy 500 `shouldReturnEqual` Left (LoginAttemptStoreUnavailable "database unavailable")
       reserveLoginAttempt malformedAdmissionStore "key" defaultLoginProtectionPolicy 500
-        `shouldReturnEqual` Left (LoginAttemptStoreCorruptData "unexpected login-attempt admission result: [[\"unexpected\"]]")
+        `shouldReturnEqual` Left (LoginAttemptStoreCorruptData "unexpected login-attempt admission result: row-count=1, column-counts=[1]")
       reserveLoginAttempt malformedLockoutStore "key" defaultLoginProtectionPolicy 500
-        `shouldReturnEqual` Left (LoginAttemptStoreCorruptData "unexpected login-attempt admission result: [[\"throttled\",\"not-a-nanosecond\"]]")
+        `shouldReturnEqual` Left (LoginAttemptStoreCorruptData "unexpected login-attempt admission result: row-count=1, column-counts=[2]")
       settleLoginAttempt malformedSettlementStore (LoginAttemptReservation "42") False
-        `shouldReturnEqual` Left (LoginAttemptStoreCorruptData "unexpected login-attempt settlement result: []")
+        `shouldReturnEqual` Left (LoginAttemptStoreCorruptData "unexpected login-attempt settlement result: row-count=0, column-counts=[]")
 
     it "rejects an oversized key before querying PostgreSQL and decodes a full bounded store" $ do
       queryCountReference <- newIORef (0 :: Int)

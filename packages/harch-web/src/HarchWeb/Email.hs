@@ -322,11 +322,15 @@ authenticateSmtp connection config capabilities credentials = do
         "235"
     )
 
+-- | PR-SEC4: SMTP response text is provider-controlled and can contain
+-- recipient or account data.  The exception therefore retains only its
+-- protocol status; callers keep the returned lines solely for local protocol
+-- decisions.
 expectSmtpResponse :: SmtpConnection -> ByteString.ByteString -> IO SmtpResponse
 expectSmtpResponse connection expectedCode = do
   response <- readSmtpResponse connection
   unless (smtpResponseCode response == expectedCode) $
-    ioError (userError ("Unexpected SMTP response: " <> show (smtpResponseLines response)))
+    ioError (userError ("Unexpected SMTP response status: " <> show (smtpResponseCode response)))
   pure response
 
 writeSmtpBytes :: SmtpConnection -> ByteString.ByteString -> IO ()
@@ -349,12 +353,13 @@ readSmtpResponse connection = do
       | separator == 32 = pure accumulatedLines
       | otherwise = ioError (userError "SMTP response used an invalid continuation separator")
 
+-- | A malformed wire line likewise has no safe diagnostic payload to retain.
 readSmtpResponseLine :: SmtpConnection -> IO (ByteString.ByteString, Word8, ByteString.ByteString)
 readSmtpResponseLine connection = do
   line <- readSmtpLine connection
   if ByteString.length line >= 4 && ByteString.all isAsciiDigit (ByteString.take 3 line)
     then pure (ByteString.take 3 line, ByteString.index line 3, ByteString.drop 4 line)
-    else ioError (userError ("Malformed SMTP response: " <> show line))
+    else ioError (userError "Malformed SMTP response")
   where
     isAsciiDigit byte = byte >= 48 && byte <= 57
 

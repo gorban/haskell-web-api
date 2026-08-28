@@ -24,7 +24,7 @@ import WebApi.Login
     LoginAttemptStoreError (..),
   )
 import WebApi.Postgres.Pool (PostgresPool)
-import WebApi.Postgres.Runtime (runPooledParameterizedRowsQuery)
+import WebApi.Postgres.Runtime (renderUnexpectedResultShape, runPooledParameterizedRowsQuery)
 
 -- | Storage policy for the app-owned login-attempt reservation table.  It is
 -- deliberately separate from the security policy: the latter determines a
@@ -144,13 +144,13 @@ decodeAdmission rows =
     [["key-too-long", ""]] -> Left (LoginAttemptStoreUnavailable "login-attempt key exceeds storage limit")
     _ -> malformed
   where
-    malformed = Left (LoginAttemptStoreCorruptData ("unexpected login-attempt admission result: " <> Text.pack (show rows)))
+    malformed = Left (LoginAttemptStoreCorruptData ("unexpected login-attempt admission result: " <> renderUnexpectedResultShape rows))
 
 requireOneRow :: [[Text]] -> Either LoginAttemptStoreError ()
 requireOneRow rows =
   case rows of
     [[_]] -> Right ()
-    _ -> Left (LoginAttemptStoreCorruptData ("unexpected login-attempt settlement result: " <> Text.pack (show rows)))
+    _ -> Left (LoginAttemptStoreCorruptData ("unexpected login-attempt settlement result: " <> renderUnexpectedResultShape rows))
 
 -- | 'RETURNING' is required even though the returned value is discarded:
 -- without it, a plain 'INSERT' reports @CommandOk@ rather than @TuplesOk@,

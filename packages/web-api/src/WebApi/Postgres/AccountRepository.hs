@@ -51,7 +51,7 @@ import WebApi.Login
     AccountCredentialStoreError (..),
   )
 import WebApi.Postgres.Pool (PostgresPool)
-import WebApi.Postgres.Runtime (runPooledParameterizedRowsQuery)
+import WebApi.Postgres.Runtime (renderUnexpectedResultShape, runPooledParameterizedRowsQuery)
 
 buildRuntimePostgresAccountStore :: PostgresPool -> AccountStore
 buildRuntimePostgresAccountStore !pool =
@@ -189,7 +189,7 @@ decodeAccountCredentialRows rows =
       accountId <- maybe (Left (AccountCredentialStoreCorruptData "account credential lookup has an invalid account id")) Right (mkAccountId accountIdValue)
       passwordHash <- maybe (Left (AccountCredentialStoreCorruptData "account credential lookup has an invalid password hash")) Right (readPasswordHash passwordHashValue)
       Right (Just (AccountCredential accountId passwordHash (verifiedAtValue /= "")))
-    _ -> Left (AccountCredentialStoreCorruptData ("unexpected account credential lookup result: " <> Text.pack (show rows)))
+    _ -> Left (AccountCredentialStoreCorruptData ("unexpected account credential lookup result: " <> renderUnexpectedResultShape rows))
 
 decodePasswordHashReplacement :: AccountId -> [[Text]] -> Either AccountCredentialStoreError Bool
 decodePasswordHashReplacement accountId rows =
@@ -197,7 +197,7 @@ decodePasswordHashReplacement accountId rows =
     [] -> Right False
     [[returnedAccountId]]
       | returnedAccountId == accountIdText accountId -> Right True
-    _ -> Left (AccountCredentialStoreCorruptData ("unexpected password-hash replacement result: " <> Text.pack (show rows)))
+    _ -> Left (AccountCredentialStoreCorruptData ("unexpected password-hash replacement result: " <> renderUnexpectedResultShape rows))
 
 decodeAccountProfileRows :: AccountId -> [[Text]] -> Either AccountStoreError (Maybe AccountProfile)
 decodeAccountProfileRows accountId rows =
@@ -213,7 +213,7 @@ decodeAccountProfileRows accountId rows =
       if returnedAccountId == accountId
         then Right (Just (AccountProfile returnedAccountId emailAddress maybeUsername (nonEmptyText displayNameValue) (verifiedAtValue /= "")))
         else Left (AccountStoreCorruptData "account profile lookup returned a different account id")
-    _ -> Left (AccountStoreCorruptData ("unexpected account profile lookup result: " <> Text.pack (show rows)))
+    _ -> Left (AccountStoreCorruptData ("unexpected account profile lookup result: " <> renderUnexpectedResultShape rows))
 
 nonEmptyText :: Text -> Maybe Text
 nonEmptyText "" = Nothing
@@ -231,7 +231,7 @@ decodeStagedPendingAccount pendingAccount rows =
     [["email-taken", ""]] -> Right PendingAccountEmailTaken
     [["username-taken", ""]] -> Right PendingAccountUsernameTaken
     [["storage-exhausted", ""]] -> Right PendingAccountStorageExhausted
-    _ -> Left (AccountStoreCorruptData ("unexpected pending-registration staging result: " <> Text.pack (show rows)))
+    _ -> Left (AccountStoreCorruptData ("unexpected pending-registration staging result: " <> renderUnexpectedResultShape rows))
 
 decodeRegistrationDeliveryClaimUpdate :: PendingRegistrationClaim -> [[Text]] -> Either AccountStoreError Bool
 decodeRegistrationDeliveryClaimUpdate claim rows =
@@ -239,7 +239,7 @@ decodeRegistrationDeliveryClaimUpdate claim rows =
     [] -> Right False
     [[accountIdValue]]
       | accountIdValue == accountIdText (pendingRegistrationClaimAccountId claim) -> Right True
-    _ -> Left (AccountStoreCorruptData ("unexpected pending-registration delivery update result: " <> Text.pack (show rows)))
+    _ -> Left (AccountStoreCorruptData ("unexpected pending-registration delivery update result: " <> renderUnexpectedResultShape rows))
 
 decodeReplacedVerification :: StoredEmailVerification -> [[Text]] -> Either AccountStoreError Bool
 decodeReplacedVerification verification rows =
@@ -247,7 +247,7 @@ decodeReplacedVerification verification rows =
     [] -> Right False
     [[accountIdValue]]
       | accountIdValue == accountIdText (storedVerificationAccountId verification) -> Right True
-    _ -> Left (AccountStoreCorruptData ("unexpected email-verification replacement result: " <> Text.pack (show rows)))
+    _ -> Left (AccountStoreCorruptData ("unexpected email-verification replacement result: " <> renderUnexpectedResultShape rows))
 
 decodeStoredVerification :: EmailVerificationTokenDigest -> [[Text]] -> Either AccountStoreError (Maybe StoredEmailVerification)
 decodeStoredVerification tokenDigest rows =
@@ -266,7 +266,7 @@ decodeStoredVerification tokenDigest rows =
                 storedVerificationExpiresAtNanoseconds = expiresAt
               }
         )
-    _ -> Left (AccountStoreCorruptData ("unexpected email-verification result: " <> Text.pack (show rows)))
+    _ -> Left (AccountStoreCorruptData ("unexpected email-verification result: " <> renderUnexpectedResultShape rows))
 
 decodeConsumedVerification :: [[Text]] -> Either AccountStoreError (Maybe AccountId)
 decodeConsumedVerification rows =
@@ -277,7 +277,7 @@ decodeConsumedVerification rows =
         (Left (AccountStoreCorruptData "email verification was consumed for an invalid account id"))
         (Right . Just)
         (mkAccountId accountIdValue)
-    _ -> Left (AccountStoreCorruptData ("unexpected email-verification consumption result: " <> Text.pack (show rows)))
+    _ -> Left (AccountStoreCorruptData ("unexpected email-verification consumption result: " <> renderUnexpectedResultShape rows))
 
 stagePendingRegistrationParameters :: PendingRegistrationStoragePolicy -> PendingAccount -> [Text]
 stagePendingRegistrationParameters storagePolicy pendingAccount =

@@ -52,6 +52,8 @@ type GmailHttpRunner = GmailHttpRequest -> IO GmailHttpResponse
 mkGmailApiConfig :: EmailAddress -> GmailAccessTokenProvider -> GmailApiConfig
 mkGmailApiConfig = GmailApiConfig
 
+-- | PR-SEC4: a Gmail response body is provider-controlled and may contain
+-- recipient or account data, so failure diagnostics retain only HTTP status.
 deliverGmailApiEmailWithRunner :: GmailHttpRunner -> GmailApiConfig -> EmailMessage -> IO ()
 deliverGmailApiEmailWithRunner runRequest config message = do
   accessToken <- gmailAccessTokenProvider config
@@ -59,7 +61,7 @@ deliverGmailApiEmailWithRunner runRequest config message = do
     ioError (userError "Gmail API access-token provider returned an invalid token")
   response <- runRequest (gmailSendRequest config accessToken message)
   unless (gmailHttpStatus response >= 200 && gmailHttpStatus response < 300) $
-    ioError (userError ("Gmail API send failed with status " <> show (gmailHttpStatus response) <> ": " <> Text.unpack (gmailHttpResponseBody response)))
+    ioError (userError ("Gmail API send failed with status " <> show (gmailHttpStatus response)))
 
 gmailSendRequest :: GmailApiConfig -> Text -> EmailMessage -> GmailHttpRequest
 gmailSendRequest config accessToken message =

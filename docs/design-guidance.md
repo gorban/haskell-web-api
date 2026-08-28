@@ -2000,6 +2000,24 @@ process. Those cases retain an unsettled row for the existing retention cleanup 
 regressions cover cancellation directly after an admitted reservation is observed and during the
 post-work settlement entry, ensuring neither normal in-process boundary can leave a stale reservation.
 
+### Decision record — PR-SEC4: redact provider and persistence payload diagnostics (2026-08-28)
+
+**Decision: redact at the existing typed adapter error boundaries; do not introduce a second logging
+abstraction or let action handlers attempt to scrub arbitrary text.** PostgreSQL decoders retain a
+stable row count and per-row column counts when their result shape is invalid, but never preserve a
+returned value in the error text. `PostgresRunnerError` uses the same representation when it is
+rendered through an ordinary `Show` path. SMTP and Gmail delivery failures retain only the protocol
+status/category, never a server response line or provider response body. This keeps the useful
+low-cardinality diagnosis at the point that knows which input is untrusted, before existing account
+action diagnostics and application log reporters can carry it.
+
+The alternative of redacting in every caller would be incomplete by construction: typed failures
+already flow through registration, login, MFA, profile, setup, and observability paths. Keeping the
+redaction beside each adapter also leaves normal client-facing error handling and stable failure codes
+unchanged. Sentinel regressions exercise a password hash, encrypted MFA/recovery data, account
+email/profile data, SMTP response lines, and a Gmail provider body through their error/diagnostic
+boundaries, proving neither a public response nor its attached private log entry retains the value.
+
 ### Decision record — DT: configurable modern TLS server policy (2026-08-26)
 
 **Decision: extend the existing listener `TlsConfig` and its manual/ACME bind plans with one closed

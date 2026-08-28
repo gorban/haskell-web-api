@@ -9,6 +9,8 @@ module WebApi.Postgres.Runtime
     buildRuntimePostgresPageRepository,
     buildRuntimePostgresPageRepositoryWithRunner,
     decodeRuntimeQueryValue,
+    renderUnexpectedQueryRows,
+    renderUnexpectedResultShape,
     libpqConnectionValue,
     renderRunnerError,
     renderRuntimeConnectionErrorMessage,
@@ -79,7 +81,33 @@ data PostgresRunnerError
   = PostgresCommandFailed PostgresCommand PostgresCommandResult
   | PostgresMigrationFailed Text
   | UnexpectedQueryRows Text [Text]
-  deriving (Eq, Show)
+  deriving (Eq)
+
+-- | PR-SEC4 keeps PostgreSQL result values out of ordinary exception rendering.
+-- The typed error retains them only long enough for the immediate decoder to
+-- classify its result; its 'Show' instance is reachable from application
+-- diagnostics, so it exposes the stable result shape instead.
+instance Show PostgresRunnerError where
+  showsPrec precedence runnerError =
+    case runnerError of
+      PostgresCommandFailed command commandResult ->
+        showParen
+          (precedence > 10)
+          ( showString "PostgresCommandFailed "
+              . showsPrec 11 command
+              . showChar ' '
+              . showsPrec 11 commandResult
+          )
+      PostgresMigrationFailed message ->
+        showParen (precedence > 10) (showString "PostgresMigrationFailed " . showString (show message))
+      UnexpectedQueryRows message rows ->
+        showParen
+          (precedence > 10)
+          ( showString "UnexpectedQueryRows "
+              . showString (show message)
+              . showChar ' '
+              . showString (show (renderUnexpectedQueryRows rows))
+          )
 
 buildPostgresPageRepository :: DatabaseConfig -> PageRepository
 buildPostgresPageRepository =
@@ -381,8 +409,22 @@ renderRunnerError runnerError =
             else stderrText
     PostgresMigrationFailed message -> message
     UnexpectedQueryRows message rows ->
-      Text.concat
-        [ message,
-          ": ",
-          Text.intercalate ", " rows
-        ]
+      message <> ": " <> renderUnexpectedQueryRows rows
+
+-- | Stable diagnostic shape for an unexpected scalar-query result. Values
+-- returned by PostgreSQL can include credentials, PII, or opaque secrets, so
+-- they must not flow into an exception or application log.
+renderUnexpectedQueryRows :: [Text] -> Text
+renderUnexpectedQueryRows rows =
+  "row-count=" <> Text.pack (show (length rows))
+
+-- | Stable diagnostic shape for an unexpected parameterized-query result.
+-- Row and column counts preserve the useful decoder signal without retaining
+-- any database value.
+renderUnexpectedResultShape :: [[Text]] -> Text
+renderUnexpectedResultShape rows =
+  "row-count="
+    <> Text.pack (show (length rows))
+    <> ", column-counts=["
+    <> Text.intercalate "," (map (Text.pack . show . length) rows)
+    <> "]"

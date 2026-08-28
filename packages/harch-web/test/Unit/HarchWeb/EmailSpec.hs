@@ -209,34 +209,37 @@ spec = do
           deliveredMessage
             `shouldBe` TextEncoding.encodeUtf8 "From: <noreply@example.test>\r\nTo: <ada@example.test>\r\nSubject: =?UTF-8?B?TcOhbGFnYQ==?=\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\nY2Fmw6k=\r\n.\r\n"
 
-    it "stops when the SMTP server rejects a command" $ do
+    it "stops when the SMTP server rejects a command without retaining its response line" $ do
       _ <- withLoopbackSmtp rejectingEhloServer $ \port -> do
         let config = required "rejecting SMTP config" (mkSmtpConfig (smtpConfigInput "127.0.0.1" port "account.example.test" sampleSender Nothing))
         result <- try (deliverSmtpEmail config sampleMessage) :: IO (Either IOException ())
         case result of
           Left failure -> do
             expectAll
-              ( (displayException failure `shouldContain` "Unexpected SMTP response:")
-                  :| [length (displayException failure) `shouldSatisfy` (> 0)]
+              ( (displayException failure `shouldContain` "Unexpected SMTP response status: \"500\"")
+                  :| [ displayException failure `shouldNotContain` "smtp-response-line-sentinel",
+                       length (displayException failure) `shouldSatisfy` (> 0)
+                     ]
               )
           Right () -> expectationFailure "expected an SMTP command rejection"
       pure ()
 
     it "rejects malformed, unfinished, and inconsistent SMTP replies" $ do
-      let assertRejected server expectedMessage = do
+      let assertRejected server expectedMessage forbiddenMessage = do
             _ <- withLoopbackSmtp server $ \port -> do
               let loopbackConfig = required "loopback SMTP config" (mkSmtpConfig (smtpConfigInput "127.0.0.1" port "account.example.test" sampleSender Nothing))
               result <- try (deliverSmtpEmail loopbackConfig sampleMessage) :: IO (Either IOException ())
               case result of
-                Left failure -> displayException failure `shouldContain` expectedMessage
+                Left failure -> do
+                  displayException failure `shouldContain` expectedMessage
+                  unless (null forbiddenMessage) (displayException failure `shouldNotContain` forbiddenMessage)
                 Right () -> expectationFailure "expected malformed SMTP reply to be rejected"
             pure ()
-      assertRejected malformedGreetingServer "Malformed SMTP response"
-      assertRejected malformedGreetingServer "not an SMTP response"
-      assertRejected unfinishedReplyServer "closed the connection"
-      assertRejected inconsistentMultilineReplyServer "changed status code"
-      assertRejected invalidMultilineSeparatorServer "invalid continuation separator"
-      assertRejected oversizedGreetingServer "exceeds 16384 bytes"
+      assertRejected malformedGreetingServer "Malformed SMTP response" "smtp-malformed-line-sentinel"
+      assertRejected unfinishedReplyServer "closed the connection" ""
+      assertRejected inconsistentMultilineReplyServer "changed status code" ""
+      assertRejected invalidMultilineSeparatorServer "invalid continuation separator" ""
+      assertRejected oversizedGreetingServer "exceeds 16384 bytes" ""
 
     it "consumes every line of a multiline SMTP capability reply" $
       withLoopbackSmtp
@@ -528,12 +531,12 @@ rejectingEhloServer socket = do
   sendResponse socket "220 loopback ready\r\n"
   command <- receiveChunk socket
   command `shouldBeServer` "EHLO account.example.test\r\n"
-  sendResponse socket "500 rejected\r\n"
+  sendResponse socket "500 smtp-response-line-sentinel\r\n"
   pure ByteString.empty
 
 malformedGreetingServer :: Socket.Socket -> IO ByteString.ByteString
 malformedGreetingServer socket = do
-  sendResponse socket "not an SMTP response\r\n"
+  sendResponse socket "smtp-malformed-line-sentinel\r\n"
   pure ByteString.empty
 
 unfinishedReplyServer :: Socket.Socket -> IO ByteString.ByteString
