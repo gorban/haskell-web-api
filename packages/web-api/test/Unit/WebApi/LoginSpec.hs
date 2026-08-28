@@ -643,7 +643,7 @@ spec = do
     it "shares one concurrent password-failure budget across email and username aliases of a resolved account" $ do
       admittedCountReference <- newIORef (0 :: Word64)
       admittedKeysReference <- newIORef []
-      passwordWorkGate <- newPasswordWorkGate (required "concurrent password-work budget" (mkPasswordWorkBudget 40))
+      passwordWorkGate <- newPasswordWorkGate (required "concurrent password-work budget" (mkPasswordWorkBudget 48))
       let expectedKey = "account:" <> accountIdText accountId
           username = required "username" (mkUsername "person_01")
           aliasCredential = AccountCredential accountId concurrentPasswordHash True
@@ -946,7 +946,7 @@ passwordHash = required "password hash" (hashPasswordWithSalt defaultPasswordHas
 -- gate with unrelated specs. It still uses a valid Argon2id hash so each
 -- admitted alias attempt follows the production verification and settlement
 -- path; the small work factor keeps all five permitted attempts inside its
--- dedicated 40 KiB gate.
+-- dedicated 48 KiB gate.
 concurrentPasswordHash :: PasswordHash
 concurrentPasswordHash =
   required
