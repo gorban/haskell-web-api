@@ -13,8 +13,9 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import Data.Word (Word64)
 import HarchWeb.Account (accountIdText)
-import HarchWeb.LoginProtection (defaultLoginProtectionPolicy, loginProtectionLockoutNanoseconds, loginProtectionWindowNanoseconds)
+import HarchWeb.LoginProtection (LoginProtectionPolicy (..), defaultLoginProtectionPolicy, loginProtectionLockoutNanoseconds, loginProtectionWindowNanoseconds)
 import HarchWeb.Password (PasswordHash (..), argon2Iterations, argon2MemoryKib, argon2Parallelism, defaultPasswordHashingPolicy, hashPasswordWithSalt, mkPassword, mkPasswordHashingPolicy, mkPasswordWorkBudget, newPasswordWorkGate, passwordHashText, withPasswordWork)
 import HarchWeb.RecoveryCode (hashRecoveryCodeWithSalt, mkRecoveryCode, recoveryCodeHashText)
 import HarchWeb.Secret (SecretEncryptionKey, encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
@@ -375,7 +376,7 @@ spec = do
         `shouldThrow` \case
           ErrorCall message -> "test failure" `Text.isInfixOf` Text.pack message
 
-    it "throttles a password step and an already-verified recovery-code step alike, without touching the credential, MFA, or attempt-recording stores" $ do
+    it "throttles a resolved password principal and an already-verified recovery-code step before password or MFA work" $ do
       let expectedLockoutEnd = 450 + fromIntegral (loginProtectionLockoutNanoseconds defaultLoginProtectionPolicy)
           throttledStoreFor matchingKey =
             LoginThrottleContext
@@ -389,10 +390,10 @@ spec = do
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = 500
               }
-          unexpectedCredentialStore = AccountCredentialStore (\_ -> error "unexpected credential lookup while throttled") (\_ -> error "unexpected credential lookup while throttled") (\_ _ _ -> error "unexpected password-hash replacement while throttled")
-      beginPasswordLogin unexpectedCredentialStore unexpectedMfaStore (throttledStoreFor "email:person@example.test") testPasswordWorkGate emailAddress (mkPassword "irrelevant")
+          knownCredentialStore = credentialStore (Right (Just verifiedCredential))
+      beginPasswordLogin knownCredentialStore unexpectedMfaStore (throttledStoreFor ("account:" <> accountIdText accountId)) testPasswordWorkGate emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordLoginThrottled expectedLockoutEnd
-      completePasswordLogin unexpectedCredentialStore ((secondFactorContextFor unexpectedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456")))) {secondFactorThrottle = throttledStoreFor "email:person@example.test"}) emailAddress (mkPassword "irrelevant")
+      completePasswordLogin knownCredentialStore ((secondFactorContextFor unexpectedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456")))) {secondFactorThrottle = throttledStoreFor ("account:" <> accountIdText accountId)}) emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordMfaLoginThrottled expectedLockoutEnd
       let recoveryContext =
             -- 'confirmedMfaStore' lets the password step's and the second-factor
@@ -406,7 +407,7 @@ spec = do
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) recoveryContext emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginThrottled expectedLockoutEnd
 
-    it "records an identical failed attempt for an unknown identifier and for a known identifier with a wrong password, so both count the same toward the throttle" $ do
+    it "records failed unknown and known-password attempts in their respective identifier and account throttle scopes" $ do
       let recordingThrottle recordedReference =
             LoginThrottleContext
               { loginThrottleStore =
@@ -428,7 +429,7 @@ spec = do
       knownRecorded <- readIORef knownReference
       expectAll
         ( (unknownRecorded `shouldBe` [("email:person@example.test", False)])
-            :| [knownRecorded `shouldBe` [("email:person@example.test", False)]]
+            :| [knownRecorded `shouldBe` [("account:" <> accountIdText accountId, False)]]
         )
 
     it "records a successful attempt whenever the password check itself succeeds, even though a further step is still required" $ do
@@ -457,17 +458,17 @@ spec = do
       (mfaStoreErrorResult, mfaStoreErrorRecorded) <- recordFor (mfaStore (Left (MfaStoreUnavailable "MFA store down"))) verifiedCredential
       expectAll
         ( (mfaRequiredResult == PasswordLoginMfaRequired accountId `shouldBe` True)
-            :| [ mfaRequiredRecorded `shouldBe` [("email:person@example.test", True)],
+            :| [ mfaRequiredRecorded `shouldBe` [("account:" <> accountIdText accountId, True)],
                  unverifiedResult == PasswordLoginEmailVerificationRequired accountId `shouldBe` True,
-                 unverifiedRecorded `shouldBe` [("email:person@example.test", True)],
+                 unverifiedRecorded `shouldBe` [("account:" <> accountIdText accountId, True)],
                  mfaEnrollmentResult == PasswordLoginMfaEnrollmentRequired accountId `shouldBe` True,
-                 mfaEnrollmentRecorded `shouldBe` [("email:person@example.test", True)],
+                 mfaEnrollmentRecorded `shouldBe` [("account:" <> accountIdText accountId, True)],
                  mfaStoreErrorResult == PasswordLoginMfaStoreError (MfaStoreUnavailable "MFA store down") `shouldBe` True,
-                 mfaStoreErrorRecorded `shouldBe` [("email:person@example.test", True)]
+                 mfaStoreErrorRecorded `shouldBe` [("account:" <> accountIdText accountId, True)]
                ]
         )
 
-    it "propagates login-attempt store failures from the throttle check without querying the credential store" $ do
+    it "propagates login-attempt store failures after resolving a credential, before password or MFA work" $ do
       let failingThrottle =
             LoginThrottleContext
               { loginThrottleStore =
@@ -479,13 +480,13 @@ spec = do
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = 500
               }
-          unexpectedCredentialStore = AccountCredentialStore (\_ -> error "unexpected credential lookup") (\_ -> error "unexpected credential lookup") (\_ _ _ -> error "unexpected password-hash replacement")
-      beginPasswordLogin unexpectedCredentialStore unexpectedMfaStore failingThrottle testPasswordWorkGate emailAddress (mkPassword "irrelevant")
+          knownCredentialStore = credentialStore (Right (Just verifiedCredential))
+      beginPasswordLogin knownCredentialStore unexpectedMfaStore failingThrottle testPasswordWorkGate emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordLoginAttemptStoreError (LoginAttemptStoreUnavailable "database unavailable")
-      completePasswordLogin unexpectedCredentialStore ((secondFactorContextFor unexpectedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456")))) {secondFactorThrottle = failingThrottle}) emailAddress (mkPassword "irrelevant")
+      completePasswordLogin knownCredentialStore ((secondFactorContextFor unexpectedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456")))) {secondFactorThrottle = failingThrottle}) emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordMfaLoginAttemptStoreError (LoginAttemptStoreUnavailable "database unavailable")
 
-    it "cancels an unsettled reservation on typed credential failure and returns cleanup or settlement errors" $ do
+    it "does not reserve before a typed credential failure and returns cleanup or settlement errors for admitted work" $ do
       cancelledReservationsReference <- newIORef []
       let reservation = LoginAttemptReservation "password-reservation"
           cancellationThrottle cancellationResult =
@@ -502,9 +503,9 @@ spec = do
           typedCredentialFailure = credentialStore (Left (AccountCredentialStoreUnavailable "credential store down"))
       beginPasswordLogin typedCredentialFailure unexpectedMfaStore (cancellationThrottle (Right ())) testPasswordWorkGate emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordLoginCredentialStoreError (AccountCredentialStoreUnavailable "credential store down")
-      (map showReservation <$> readIORef cancelledReservationsReference) `shouldReturn` ["password-reservation"]
+      (map showReservation <$> readIORef cancelledReservationsReference) `shouldReturn` []
       beginPasswordLogin typedCredentialFailure unexpectedMfaStore (cancellationThrottle (Left (LoginAttemptStoreUnavailable "cleanup failed"))) testPasswordWorkGate emailAddress (mkPassword "irrelevant")
-        `shouldReturnEqual` PasswordLoginAttemptStoreError (LoginAttemptStoreUnavailable "cleanup failed")
+        `shouldReturnEqual` PasswordLoginCredentialStoreError (AccountCredentialStoreUnavailable "credential store down")
       let settlementFailureThrottle =
             LoginThrottleContext
               { loginThrottleStore =
@@ -519,12 +520,47 @@ spec = do
       beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore settlementFailureThrottle testPasswordWorkGate emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordLoginAttemptStoreError (LoginAttemptStoreUnavailable "settlement failed")
       (map showReservation <$> readIORef cancelledReservationsReference)
-        `shouldReturn` ["password-reservation", "password-reservation", "password-reservation"]
+        `shouldReturn` ["password-reservation"]
 
-    it "cancels a reserved password attempt when asynchronous cancellation interrupts credential work" $ do
+    it "cancels an admitted password reservation when the password-work budget is unavailable" $ do
+      let reservation = LoginAttemptReservation "password-work-reservation"
+          throttleWith cancellationResult cancelledReservationsReference =
+            LoginThrottleContext
+              { loginThrottleStore =
+                  LoginAttemptStore
+                    { reserveLoginAttempt = \_ _ _ -> pure (Right (LoginAttemptReserved reservation)),
+                      settleLoginAttempt = \_ _ -> error "password work exhaustion must not settle an attempt",
+                      cancelLoginAttempt = \receivedReservation -> modifyIORef' cancelledReservationsReference (receivedReservation :) >> pure cancellationResult
+                    },
+                loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleNow = 500
+              }
+      exhaustedPasswordWork <- newPasswordWorkGate (required "password-work budget" (mkPasswordWorkBudget 8))
+      successfulCancellationReference <- newIORef []
+      beginPasswordLogin
+        (credentialStore (Right Nothing))
+        unexpectedMfaStore
+        (throttleWith (Right ()) successfulCancellationReference)
+        exhaustedPasswordWork
+        emailAddress
+        (mkPassword "correct horse battery staple")
+        `shouldReturnEqual` PasswordLoginPasswordWorkBudgetExhausted
+      (map showReservation <$> readIORef successfulCancellationReference) `shouldReturn` ["password-work-reservation"]
+      failedCancellationReference <- newIORef []
+      beginPasswordLogin
+        (credentialStore (Right Nothing))
+        unexpectedMfaStore
+        (throttleWith (Left (LoginAttemptStoreUnavailable "cleanup failed")) failedCancellationReference)
+        exhaustedPasswordWork
+        emailAddress
+        (mkPassword "correct horse battery staple")
+        `shouldReturnEqual` PasswordLoginAttemptStoreError (LoginAttemptStoreUnavailable "cleanup failed")
+      (map showReservation <$> readIORef failedCancellationReference) `shouldReturn` ["password-work-reservation"]
+
+    it "cancels a reserved password attempt when asynchronous cancellation interrupts post-admission credential work" $ do
       cancelledReservationsReference <- newIORef []
-      credentialLookupStarted <- newEmptyMVar
-      blockedCredentialResult <- newEmptyMVar
+      credentialWorkStarted <- newEmptyMVar
+      blockedCredentialWork <- newEmptyMVar
       workerResult <- newEmptyMVar
       let cancellationThrottle =
             LoginThrottleContext
@@ -537,21 +573,20 @@ spec = do
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = 500
               }
-          blockedCredentialStore =
-            AccountCredentialStore
-              (\_ -> putMVar credentialLookupStarted () >> takeMVar blockedCredentialResult)
-              (\_ -> error "unexpected username lookup")
-              (\_ _ _ -> error "unexpected password-hash replacement")
+          blockedMfaStore =
+            confirmedMfaStore
+              { loadTotpEnrollment = \_ -> putMVar credentialWorkStarted () >> takeMVar blockedCredentialWork
+              }
       worker <- forkIO $ do
-        result <- (try (beginPasswordLogin blockedCredentialStore unexpectedMfaStore cancellationThrottle testPasswordWorkGate emailAddress (mkPassword "irrelevant")) :: IO (Either SomeException PasswordLoginResult))
+        result <- (try (beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) blockedMfaStore cancellationThrottle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")) :: IO (Either SomeException PasswordLoginResult))
         putMVar workerResult result
-      takeMVar credentialLookupStarted
+      takeMVar credentialWorkStarted
       throwTo worker ThreadKilled
       cancellationResult <- takeMVar workerResult
       case cancellationResult of
         Left _ -> pure ()
         Right _ -> expectationFailure "expected asynchronous cancellation"
-      readIORef cancelledReservationsReference `shouldReturn` ["email:person@example.test"]
+      readIORef cancelledReservationsReference `shouldReturn` ["account:" <> accountIdText accountId]
 
     it "keys case variants of a username identifier with the same canonical throttle identity, distinct from email" $ do
       keyReference <- newIORef []
@@ -574,6 +609,65 @@ spec = do
         `shouldReturnEqual` PasswordLoginRejected
       capturedKeys <- readIORef keyReference
       capturedKeys `shouldBe` ["username:person_01", "username:person_01"]
+
+    it "shares one concurrent password-failure budget across email and username aliases of a resolved account" $ do
+      admittedCountReference <- newIORef (0 :: Word64)
+      admittedKeysReference <- newIORef []
+      let expectedKey = "account:" <> accountIdText accountId
+          username = required "username" (mkUsername "person_01")
+          aliasCredentialStore =
+            AccountCredentialStore
+              { findAccountCredentialByEmail = \_ -> pure (Right (Just verifiedCredential)),
+                findAccountCredentialByUsername = \_ -> pure (Right (Just verifiedCredential)),
+                replacePasswordHashIfCurrent = \_ _ _ -> error "unexpected password-hash replacement for a rejected password"
+              }
+          sharedThrottle =
+            LoginThrottleContext
+              { loginThrottleStore =
+                  LoginAttemptStore
+                    { reserveLoginAttempt = \key policy now ->
+                        atomicModifyIORef' admittedCountReference $ \count ->
+                          if count < loginProtectionMaximumFailures policy
+                            then
+                              ( count + 1,
+                                Right (LoginAttemptReserved (LoginAttemptReservation key))
+                              )
+                            else
+                              ( count,
+                                Right (LoginAttemptThrottled (now + fromIntegral (loginProtectionLockoutNanoseconds policy)))
+                              ),
+                      settleLoginAttempt = \reservation succeeded -> do
+                        modifyIORef' admittedKeysReference ((showReservation reservation, succeeded) :)
+                        pure (Right ()),
+                      cancelLoginAttempt = \_ -> pure (Right ())
+                    },
+                loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleNow = 500
+              }
+          startAttempt identifier resultSlot =
+            forkIO $
+              beginPasswordLoginWithIdentifier aliasCredentialStore unexpectedMfaStore sharedThrottle testPasswordWorkGate identifier (mkPassword "incorrect password")
+                >>= putMVar resultSlot
+      resultSlots <- sequence [newEmptyMVar, newEmptyMVar, newEmptyMVar, newEmptyMVar, newEmptyMVar, newEmptyMVar]
+      sequence_
+        [ startAttempt (LoginEmailAddress emailAddress) resultSlot
+        | resultSlot <- take 3 resultSlots
+        ]
+      sequence_
+        [ startAttempt (LoginUsername username) resultSlot
+        | resultSlot <- drop 3 resultSlots
+        ]
+      results <- traverse takeMVar resultSlots
+      admittedCount <- readIORef admittedCountReference
+      admittedKeys <- fmap fst <$> readIORef admittedKeysReference
+      let throttledCount = length [() | PasswordLoginThrottled _ <- results]
+      expectAll
+        ( (admittedCount `shouldBe` loginProtectionMaximumFailures defaultLoginProtectionPolicy)
+            :| [ throttledCount `shouldBe` 1,
+                 all (== expectedKey) admittedKeys `shouldBe` True,
+                 length admittedKeys `shouldBe` fromIntegral (loginProtectionMaximumFailures defaultLoginProtectionPolicy)
+               ]
+        )
 
     it "passes the current time and policy to admission before credential work" $ do
       admissionReference <- newIORef Nothing

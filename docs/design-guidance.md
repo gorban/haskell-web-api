@@ -1965,6 +1965,23 @@ while making both transfer boundaries cancellation-safe. Focused asynchronous re
 completed-unadopted and claimed-but-cancelled uploads each invoke their adapter discard exactly
 once.
 
+### Decision record — PR-SEC2: principal-wide password-attempt throttling (2026-08-28)
+
+**Decision: extend the existing password admission path with an opaque resolved-account key; do
+not add an alias map or a parallel throttle.** The single credential lookup already returns the
+stable `AccountId` required to make email and username spellings share one durable failure budget.
+Known credentials therefore reserve `account:<id>` before their password verification, while an
+unknown identifier reserves its canonical submitted-identifier key and verifies the same fixed
+dummy hash. This preserves bounded unknown-identifier admission and rejection timing without
+turning the attempt store into credential storage or adding an inconsistent second lifecycle.
+
+Credential lookup must precede admission because there is no principal key until it completes. A
+lookup failure consequently returns the existing typed credential-store failure without creating a
+reservation; after resolution, the unchanged admission/settlement lifecycle owns all password work.
+Concurrent email/username regressions prove the configured account-wide maximum is shared and the
+next alias attempt is throttled. PR-SEC3 remains responsible for making the post-reservation
+cancellation handoffs themselves safe.
+
 ### Decision record — DT: configurable modern TLS server policy (2026-08-26)
 
 **Decision: extend the existing listener `TlsConfig` and its manual/ACME bind plans with one closed

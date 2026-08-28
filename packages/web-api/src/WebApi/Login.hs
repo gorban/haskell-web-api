@@ -238,6 +238,13 @@ loginIdentifierKey identifier =
     LoginEmailAddress emailAddress -> "email:" <> emailAddressText emailAddress
     LoginUsername username -> "username:" <> Text.toLower (usernameText username)
 
+-- | Known credentials use their resolved account identity, not the spelling
+-- that found them.  This makes email and username login attempts share one
+-- durable password-failure budget; the submitted-identifier key remains for
+-- an absent credential, where there is no principal to resolve.
+accountPasswordAttemptKey :: AccountId -> Text
+accountPasswordAttemptKey accountId = "account:" <> accountIdText accountId
+
 secondFactorAttemptKey :: AccountId -> Text
 secondFactorAttemptKey accountId = "mfa:" <> accountIdText accountId
 
@@ -286,15 +293,28 @@ beginPasswordLogin credentialStore mfaStore throttle passwordWorkGate emailAddre
 beginPasswordLoginWithIdentifier :: AccountCredentialStore -> MfaStore -> LoginThrottleContext -> PasswordWorkGate -> LoginIdentifier -> Password -> IO PasswordLoginResult
 beginPasswordLoginWithIdentifier = beginPasswordLoginWithIdentifierAndRehasher defaultPasswordRehasher
 
+-- | Decision (PR-SEC2, 2026-08-28): extend the existing password admission
+-- path with a resolved-principal key, rather than add an alias map or a
+-- second throttle. Credential lookup is necessarily before admission because
+-- only it can distinguish an account principal from an unknown identifier.
+-- Both branches still run exactly one admitted password check: a known
+-- credential uses its opaque account id so email and username share one
+-- durable budget, while the unknown branch keeps the canonical submitted
+-- identifier and verifies the fixed dummy hash to preserve rejection timing.
 beginPasswordLoginWithIdentifierAndRehasher :: PasswordRehasher -> AccountCredentialStore -> MfaStore -> LoginThrottleContext -> PasswordWorkGate -> LoginIdentifier -> Password -> IO PasswordLoginResult
-beginPasswordLoginWithIdentifierAndRehasher passwordRehasher credentialStore mfaStore throttle passwordWorkGate identifier password =
-  runAdmittedLoginAttempt throttle key PasswordLoginThrottled PasswordLoginAttemptStoreError work
-  where
-    work = do
-      credentialResult <- lookupCredential credentialStore identifier
-      outcome <- either (pure . CredentialCheckCredentialStoreError) (continueWithCredential passwordRehasher credentialStore mfaStore passwordWorkGate password) credentialResult
-      pure (credentialCheckToPasswordLoginAdmission outcome)
-    key = loginIdentifierKey identifier
+beginPasswordLoginWithIdentifierAndRehasher passwordRehasher credentialStore mfaStore throttle passwordWorkGate identifier password = do
+  credentialResult <- lookupCredential credentialStore identifier
+  case credentialResult of
+    Left storeError -> pure (PasswordLoginCredentialStoreError storeError)
+    Right maybeCredential ->
+      runAdmittedLoginAttempt
+        throttle
+        (maybe (loginIdentifierKey identifier) (accountPasswordAttemptKey . accountCredentialId) maybeCredential)
+        PasswordLoginThrottled
+        PasswordLoginAttemptStoreError
+        ( credentialCheckToPasswordLoginAdmission
+            <$> continueWithCredential passwordRehasher credentialStore mfaStore passwordWorkGate password maybeCredential
+        )
 
 -- | A credential check's own outcome, distinct from 'PasswordLoginResult':
 -- neither the throttle-gate's own rejection ('PasswordLoginThrottled') nor a
@@ -311,7 +331,6 @@ data CredentialCheckOutcome
   | CredentialCheckEmailVerificationRequired AccountId
   | CredentialCheckMfaEnrollmentRequired AccountId
   | CredentialCheckMfaRequired AccountId
-  | CredentialCheckCredentialStoreError AccountCredentialStoreError
   | CredentialCheckMfaStoreError MfaStoreError
   | CredentialCheckPasswordWorkBudgetExhausted
 
@@ -322,7 +341,6 @@ credentialCheckToPasswordLoginAdmission outcome =
     CredentialCheckEmailVerificationRequired accountId -> (PasswordLoginEmailVerificationRequired accountId, Just True)
     CredentialCheckMfaEnrollmentRequired accountId -> (PasswordLoginMfaEnrollmentRequired accountId, Just True)
     CredentialCheckMfaRequired accountId -> (PasswordLoginMfaRequired accountId, Just True)
-    CredentialCheckCredentialStoreError storeError -> (PasswordLoginCredentialStoreError storeError, Nothing)
     CredentialCheckMfaStoreError storeError -> (PasswordLoginMfaStoreError storeError, Just True)
     CredentialCheckPasswordWorkBudgetExhausted -> (PasswordLoginPasswordWorkBudgetExhausted, Nothing)
 

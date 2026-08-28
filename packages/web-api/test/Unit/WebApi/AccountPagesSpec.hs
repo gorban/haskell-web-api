@@ -1258,7 +1258,7 @@ spec = do
       handleAccountAction canonicalUsernameWorkflow (loginRequest defaultRequestContext uppercaseUsernameFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
       canonicalUsernameKeys <- readIORef canonicalUsernameKeysReference
-      filter (Text.isPrefixOf "username:") canonicalUsernameKeys `shouldBe` ["username:person_01", "username:person_01"]
+      filter (Text.isPrefixOf "account:") canonicalUsernameKeys `shouldBe` ["account:" <> Account.accountIdText accountId, "account:" <> Account.accountIdText accountId]
       handleAccountAction validWorkflow (loginRequest defaultRequestContext emailUsernameFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
       handleAccountAction exhaustedTotpWorkflow (loginRequest defaultRequestContext validFields)
