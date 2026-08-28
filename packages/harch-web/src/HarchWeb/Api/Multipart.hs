@@ -22,6 +22,14 @@
 -- 'MultipartPartBodyChunk' and dropped from the retained state. This is the
 -- property that lets a caller stream large file parts without buffering them
 -- whole.
+--
+-- Decision (PR-SEC1, 2026-08-28): a completed upload is registered with the
+-- scoped cleanup list before its staged reference is cleared, under one
+-- masked handoff.  Promotion is continuation-based: the application owns the
+-- completed value only after its continuation returns normally.  An exception
+-- or cancellation in that continuation discards the value exactly once, so a
+-- raw completed value can never escape through an interruptible ownership
+-- handoff.
 module HarchWeb.Api.Multipart
   ( MultipartEvent (..),
     MultipartScanner,
@@ -42,7 +50,7 @@ module HarchWeb.Api.Multipart
     defaultMultipartLimits,
     MultipartScopedPart (..),
     MultipartUpload,
-    promoteMultipartUpload,
+    withPromotedMultipartUpload,
     discardMultipartUpload,
     MultipartStorage,
     MultipartStagedUpload,
@@ -159,10 +167,6 @@ defaultMultipartLimits =
 -- | One fully-consumed part: either a plain field's decoded value, kept in
 -- memory, or a file upload represented by the selected storage adapter's
 -- completed value and byte count.
-data MultipartPartWith stored
-  = MultipartFieldPart Text Text
-  | MultipartFilePart Text UntrustedFilename stored Int
-
 -- | A file part visible only while a multipart callback is running. Its
 -- upload must be deliberately promoted or is discarded when that callback
 -- scope finishes.
@@ -176,10 +180,29 @@ data MultipartUpload stored = MultipartUpload
     multipartUploadClaimedReference :: IORef.IORef Bool
   }
 
-promoteMultipartUpload :: MultipartUpload stored -> IO (Maybe stored)
-promoteMultipartUpload upload =
-  IORef.atomicModifyIORef' (multipartUploadClaimedReference upload) $ \claimed ->
-    if claimed then (True, Nothing) else (True, Just (multipartUploadStoredValue upload))
+-- | Run an application adoption action for an upload exactly once.
+--
+-- Ownership transfers only when @adopt@ returns normally. If it throws or is
+-- cancelled, this function discards the completed value before propagating the
+-- exception; the surrounding scoped cleanup then observes the already-claimed
+-- upload and cannot discard it again. An adopter must not hand the value to a
+-- concurrent owner before it returns normally.
+withPromotedMultipartUpload :: MultipartUpload stored -> (stored -> IO result) -> IO (Maybe result)
+withPromotedMultipartUpload upload adopt = Exception.mask $ \restore -> do
+  maybeStored <-
+    IORef.atomicModifyIORef' (multipartUploadClaimedReference upload) $ \claimed ->
+      if claimed then (True, Nothing) else (True, Just (multipartUploadStoredValue upload))
+  case maybeStored of
+    Nothing -> pure Nothing
+    Just stored ->
+      Just
+        <$> ( restore (adopt stored)
+                `Exception.onException` discardClaimedMultipartUpload upload
+            )
+
+discardClaimedMultipartUpload :: MultipartUpload stored -> IO ()
+discardClaimedMultipartUpload upload =
+  for_ (multipartUploadDiscardAction upload) ($ multipartUploadStoredValue upload)
 
 discardMultipartUpload :: MultipartUpload stored -> IO ()
 discardMultipartUpload upload = do
@@ -265,16 +288,8 @@ withMultipartBodyWith storage limits boundary readChunk onPart = Exception.mask 
   activeUploadReference <- IORef.newIORef Nothing
   let discardUnclaimed = IORef.readIORef uploadsReference >>= traverse_ discardMultipartUpload
       discardUploads = discardActiveMultipartUpload activeUploadReference >> discardUnclaimed
-      scopedPart = \case
-        MultipartFieldPart fieldName value -> pure (MultipartScopedFieldPart fieldName value)
-        MultipartFilePart fieldName filename storedUpload bytesWritten -> do
-          claimedReference <- IORef.newIORef False
-          let upload = MultipartUpload storedUpload (MultipartStorage.discardCompletedMultipartUpload storage) claimedReference
-          IORef.modifyIORef' uploadsReference (upload :)
-          pure (MultipartScopedFilePart fieldName filename upload bytesWritten)
-      scopedCallback part = scopedPart part >>= onPart
   result <-
-    restore (consumeMultipartBodyWithActive activeUploadReference storage limits boundary readChunk scopedCallback)
+    restore (consumeMultipartBodyWithActive activeUploadReference uploadsReference storage limits boundary readChunk onPart)
       `Exception.onException` discardUploads
   case result of
     Left consumeError -> discardUploads >> pure (Left consumeError)
@@ -282,18 +297,20 @@ withMultipartBodyWith storage limits boundary readChunk onPart = Exception.mask 
 
 consumeMultipartBodyWithActive ::
   IORef.IORef (Maybe (MultipartStagedUpload stored)) ->
+  IORef.IORef [MultipartUpload stored] ->
   MultipartStorage stored ->
   MultipartLimits ->
   ByteString ->
   IO ByteString ->
-  (MultipartPartWith stored -> IO (Either MultipartConsumeError ())) ->
+  (MultipartScopedPart stored -> IO (Either MultipartConsumeError ())) ->
   IO (Either MultipartConsumeError ())
-consumeMultipartBodyWithActive activeUploadReference storage limits boundary readChunk onPart =
+consumeMultipartBodyWithActive activeUploadReference uploadsReference storage limits boundary readChunk onPart =
   let consumer =
         MultipartConsumer
           { multipartConsumerStorage = storage,
             multipartConsumerLimits = limits,
             multipartConsumerActiveUploadReference = activeUploadReference,
+            multipartConsumerUploadsReference = uploadsReference,
             multipartConsumerReadChunk = readChunk,
             multipartConsumerOnPart = onPart
           }
@@ -314,8 +331,9 @@ data MultipartConsumer stored = MultipartConsumer
   { multipartConsumerStorage :: MultipartStorage stored,
     multipartConsumerLimits :: MultipartLimits,
     multipartConsumerActiveUploadReference :: IORef.IORef (Maybe (MultipartStagedUpload stored)),
+    multipartConsumerUploadsReference :: IORef.IORef [MultipartUpload stored],
     multipartConsumerReadChunk :: IO ByteString,
-    multipartConsumerOnPart :: MultipartPartWith stored -> IO (Either MultipartConsumeError ())
+    multipartConsumerOnPart :: MultipartScopedPart stored -> IO (Either MultipartConsumeError ())
   }
 
 -- | How many parts, and how many of each kind, have completed so far. Kept
@@ -488,14 +506,18 @@ reachedMultipartItemLimit :: Int -> MultipartItemLimit -> Bool
 reachedMultipartItemLimit current maximumItems =
   toInteger current >= toInteger (multipartItemLimitValue maximumItems)
 
-finalizeMultipartPart :: MultipartConsumer stored -> PartAccumulator stored -> IO (MultipartPartWith stored)
+finalizeMultipartPart :: MultipartConsumer stored -> PartAccumulator stored -> IO (MultipartScopedPart stored)
 finalizeMultipartPart consumer accumulator =
   case accumulator of
-    FieldAccumulator fieldName chunks _buffered -> pure (MultipartFieldPart fieldName (decodeLeniently (ByteString.concat (reverse chunks))))
-    FileAccumulator fieldName filename stagedUpload bytesWritten -> do
-      storedUpload <- MultipartStorage.completeMultipartUpload stagedUpload
-      IORef.writeIORef (multipartConsumerActiveUploadReference consumer) Nothing
-      pure (MultipartFilePart fieldName filename storedUpload bytesWritten)
+    FieldAccumulator fieldName chunks _buffered -> pure (MultipartScopedFieldPart fieldName (decodeLeniently (ByteString.concat (reverse chunks))))
+    FileAccumulator fieldName filename stagedUpload bytesWritten ->
+      Exception.mask_ $ do
+        storedUpload <- MultipartStorage.completeMultipartUpload stagedUpload
+        claimedReference <- IORef.newIORef False
+        let upload = MultipartUpload storedUpload (MultipartStorage.discardCompletedMultipartUpload (multipartConsumerStorage consumer)) claimedReference
+        IORef.modifyIORef' (multipartConsumerUploadsReference consumer) (upload :)
+        IORef.writeIORef (multipartConsumerActiveUploadReference consumer) Nothing
+        pure (MultipartScopedFilePart fieldName filename upload bytesWritten)
 
 -- | Parse a strict @multipart\/form-data@ media type and its single boundary
 -- parameter. Parameter names and the media type are ASCII case-insensitive;

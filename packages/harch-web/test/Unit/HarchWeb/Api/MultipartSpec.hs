@@ -151,12 +151,12 @@ runConsume limits chunks = do
         IORef.modifyIORef' observedPartsReference (ObservedField fieldName value :)
         pure (Right ())
       MultipartScopedFilePart fieldName filename upload byteCount -> do
-        maybeUpload <- promoteMultipartUpload upload
-        case maybeUpload of
+        maybeAdopted <- withPromotedMultipartUpload upload $ \inMemoryUpload -> do
+          IORef.modifyIORef' observedPartsReference (ObservedFile fieldName (untrustedFilenameText filename) (inMemoryUploadBytes inMemoryUpload) byteCount :)
+          pure ()
+        case maybeAdopted of
           Nothing -> pure (Left MultipartMalformedBody)
-          Just inMemoryUpload -> do
-            IORef.modifyIORef' observedPartsReference (ObservedFile fieldName (untrustedFilenameText filename) (inMemoryUploadBytes inMemoryUpload) byteCount :)
-            pure (Right ())
+          Just () -> pure (Right ())
   case result of
     Left consumeError -> pure (Left consumeError)
     Right () -> Right . reverse <$> IORef.readIORef observedPartsReference
@@ -170,12 +170,12 @@ runRequestConsume limits request = do
         IORef.modifyIORef' observedPartsReference (ObservedField fieldName value :)
         pure (Right ())
       MultipartScopedFilePart fieldName filename upload byteCount -> do
-        maybeUpload <- promoteMultipartUpload upload
-        case maybeUpload of
+        maybeAdopted <- withPromotedMultipartUpload upload $ \inMemoryUpload -> do
+          IORef.modifyIORef' observedPartsReference (ObservedFile fieldName (untrustedFilenameText filename) (inMemoryUploadBytes inMemoryUpload) byteCount :)
+          pure ()
+        case maybeAdopted of
           Nothing -> pure (Left MultipartMalformedBody)
-          Just inMemoryUpload -> do
-            IORef.modifyIORef' observedPartsReference (ObservedFile fieldName (untrustedFilenameText filename) (inMemoryUploadBytes inMemoryUpload) byteCount :)
-            pure (Right ())
+          Just () -> pure (Right ())
   case result of
     Left consumeError -> pure (Left consumeError)
     Right () -> Right . reverse <$> IORef.readIORef observedPartsReference
@@ -251,9 +251,8 @@ spec =
               MultipartScopedFieldPart "field1" "value1" -> pure (Right ())
               MultipartScopedFilePart "file1" filename upload byteCount
                 | untrustedFilenameText filename == "a.txt" -> do
-                    promoted <- promoteMultipartUpload upload
-                    IORef.writeIORef promotedReference ((,byteCount) <$> promoted)
-                    pure (Right ())
+                    adopted <- withPromotedMultipartUpload upload $ \path -> IORef.writeIORef promotedReference (Just (path, byteCount))
+                    pure (if adopted == Just () then Right () else Left MultipartMalformedBody)
               _ -> pure (Left MultipartMalformedBody)
           promoted <- IORef.readIORef promotedReference
           case (result, promoted) of
@@ -784,10 +783,12 @@ spec =
               MultipartScopedFilePart fieldName filename upload byteCount -> do
                 fieldName `shouldBe` "file1"
                 untrustedFilenameText filename `shouldBe` "a.txt"
-                promoted <- promoteMultipartUpload upload
-                IORef.writeIORef promotedReference promoted
+                adopted <- withPromotedMultipartUpload upload $ \path -> IORef.writeIORef promotedReference (Just path)
                 byteCount `shouldBe` ByteString.length "file content here"
-                promoteMultipartUpload upload `shouldReturn` Nothing
+                expectAll
+                  ( (adopted `shouldBe` Just ())
+                      :| [withPromotedMultipartUpload upload (const (pure ())) `shouldReturn` Nothing]
+                  )
                 pure (Right ())
           maybePath <- IORef.readIORef promotedReference
           case maybePath of
@@ -796,6 +797,75 @@ spec =
               contents <- ByteString.readFile path
               removeFile path
               expectAll ((result `shouldBe` Right ()) :| [contents `shouldBe` "file content here"])
+
+      it "discards a completed unadopted upload once when cancellation reaches its callback boundary" $
+        withTestUploadOpener $ \openUploadFile -> do
+          discardedReference <- IORef.newIORef (0 :: Int)
+          callbackEntered <- newEmptyMVar
+          callbackWait <- newEmptyMVar
+          callingThreadId <- myThreadId
+          readChunk <- chunkReader [twoPartBody]
+          let storage =
+                multipartStorage
+                  ( \filename -> do
+                      (path, handle) <- openUploadFile (untrustedFilenameText filename)
+                      pure (multipartStagedUpload (ByteString.hPut handle) (hClose handle >> pure path) (hClose handle >> removeFile path))
+                  )
+                  (Just (\path -> IORef.modifyIORef' discardedReference (+ 1) >> removeFile path))
+          _ <- forkIO (takeMVar callbackEntered >> Exception.throwTo callingThreadId Exception.ThreadKilled)
+          attempt :: Either Exception.SomeException (Either MultipartConsumeError ()) <-
+            Exception.try
+              ( withMultipartBodyWith storage defaultMultipartLimits boundaryToken readChunk $ \case
+                  MultipartScopedFieldPart _ _ -> pure (Right ())
+                  MultipartScopedFilePart {} -> do
+                    putMVar callbackEntered ()
+                    takeMVar callbackWait
+                    pure (Right ())
+              )
+          discarded <- IORef.readIORef discardedReference
+          let cancellation =
+                case attempt of
+                  Left exception -> Exception.fromException exception :: Maybe Exception.AsyncException
+                  Right _ -> Nothing
+          expectAll
+            ( (cancellation `shouldBe` Just Exception.ThreadKilled)
+                :| [discarded `shouldBe` 1]
+            )
+
+      it "discards a claimed upload once when cancellation interrupts its adoption continuation" $
+        withTestUploadOpener $ \openUploadFile -> do
+          discardedReference <- IORef.newIORef (0 :: Int)
+          adoptionEntered <- newEmptyMVar
+          adoptionWait <- newEmptyMVar
+          callingThreadId <- myThreadId
+          readChunk <- chunkReader [twoPartBody]
+          let storage =
+                multipartStorage
+                  ( \filename -> do
+                      (path, handle) <- openUploadFile (untrustedFilenameText filename)
+                      pure (multipartStagedUpload (ByteString.hPut handle) (hClose handle >> pure path) (hClose handle >> removeFile path))
+                  )
+                  (Just (\path -> IORef.modifyIORef' discardedReference (+ 1) >> removeFile path))
+          _ <- forkIO (takeMVar adoptionEntered >> Exception.throwTo callingThreadId Exception.ThreadKilled)
+          attempt :: Either Exception.SomeException (Either MultipartConsumeError ()) <-
+            Exception.try
+              ( withMultipartBodyWith storage defaultMultipartLimits boundaryToken readChunk $ \case
+                  MultipartScopedFieldPart _ _ -> pure (Right ())
+                  MultipartScopedFilePart _ _ upload _ -> do
+                    _ <- withPromotedMultipartUpload upload $ \_ -> do
+                      putMVar adoptionEntered ()
+                      takeMVar adoptionWait
+                    pure (Right ())
+              )
+          discarded <- IORef.readIORef discardedReference
+          let cancellation =
+                case attempt of
+                  Left exception -> Exception.fromException exception :: Maybe Exception.AsyncException
+                  Right _ -> Nothing
+          expectAll
+            ( (cancellation `shouldBe` Just Exception.ThreadKilled)
+                :| [discarded `shouldBe` 1]
+            )
 
       it "discards scoped uploads when a callback throws" $
         withTestUploadOpener $ \openUploadFile -> do
@@ -866,9 +936,8 @@ spec =
           result <-
             withMultipartBodyWith (storageFromOpener openUploadFile) defaultMultipartLimits boundaryToken readChunk $ \case
               MultipartScopedFilePart _ _ upload _ -> do
-                spooledPath <- promoteMultipartUpload upload
-                IORef.writeIORef spooledPathRef spooledPath
-                pure (Right ())
+                adopted <- withPromotedMultipartUpload upload $ \path -> IORef.writeIORef spooledPathRef (Just path)
+                pure (if adopted == Just () then Right () else Left MultipartMalformedBody)
               MultipartScopedFieldPart {} -> pure (Left MultipartMalformedBody)
           maybeSpooledPath <- IORef.readIORef spooledPathRef
           case maybeSpooledPath of
@@ -922,9 +991,8 @@ spec =
               $ \case
                 MultipartScopedFieldPart _ _ -> pure (Right ())
                 MultipartScopedFilePart _ _ upload _ -> do
-                  promoted <- promoteMultipartUpload upload
-                  IORef.writeIORef promotedReference promoted
-                  pure (Right ())
+                  adopted <- withPromotedMultipartUpload upload $ \path -> IORef.writeIORef promotedReference (Just path)
+                  pure (if adopted == Just () then Right () else Left MultipartMalformedBody)
           maybePath <- IORef.readIORef promotedReference
           case maybePath of
             Nothing -> expectationFailure "expected the callback to promote its upload"

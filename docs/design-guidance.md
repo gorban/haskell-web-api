@@ -1943,6 +1943,28 @@ Warp, pinning an unreleased revision, or changing TLS/HTTP2 ownership. Real dist
 sequential, concurrent, plaintext-on-TLS, premature-close, and asynchronous-worker regressions
 prove the peer attributes remain tied to their accepted TCP connection.
 
+### Decision record — PR-SEC1: cancellation-safe multipart ownership handoffs (2026-08-28)
+
+**Decision: extend `HarchWeb.Api.Multipart`'s existing scoped-upload lifecycle with masked
+handoffs and continuation-based promotion; do not add another storage adapter or expose a raw
+completed value.** A staged upload already has one explicit framework-owned cleanup reference, and
+an unpromoted completed upload already has one scoped cleanup list. The defect was the transfer
+between those two existing owners: cancellation could occur after completion had cleared the staged
+reference but before the scoped list owned the value. Completion now registers the opaque upload in
+the scoped list before clearing staged ownership, under one masked handoff. The completion action
+remains interruptible where its storage adapter performs interruptible IO; before that handoff the
+staged reference remains the cleanup owner.
+
+The old `IO (Maybe stored)` promotion result could be claimed and then interrupted before a caller
+adopted it. `withPromotedMultipartUpload` instead runs an adoption continuation under a masked
+claim: normal return transfers ownership to the application, while an exception or cancellation in
+the continuation discards the completed upload exactly once. The continuation must not publish a
+second concurrent owner before it returns normally. This preserves application-selected storage,
+the single multipart parser/dispatcher, and the existing explicit promote-or-discard lifecycle
+while making both transfer boundaries cancellation-safe. Focused asynchronous regressions prove
+completed-unadopted and claimed-but-cancelled uploads each invoke their adapter discard exactly
+once.
+
 ### Decision record — DT: configurable modern TLS server policy (2026-08-26)
 
 **Decision: extend the existing listener `TlsConfig` and its manual/ACME bind plans with one closed

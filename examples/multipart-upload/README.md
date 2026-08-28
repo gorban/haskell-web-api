@@ -53,9 +53,9 @@ consumeUpload storage limits boundary readChunk onPart =
 
 The filename is deliberately ignored when allocating a local file: it is
 untrusted metadata, not a path. The completed path remains inaccessible until
-`onPart` explicitly calls `promoteMultipartUpload`; otherwise the parser
-discards it after callback completion, rejection, malformed input, or an
-exception. A WAI application can preserve the convenience boundary's
+`onPart` explicitly calls `withPromotedMultipartUpload` with the action that
+adopts the completed value; otherwise the parser discards it after callback
+completion, rejection, malformed input, or an exception. A WAI application can preserve the convenience boundary's
 media-type, `Content-Length`, and boundary validation while selecting this
 adapter:
 
