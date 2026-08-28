@@ -1982,6 +1982,24 @@ Concurrent email/username regressions prove the configured account-wide maximum 
 next alias attempt is throttled. PR-SEC3 remains responsible for making the post-reservation
 cancellation handoffs themselves safe.
 
+### Decision record — PR-SEC3: cancellation-safe login-attempt ownership handoffs (2026-08-28)
+
+**Decision: extend `WebApi.Login`'s existing `LoginAttemptStore` lifecycle with a masked handoff;
+do not create a second reservation type, wrapper, or uninterruptible database layer.** The existing
+store-issued reservation is already the sole owner of the provisional durable failure. The fault was
+between its operations: an asynchronous exception could arrive after admission returned but before
+the work cleanup handler existed, or after work returned but before settlement began. The lifecycle
+now masks those short ownership transfers, then restores asynchronous exceptions for admission,
+password/MFA work, and settlement. Cancellation during the restored work or settlement invokes the
+same store cancellation operation; a normal no-settlement outcome still reports a typed cancellation
+failure through the existing result path.
+
+This deliberately does not make a blocked database operation uninterruptible and does not claim a
+process crash or cancellation while compensating cancellation itself is blocked can be recovered in
+process. Those cases retain an unsettled row for the existing retention cleanup (PR-S5). Deterministic
+regressions cover cancellation directly after an admitted reservation is observed and during the
+post-work settlement entry, ensuring neither normal in-process boundary can leave a stale reservation.
+
 ### Decision record — DT: configurable modern TLS server policy (2026-08-26)
 
 **Decision: extend the existing listener `TlsConfig` and its manual/ACME bind plans with one closed

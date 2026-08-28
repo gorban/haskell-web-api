@@ -24,7 +24,7 @@ module WebApi.Login
   )
 where
 
-import Control.Exception (evaluate, onException)
+import Control.Exception (evaluate, mask, onException)
 import Control.Monad (join, void, when)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Core.Control.Error (fromMaybeError, liftEitherWith)
@@ -107,16 +107,20 @@ data LoginAttemptAdmission
   | LoginAttemptThrottled UnixTimeNanoseconds
   deriving (Eq)
 
--- | Decision (PR-S4, 2026-08-23): extend the existing attempt-store boundary
--- rather than adding a parallel throttle. A PostgreSQL implementation admits
--- one key through a database reservation function: it takes the per-key lock,
--- then evaluates and inserts the unsettled row in a post-lock query snapshot.
--- That row already counts as a failure. The workflow then settles the
--- reservation to its real result, or cancels it on typed infrastructure
--- failure, settlement failure, and asynchronous exception. A process crash
--- can still leave an unsettled row until its window expires; PR-S5 owns
--- durable retention and stale-reservation cleanup rather than introducing a
--- second lifecycle here.
+-- | Decision (PR-SEC3, 2026-08-28): extend the existing attempt-store
+-- boundary rather than add a parallel ownership abstraction. A PostgreSQL
+-- implementation admits one key through a database reservation function: it
+-- takes the per-key lock, then evaluates and inserts the unsettled row in a
+-- post-lock query snapshot. That row already counts as a failure. The login
+-- lifecycle masks only the handoffs from admission into protected work and
+-- from completed work into settlement; it restores asynchronous exceptions
+-- for the database calls and password/MFA work themselves. Thus cancellation
+-- cannot strand a reservation in either handoff, while a slow database cannot
+-- become indefinitely uninterruptible. A process crash, or cancellation while
+-- the compensating database cancellation is itself blocked, can still leave
+-- an unsettled row until its window expires; PR-S5 owns durable retention and
+-- stale-reservation cleanup rather than claiming this in-process lifecycle is
+-- crash-proof.
 data LoginAttemptStore = LoginAttemptStore
   { reserveLoginAttempt :: Text -> LoginProtectionPolicy -> UnixTimeNanoseconds -> IO (Either LoginAttemptStoreError LoginAttemptAdmission),
     settleLoginAttempt :: LoginAttemptReservation -> Bool -> IO (Either LoginAttemptStoreError ()),
@@ -248,6 +252,15 @@ accountPasswordAttemptKey accountId = "account:" <> accountIdText accountId
 secondFactorAttemptKey :: AccountId -> Text
 secondFactorAttemptKey accountId = "mfa:" <> accountIdText accountId
 
+-- | A reservation is a durable provisional failure until it is settled or
+-- cancelled.  The outer mask makes each ownership handoff atomic: once
+-- admission returns a reservation, cancellation is deferred until the work
+-- action is protected by its cancellation handler; once work returns,
+-- cancellation is deferred until settlement is protected likewise.  The
+-- restored work and settlement actions remain interruptible, and their
+-- handler only tries the store's idempotent cancellation operation, so this
+-- does not claim to make a stalled database call uninterruptible or a process
+-- crash recoverable.
 runAdmittedLoginAttempt ::
   LoginThrottleContext ->
   Text ->
@@ -255,32 +268,35 @@ runAdmittedLoginAttempt ::
   (LoginAttemptStoreError -> result) ->
   IO (result, Maybe Bool) ->
   IO result
-runAdmittedLoginAttempt throttle key throttled storeFailure work = do
-  admissionResult <- reserveLoginAttempt store key policy now
-  case admissionResult of
-    Left storeError -> pure (storeFailure storeError)
-    Right (LoginAttemptThrottled lockoutEndsAt) -> pure (throttled lockoutEndsAt)
-    Right (LoginAttemptReserved reservation) -> do
-      (result, settlement) <- work `onException` void (cancelLoginAttempt store reservation)
-      case settlement of
-        Nothing -> cancelOrFail reservation result
-        Just succeeded -> settleOrFail reservation succeeded result
+runAdmittedLoginAttempt throttle key throttled storeFailure work =
+  mask $ \restore -> do
+    admissionResult <- restore (reserveLoginAttempt store key policy now)
+    case admissionResult of
+      Left storeError -> pure (storeFailure storeError)
+      Right (LoginAttemptThrottled lockoutEndsAt) -> pure (throttled lockoutEndsAt)
+      Right (LoginAttemptReserved reservation) -> do
+        (result, settlement) <- restore work `onException` discardReservation reservation
+        case settlement of
+          Nothing -> cancelOrFail reservation result
+          Just succeeded -> settleOrFail restore reservation succeeded result
   where
     store = loginThrottleStore throttle
     policy = loginThrottlePolicy throttle
     now = loginThrottleNow throttle
+    discardReservation reservation =
+      void (cancelLoginAttempt store reservation)
     cancelOrFail reservation result = do
       cancelResult <- cancelLoginAttempt store reservation
       pure (either storeFailure (const result) cancelResult)
-    settleOrFail reservation succeeded result = do
-      settleResult <- settleLoginAttempt store reservation succeeded
+    settleOrFail restore reservation succeeded result = do
+      settleResult <- restore (settleLoginAttempt store reservation succeeded) `onException` discardReservation reservation
       case settleResult of
         Right () -> pure result
         Left storeError -> do
           -- A settlement outcome can be ambiguous to the caller. Cancellation
           -- only removes still-unsettled rows, so it recovers the ordinary
           -- failed-write case without undoing a settlement that reached the DB.
-          void (cancelLoginAttempt store reservation)
+          discardReservation reservation
           pure (storeFailure storeError)
 
 -- | Validates the password first, then requires a confirmed authenticator.

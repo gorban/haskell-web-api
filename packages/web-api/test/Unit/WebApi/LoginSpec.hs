@@ -557,16 +557,18 @@ spec = do
         `shouldReturnEqual` PasswordLoginAttemptStoreError (LoginAttemptStoreUnavailable "cleanup failed")
       (map showReservation <$> readIORef failedCancellationReference) `shouldReturn` ["password-work-reservation"]
 
-    it "cancels a reserved password attempt when asynchronous cancellation interrupts post-admission credential work" $ do
+    it "cancels a reserved password attempt when cancellation is requested immediately after admission" $ do
       cancelledReservationsReference <- newIORef []
-      credentialWorkStarted <- newEmptyMVar
+      reservationAdmitted <- newEmptyMVar
       blockedCredentialWork <- newEmptyMVar
       workerResult <- newEmptyMVar
       let cancellationThrottle =
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \key _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                    { reserveLoginAttempt = \key _ _ -> do
+                        putMVar reservationAdmitted ()
+                        pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
                       settleLoginAttempt = \_ _ -> error "unexpected settlement after asynchronous cancellation",
                       cancelLoginAttempt = \reservation -> modifyIORef' cancelledReservationsReference (showReservation reservation :) >> pure (Right ())
                     },
@@ -575,12 +577,40 @@ spec = do
               }
           blockedMfaStore =
             confirmedMfaStore
-              { loadTotpEnrollment = \_ -> putMVar credentialWorkStarted () >> takeMVar blockedCredentialWork
+              { loadTotpEnrollment = \_ -> takeMVar blockedCredentialWork
               }
       worker <- forkIO $ do
         result <- (try (beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) blockedMfaStore cancellationThrottle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")) :: IO (Either SomeException PasswordLoginResult))
         putMVar workerResult result
-      takeMVar credentialWorkStarted
+      takeMVar reservationAdmitted
+      throwTo worker ThreadKilled
+      cancellationResult <- takeMVar workerResult
+      case cancellationResult of
+        Left _ -> pure ()
+        Right _ -> expectationFailure "expected asynchronous cancellation"
+      readIORef cancelledReservationsReference `shouldReturn` ["account:" <> accountIdText accountId]
+
+    it "cancels a reservation when asynchronous cancellation interrupts settlement after completed password work" $ do
+      cancelledReservationsReference <- newIORef []
+      settlementStarted <- newEmptyMVar
+      blockedSettlement <- newEmptyMVar
+      workerResult <- newEmptyMVar
+      let reservation = LoginAttemptReservation ("account:" <> accountIdText accountId)
+          cancellationThrottle =
+            LoginThrottleContext
+              { loginThrottleStore =
+                  LoginAttemptStore
+                    { reserveLoginAttempt = \_ _ _ -> pure (Right (LoginAttemptReserved reservation)),
+                      settleLoginAttempt = \_ _ -> putMVar settlementStarted () >> takeMVar blockedSettlement,
+                      cancelLoginAttempt = \receivedReservation -> modifyIORef' cancelledReservationsReference (showReservation receivedReservation :) >> pure (Right ())
+                    },
+                loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleNow = 500
+              }
+      worker <- forkIO $ do
+        result <- (try (beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedMfaStore cancellationThrottle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")) :: IO (Either SomeException PasswordLoginResult))
+        putMVar workerResult result
+      takeMVar settlementStarted
       throwTo worker ThreadKilled
       cancellationResult <- takeMVar workerResult
       case cancellationResult of
