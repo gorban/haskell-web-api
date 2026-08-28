@@ -1,6 +1,6 @@
 # ADR-DT: Configurable modern TLS server policy
 
-- Status: **Implemented — local CI-equivalent validation passed; GitHub Actions pending**
+- Status: **Implemented — CI-equivalent validation and GitHub Actions passed**
 - Task: [DT — configurable modern TLS policy](../../TASKS/pr-3-correctness-and-security-defects.md)
 - Date: 2026-08-26
 
@@ -53,6 +53,10 @@ incompatible rejection. Runtime transport settings are derived exclusively from 
 plan. Real-listener transport tests prove TLS 1.2/1.3 success, rejected TLS 1.0/1.1 and TLS 1.2
 CBC attempts under the default, and a TLS 1.0 ECDSA-CBC handshake only when an operator explicitly
 supplies that compatible legacy policy.
+
+The complete local CI-equivalent sequence and the GitHub Actions
+[0.1.2.0 CI run 33145703422](https://github.com/gorban/haskell-web-api/actions/runs/33145703422)
+passed for the implementation commit.
 
 ## Required cross-task ordering
 
