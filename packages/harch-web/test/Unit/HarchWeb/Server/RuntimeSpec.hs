@@ -2,8 +2,8 @@
 
 {-# SPEC #-}
 
-import Control.Concurrent (forkIO, killThread, newEmptyMVar, newMVar, putMVar, readMVar, threadDelay)
-import Control.Exception (Exception (displayException), SomeException, finally, try)
+import Control.Concurrent (forkIO, killThread, newEmptyMVar, newMVar, putMVar, readMVar, takeMVar, threadDelay)
+import Control.Exception (AsyncException (ThreadKilled), Exception (displayException), SomeException, finally, throwIO, try)
 import Control.Monad ()
 import Data.ByteString qualified as ByteString (empty, isInfixOf)
 import Data.ByteString.Builder qualified as Builder ()
@@ -12,12 +12,12 @@ import Data.ByteString.Lazy qualified as LazyByteString ()
 import Data.Char ()
 import Data.Either ()
 import Data.Functor.Compose ()
-import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find, isInfixOf, isPrefixOf)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (isNothing)
 import Data.Text ()
-import Data.Text qualified as Text (isInfixOf, isPrefixOf, pack)
+import Data.Text qualified as Text (Text, isInfixOf, isPrefixOf, pack, unpack)
 import Data.Text.Encoding qualified as TextEncoding ()
 import HarchWeb (AcmeChallengeStore (AcmeChallengeStore), AcmeConfig (AcmeConfig, acmeCertbotConfig, acmeCertificateDirectory, acmeContactEmails, acmeDirectoryUrl, acmeDomains, acmeHttp01Port), Application (applicationRequestPolicy, reportApplicationLog, reportConnectionObservability, reportRequestObservability, requestContextFromRequest), CertbotConfig (CertbotConfig, certbotArguments, certbotExecutable), ListenerConfig (ListenerConfig, listenerAcme, listenerHost, listenerPort, listenerScheme, listenerTls), ListenerScheme (Http, Https), ManualTlsBindPlan, ManualTlsCertificateFiles (ManualTlsCertificateFiles, certificateFile, privateKeyFile), RequestPolicyConfig (forwardedHeaderTrust), TlsCertificateSource (AcmeCertificateSource, ManualCertificateFiles), TlsConfig (TlsConfig, certificateSource), acmeChallengeResponseForRequest, newCertbotWebrootStore, prepareCertbotManualTlsBindPlan, runServer, runServerWithWaiMiddleware, validAcmeHttp01ChallengeToken)
 import HarchWeb.Action qualified as Action ()
@@ -25,9 +25,10 @@ import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
 import HarchWeb.Observability qualified as Observability (ConnectionObservability (observabilityConnectionSpan), ObservabilityAttribute (ObservabilityAttribute, attributeName, attributeValue), ObservabilityAttributeValue (TextAttribute), RequestIdentity (RequestIdentity, requestIdentityMethod, requestIdentityPath, requestIdentityRoutePath, requestIdentityScheme), RequestSpan (requestSpanAttributes, requestSpanDisplayName), ResponseKind (BodyResponseKind), buildRequestObservability, mkSpanMethodLabel, mkSpanRoutePath)
 import HarchWeb.Security qualified as Security ()
+import HarchWeb.Server.Transport.Internal (acceptTrackedConnection, clearPendingAddressForAcceptLoopFailure, forkTrackedConnection, newActiveConnectionAddresses, openLoopbackSocket, recordAcceptLoopThread, socketPort)
 import Network.HTTP.Client qualified as HttpClient ()
 import Network.HTTP.Types qualified as Http (status200)
-import Network.Socket qualified as Socket (AddrInfo (addrAddress, addrFlags), AddrInfoFlag (AI_PASSIVE), SocketOption (ReuseAddr), bind, close, defaultHints, getAddrInfo, listen, maxListenQueue, openSocket, setSocketOption)
+import Network.Socket qualified as Socket (AddrInfo (addrAddress, addrFlags), AddrInfoFlag (AI_PASSIVE), SockAddr, Socket, SocketOption (ReuseAddr), bind, close, defaultHints, getAddrInfo, listen, maxListenQueue, openSocket, setSocketOption, tupleToHostAddress)
 import Network.Socket.ByteString qualified as SocketByteString ()
 import Network.Wai qualified as Wai (Request (rawPathInfo, requestHeaders), defaultRequest, responseLBS)
 import Network.Wai.Handler.Warp qualified as Warp ()
@@ -43,9 +44,58 @@ import System.Process ()
 import TestCore.CustomAssertions ()
 import TestCore.Wai ()
 import Text.Read ()
-import Unit.HarchWeb.TestSupport (acmeHttpsListener, acmeHttpsListenerWithContacts, acmeHttpsListenerWithDomains, acmeHttpsListenerWithDomainsAndChallengePort, certbotHttp01Backend, certbotHttp01BackendWithExecutable, connectAndCloseLoopbackSocket, defaultRequestPolicy, expectLoopbackPortReusable, expectMeasuredRootRequestTiming, fakeCertbotScriptPreamble, hasTextAttribute, httpRuntimeListener, manualTlsCertificatePem, manualTlsPrivateKeyPem, readLoopbackHttpResponse, readLoopbackHttpResponseBytesWithHostAndHeadersResult, readLoopbackHttpResponseBytesWithHostResult, readLoopbackHttpsResponse, readLoopbackHttpsResponseResult, runtimeAcmePlanWithCertbotConfig, sampleApplication, sampleRequestContextFromRequest, serverConfigWithListeners, sharedHttpsListener, stripVolatileRequestTiming, testTrustedForwardedProxy, waitForConnectionObservability, waitForHttpsServerResponse, waitForServerExit, waitForServerResponse, withCustomFakeCertbotExecutable, withEmptyExecutablePath, withFailingFakeCertbotExecutable, withFakeCertbotExecutable, withManualTlsFiles, withOccupiedLoopbackPort, withUnusedLoopbackPort)
+import Unit.HarchWeb.TestSupport (acmeHttpsListener, acmeHttpsListenerWithContacts, acmeHttpsListenerWithDomains, acmeHttpsListenerWithDomainsAndChallengePort, certbotHttp01Backend, certbotHttp01BackendWithExecutable, connectAndCloseLoopbackSocket, connectAndCloseLoopbackSocketFrom, defaultRequestPolicy, expectLoopbackPortReusable, expectMeasuredRootRequestTiming, fakeCertbotScriptPreamble, hasTextAttribute, httpRuntimeListener, manualTlsCertificatePem, manualTlsPrivateKeyPem, readLoopbackHttpResponse, readLoopbackHttpResponseBytesWithHostAndHeadersResult, readLoopbackHttpResponseBytesWithHostResult, readLoopbackHttpResponseBytesWithHostResultFrom, readLoopbackHttpsResponse, readLoopbackHttpsResponseResult, runtimeAcmePlanWithCertbotConfig, sampleApplication, sampleRequestContextFromRequest, serverConfigWithListeners, sharedHttpsListener, stripVolatileRequestTiming, testTrustedForwardedProxy, waitForConnectionObservability, waitForHttpsServerResponse, waitForServerExit, waitForServerResponse, withCustomFakeCertbotExecutable, withEmptyExecutablePath, withFailingFakeCertbotExecutable, withFakeCertbotExecutable, withManualTlsFiles, withOccupiedLoopbackPort, withUnusedLoopbackPort)
 
 spec = do
+  describe "the Warp accepted-peer handoff" $ do
+    it "fails closed for a missing worker handoff" $ do
+      tracker <- newActiveConnectionAddresses
+      forkTrackedConnection tracker (\_ -> pure ())
+        `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Warp peer-address handoff was unexpectedly empty while starting a connection worker)")
+
+    it "clears only the accept loop's own unclaimed peer" $ do
+      tracker <- newActiveConnectionAddresses
+      clearPendingAddressForAcceptLoopFailure tracker
+      recordAcceptLoopThread tracker
+      clearPendingAddressForAcceptLoopFailure tracker
+      forkTrackedConnection tracker (\_ -> pure ())
+        `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Warp peer-address handoff was unexpectedly empty while starting a connection worker)")
+
+    it "rejects a second accept-loop thread rather than sharing its handoff" $ do
+      tracker <- newActiveConnectionAddresses
+      recordAcceptLoopThread tracker
+      recordAcceptLoopThread tracker
+      completion <- newEmptyMVar
+      _ <- forkIO $ do
+        result <- try (recordAcceptLoopThread tracker) :: IO (Either IOError ())
+        putMVar completion result
+      completionResult <- takeMVar completion
+      case completionResult of
+        Left exception -> show exception `shouldBe` "user error (Warp invoked the peer-address accept hook from multiple accept-loop threads)"
+        Right () -> expectationFailure "expected a distinct accept-loop thread to be rejected"
+
+    it "closes an accepted socket when Warp violates the one-place accept/fork contract" $ do
+      tracker <- newActiveConnectionAddresses
+      listeningSocket <- openLoopbackSocket
+      let closeListener = Socket.close listeningSocket
+      ( do
+          port <- socketPort listeningSocket
+          _ <- forkIO (connectAndCloseLoopbackSocket port)
+          firstResult <- try (acceptTrackedConnection tracker listeningSocket) :: IO (Either IOError (Socket.Socket, Socket.SockAddr))
+          case firstResult of
+            Left exception -> expectationFailure ("expected the first accepted peer handoff, but got: " <> displayException exception)
+            Right (acceptedSocket, _) -> Socket.close acceptedSocket
+
+          _ <- forkIO (connectAndCloseLoopbackSocket port)
+          secondResult <- try (acceptTrackedConnection tracker listeningSocket) :: IO (Either IOError (Socket.Socket, Socket.SockAddr))
+          case secondResult of
+            Left exception -> show exception `shouldBe` "user error (Warp peer-address handoff was unexpectedly occupied after accepting a TCP connection)"
+            Right (acceptedSocket, _) -> do
+              Socket.close acceptedSocket
+              expectationFailure "expected a full peer handoff to close the accepted socket and fail"
+        )
+        `finally` closeListener
+
   describe "runServer" $ do
     it "serves responses on the configured HTTP listener and stays running until signalled to stop" $
       withUnusedLoopbackPort $ \unusedPort ->
@@ -73,6 +123,7 @@ spec = do
           completionResult `shouldSatisfy` isNothing
           killThread serverThreadId
           waitForServerExit completionReference
+
           hClose outputHandle
           readFile outputPath `shouldReturn` ("HTTP Server listening at http://127.0.0.1:" <> show unusedPort <> "\n")
 
@@ -285,6 +336,101 @@ spec = do
               `shouldSatisfy` hasTextAttribute "harch.connection.event" "client-closed-connection-prematurely"
             Observability.requestSpanAttributes connectionSpan
               `shouldSatisfy` hasTextAttribute "exception.type" "ClientClosedConnectionPrematurely"
+            killThread serverThreadId
+            waitForServerExit completionReference
+
+    it "keeps sequential and concurrent pre-TLS failures attached to each accepted TCP peer" $
+      withUnusedLoopbackPort $ \unusedPort ->
+        withManualTlsFiles $ \certificatePath privateKeyPath ->
+          withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+            completionReference <- newIORef Nothing
+            connectionObservabilityReference <- newIORef []
+            injectWorkerFailureReference <- newIORef False
+            workerFailureObserved <- newEmptyMVar
+            let loopbackOne = Socket.tupleToHostAddress (127, 0, 0, 1)
+                loopbackTwo = Socket.tupleToHostAddress (127, 0, 0, 2)
+                failureInjectingMiddleware innerApplication request respond = do
+                  injectWorkerFailure <- readIORef injectWorkerFailureReference
+                  if injectWorkerFailure
+                    then putMVar workerFailureObserved () >> throwIO ThreadKilled
+                    else innerApplication request respond
+                observingApplication =
+                  sampleApplication
+                    { reportConnectionObservability = \connectionObservabilityValue ->
+                        atomicModifyIORef'
+                          connectionObservabilityReference
+                          (\connectionObservabilityValues -> (connectionObservabilityValue : connectionObservabilityValues, ()))
+                    }
+                manualTlsConfig =
+                  serverConfigWithListeners
+                    [ ListenerConfig
+                        { listenerHost = "127.0.0.1",
+                          listenerPort = unusedPort,
+                          listenerScheme = Https,
+                          listenerTls =
+                            Just
+                              TlsConfig
+                                { certificateSource =
+                                    ManualCertificateFiles
+                                      ManualTlsCertificateFiles
+                                        { certificateFile = certificatePath,
+                                          privateKeyFile = privateKeyPath
+                                        }
+                                },
+                          listenerAcme = Nothing
+                        }
+                    ]
+            serverThreadId <- forkIO $ do
+              result <- try (runServerWithWaiMiddleware failureInjectingMiddleware outputHandle manualTlsConfig observingApplication) :: IO (Either SomeException ())
+              writeIORef completionReference (Just result)
+            _ <- waitForHttpsServerResponse completionReference unusedPort "/known"
+
+            writeIORef injectWorkerFailureReference True
+            _ <- readLoopbackHttpsResponseResult unusedPort "/known"
+            takeMVar workerFailureObserved
+            writeIORef injectWorkerFailureReference False
+
+            _ <- readLoopbackHttpResponseBytesWithHostResultFrom loopbackOne unusedPort "127.0.0.1" "/known"
+            sequentialPlaintext <-
+              waitForConnectionObservabilityAtPeer
+                connectionObservabilityReference
+                "insecure-connection-denied"
+                "127.0.0.1"
+            connectAndCloseLoopbackSocketFrom loopbackTwo unusedPort
+            sequentialPrematureClose <-
+              waitForConnectionObservabilityAtPeer
+                connectionObservabilityReference
+                "client-closed-connection-prematurely"
+                "127.0.0.2"
+
+            simultaneousStart <- newEmptyMVar
+            plaintextDone <- newEmptyMVar
+            prematureCloseDone <- newEmptyMVar
+            _ <- forkIO $ do
+              takeMVar simultaneousStart
+              _ <- readLoopbackHttpResponseBytesWithHostResultFrom loopbackTwo unusedPort "127.0.0.1" "/known"
+              putMVar plaintextDone ()
+            _ <- forkIO $ do
+              takeMVar simultaneousStart
+              connectAndCloseLoopbackSocketFrom loopbackOne unusedPort
+              putMVar prematureCloseDone ()
+            putMVar simultaneousStart ()
+            putMVar simultaneousStart ()
+            takeMVar plaintextDone
+            takeMVar prematureCloseDone
+            concurrentPlaintext <-
+              waitForConnectionObservabilityAtPeer
+                connectionObservabilityReference
+                "insecure-connection-denied"
+                "127.0.0.2"
+            concurrentPrematureClose <-
+              waitForConnectionObservabilityAtPeer
+                connectionObservabilityReference
+                "client-closed-connection-prematurely"
+                "127.0.0.1"
+
+            map (Observability.requestSpanDisplayName . Observability.observabilityConnectionSpan) [sequentialPlaintext, sequentialPrematureClose, concurrentPlaintext, concurrentPrematureClose]
+              `shouldBe` ["CONNECTION insecure-connection-denied", "CONNECTION client-closed-connection-prematurely", "CONNECTION insecure-connection-denied", "CONNECTION client-closed-connection-prematurely"]
             killThread serverThreadId
             waitForServerExit completionReference
 
@@ -1673,3 +1819,31 @@ spec = do
           completionResult `shouldSatisfy` isNothing
           killThread serverThreadId
           waitForServerExit completionReference
+
+waitForConnectionObservabilityAtPeer :: IORef [Observability.ConnectionObservability] -> Text.Text -> Text.Text -> IO Observability.ConnectionObservability
+waitForConnectionObservabilityAtPeer connectionObservabilityReference expectedEventName expectedPeerAddress =
+  waitForObservabilityAttempts (500 :: Int)
+  where
+    waitForObservabilityAttempts remainingAttempts = do
+      connectionObservabilityValues <- readIORef connectionObservabilityReference
+      case find matchesExpectedConnection connectionObservabilityValues of
+        Just connectionObservabilityValue -> pure connectionObservabilityValue
+        Nothing
+          | remainingAttempts > 0 -> do
+              threadDelay 10000
+              waitForObservabilityAttempts (remainingAttempts - 1)
+          | otherwise -> do
+              expectationFailure
+                ( "expected connection observability for "
+                    <> Text.unpack expectedEventName
+                    <> " from "
+                    <> Text.unpack expectedPeerAddress
+                )
+              error "connection observability was not reported"
+
+    matchesExpectedConnection connectionObservabilityValue =
+      let attributes =
+            Observability.requestSpanAttributes
+              (Observability.observabilityConnectionSpan connectionObservabilityValue)
+       in hasTextAttribute "harch.connection.event" expectedEventName attributes
+            && hasTextAttribute "network.peer.address" expectedPeerAddress attributes

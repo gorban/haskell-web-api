@@ -8,16 +8,22 @@
 -- makes those concerns independently testable without coupling them to the
 -- application/WAI request pipeline.
 module HarchWeb.Server.Transport
-  ( ReloadingTlsCredentials,
+  ( ActiveConnectionAddresses,
+    ReloadingTlsCredentials,
     RunningRuntimeServer,
     TlsCertificateFilePath,
     TlsPrivateKeyFilePath,
     ensureRuntimeFileExists,
+    acceptTrackedConnection,
+    clearPendingAddressForAcceptLoopFailure,
+    forkTrackedConnection,
     listenerSchemeText,
     loadReloadingTlsCredentials,
     loadTlsCredentialSnapshotOrThrowWithLoader,
     openListenerSocket,
     openLoopbackSocket,
+    newActiveConnectionAddresses,
+    recordAcceptLoopThread,
     reloadTlsCredentialsIfChanged,
     socketPort,
     startHttpRuntimeServerWithStarter,
@@ -36,11 +42,10 @@ module HarchWeb.Server.Transport
   )
 where
 
-import Control.Concurrent (MVar, ThreadId, forkFinally, forkIOWithUnmask, killThread, modifyMVar, modifyMVar_, myThreadId, newEmptyMVar, newMVar, putMVar, takeMVar, tryPutMVar)
+import Control.Concurrent (MVar, ThreadId, forkFinally, forkIOWithUnmask, killThread, myThreadId, newEmptyMVar, putMVar, takeMVar, tryPutMVar, tryReadMVar, tryTakeMVar)
 import Control.Exception (SomeException, displayException, evaluate, finally, fromException, onException, throwIO)
-import Control.Monad (void)
+import Control.Monad (unless, void, when)
 import Data.Either (lefts)
-import Data.Foldable (for_)
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Maybe (catMaybes)
@@ -82,7 +87,16 @@ data RunningRuntimeServer = RunningRuntimeServer
   }
 
 data ActiveConnectionAddresses = ActiveConnectionAddresses
-  { pendingConnectionAddresses :: MVar [Socket.SockAddr],
+  { -- | A one-place handoff from Warp's accept-loop thread to its worker
+    -- factory.  Warp 3.3.24+ calls @settingsAccept@ then @settingsFork@
+    -- while the accept loop masks asynchronous exceptions, and does not
+    -- accept another connection until that factory returns.  This records the
+    -- kernel-provided TCP peer at the only public point where it is available
+    -- before TLS negotiation, without reimplementing WarpTLS's connection
+    -- maker.  A full or empty handoff is a Warp lifecycle-contract violation:
+    -- fail closed rather than attach one connection's address to another.
+    pendingConnectionAddress :: MVar Socket.SockAddr,
+    acceptLoopThreadId :: MVar ThreadId,
     activeConnectionAddresses :: IORef [(ThreadId, Socket.SockAddr)]
   }
 
@@ -258,8 +272,7 @@ runtimeServerSettings requestHeadLimits transportLimits listenerScheme endpoint 
   Warp.setPort (endpointPort endpoint)
     . Warp.setOnException (runtimeConnectionExceptionReporter listenerScheme endpoint activeConnectionAddresses connectionReporter (Warp.getOnException Warp.defaultSettings))
     . Warp.setFork (forkTrackedConnection activeConnectionAddresses)
-    . Warp.setOnOpen (registerActiveConnection activeConnectionAddresses)
-    . Warp.setOnClose (\_ -> unregisterActiveConnection activeConnectionAddresses)
+    . Warp.setAccept (acceptTrackedConnection activeConnectionAddresses)
     $ applyRequestTransportLimits requestHeadLimits transportLimits (Warp.setBeforeMainLoop (putMVar startupSignal (Right RuntimeServerReady)) Warp.defaultSettings)
 
 runtimeHttpServerSettings :: RequestHeadLimits -> RequestTransportLimits -> ListenerEndpoint -> MVar (Either SomeException RuntimeServerReady) -> Warp.Settings
@@ -279,18 +292,30 @@ applyRequestTransportLimits requestHeadLimits transportLimits =
 newActiveConnectionAddresses :: IO ActiveConnectionAddresses
 newActiveConnectionAddresses =
   ActiveConnectionAddresses
-    <$> newMVar []
+    <$> newEmptyMVar
+    <*> newEmptyMVar
     <*> newIORef []
 
-registerActiveConnection :: ActiveConnectionAddresses -> Socket.SockAddr -> IO Bool
-registerActiveConnection tracker socketAddress = do
-  modifyMVar_ (pendingConnectionAddresses tracker) (\entries -> pure (entries ++ [socketAddress]))
-  pure True
+acceptTrackedConnection :: ActiveConnectionAddresses -> Socket.Socket -> IO (Socket.Socket, Socket.SockAddr)
+acceptTrackedConnection tracker listeningSocket = do
+  recordAcceptLoopThread tracker
+  acceptedConnection@(acceptedSocket, socketAddress) <- Socket.accept listeningSocket
+  accepted <- tryPutMVar (pendingConnectionAddress tracker) socketAddress
+  if accepted
+    then pure acceptedConnection
+    else do
+      Socket.close acceptedSocket
+      ioError (userError "Warp peer-address handoff was unexpectedly occupied after accepting a TCP connection")
 
-unregisterActiveConnection :: ActiveConnectionAddresses -> IO ()
-unregisterActiveConnection tracker = do
+recordAcceptLoopThread :: ActiveConnectionAddresses -> IO ()
+recordAcceptLoopThread tracker = do
   currentThreadId <- myThreadId
-  untrackActiveConnection tracker currentThreadId
+  recorded <- tryPutMVar (acceptLoopThreadId tracker) currentThreadId
+  unless recorded $ do
+    maybeAcceptThreadId <- tryReadMVar (acceptLoopThreadId tracker)
+    unless
+      (maybeAcceptThreadId == Just currentThreadId)
+      (ioError (userError "Warp invoked the peer-address accept hook from multiple accept-loop threads"))
 
 lookupActiveConnectionAddress :: ActiveConnectionAddresses -> IO (Maybe Socket.SockAddr)
 lookupActiveConnectionAddress tracker = do
@@ -299,23 +324,16 @@ lookupActiveConnectionAddress tracker = do
 
 forkTrackedConnection :: ActiveConnectionAddresses -> (((forall a. IO a -> IO a) -> IO ()) -> IO ())
 forkTrackedConnection tracker action = do
-  maybeSocketAddress <- claimPendingConnectionAddress tracker
-  void $
-    forkIOWithUnmask $ \unmask -> do
-      currentThreadId <- myThreadId
-      for_ maybeSocketAddress (trackActiveConnection tracker currentThreadId)
-      action unmask `finally` untrackActiveConnection tracker currentThreadId
-
-claimPendingConnectionAddress :: ActiveConnectionAddresses -> IO (Maybe Socket.SockAddr)
-claimPendingConnectionAddress tracker =
-  modifyMVar
-    (pendingConnectionAddresses tracker)
-    ( \entries ->
-        case entries of
-          [] -> pure ([], Nothing)
-          firstAddress : _ -> do
-            (,) <$> evaluate (drop 1 entries) <*> pure (Just firstAddress)
-    )
+  maybeSocketAddress <- tryTakeMVar (pendingConnectionAddress tracker)
+  case maybeSocketAddress of
+    Nothing ->
+      ioError (userError "Warp peer-address handoff was unexpectedly empty while starting a connection worker")
+    Just socketAddress ->
+      void $
+        forkIOWithUnmask $ \unmask -> do
+          currentThreadId <- myThreadId
+          trackActiveConnection tracker currentThreadId socketAddress
+          action unmask `finally` untrackActiveConnection tracker currentThreadId
 
 trackActiveConnection :: ActiveConnectionAddresses -> ThreadId -> Socket.SockAddr -> IO ()
 trackActiveConnection tracker currentThreadId socketAddress =
@@ -331,6 +349,7 @@ untrackActiveConnection tracker currentThreadId =
 
 runtimeConnectionExceptionReporter :: ListenerScheme -> ListenerEndpoint -> ActiveConnectionAddresses -> (Observability.ConnectionObservability -> IO ()) -> (Maybe Wai.Request -> SomeException -> IO ()) -> Maybe Wai.Request -> SomeException -> IO ()
 runtimeConnectionExceptionReporter listenerScheme endpoint activeConnectionAddresses connectionReporter defaultReporter maybeRequest exception = do
+  clearPendingAddressForAcceptLoopFailure activeConnectionAddresses
   maybeConnectionObservability <-
     buildConnectionExceptionObservability
       listenerScheme
@@ -343,6 +362,18 @@ runtimeConnectionExceptionReporter listenerScheme endpoint activeConnectionAddre
         connectionReporter connectionObservability
     Nothing ->
       defaultReporter maybeRequest exception
+
+-- | Warp delivers failures while preparing a just-accepted connection through
+-- its normal exception callback.  Only the accept-loop thread may clear this
+-- slot: a worker can fail after the loop has accepted a different connection,
+-- and clearing then would recreate the cross-connection attribution bug.
+clearPendingAddressForAcceptLoopFailure :: ActiveConnectionAddresses -> IO ()
+clearPendingAddressForAcceptLoopFailure tracker = do
+  currentThreadId <- myThreadId
+  maybeAcceptThreadId <- tryReadMVar (acceptLoopThreadId tracker)
+  when
+    (maybeAcceptThreadId == Just currentThreadId)
+    (void (tryTakeMVar (pendingConnectionAddress tracker)))
 
 buildConnectionExceptionObservability :: ListenerScheme -> ListenerEndpoint -> ActiveConnectionAddresses -> SomeException -> IO (Maybe Observability.ConnectionObservability)
 buildConnectionExceptionObservability listenerScheme endpoint activeConnectionAddresses exception =

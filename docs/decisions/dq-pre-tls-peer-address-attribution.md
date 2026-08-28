@@ -1,6 +1,6 @@
 # ADR-DQ: Attribute peer addresses before TLS setup
 
-- Status: **Accepted and approved — pending required published Warp hook**
+- Status: **Implemented — local CI-equivalent validation passed; GitHub Actions pending**
 - Task: [DQ — connection-address attribution](../../TASKS/pr-3-request-pipeline-transport-and-static-assets.md)
 - Date: 2026-08-26
 
@@ -14,15 +14,18 @@ analysis. The correct fix needs the accepted `SockAddr` in the worker before War
 handshake. Warp has that accepted address at its worker exception boundary, but its public
 settings API does not expose it to applications.
 
-Decision made: obtain a pre-handshake accepted-peer hook without taking ownership of WarpTLS's
-complete TLS and HTTP/2 server loop, through Warp's public API.
+Decision made: pair Warp's existing public `setAccept` and `setFork` hooks. `setAccept` records the
+kernel-provided peer immediately after accept; `setFork` transfers that single peer to the worker
+before WarpTLS runs its connection maker. This extends the existing transport boundary without
+forking, pinning, or reimplementing WarpTLS's TLS and HTTP/2 server loop.
 
 ## Design guidance that constrains the decision
 
 - **Extend the existing boundary.** `HarchWeb.Server.Transport` already owns listener startup and
   connection telemetry. The fix belongs at that boundary, not in a second reporter or server.
-- **Add a small general primitive when possible.** The missing-capability protocol prefers an
-  additive Warp hook over an application workaround or a parallel TLS implementation.
+- **Extend the existing boundary first.** Warp's documented accept and worker-factory hooks already
+  provide the required ordering, so an upstream API addition or a parallel TLS implementation is
+  unnecessary.
 - **Flag materially different behavior.** Inventing an address or correlating independent queues
   changes the correctness property and is not an acceptable fallback.
 - **Keep observability truthful and bounded.** Stable event codes may remain; peer attributes must
@@ -33,41 +36,37 @@ complete TLS and HTTP/2 server loop, through Warp's public API.
 
 ## Current evidence
 
-- The workspace resolves Warp 3.4.12 and warp-tls 3.4.9.
-- [`Transport.hs`](../../packages/harch-web/src/HarchWeb/Server/Transport.hs) calls `setFork` to
-  claim from a FIFO before `setOnOpen` appends the accepted address.
-- A real `127.0.0.2` plaintext connection to the TLS listener proved WarpTLS rejects the connection
-  before `onOpen`; a thread map populated only there cannot report that rejected peer.
-- [Warp 3.4.12](https://github.com/yesodweb/wai/blob/warp-3.4.12/warp/Network/Wai/Handler/Warp/Run.hs)
-  accepts the socket address and catches connection setup/serving failures in the same worker, but
-  invokes only the address-less public `setOnException` callback. WarpTLS 3.4.14 continues to use
-  that runner; changing `tls` or `warp-tls` versions therefore does not fix this ordering.
-- Rechecked 2026-08-28 against upstream Warp `main` (commit `62a8b49b62a4`): `Settings` still
-  exposes address-less `settingsOnException` / `setOnException` and the peer-bearing lifecycle
-  hooks remain `onOpen` and `onClose`. There is no compatible published release or open upstream
-  proposal for a peer-aware worker exception hook. DQ consequently remains blocked by the required
-  external release; no local source pin, fork, or TCP/TLS reimplementation is permitted as a
-  substitute.
+- The supported workspace resolves Warp 3.4.12 and warp-tls 3.4.9. Warp 3.4.12's public
+  `setAccept` is invoked before `setFork`; Warp's masked accept loop does not begin another accept
+  until the worker factory returns.
+- `setAccept` records exactly one accepted `SockAddr` in a non-blocking, one-place handoff.
+  `setFork` claims it before launching the worker and registers `ThreadId -> SockAddr` before
+  WarpTLS can perform TLS setup. A full or empty handoff is a clear lifecycle-contract failure and
+  never creates an event with a guessed peer.
+- The normal exception callback clears an unclaimed handoff only when it is running on the recorded
+  accept-loop thread. A worker failure cannot clear a later connection's handoff.
+- Real source-bound `127.0.0.1`/`127.0.0.2` sequential and concurrent plaintext-on-TLS and
+  premature-close tests, preceded by an injected asynchronous worker failure, prove every
+  recognized event uses that connection's accepted TCP peer.
 
 ## Options and consequences
 
-### Option A — Add a peer-aware connection-exception hook upstream in Warp
+### Option A — Use public accept and worker-factory hooks
 
-Propose an additive `setOnConnectionException :: (SockAddr -> SomeException -> IO ()) -> Settings
--> Settings` (or equivalent) in Warp. Warp invokes it once from its existing outer worker handler
-when setup or serving fails; existing `setOnException` behavior remains unchanged. Adopt only a
-published Hackage Warp release carrying that hook.
+Use `setAccept` to record the accepted peer and `setFork` to attach that peer to the worker before
+the existing WarpTLS connection maker runs. Keep the association in a one-place, non-blocking
+handoff plus a worker-thread map.
 
 Consequences:
 
 - Preserves WarpTLS ownership of TLS negotiation, HTTP/2 ALPN, session management, timeouts, socket
   cleanup, and future compatibility.
 - Gives Harch Web the accepted peer directly for rejected handshakes without an address queue.
-- Avoids a WarpTLS fork, local connection maker, source pin, and forced WarpTLS version pin.
-- The hook contract must cover asynchronous exceptions and run exactly once per escaped connection
-  failure.
+- Avoids a WarpTLS fork, local connection maker, source pin, forced WarpTLS version pin, and
+  upstream coordination.
+- Detects an upstream lifecycle-order change safely rather than correlating independent queues.
 
-### Option B — Carry a permanent narrow fork or source pin
+### Option B — Carry a permanent narrow Warp fork or source pin
 
 Maintain the same small hook as a repository-owned fork and pin it indefinitely.
 
@@ -110,27 +109,19 @@ Consequences:
 
 ## Recommendation
 
-Adopt **Option A**. All implementation work below is approved. DQ awaits only the required
-external prerequisite: a compatible published Warp release containing the hook. There is no source
-pin, fork, local TLS connection maker, or temporary fallback that claims a peer address. The current
-FIFO is known incorrect and must not be treated as a completed solution.
-
-This recommendation keeps TLS mechanics in WarpTLS and gives the framework a small, general Warp
-primitive for accurate connection-level telemetry without a permanent fork.
+Adopt **Option A**. It uses the stable public Warp surface at the point the kernel peer is known,
+keeps TLS mechanics in WarpTLS, and has no third-party source ownership. The FIFO is deleted rather
+than retained as a fallback: false peer identity is worse than no peer identity.
 
 ## Required approved execution order
 
-1. Specify and submit the focused Warp worker-exception hook with its exactly-once semantics.
-2. Wait for a compatible published Warp release; do not pin an unreleased revision.
-3. Wire the hook into `HarchWeb.Server.Transport`, remove the FIFO/list tracker and `setFork` /
-   `setOnOpen` / `setOnClose` bridge, without changing event names or public response
-   behavior.
-4. Prove `127.0.0.1` and `127.0.0.2` cannot cross-attribute under sequential and concurrent TLS,
+1. Wire `setAccept`/`setFork` into `HarchWeb.Server.Transport`, remove the FIFO/list tracker and
+   `setOnOpen` / `setOnClose` bridge, without changing event names or public response behavior.
+2. Prove `127.0.0.1` and `127.0.0.2` cannot cross-attribute under sequential and concurrent TLS,
    plaintext-on-TLS, premature-close, and asynchronous-exception cases.
-5. Complete DT's TLS/cipher configuration and real transport proof as specified in
+3. Complete DT's TLS/cipher configuration and real transport proof as specified in
    [ADR-DT](dt-configurable-modern-tls-server-policy.md).
-6. Run the complete CI-equivalent and module-health gates before committing and pushing, then close
+4. Run the complete CI-equivalent and module-health gates before committing and pushing, then close
    the affected task groups.
 
-No additional architectural approval is required. The published Warp release is a technical
-prerequisite, not a decision gate.
+No additional architectural approval is required.

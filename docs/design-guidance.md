@@ -1928,19 +1928,20 @@ value (after the existing port stripping). A hostless request cannot establish e
 domain-specific challenge, so it is an ordinary non-match. This is a narrow correction to the one
 existing challenge matcher; no new routing policy or hostname inference is introduced.
 
-### Decision record — DQ: peer-address attribution before a rejected TLS handshake (2026-08-25)
+### Decision record — DQ: peer-address attribution before a rejected TLS handshake (2026-08-28)
 
-**Decision: flag and stop (option 3) until the transport exposes the accepted peer address before
-TLS setup.** The existing FIFO bridge from Warp's `onOpen` hook to `setFork` is demonstrably
-incorrect: it associates a subsequent connection with the prior connection's address. Replacing it
-with a worker-thread map keyed by `onOpen` was investigated with a real source-bound loopback
-connection (`127.0.0.2` after a successful `127.0.0.1` handshake). WarpTLS rejects plaintext before
-it invokes `onOpen`, so the replacement correctly has no address at all for precisely the
-`InsecureConnectionDenied` telemetry DQ must preserve. The queue is not a safe fallback—it produces
-false peer identity—while silently omitting or inventing an address changes observability correctness.
-The framework needs a small, general primitive from Warp/WarpTLS (or a transport boundary that owns
-the accepted socket and peer address before handshake processing) before DQ can be completed and
-tested without a fabricated association. DQ remains open with that concrete prerequisite.
+**Decision: extend the existing `HarchWeb.Server.Transport` boundary with Warp's public
+`setAccept`/`setFork` lifecycle hooks.** The old FIFO bridge from `onOpen` to `setFork` was
+demonstrably incorrect because a rejected TLS connection never reaches `onOpen` and could inherit a
+prior peer. `setAccept` instead records the accepted kernel `SockAddr` before WarpTLS creates its
+connection maker; `setFork` claims that one-place handoff and registers the worker's address before
+TLS setup. The transfer uses non-blocking operations: a full/empty slot is an explicit, safe
+lifecycle-contract failure, never guessed observability. Only the accept-loop thread clears an
+unclaimed peer after its own setup failure, so a worker exception cannot erase a newer peer. This
+extends the existing public transport API rather than adding a server implementation, vendoring
+Warp, pinning an unreleased revision, or changing TLS/HTTP2 ownership. Real distinct-source,
+sequential, concurrent, plaintext-on-TLS, premature-close, and asynchronous-worker regressions
+prove the peer attributes remain tied to their accepted TCP connection.
 
 ### Decision record — AW: authenticated SMTP uses fresh TLS validation (2026-08-26)
 

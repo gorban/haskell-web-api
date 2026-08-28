@@ -86,6 +86,7 @@ library
     HarchWeb.Secret
     HarchWeb.Security
     HarchWeb.Server
+    HarchWeb.Server.Transport.Internal
     HarchWeb.Session
     HarchWeb.Site
     HarchWeb.StaticAssets

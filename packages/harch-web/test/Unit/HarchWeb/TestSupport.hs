@@ -26,7 +26,7 @@ import HarchWeb.Observability qualified as Observability (ConnectionObservabilit
 import HarchWeb.Security qualified as Security ()
 import HarchWeb.Session (generateCsrfToken)
 import Network.HTTP.Types qualified as Http (RequestHeaders, status200, status202, status501)
-import Network.Socket qualified as Socket (Family (AF_INET), SockAddr (SockAddrInet), Socket, SocketType (Stream), bind, close, connect, defaultProtocol, getSocketName, listen, maxListenQueue, socket, tupleToHostAddress, withSocketsDo)
+import Network.Socket qualified as Socket (Family (AF_INET), HostAddress, SockAddr (SockAddrInet), Socket, SocketType (Stream), bind, close, connect, defaultProtocol, getSocketName, listen, maxListenQueue, socket, tupleToHostAddress, withSocketsDo)
 import Network.Socket.ByteString qualified as SocketByteString (recv, sendAll)
 import Network.Wai qualified as Wai (Request (remoteHost, requestHeaders))
 import System.Directory ()
@@ -618,10 +618,18 @@ readLoopbackHttpResponseBytesWithHost port hostHeader path = do
       ioError (userError responseError)
 
 readLoopbackHttpResponseBytesWithHostResult :: Int -> Text -> Text -> IO (Either String ByteString.ByteString)
-readLoopbackHttpResponseBytesWithHostResult port hostHeader path =
+readLoopbackHttpResponseBytesWithHostResult =
+  readLoopbackHttpResponseBytesWithHostResultFrom (Socket.tupleToHostAddress (127, 0, 0, 1))
+
+-- | Send an ordinary plaintext HTTP request from a chosen loopback source.
+-- This is intentionally a real TCP bind, so transport tests can distinguish
+-- accepted peers rather than merely varying request-level data.
+readLoopbackHttpResponseBytesWithHostResultFrom :: Socket.HostAddress -> Int -> Text -> Text -> IO (Either String ByteString.ByteString)
+readLoopbackHttpResponseBytesWithHostResultFrom sourceAddress port hostHeader path =
   Socket.withSocketsDo $ do
     clientSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
     responseResult <- try $ do
+      Socket.bind clientSocket (Socket.SockAddrInet 0 sourceAddress)
       Socket.connect clientSocket (Socket.SockAddrInet (fromIntegral port) (Socket.tupleToHostAddress (127, 0, 0, 1)))
       SocketByteString.sendAll clientSocket (buildHttpRequestWithHost hostHeader path)
       responseBytes <- readAllSocketChunks clientSocket
@@ -675,7 +683,7 @@ readLoopbackHttpsResponseResult port path = do
   (exitCode, stdoutText, stderrText) <-
     readProcessWithExitCode
       "curl"
-      ["--silent", "--show-error", "--insecure", "--fail", "--noproxy", "*", url]
+      ["--silent", "--show-error", "--insecure", "--fail", "--max-time", "2", "--noproxy", "*", url]
       ""
   pure $
     case exitCode of
@@ -683,9 +691,16 @@ readLoopbackHttpsResponseResult port path = do
       ExitFailure _ -> Left stderrText
 
 connectAndCloseLoopbackSocket :: Int -> IO ()
-connectAndCloseLoopbackSocket port =
+connectAndCloseLoopbackSocket =
+  connectAndCloseLoopbackSocketFrom (Socket.tupleToHostAddress (127, 0, 0, 1))
+
+-- | Open then immediately close a TCP connection from a chosen loopback
+-- source, exercising the server's pre-TLS premature-close path.
+connectAndCloseLoopbackSocketFrom :: Socket.HostAddress -> Int -> IO ()
+connectAndCloseLoopbackSocketFrom sourceAddress port =
   Socket.withSocketsDo $ do
     clientSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
+    Socket.bind clientSocket (Socket.SockAddrInet 0 sourceAddress)
     Socket.connect clientSocket (Socket.SockAddrInet (fromIntegral port) (Socket.tupleToHostAddress (127, 0, 0, 1)))
     Socket.close clientSocket
 
