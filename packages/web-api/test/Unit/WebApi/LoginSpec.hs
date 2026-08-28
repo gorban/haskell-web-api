@@ -643,12 +643,14 @@ spec = do
     it "shares one concurrent password-failure budget across email and username aliases of a resolved account" $ do
       admittedCountReference <- newIORef (0 :: Word64)
       admittedKeysReference <- newIORef []
+      passwordWorkGate <- newPasswordWorkGate (required "concurrent password-work budget" (mkPasswordWorkBudget 40))
       let expectedKey = "account:" <> accountIdText accountId
           username = required "username" (mkUsername "person_01")
+          aliasCredential = AccountCredential accountId concurrentPasswordHash True
           aliasCredentialStore =
             AccountCredentialStore
-              { findAccountCredentialByEmail = \_ -> pure (Right (Just verifiedCredential)),
-                findAccountCredentialByUsername = \_ -> pure (Right (Just verifiedCredential)),
+              { findAccountCredentialByEmail = \_ -> pure (Right (Just aliasCredential)),
+                findAccountCredentialByUsername = \_ -> pure (Right (Just aliasCredential)),
                 replacePasswordHashIfCurrent = \_ _ _ -> error "unexpected password-hash replacement for a rejected password"
               }
           sharedThrottle =
@@ -676,7 +678,7 @@ spec = do
               }
           startAttempt identifier resultSlot =
             forkIO $
-              beginPasswordLoginWithIdentifier aliasCredentialStore unexpectedMfaStore sharedThrottle testPasswordWorkGate identifier (mkPassword "incorrect password")
+              beginPasswordLoginWithIdentifier aliasCredentialStore unexpectedMfaStore sharedThrottle passwordWorkGate identifier (mkPassword "incorrect password")
                 >>= putMVar resultSlot
       resultSlots <- sequence [newEmptyMVar, newEmptyMVar, newEmptyMVar, newEmptyMVar, newEmptyMVar, newEmptyMVar]
       sequence_
@@ -939,6 +941,21 @@ unexpectedMfaStore = mfaStore (error "MFA lookup should not occur")
 
 passwordHash :: PasswordHash
 passwordHash = required "password hash" (hashPasswordWithSalt defaultPasswordHashingPolicy "0123456789abcdef" (mkPassword "correct horse battery staple"))
+
+-- | This focused concurrency proof must not compete for the process-wide test
+-- gate with unrelated specs. It still uses a valid Argon2id hash so each
+-- admitted alias attempt follows the production verification and settlement
+-- path; the small work factor keeps all five permitted attempts inside its
+-- dedicated 40 KiB gate.
+concurrentPasswordHash :: PasswordHash
+concurrentPasswordHash =
+  required
+    "concurrent password hash"
+    ( hashPasswordWithSalt
+        (required "concurrent password policy" (mkPasswordHashingPolicy (argon2Iterations 1) (argon2MemoryKib 8) (argon2Parallelism 1)))
+        "0123456789abcdef"
+        (mkPassword "correct horse battery staple")
+    )
 
 verifiedCredential :: AccountCredential
 verifiedCredential = AccountCredential accountId passwordHash True
