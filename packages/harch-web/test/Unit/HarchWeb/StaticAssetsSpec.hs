@@ -43,7 +43,7 @@ import System.Process ()
 import TestCore.CustomAssertions ()
 import TestCore.Wai ()
 import Text.Read ()
-import Unit.HarchWeb.TestSupport ()
+import Unit.HarchWeb.TestSupport (testPathPrefix)
 
 spec = do
   describe "staticAssetHref" $
@@ -54,11 +54,11 @@ spec = do
         `shouldBe` "/assets/css/app.css"
       staticAssetHref (StaticAssetRoot {staticUrlPrefix = "/", staticDirectory = "public"}) "/img/logo.svg"
         `shouldBe` "/img/logo.svg"
-      staticAssetHrefWithPrefix "/app" (StaticAssetRoot {staticUrlPrefix = "/", staticDirectory = "public"}) ""
+      staticAssetHrefWithPrefix (testPathPrefix "/app") (StaticAssetRoot {staticUrlPrefix = "/", staticDirectory = "public"}) ""
         `shouldBe` "/app"
-      staticAssetHrefWithPrefix "/app" (StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}) "app.js"
+      staticAssetHrefWithPrefix (testPathPrefix "/app") (StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}) "app.js"
         `shouldBe` "/app/assets/app.js"
-      staticAssetHrefWithPrefix "/" (StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}) "app.js"
+      staticAssetHrefWithPrefix (testPathPrefix "/") (StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}) "app.js"
         `shouldBe` "/assets/app.js"
-      staticAssetHrefWithPrefix "app/" (StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}) "app.js"
+      staticAssetHrefWithPrefix (testPathPrefix "app/") (StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}) "app.js"
         `shouldBe` "/app/assets/app.js"

@@ -34,6 +34,7 @@ module Unit.WebApi.TestSupport
     spacesRequest,
     profileRequest,
     spanishRequestContext,
+    testPathPrefix,
     assertSameProfilePageModel,
     explicitEnglishRequestContext,
     spanishHomeRequest,
@@ -343,10 +344,16 @@ explicitEnglishRequestContext :: AppRequestContext
 explicitEnglishRequestContext = defaultRequestContext {requestLocaleIsExplicit = True}
 
 prefixedRequestContext :: AppRequestContext
-prefixedRequestContext = defaultRequestContext {requestPathPrefix = "/app"}
+prefixedRequestContext = defaultRequestContext {requestPathPrefix = testPathPrefix "/app"}
 
 prefixedSpanishRequestContext :: AppRequestContext
-prefixedSpanishRequestContext = spanishRequestContext {requestPathPrefix = "/app"}
+prefixedSpanishRequestContext = spanishRequestContext {requestPathPrefix = testPathPrefix "/app"}
+
+testPathPrefix :: Text -> HarchWeb.PathPrefix
+testPathPrefix value =
+  case HarchWeb.parseRequestPathPrefix value of
+    Left parseError -> error ("invalid test path prefix: " <> show parseError)
+    Right pathPrefix -> pathPrefix
 
 spanishHomeRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 spanishHomeRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb.requestContext = spanishRequestContext}

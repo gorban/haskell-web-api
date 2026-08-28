@@ -16,7 +16,7 @@ import Data.List (find)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import Data.Text (Text)
-import Data.Text qualified as Text (dropWhileEnd, empty, isPrefixOf, null, pack, splitOn, strip, stripPrefix, unpack)
+import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding (decodeUtf8)
 import HarchWeb
 import HarchWeb.Action qualified as Action (ActionCodec, action, actionCodec, formField, getAt, postAt, required, textValue)
@@ -54,6 +54,12 @@ data TestRoute
   | EventStreamRoute
   | MissingRoute
   deriving (Eq, Show)
+
+testPathPrefix :: Text -> PathPrefix
+testPathPrefix rawPrefix =
+  case parseRequestPathPrefix rawPrefix of
+    Left parseError -> error ("invalid test path prefix: " <> show parseError)
+    Right pathPrefix -> pathPrefix
 
 trustedMarkup :: Text -> Html
 trustedMarkup = trustedHtml . MarkupUnsafe.unsafeTrustHtml
@@ -144,38 +150,12 @@ applyTestPathPrefix pathPrefix path
   | path == "/" = pathPrefix
   | otherwise = pathPrefix <> path
 
-sampleRequestContextFromRequest :: ForwardedHeaderTrust -> Wai.Request -> TestContext -> TestContext
-sampleRequestContextFromRequest forwardedHeaderTrust request requestContext =
+sampleRequestContextFromRequest :: RequestPolicyConfig -> Wai.Request -> TestContext -> TestContext
+sampleRequestContextFromRequest requestPolicyConfig request requestContext =
   requestContext
     { testContextPathPrefix =
-        if isTrustedForwardingPeer forwardedHeaderTrust (Wai.remoteHost request)
-          then
-            maybe
-              ""
-              normalizeTestPathPrefix
-              ( lookup "X-Forwarded-Prefix" (Wai.requestHeaders request)
-                  >>= firstTestHeaderValue
-              )
-          else ""
+        pathPrefixText (requestPathPrefix requestPolicyConfig request)
     }
-
-normalizeTestPathPrefix :: Text -> Text
-normalizeTestPathPrefix pathPrefix =
-  let trimmedPrefix = Text.strip pathPrefix
-      slashPrefixedPrefix =
-        case (Text.null trimmedPrefix || trimmedPrefix == "/", Text.isPrefixOf "/" trimmedPrefix) of
-          (True, _) -> ""
-          (False, True) -> trimmedPrefix
-          (False, False) -> "/" <> trimmedPrefix
-      normalizedPrefix =
-        Text.dropWhileEnd (== '/') slashPrefixedPrefix
-   in normalizedPrefix
-
-firstTestHeaderValue :: ByteString.ByteString -> Maybe Text
-firstTestHeaderValue headerValue =
-  case filter (not . Text.null) (map Text.strip (Text.splitOn "," (TextEncoding.decodeUtf8 headerValue))) of
-    [] -> Nothing
-    firstValue : _ -> Just firstValue
 
 samplePage :: RouteRequest TestRoute TestContext -> Page TestRoute TestContext
 samplePage request =
@@ -278,7 +258,7 @@ sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
   Application
     { appName = "sample",
       defaultRequestContext = defaultContext,
-      requestContextFromRequest = sampleRequestContextFromRequest (forwardedHeaderTrust requestPolicyConfig),
+      requestContextFromRequest = sampleRequestContextFromRequest requestPolicyConfig,
       applicationNavigationRuntime = Nothing,
       applicationStaticAssets = staticAssetsConfig,
       applicationRequestPolicy = requestPolicyConfig,
@@ -502,7 +482,7 @@ rootPathApplication =
   Application
     { appName = "root-path",
       defaultRequestContext = defaultContext,
-      requestContextFromRequest = sampleRequestContextFromRequest testTrustedForwardedProxy,
+      requestContextFromRequest = sampleRequestContextFromRequest (defaultRequestPolicy {forwardedHeaderTrust = testTrustedForwardedProxy}),
       applicationNavigationRuntime = Nothing,
       applicationStaticAssets = emptyStaticAssets,
       applicationRequestPolicy = defaultRequestPolicy {forwardedHeaderTrust = testTrustedForwardedProxy},

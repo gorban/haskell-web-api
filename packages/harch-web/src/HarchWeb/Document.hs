@@ -35,7 +35,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Markup (Html, renderHtml, text)
-import HarchWeb.PathPrefix (applyPathPrefix, mkPathPrefix, mkUrlPath, urlPathText)
+import HarchWeb.PathPrefix (PathPrefix, applyPathPrefix, mkUrlPath, urlPathText)
 import HarchWeb.Routing (RouteCodec, routeHref)
 import HarchWeb.StaticAssets (AssetPath (..), Stylesheet (..))
 
@@ -105,9 +105,9 @@ defaultNavigationRuntime =
       navigationRuntimeScript = defaultNavigationRuntimeScript
     }
 
-navigationRuntimeScriptSource :: Text -> NavigationRuntime -> Text
+navigationRuntimeScriptSource :: PathPrefix -> NavigationRuntime -> Text
 navigationRuntimeScriptSource pathPrefix runtime =
-  urlPathText (applyPathPrefix (mkPathPrefix pathPrefix) (mkUrlPath (navigationRuntimePath runtime)))
+  urlPathText (applyPathPrefix pathPrefix (mkUrlPath (navigationRuntimePath runtime)))
 
 defaultNavigationRuntimeScript :: Text
 defaultNavigationRuntimeScript =

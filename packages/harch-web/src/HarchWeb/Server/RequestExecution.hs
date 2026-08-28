@@ -38,7 +38,6 @@ import HarchWeb.Security
     corsPreflightResponse,
     externalRequestPath,
     httpsRedirectResponse,
-    mkPathPrefix,
     mkUrlPath,
     requestPathPrefix,
     requestPolicyResponseHeaders,
@@ -106,7 +105,7 @@ runEarlyRequestStages webApplication request requestPath policyResponseHeaders =
   for_ maybeStaticResponse $ \(staticRoutePath, staticResponse) ->
     earlyResponse
       ( urlPathText
-          (applyRequestPathPrefix (mkPathPrefix (requestPathPrefix requestPolicyConfig request)) (mkUrlPath staticRoutePath))
+          (applyRequestPathPrefix (requestPathPrefix requestPolicyConfig request) (mkUrlPath staticRoutePath))
       )
       staticResponse
 

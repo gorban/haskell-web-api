@@ -1364,7 +1364,7 @@ spec = do
                             acmeTlsConfig
                             sampleApplication
                               { applicationRequestPolicy = defaultRequestPolicy {forwardedHeaderTrust = testTrustedForwardedProxy},
-                                requestContextFromRequest = sampleRequestContextFromRequest testTrustedForwardedProxy,
+                                requestContextFromRequest = sampleRequestContextFromRequest (defaultRequestPolicy {forwardedHeaderTrust = testTrustedForwardedProxy}),
                                 reportRequestObservability = \requestObservabilityValue ->
                                   modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
                               }

@@ -63,7 +63,7 @@ data AppRequestContext = AppRequestContext
   { requestLocale :: AppLocale,
     requestLocaleIsExplicit :: Bool,
     requestCorrelationId :: Maybe Text,
-    requestPathPrefix :: Text,
+    requestPathPrefix :: HarchWeb.PathPrefix,
     requestQueryParameters :: [(Text, Text)],
     requestSessionId :: Maybe SessionId,
     requestMfaEnrollmentSessionId :: Maybe SessionId
@@ -184,7 +184,7 @@ defaultRequestContext =
     { requestLocale = English,
       requestLocaleIsExplicit = False,
       requestCorrelationId = Nothing,
-      requestPathPrefix = Text.empty,
+      requestPathPrefix = HarchWeb.emptyPathPrefix,
       requestQueryParameters = [],
       requestSessionId = Nothing,
       requestMfaEnrollmentSessionId = Nothing
@@ -235,7 +235,7 @@ renderRoutePath :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Text
 renderRoutePath routeRequest =
   HarchWeb.urlPathText
     ( HarchWeb.applyRequestPathPrefix
-        (HarchWeb.mkPathPrefix (requestPathPrefix requestContext))
+        (requestPathPrefix requestContext)
         ( HarchWeb.mkUrlPath
             ( case HarchWeb.requestRoute routeRequest of
                 Api apiRoute -> renderApiRoutePath apiRoute
@@ -289,19 +289,11 @@ mergeRequestContext requestContext maybeLocale =
           Nothing -> requestLocaleIsExplicit requestContext
     }
 
-requestContextFromWaiRequest :: HarchWeb.ForwardedHeaderTrust -> Wai.Request -> AppRequestContext -> AppRequestContext
-requestContextFromWaiRequest forwardedHeaderTrust request requestContext =
+requestContextFromWaiRequest :: HarchWeb.RequestPolicyConfig -> Wai.Request -> AppRequestContext -> AppRequestContext
+requestContextFromWaiRequest requestPolicyConfig request requestContext =
   requestContext
     { requestPathPrefix =
-        if HarchWeb.isTrustedForwardingPeer forwardedHeaderTrust (Wai.remoteHost request)
-          then
-            maybe
-              Text.empty
-              HarchWeb.normalizeRequestPathPrefix
-              ( lookup "X-Forwarded-Prefix" (Wai.requestHeaders request)
-                  >>= either (const Nothing) (firstCommaSeparatedValue . Text.strip) . TextEncoding.decodeUtf8'
-              )
-          else Text.empty,
+        HarchWeb.requestPathPrefix requestPolicyConfig request,
       requestSessionId = sessionIdFromCookieHeaders (sessionCookieNameText (sessionCookieName defaultSessionCookiePolicy)) (Wai.requestHeaders request),
       requestMfaEnrollmentSessionId = sessionIdFromCookieHeaders (sessionCookieNameText (sessionCookieName mfaEnrollmentSessionCookiePolicy)) (Wai.requestHeaders request)
     }
@@ -415,12 +407,6 @@ renderApiRoutePath apiRoute =
     StatusApi -> "/api/status"
     SecondApi -> "/api/second"
     ApiNotFound -> "/api/404"
-
-firstCommaSeparatedValue :: Text -> Maybe Text
-firstCommaSeparatedValue value =
-  case filter (not . Text.null) (map Text.strip (Text.splitOn "," value)) of
-    [] -> Nothing
-    firstValue : _ -> Just firstValue
 
 sessionIdFromCookieHeaders :: Text -> Http.RequestHeaders -> Maybe SessionId
 sessionIdFromCookieHeaders cookieName headers = do

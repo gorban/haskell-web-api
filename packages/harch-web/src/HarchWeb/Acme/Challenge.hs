@@ -35,7 +35,6 @@ import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Security
   ( RequestPolicyConfig,
     applyRequestPathPrefix,
-    mkPathPrefix,
     mkUrlPath,
     requestHostWithoutPort,
     requestPathPrefix,
@@ -88,7 +87,7 @@ acmeChallengeRoutePath :: RequestPolicyConfig -> Wai.Request -> Text
 acmeChallengeRoutePath requestPolicyConfig request =
   urlPathText
     ( applyRequestPathPrefix
-        (mkPathPrefix (requestPathPrefix requestPolicyConfig request))
+        (requestPathPrefix requestPolicyConfig request)
         (mkUrlPath "/.well-known/acme-challenge/*")
     )
 

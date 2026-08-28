@@ -127,6 +127,20 @@ over-limit allocation. Stable errors carry no provider payload. The existing 16 
 remains defence in depth. Real loopback coverage exercises count overflow in a greeting and after
 STARTTLS, plus byte overflow in the pre-TLS EHLO path.
 
+### Decision record — typed forwarded path prefixes (PR-SEC7, 2026-08-28)
+
+**Decision: extend the existing opaque `HarchWeb.PathPrefix` role into the sole validated
+forwarded-prefix representation, and construct it once at `HarchWeb.Security`'s trusted-header
+boundary.** A second URL-sanitizing layer at each redirect, route, navigation, or static-asset
+sink would be incomplete by construction. `PathPrefix` now accepts only canonical absolute paths
+made from nonempty URI-unreserved ASCII segments; repeated slashes, dot segments, percent escapes,
+backslashes, query/fragment delimiters, controls, and other ambiguous characters fail closed to the
+root mount. `RequestPolicyConfig` owns the trust decision, and the parsed value flows through
+framework routing, redirects, ACME/static paths, the site runtime descriptor, and web-api request
+context rather than re-normalizing raw header text. This preserves ordinary `/app` mounting while a
+proxy that appends a client-controlled header can no longer turn generated `Location`, `href`, or
+`src` values into external browser references.
+
 **Worked example.** A native file-upload form needed to set a `Set-Cookie` header from a plain page
 response for a double-submit CSRF cookie, and the response type had no header field at all. The gap
 was worked around silently: a single-use, server-held token replaced the cookie-based scheme the

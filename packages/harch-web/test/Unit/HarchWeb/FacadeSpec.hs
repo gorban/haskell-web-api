@@ -46,7 +46,7 @@ import System.Process ()
 import TestCore.CustomAssertions ()
 import TestCore.Wai ()
 import Text.Read ()
-import Unit.HarchWeb.TestSupport (TestContext, TestRoute (DataRoute, KnownRoute, MissingRoute), defaultContext, emptyStaticAssets, renderDocument, sampleApplication, samplePage, spanishContext, testRegionPatch, trustedMarkup)
+import Unit.HarchWeb.TestSupport (TestContext, TestRoute (DataRoute, KnownRoute, MissingRoute), defaultContext, emptyStaticAssets, renderDocument, sampleApplication, samplePage, spanishContext, testPathPrefix, testRegionPatch, trustedMarkup)
 
 existingSpec :: Spec
 existingSpec =
@@ -85,8 +85,8 @@ movedSpec :: Spec
 movedSpec = do
   describe "public role-safe boundaries" $ do
     it "constructs and applies opaque path, password, secret, TLS, and span roles through their public modules" $ do
-      urlPathText (applyRequestPathPrefix (mkPathPrefix "/app/") (mkUrlPath "/second")) `shouldBe` "/app/second"
-      urlPathText (stripRequestPathPrefix (mkPathPrefix "/app") (mkUrlPath "/app/second")) `shouldBe` "/second"
+      urlPathText (applyRequestPathPrefix (testPathPrefix "/app/") (mkUrlPath "/second")) `shouldBe` "/app/second"
+      urlPathText (stripRequestPathPrefix (testPathPrefix "/app") (mkUrlPath "/app/second")) `shouldBe` "/second"
       Password.mkPasswordHashingPolicy (Password.argon2Iterations 1) (Password.argon2MemoryKib 8) (Password.argon2Parallelism 1)
         `shouldBe` Just (Password.defaultPasswordHashingPolicy {Password.passwordHashIterations = 1, Password.passwordHashMemoryKibibytes = 8, Password.passwordHashParallelism = 1})
       let encryptionKey =
@@ -170,7 +170,7 @@ movedSpec = do
       navigationItemRoute `shouldBe` KnownRoute
       navigationRuntimePath navigationRuntime `shouldBe` "/assets/navigation.js"
       navigationRuntimeScript navigationRuntime `shouldBe` "console.log('nav');"
-      navigationRuntimeScriptSource "/app" navigationRuntime `shouldBe` "/app/assets/navigation.js"
+      navigationRuntimeScriptSource (testPathPrefix "/app") navigationRuntime `shouldBe` "/app/assets/navigation.js"
       navigationRuntimeResponse navigationRuntime "/assets/navigation.js"
         `shouldBe` Just
           ResponseBody

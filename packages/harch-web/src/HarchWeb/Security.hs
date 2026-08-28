@@ -18,6 +18,7 @@ module HarchWeb.Security
     module HarchWeb.Security.RequestLimits,
     CorsPolicyConfig (..),
     PathPrefix.PathPrefix,
+    PathPrefix.PathPrefixError (..),
     PathPrefix.UrlPath,
     RequestContextField (..),
     RequestPolicyConfig (..),
@@ -31,9 +32,9 @@ module HarchWeb.Security
     defaultResponseSecurityHeadersConfig,
     externalRequestPath,
     httpsRedirectResponse,
-    PathPrefix.mkPathPrefix,
+    PathPrefix.emptyPathPrefix,
     PathPrefix.mkUrlPath,
-    normalizeRequestPathPrefix,
+    parseRequestPathPrefix,
     PathPrefix.pathPrefixText,
     requestContextObservabilityAttributes,
     requestContextFields,
@@ -59,6 +60,7 @@ import Control.Applicative ((<|>))
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.Char (isHexDigit)
+import Data.Either (fromRight)
 import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -184,7 +186,7 @@ waiRequestPath :: RequestPolicyConfig -> Wai.Request -> Text
 waiRequestPath requestPolicyConfig request =
   PathPrefix.urlPathText
     ( stripRequestPathPrefix
-        (PathPrefix.mkPathPrefix (requestPathPrefix requestPolicyConfig request))
+        (requestPathPrefix requestPolicyConfig request)
         (PathPrefix.mkUrlPath (rawRequestPath request))
     )
 
@@ -523,9 +525,16 @@ isAsciiHexText character = isHexDigit character && fromEnum character < 128
 limitObservabilityHeaderValue :: Text -> Text
 limitObservabilityHeaderValue = Text.take 256
 
-requestPathPrefix :: RequestPolicyConfig -> Wai.Request -> Text
+-- | Decision (PR-SEC7, 2026-08-28): parse a trusted forwarded prefix once at
+-- the request-policy boundary into 'PathPrefix.PathPrefix', rather than let
+-- individual URL sinks normalize raw header text. Invalid values fail closed
+-- to the root mount: a proxy which appends client-controlled headers cannot
+-- make framework-generated locations, links, or assets external.
+requestPathPrefix :: RequestPolicyConfig -> Wai.Request -> PathPrefix.PathPrefix
 requestPathPrefix requestPolicyConfig request =
-  maybe Text.empty normalizeRequestPathPrefix (trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-Prefix" request)
+  maybe PathPrefix.emptyPathPrefix parsedPrefix (trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-Prefix" request)
+  where
+    parsedPrefix = fromRight PathPrefix.emptyPathPrefix . parseRequestPathPrefix
 
 rawRequestPath :: Wai.Request -> Text
 rawRequestPath request
@@ -553,18 +562,14 @@ externalRequestPath :: RequestPolicyConfig -> Wai.Request -> Text
 externalRequestPath requestPolicyConfig request =
   PathPrefix.urlPathText
     ( applyRequestPathPrefix
-        (PathPrefix.mkPathPrefix (requestPathPrefix requestPolicyConfig request))
+        (requestPathPrefix requestPolicyConfig request)
         (PathPrefix.mkUrlPath (waiRequestPath requestPolicyConfig request))
     )
 
--- | Normalize a raw path-prefix value (trim, ensure a single leading slash,
--- drop any trailing slash) without applying it to a path. Exposed alongside
--- 'applyRequestPathPrefix'/'stripRequestPathPrefix' for a caller — such as
--- @web-api@'s own request-context construction — that needs to store a
--- normalized prefix on its own, rather than duplicate this module's private
--- 'HarchWeb.PathPrefix' logic.
-normalizeRequestPathPrefix :: Text -> Text
-normalizeRequestPathPrefix = PathPrefix.normalizePathPrefix
+-- | Parse a raw path-prefix value into the only type accepted by framework
+-- browser-URL helpers. See 'requestPathPrefix' for the trusted-header policy.
+parseRequestPathPrefix :: Text -> Either PathPrefix.PathPrefixError PathPrefix.PathPrefix
+parseRequestPathPrefix = PathPrefix.parsePathPrefix
 
 applyRequestPathPrefix :: PathPrefix.PathPrefix -> PathPrefix.UrlPath -> PathPrefix.UrlPath
 applyRequestPathPrefix = PathPrefix.applyPathPrefix

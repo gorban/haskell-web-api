@@ -16,10 +16,10 @@ import Data.IORef ()
 import Data.List ()
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe ()
-import Data.Text ()
+import Data.Text (Text)
 import Data.Text qualified as Text ()
 import Data.Text.Encoding qualified as TextEncoding ()
-import HarchWeb (applyRequestPathPrefix, mkPathPrefix, mkUrlPath, pathPrefixText, stripRequestPathPrefix, urlPathText)
+import HarchWeb (PathPrefix, PathPrefixError (PathPrefixAmbiguousSegment, PathPrefixMultipleSlashes, PathPrefixUnsafeCharacter), applyRequestPathPrefix, mkUrlPath, parseRequestPathPrefix, pathPrefixText, stripRequestPathPrefix, urlPathText)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -46,12 +46,55 @@ import Text.Read ()
 import Unit.HarchWeb.TestSupport ()
 
 spec = do
-  describe "PathPrefix and UrlPath" $
+  describe "PathPrefix and UrlPath" $ do
     it "keeps both path roles distinct while applying and stripping prefixes" $
+      let prefix = validPathPrefix "/app"
+       in expectAll
+            ( (pathPrefixText prefix `shouldBe` "/app")
+                :| [ urlPathText (mkUrlPath "/known") `shouldBe` "/known",
+                     urlPathText (applyRequestPathPrefix prefix (mkUrlPath "/known")) `shouldBe` "/app/known",
+                     urlPathText (stripRequestPathPrefix prefix (mkUrlPath "/app/known")) `shouldBe` "/known"
+                   ]
+            )
+
+    it "canonicalizes safe path segments and rejects ambiguous browser prefixes" $
       expectAll
-        ( (pathPrefixText (mkPathPrefix "/app") `shouldBe` "/app")
-            :| [ urlPathText (mkUrlPath "/known") `shouldBe` "/known",
-                 urlPathText (applyRequestPathPrefix (mkPathPrefix "/app") (mkUrlPath "/known")) `shouldBe` "/app/known",
-                 urlPathText (stripRequestPathPrefix (mkPathPrefix "/app") (mkUrlPath "/app/known")) `shouldBe` "/known"
+        ( (pathPrefixText (validPathPrefix "app/~team_1") `shouldBe` "/app/~team_1")
+            :| [ parseRequestPathPrefix "//attacker.example" `shouldBe` Left PathPrefixMultipleSlashes,
+                 parseRequestPathPrefix "/app//nested" `shouldBe` Left PathPrefixMultipleSlashes,
+                 parseRequestPathPrefix "/app\\nested" `shouldBe` Left PathPrefixUnsafeCharacter,
+                 parseRequestPathPrefix "/app?next=external" `shouldBe` Left PathPrefixUnsafeCharacter,
+                 parseRequestPathPrefix "/app#fragment" `shouldBe` Left PathPrefixUnsafeCharacter,
+                 parseRequestPathPrefix "/app%2Fexternal" `shouldBe` Left PathPrefixUnsafeCharacter,
+                 parseRequestPathPrefix "/app\NULnested" `shouldBe` Left PathPrefixUnsafeCharacter,
+                 parseRequestPathPrefix "/app//" `shouldBe` Left PathPrefixMultipleSlashes,
+                 parseRequestPathPrefix "/app/" `shouldBe` Right (validPathPrefix "/app"),
+                 parseRequestPathPrefix "/app/./nested" `shouldBe` Left PathPrefixAmbiguousSegment
                ]
         )
+
+    it "keeps the public policy values comparable and diagnosable" $
+      let canonicalPrefix = validPathPrefix "/app"
+          equivalentPrefix = validPathPrefix "app"
+          distinctPrefix = validPathPrefix "/other"
+       in expectAll
+            ( ((canonicalPrefix == equivalentPrefix) `shouldBe` True)
+                :| [ (canonicalPrefix == distinctPrefix) `shouldBe` False,
+                     (canonicalPrefix /= distinctPrefix) `shouldBe` True,
+                     show canonicalPrefix `shouldBe` "PathPrefix \"/app\"",
+                     showsPrec 11 canonicalPrefix "" `shouldBe` "(PathPrefix \"/app\")",
+                     showList [canonicalPrefix] "" `shouldBe` "[PathPrefix \"/app\"]",
+                     (PathPrefixMultipleSlashes == PathPrefixMultipleSlashes) `shouldBe` True,
+                     (PathPrefixMultipleSlashes == PathPrefixUnsafeCharacter) `shouldBe` False,
+                     (PathPrefixMultipleSlashes /= PathPrefixUnsafeCharacter) `shouldBe` True,
+                     show PathPrefixAmbiguousSegment `shouldBe` "PathPrefixAmbiguousSegment",
+                     showsPrec 11 PathPrefixAmbiguousSegment "" `shouldBe` "PathPrefixAmbiguousSegment",
+                     showList [PathPrefixAmbiguousSegment] "" `shouldBe` "[PathPrefixAmbiguousSegment]"
+                   ]
+            )
+
+validPathPrefix :: Text -> PathPrefix
+validPathPrefix value =
+  case parseRequestPathPrefix value of
+    Left parseError -> error ("invalid path-prefix fixture: " <> show parseError)
+    Right pathPrefix -> pathPrefix

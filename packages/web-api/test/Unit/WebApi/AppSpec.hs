@@ -171,7 +171,7 @@ spec = do
               { Wai.requestHeaders = [("X-Forwarded-Prefix", "\255")]
               }
       HarchWeb.requestContextFromRequest trustedForwardedApplication forwardedPrefixRequest defaultRequestContext
-        `shouldBe` defaultRequestContext {requestPathPrefix = "/app"}
+        `shouldBe` defaultRequestContext {requestPathPrefix = testPathPrefix "/app"}
       HarchWeb.requestContextFromRequest trustedForwardedApplication emptyForwardedPrefixRequest defaultRequestContext
         `shouldBe` defaultRequestContext
       HarchWeb.requestContextFromRequest trustedForwardedApplication invalidForwardedPrefixRequest defaultRequestContext
@@ -446,6 +446,35 @@ spec = do
       assetResponse <- performWaiRequest (HarchWeb.toWaiApplication prefixedApplication) prefixedAssetRequest
       Wai.responseStatus assetResponse `shouldBe` Http.status200
       lookup Http.hContentType (Wai.responseHeaders assetResponse) `shouldBe` Just "application/javascript; charset=utf-8"
+
+    it "fails closed for hostile trusted forwarded prefixes in rendered links and script sources" $ do
+      let hostilePrefixes = ["//attacker.example", "/app\\attacker", "/app?next=attacker", "/app%2Fattacker"]
+          trustedApplication =
+            buildApp
+              navigationAppConfig
+                { requestPolicy =
+                    (requestPolicy navigationAppConfig)
+                      { forwardedHeaderTrust = testTrustedForwardedProxy
+                      }
+                }
+      forM_ hostilePrefixes $ \hostilePrefix -> do
+        response <-
+          performWaiRequest
+            (HarchWeb.toWaiApplication trustedApplication)
+            ( (waiRequest ["second"])
+                { Wai.requestHeaders = [("X-Forwarded-Prefix", hostilePrefix)]
+                }
+            )
+        Wai.responseStatus response `shouldBe` Http.status200
+        responseBody <- readResponseBody response
+        expectAll
+          ( (Text.isInfixOf "href=\"/\"" responseBody `shouldBe` True)
+              :| [ Text.isInfixOf "src=\"/assets/navigation.js\"" responseBody `shouldBe` True,
+                   Text.isInfixOf "attacker" responseBody `shouldBe` False,
+                   Text.isInfixOf "href=\"//" responseBody `shouldBe` False,
+                   Text.isInfixOf "src=\"//" responseBody `shouldBe` False
+                 ]
+          )
 
     it "returns HTTP 500 for required page failures while keeping unaffected routes unchanged" $ do
       let failingApplication =

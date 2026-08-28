@@ -154,7 +154,7 @@ spec = do
       let prefixedSpanishRequest =
             HarchWeb.RouteRequest
               HomeRoute
-              spanishRequestContext {requestPathPrefix = "/app"}
+              spanishRequestContext {requestPathPrefix = testPathPrefix "/app"}
       selectResponse defaultAppConfig spanishHomeRequest
         `shouldReturn` (HarchWeb.redirectResponse Http.status302 "/es/spaces" :: HarchWeb.Response AppRoute AppRequestContext)
       selectResponse defaultAppConfig prefixedSpanishRequest

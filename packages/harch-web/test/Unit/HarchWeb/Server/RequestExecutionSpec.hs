@@ -1046,6 +1046,12 @@ spec = do
         Http.status308,
         Just "https://app.example.com/app"
       ),
+      ( "rejects a hostile trusted forwarded prefix in HTTPS redirects",
+        Wai.defaultRequest {Wai.rawPathInfo = "/second", Wai.requestHeaders = [("Host", "app.example.com"), ("X-Forwarded-Prefix", "//attacker.example")]},
+        defaultRequestPolicy {redirectHttpToHttps = True, forwardedHeaderTrust = testTrustedForwardedProxy},
+        Http.status308,
+        Just "https://app.example.com/second"
+      ),
       ( "does not redirect ACME http-01 challenge paths",
         Wai.defaultRequest {Wai.rawPathInfo = "/.well-known/acme-challenge/token", Wai.requestHeaders = [("Host", "app.example.com:5001")]},
         defaultRequestPolicy {redirectHttpToHttps = True, httpsRedirectPort = Just 5443},
@@ -2093,7 +2099,7 @@ spec = do
           diagnosticApplication =
             sampleApplication
               { applicationRequestPolicy = defaultRequestPolicy {forwardedHeaderTrust = testTrustedForwardedProxy},
-                requestContextFromRequest = sampleRequestContextFromRequest testTrustedForwardedProxy,
+                requestContextFromRequest = sampleRequestContextFromRequest (defaultRequestPolicy {forwardedHeaderTrust = testTrustedForwardedProxy}),
                 renderRequestResponse =
                   \_ request ->
                     pure $

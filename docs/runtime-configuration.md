@@ -61,7 +61,7 @@ The smaller `two-pages-example` has its own fixed local configuration and does n
 | `STATIC_ASSET_CONTENT_TYPE_<n>_EXTENSION` | Allowed extension, including its leading dot. An empty value opts into extensionless files. | `.css`, `.html`, `.js`, `.json`, `.svg`, `.txt` |
 | `STATIC_ASSET_CONTENT_TYPE_<n>_MIME_TYPE` | MIME type paired with the indexed extension. | types for the default extensions |
 | `STATIC_CACHE_CONTROL_SECONDS` | Static response `Cache-Control` max-age. | unset |
-| `TRUST_FORWARDED_HEADERS` | Trust forwarded host/proto/prefix headers from a configured reverse proxy. Keep `false` unless the direct peer is trusted. | `false` |
+| `TRUST_FORWARDED_HEADERS` | Trust forwarded host/proto/prefix headers from a configured reverse proxy. Keep `false` unless the direct peer is trusted. A trusted `X-Forwarded-Prefix` is accepted only as slash-separated ASCII URI-unreserved segments; malformed, encoded, or externally-shaped values are ignored rather than rendered. | `false` |
 | `REQUEST_TARGET_MAX_BYTES` | Optional maximum for raw path plus query bytes. A request above it receives `414` before routing, logging, or tracing. | unset (unbounded) |
 | `REQUEST_HEADER_MAX_BYTES` | Optional total request-header budget. Warp applies it while parsing the wire request; the framework also checks it before middleware. | unset (unbounded) |
 | `REQUEST_HEADER_MAX_COUNT` | Optional maximum number of request header fields. | unset (unbounded) |

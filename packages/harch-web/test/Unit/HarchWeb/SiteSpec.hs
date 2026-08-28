@@ -61,7 +61,7 @@ spec = do
                  HarchWeb.staticAssetContentTypes (siteStaticAssets sampleSite) `shouldBe` HarchWeb.defaultStaticAssetContentTypes,
                  HarchWeb.staticCacheControlSeconds (siteStaticAssets sampleSite) `shouldBe` Nothing,
                  fmap HarchWeb.navigationRuntimePath (siteNavigationRuntime sampleSite) `shouldBe` Just "/assets/navigation.js",
-                 siteNavigationRuntimePathPrefix sampleSite (SampleContext "/app") `shouldBe` "",
+                 siteNavigationRuntimePathPrefix sampleSite (SampleContext "/app") `shouldBe` HarchWeb.emptyPathPrefix,
                  HarchWeb.httpsRedirectPort (siteRequestPolicy sampleSite) `shouldBe` Nothing,
                  HarchWeb.httpsRedirectAuthority (siteRequestPolicy sampleSite) `shouldBe` Nothing,
                  HarchWeb.requestTransportLimits (siteRequestPolicy sampleSite) `shouldBe` HarchWeb.warpDefaultRequestTransportLimits,
@@ -322,7 +322,7 @@ spec = do
     it "renders the framework runtime script source from page context" $ do
       let prefixedRuntimeSite =
             sampleSite
-              { siteNavigationRuntimePathPrefix = pathPrefix
+              { siteNavigationRuntimePathPrefix = sampleContextPathPrefix
               }
           siteApplication = buildSiteApplication prefixedRuntimeSite
           request = RouteRequest {requestRoute = HomeRoute, requestContext = SampleContext "/app"}
@@ -339,6 +339,12 @@ sampleSite =
     samplePageShell
     [HomeRoute, SecondRoute]
     sampleRouteDefinition
+
+sampleContextPathPrefix :: SampleContext -> HarchWeb.PathPrefix
+sampleContextPathPrefix (SampleContext value) =
+  case HarchWeb.parseRequestPathPrefix value of
+    Left parseError -> error ("invalid sample path prefix: " <> show parseError)
+    Right pathPrefix -> pathPrefix
 
 sampleRouteDefinition :: SampleRoute -> RouteDefinition SampleRoute SampleContext
 sampleRouteDefinition route =
