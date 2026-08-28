@@ -241,6 +241,38 @@ spec = do
       assertRejected invalidMultilineSeparatorServer "invalid continuation separator" ""
       assertRejected oversizedGreetingServer "exceeds 16384 bytes" ""
 
+    it "bounds multiline greeting continuation lines without retaining server text" $ do
+      _ <- withLoopbackSmtp excessiveGreetingLineServer $ \port -> do
+        let config = required "loopback SMTP config" (mkSmtpConfig (smtpConfigInput "127.0.0.1" port "account.example.test" sampleSender Nothing))
+        result <- try (deliverSmtpEmail config sampleMessage) :: IO (Either IOException ())
+        case result of
+          Left failure -> do
+            displayException failure `shouldContain` "SMTP response exceeds 100 lines"
+            displayException failure `shouldNotContain` "smtp-response-count-sentinel"
+          Right () -> expectationFailure "expected excessive SMTP greeting continuation lines to be rejected"
+      pure ()
+
+    it "bounds a pre-TLS EHLO response's aggregate bytes without retaining server text" $ do
+      _ <- withLoopbackSmtp excessiveEhloBytesServer $ \port -> do
+        let config = required "loopback SMTP config" (mkSmtpConfig (smtpConfigInput "127.0.0.1" port "account.example.test" sampleSender Nothing))
+        result <- try (deliverSmtpEmail config sampleMessage) :: IO (Either IOException ())
+        case result of
+          Left failure -> do
+            displayException failure `shouldContain` "SMTP response exceeds 65536 bytes"
+            displayException failure `shouldNotContain` "smtp-response-bytes-sentinel"
+          Right () -> expectationFailure "expected excessive pre-TLS EHLO bytes to be rejected"
+      pure ()
+
+    it "bounds a post-TLS EHLO response's continuation lines" $
+      withSystemTrustedLoopbackCertificate $ \certificatePath privateKeyPath -> do
+        _ <- withLoopbackSmtp (excessivePostTlsEhloLineServer certificatePath privateKeyPath) $ \port -> do
+          let config = required "STARTTLS SMTP config" (mkSmtpConfig (smtpConfigInput "localhost" port "account.example.test" sampleSender (Just (smtpAuthentication (smtpLoginUsername "smtp-user") (smtpLoginPassword "smtp-password")))))
+          result <- try (deliverSmtpEmailWithResolver (loopbackSmtpResolver port) config sampleMessage) :: IO (Either IOException ())
+          case result of
+            Left failure -> displayException failure `shouldContain` "SMTP response exceeds 100 lines"
+            Right () -> expectationFailure "expected excessive post-TLS EHLO continuation lines to be rejected"
+        pure ()
+
     it "consumes every line of a multiline SMTP capability reply" $
       withLoopbackSmtp
         acceptingThreeLineCapabilityServer
@@ -559,6 +591,36 @@ oversizedGreetingServer :: Socket.Socket -> IO ByteString.ByteString
 oversizedGreetingServer socket = do
   sendResponse socket ("220 " <> ByteString.replicate 16381 97)
   pure ByteString.empty
+
+excessiveGreetingLineServer :: Socket.Socket -> IO ByteString.ByteString
+excessiveGreetingLineServer socket = do
+  sendResponse socket (smtpContinuationLines "220" "smtp-response-count-sentinel" 101)
+  pure ByteString.empty
+
+excessiveEhloBytesServer :: Socket.Socket -> IO ByteString.ByteString
+excessiveEhloBytesServer socket = do
+  sendResponse socket "220 loopback ready\r\n"
+  command <- receiveChunk socket
+  command `shouldBeServer` "EHLO account.example.test\r\n"
+  let sentinel = "smtp-response-bytes-sentinel"
+      continuationPayload = sentinel <> ByteString.replicate (16378 - ByteString.length sentinel) 97
+  sendResponse socket (smtpContinuationLines "250" continuationPayload 5)
+  pure ByteString.empty
+
+excessivePostTlsEhloLineServer :: FilePath -> FilePath -> Socket.Socket -> IO ByteString.ByteString
+excessivePostTlsEhloLineServer certificatePath privateKeyPath socket = do
+  sendResponse socket "220 loopback ready\r\n"
+  expectCommand socket "EHLO account.example.test\r\n" "250-STARTTLS\r\n250 AUTH PLAIN\r\n"
+  expectCommand socket "STARTTLS\r\n" "220 begin TLS\r\n"
+  connection <- newTlsTestConnection certificatePath privateKeyPath socket
+  command <- readTlsLine connection
+  command `shouldBeServer` "EHLO account.example.test"
+  writeTlsResponse connection (smtpContinuationLines "250" "smtp-response-post-tls-sentinel" 101)
+  pure ByteString.empty
+
+smtpContinuationLines :: ByteString.ByteString -> ByteString.ByteString -> Int -> ByteString.ByteString
+smtpContinuationLines statusCode payload count =
+  ByteString.concat (replicate count (statusCode <> "-" <> payload <> "\r\n"))
 
 expectCommand :: Socket.Socket -> ByteString.ByteString -> ByteString.ByteString -> IO ()
 expectCommand socket expected response = do

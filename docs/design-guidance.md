@@ -114,6 +114,19 @@ that wrapper owns protected credential files or its managed environment and its 
 policy. This removes the framework from credential transport rather than inventing a partial
 secret-argv filter.
 
+### Decision record — bounded SMTP response accumulation (PR-SEC6, 2026-08-28)
+
+**Decision: extend `HarchWeb.Email`'s existing SMTP response reader with fixed whole-response
+limits, rather than expose a new SMTP configuration surface or add a second parser.** The response
+reader is the sole owner of provider-controlled reply lines and already owns the per-line bound.
+It now permits at most 100 lines and 64 KiB of complete wire lines (including status/separator and
+CRLF), which is comfortably above normal greetings and capability replies but bounds both retained
+memory and continuation-loop work before authentication. The accounting checks the next line
+against the remaining byte budget before retaining it, avoiding overflow or an intermediate
+over-limit allocation. Stable errors carry no provider payload. The existing 16 KiB line ceiling
+remains defence in depth. Real loopback coverage exercises count overflow in a greeting and after
+STARTTLS, plus byte overflow in the pre-TLS EHLO path.
+
 **Worked example.** A native file-upload form needed to set a `Set-Cookie` header from a plain page
 response for a double-submit CSRF cookie, and the response type had no header field at all. The gap
 was worked around silently: a single-use, server-held token replaced the cookie-based scheme the

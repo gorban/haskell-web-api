@@ -341,17 +341,51 @@ writeSmtpBytes connection bytes = do
 readSmtpResponse :: SmtpConnection -> IO SmtpResponse
 readSmtpResponse connection = do
   (responseCode, responseSeparator, firstLine) <- readSmtpResponseLine connection
-  remainingLines <- readContinuationLines responseCode responseSeparator []
+  let firstLineBytes = smtpResponseWireLineBytes firstLine
+  ensureSmtpResponseLineCount 1
+  ensureSmtpResponseBytes firstLineBytes 0
+  remainingLines <- readContinuationLines responseCode responseSeparator 1 firstLineBytes []
   pure (SmtpResponse responseCode (firstLine : reverse remainingLines))
   where
-    readContinuationLines expectedCode separator accumulatedLines
+    readContinuationLines expectedCode separator lineCount byteCount accumulatedLines
       | separator == 45 = do
           (nextCode, nextSeparator, nextLine) <- readSmtpResponseLine connection
           unless (nextCode == expectedCode) $
             ioError (userError "SMTP multiline response changed status code")
-          readContinuationLines expectedCode nextSeparator (nextLine : accumulatedLines)
+          let nextLineBytes = smtpResponseWireLineBytes nextLine
+              nextLineCount = lineCount + 1
+          ensureSmtpResponseLineCount nextLineCount
+          ensureSmtpResponseBytes nextLineBytes byteCount
+          readContinuationLines expectedCode nextSeparator nextLineCount (byteCount + nextLineBytes) (nextLine : accumulatedLines)
       | separator == 32 = pure accumulatedLines
       | otherwise = ioError (userError "SMTP response used an invalid continuation separator")
+
+-- | Decision (PR-SEC6, 2026-08-28): extend the existing response reader with
+-- fixed whole-response budgets instead of adding SMTP configuration.  The
+-- reader already owns the only retained provider-controlled response data,
+-- and 100 lines/64 KiB is deliberately far above normal SMTP greetings and
+-- EHLO capability lists while bounding unauthenticated continuation traffic.
+-- Count wire bytes (status/separator and CRLF included) before retaining a
+-- line; reject with stable non-payload errors and retain the existing 16 KiB
+-- per-line limit as defence in depth.
+maxSmtpResponseLines :: Int
+maxSmtpResponseLines = 100
+
+maxSmtpResponseBytes :: Int
+maxSmtpResponseBytes = 65536
+
+smtpResponseWireLineBytes :: ByteString.ByteString -> Int
+smtpResponseWireLineBytes responseLine = ByteString.length responseLine + 6
+
+ensureSmtpResponseLineCount :: Int -> IO ()
+ensureSmtpResponseLineCount lineCount =
+  when (lineCount > maxSmtpResponseLines) $
+    ioError (userError "SMTP response exceeds 100 lines")
+
+ensureSmtpResponseBytes :: Int -> Int -> IO ()
+ensureSmtpResponseBytes nextLineBytes accumulatedBytes =
+  when (nextLineBytes > maxSmtpResponseBytes - accumulatedBytes) $
+    ioError (userError "SMTP response exceeds 65536 bytes")
 
 -- | A malformed wire line likewise has no safe diagnostic payload to retain.
 readSmtpResponseLine :: SmtpConnection -> IO (ByteString.ByteString, Word8, ByteString.ByteString)
