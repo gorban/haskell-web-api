@@ -55,7 +55,7 @@ The smaller `two-pages-example` has its own fixed local configuration and does n
 | `LISTENER_<n>_ACME_DOMAINS` | Comma-delimited certificate domains. | unset |
 | `LISTENER_<n>_ACME_CERTIFICATE_DIRECTORY` | Directory where ACME publishes `fullchain.pem` and `privkey.pem`. | `./.tls/<cert-name>` |
 | `LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` | Certbot executable path. | `certbot` |
-| `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` | Comma-delimited certbot overrides. Otherwise startup derives a non-interactive webroot invocation from ACME config. | unset |
+| `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` | Removed. Startup rejects this key without echoing its value; it derives the non-interactive webroot invocation from ACME config. For DNS or another custom authenticator, set `LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` to an operator-owned wrapper whose credentials are in a protected file or its managed environment, never command-line arguments. | unsupported |
 | `STATIC_ASSET_ROOT_<n>_URL_PREFIX` | URL prefix for static root `n`. | unset |
 | `STATIC_ASSET_ROOT_<n>_DIRECTORY` | Filesystem directory for static root `n`. | unset |
 | `STATIC_ASSET_CONTENT_TYPE_<n>_EXTENSION` | Allowed extension, including its leading dot. An empty value opts into extensionless files. | `.css`, `.html`, `.js`, `.json`, `.svg`, `.txt` |

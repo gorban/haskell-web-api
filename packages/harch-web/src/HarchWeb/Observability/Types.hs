@@ -57,7 +57,7 @@ data OtlpExporter = OtlpExporter
   { otlpEndpoint :: Text,
     otlpHeaders :: [(Text, Text)]
   }
-  deriving (Eq, Show)
+  deriving (Eq)
 
 data ObservabilityConfig = ObservabilityConfig
   { tracingExporter :: Maybe OtlpExporter,
@@ -75,12 +75,40 @@ data OtlpExporterStartup = OtlpExporterStartup
     startupEndpoint :: Text,
     startupHeaders :: [(Text, Text)]
   }
-  deriving (Eq, Show)
+  deriving (Eq)
 
 newtype ObservabilityStartupPlan = ObservabilityStartupPlan
   { startupExporters :: [OtlpExporterStartup]
   }
   deriving (Eq, Show)
+
+-- | OTLP endpoints and headers can carry collector credentials. Rendering
+-- configuration or startup plans is useful during startup failures, but it
+-- must never turn those values into application-log payloads. Keep only the
+-- stable fact that each field was configured; the exporter runtime still
+-- receives the original values (PR-SEC5, 2026-08-28).
+instance Show OtlpExporter where
+  showsPrec precedence exporter =
+    showParen
+      (precedence > 10)
+      ( showString "OtlpExporter {otlpEndpoint = <configured>, otlpHeaders = <redacted: "
+          . shows (length (otlpHeaders exporter))
+          . showString ">}"
+      )
+
+-- | See 'OtlpExporter'. The derived startup plan may be rendered through a
+-- top-level application startup error, so its copied transport parameters
+-- follow the same non-disclosure rule.
+instance Show OtlpExporterStartup where
+  showsPrec precedence exporter =
+    showParen
+      (precedence > 10)
+      ( showString "OtlpExporterStartup {startupSignal = "
+          . shows (startupSignal exporter)
+          . showString ", startupEndpoint = <configured>, startupHeaders = <redacted: "
+          . shows (length (startupHeaders exporter))
+          . showString ">}"
+      )
 
 -- | Convert configured exporters into the stable startup actions that the
 -- server runtime performs. This is pure so applications can validate and

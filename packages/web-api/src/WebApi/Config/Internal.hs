@@ -75,7 +75,6 @@ import Core.Config
     lookupConfigValue,
     parseBoolean,
     parseDelimitedTexts,
-    parseDelimitedTextsUnsafe,
     parseHeaders,
     parseNonNegativeInt,
     parsePositiveInt,
@@ -83,7 +82,7 @@ import Core.Config
 import Data.Bifunctor (bimap, first)
 import Data.ByteString qualified as ByteString
 import Data.Foldable (toList, traverse_)
-import Data.List (nub)
+import Data.List (find, nub)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromJust, fromMaybe, isJust, listToMaybe)
 import Data.Text (Text)
@@ -120,13 +119,11 @@ import HarchWeb
     TlsPolicy (..),
     TlsProtocolVersion (..),
     TlsStartupMode (..),
-    certbotOptionValues,
     defaultContentSecurityPolicy,
     defaultCorsPolicyConfig,
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
     defaultTlsPolicy,
-    firstCertbotDomain,
     mkRequestConcurrencyLimit,
     mkRequestHeaderCountLimit,
     parseCidrBlock,
@@ -736,6 +733,7 @@ liftEitherP = either throwError pure
 
 parseAppConfig :: ConfigParser AppConfig
 parseAppConfig = do
+  rejectRemovedCertbotArgumentSettingsP
   parsedTitlePrefix <- requiredConfigValueP "APP_TITLE_PREFIX"
   parsedListeners <- parseListenerConfigsP
   parsedStaticAssets <- parseStaticAssetsConfigP
@@ -764,6 +762,16 @@ configLayersFromSources sources =
       configLayerLocalOverrides = configLocalOverrides sources,
       configLayerEnvironmentOverrides = configEnvironmentOverrides sources
     }
+
+-- | Reject the retired arbitrary argv setting before listener-specific
+-- parsing. A manual/shared listener can otherwise carry the setting without
+-- ever reaching the ACME parser, making the documented removal depend on an
+-- unrelated listener mode. Keep only the key in the error because operators
+-- may have supplied a credential value (PR-SEC5, 2026-08-28).
+rejectRemovedCertbotArgumentSettingsP :: ConfigParser ()
+rejectRemovedCertbotArgumentSettingsP = do
+  entries <- allConfigEntriesP
+  traverse_ (throwError . UnsupportedConfigValue . fst) (find (Text.isSuffixOf "_ACME_CERTBOT_ARGUMENTS" . fst) entries)
 
 requiredConfigValueP :: Text -> ConfigParser Text
 requiredConfigValueP key = do
@@ -930,7 +938,7 @@ parseAcmeConfigP listenerIndex parsedPort = do
   parsedContactEmails <- parseRequiredIndexedP listenerIndex "ACME_CONTACT_EMAILS" (\key value -> fmap toList (parseDelimitedTexts key value))
   parsedDomains <- parseConfiguredAcmeDomainsP listenerIndex
   parsedCertbotConfig <- parseAcmeCertbotConfigP listenerIndex
-  resolvedCertificateDirectory <- resolveAcmeCertificateDirectoryP listenerIndex parsedDomains parsedCertbotConfig
+  resolvedCertificateDirectory <- resolveAcmeCertificateDirectoryP listenerIndex parsedDomains
   pure AcmeConfig {acmeDirectoryUrl = parsedDirectoryUrl, acmeContactEmails = parsedContactEmails, acmeDomains = parsedDomains, acmeHttp01Port = parsedPort, acmeCertificateDirectory = Just resolvedCertificateDirectory, acmeCertbotConfig = parsedCertbotConfig}
 
 parseConfiguredAcmeDomainsP :: Int -> ConfigParser [Text]
@@ -954,19 +962,20 @@ resolveSharedCertificateDirectoryP listenerIndex = do
 resolveConfiguredAcmeCertificateDirectoryP :: Int -> ConfigParser FilePath
 resolveConfiguredAcmeCertificateDirectoryP listenerIndex = do
   parsedDomains <- parseConfiguredAcmeDomainsP listenerIndex
-  parsedCertbotConfig <- parseAcmeCertbotConfigP listenerIndex
-  resolveAcmeCertificateDirectoryP listenerIndex parsedDomains parsedCertbotConfig
+  resolveAcmeCertificateDirectoryP listenerIndex parsedDomains
 
-resolveAcmeCertificateDirectoryP :: Int -> [Text] -> CertbotConfig -> ConfigParser FilePath
-resolveAcmeCertificateDirectoryP listenerIndex parsedDomains parsedCertbotConfig = do
+resolveAcmeCertificateDirectoryP :: Int -> [Text] -> ConfigParser FilePath
+resolveAcmeCertificateDirectoryP listenerIndex parsedDomains = do
   configuredDirectory <- optionalIndexedConfigValueP "LISTENER" listenerIndex "ACME_CERTIFICATE_DIRECTORY"
-  pure $ maybe (defaultCertificateDirectoryPath (defaultAcmeCertificateIdentifier listenerIndex parsedDomains parsedCertbotConfig)) Text.unpack configuredDirectory
+  pure $ maybe (defaultCertificateDirectoryPath (defaultAcmeCertificateIdentifier listenerIndex parsedDomains)) Text.unpack configuredDirectory
 
-defaultAcmeCertificateIdentifier :: Int -> [Text] -> CertbotConfig -> Text
-defaultAcmeCertificateIdentifier listenerIndex parsedDomains parsedCertbotConfig =
-  fromMaybe (Text.pack ("listener-" <> show listenerIndex)) (listToMaybe (certbotOptionValues "--cert-name" arguments) <|> firstCertbotDomain arguments <|> listToMaybe parsedDomains)
-  where
-    arguments = certbotArguments parsedCertbotConfig
+-- | Runtime configuration never accepts arbitrary Certbot argv, so its
+-- certificate-directory default comes only from the declared domains. This
+-- keeps a DNS-plugin credential or other wrapper argument from influencing a
+-- framework-owned path (PR-SEC5, 2026-08-28).
+defaultAcmeCertificateIdentifier :: Int -> [Text] -> Text
+defaultAcmeCertificateIdentifier listenerIndex parsedDomains =
+  fromMaybe (Text.pack ("listener-" <> show listenerIndex)) (listToMaybe parsedDomains)
 
 defaultCertificateDirectoryPath :: Text -> FilePath
 defaultCertificateDirectoryPath certificateIdentifier = defaultCertificateDirectoryRoot <> "/" <> Text.unpack certificateIdentifier
@@ -986,14 +995,14 @@ listenerHasAcmeConfigP listenerIndex =
 
 rejectRemovedCertbotConfigP :: Int -> ConfigParser ()
 rejectRemovedCertbotConfigP listenerIndex =
-  optionalConfigValueP key >>= traverse_ (throwError . InvalidConfigValue key)
+  optionalConfigValueP key >>= traverse_ (const (throwError (UnsupportedConfigValue key)))
   where
     key = indexedConfigKey "LISTENER" listenerIndex "ACME_CHALLENGE_BACKEND"
 
 parseAcmeCertbotConfigP :: Int -> ConfigParser CertbotConfig
 parseAcmeCertbotConfigP listenerIndex =
   (CertbotConfig . maybe defaultCertbotExecutable Text.unpack <$> optionalIndexedConfigValueP "LISTENER" listenerIndex "ACME_CERTBOT_EXECUTABLE")
-    <*> (maybe [] (parseDelimitedTextsUnsafe ",") <$> optionalIndexedConfigValueP "LISTENER" listenerIndex "ACME_CERTBOT_ARGUMENTS")
+    <*> pure []
 
 parseStaticAssetsConfigP :: ConfigParser StaticAssetsConfig
 parseStaticAssetsConfigP = do

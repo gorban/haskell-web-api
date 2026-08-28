@@ -433,14 +433,14 @@ spec = do
       serverConfig `shouldNotBe` serverConfig {listenerConfigs = [otherListenerConfig]}
       show Http `shouldBe` "Http"
       show Https `shouldBe` "Https"
-      show certbotConfig `shouldBe` "CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}"
+      show certbotConfig `shouldBe` "CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = <redacted: 2>}"
       show strictTransportSecurityConfig `shouldBe` "StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}"
       show corsPolicyConfig `shouldBe` "CorsPolicyConfig {corsAllowedOrigins = [\"https://client.example.com\"], corsAllowedMethods = [\"GET\",\"HEAD\",\"OPTIONS\"], corsAllowedHeaders = [\"Content-Type\",\"X-Requested-With\"], corsMaxAgeSeconds = Just 600}"
       show responseSecurityHeadersConfig `shouldContain` "ResponseSecurityHeadersConfig {contentSecurityPolicy = Just \"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'\""
       show requestPolicyConfig `shouldContain` "corsPolicy = CorsPolicyConfig {corsAllowedOrigins = [\"https://client.example.com\"], corsAllowedMethods = [\"GET\",\"HEAD\",\"OPTIONS\"], corsAllowedHeaders = [\"Content-Type\",\"X-Requested-With\"], corsMaxAgeSeconds = Just 600}"
       show requestPolicyConfig `shouldContain` "responseSecurityHeaders = ResponseSecurityHeadersConfig {contentSecurityPolicy = Just \"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'\""
-      show certbotConfig `shouldBe` "CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}"
-      show acmeConfig `shouldBe` "AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}"
+      show certbotConfig `shouldBe` "CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = <redacted: 2>}"
+      show acmeConfig `shouldContain` "certbotArguments = <redacted: 2>"
       show manualCertificateSource `shouldBe` "ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"})"
       show sharedCertificateSource `shouldBe` "SharedCertificateFiles (SharedTlsCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles Nothing})"
       -- 'deriving (Eq, Show)' on 'ManualTlsCertificateFiles'/'SharedTlsCertificateFiles'
@@ -474,23 +474,23 @@ spec = do
         `shouldBe` "[ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}]"
       show [SharedTlsCertificateFiles {certificateDirectory = "/var/lib/harch-web/shared-certs", sharedCertificateStartupMode = AwaitCertificateFiles Nothing}]
         `shouldBe` "[SharedTlsCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles Nothing}]"
-      show acmeCertificateSource `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})"
+      show acmeCertificateSource `shouldContain` "certbotArguments = <redacted: 2>"
       show (TlsConfig {certificateSource = manualCertificateSource, tlsPolicy = defaultTlsPolicy}) `shouldBe` "TlsConfig {certificateSource = ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}), tlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}"
-      show listenerConfig `shouldBe` "ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}), tlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}})}"
-      show httpAcmeListenerConfig `shouldBe` "ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 80, listenerScheme = Http, listenerTls = Nothing, listenerAcme = AcmeConfig {acmeDirectoryUrl = \"https://acme-staging-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"staging.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Just \"/var/lib/harch-web/staging-certs\", acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"renew\"]}}}"
+      show listenerConfig `shouldContain` "certbotArguments = <redacted: 2>"
+      show httpAcmeListenerConfig `shouldContain` "certbotArguments = <redacted: 1>"
       show staticRoot `shouldBe` "StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}"
       show staticAssetsConfig
         `shouldBe` ( "StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticAssetContentTypes = "
                        <> show defaultStaticAssetContentTypes
                        <> ", staticCacheControlSeconds = Just 3600}"
                    )
-      show tracingConfig `shouldBe` "OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}"
-      show observabilityConfig `shouldBe` "ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}"
+      show tracingConfig `shouldBe` "OtlpExporter {otlpEndpoint = <configured>, otlpHeaders = <redacted: 1>}"
+      show observabilityConfig `shouldContain` "otlpHeaders = <redacted: 1>"
       show ManualTlsCredentials `shouldBe` "ManualTlsCredentials"
       show (AwaitCertificateFiles (Just 15)) `shouldBe` "AwaitCertificateFiles (Just 15)"
       show TracingSignal `shouldBe` "TracingSignal"
-      show exporterStartup `shouldBe` "OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}"
-      show observabilityPlan `shouldBe` "ObservabilityStartupPlan {startupExporters = [OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]}"
+      show exporterStartup `shouldBe` "OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = <configured>, startupHeaders = <redacted: 1>}"
+      show observabilityPlan `shouldContain` "startupHeaders = <redacted: 1>"
       show serverConfig `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
       shouldBeParenthesized (showsPrec 11 certbotConfig "")
       shouldBeParenthesized (showsPrec 11 strictTransportSecurityConfig "")
@@ -515,31 +515,51 @@ spec = do
       show [Http, Https] `shouldBe` "[Http,Https]"
       show [ManualTlsCredentials, SharedTlsCredentials] `shouldBe` "[ManualTlsCredentials,SharedTlsCredentials]"
       show [RequireCertificateFiles, AwaitCertificateFiles Nothing] `shouldBe` "[RequireCertificateFiles,AwaitCertificateFiles Nothing]"
-      show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
+      show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = <redacted: 2>}]"
       show [strictTransportSecurityConfig] `shouldBe` "[StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}]"
       show [corsPolicyConfig] `shouldBe` "[CorsPolicyConfig {corsAllowedOrigins = [\"https://client.example.com\"], corsAllowedMethods = [\"GET\",\"HEAD\",\"OPTIONS\"], corsAllowedHeaders = [\"Content-Type\",\"X-Requested-With\"], corsMaxAgeSeconds = Just 600}]"
       show [responseSecurityHeadersConfig] `shouldContain` "[ResponseSecurityHeadersConfig {contentSecurityPolicy = Just \"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'\""
       show [requestPolicyConfig] `shouldContain` "RequestPolicyConfig {redirectHttpToHttps = True, httpsRedirectPort = Just 5443, httpsRedirectAuthority = Just \"app.example.com\", strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}), forwardedHeaderTrust = NeverTrustForwarded"
-      show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
-      show [acmeConfig] `shouldBe` "[AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}]"
-      show [manualCertificateSource, sharedCertificateSource, acmeCertificateSource] `shouldBe` "[ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}),SharedCertificateFiles (SharedTlsCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles Nothing}),AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})]"
-      show [tlsConfig] `shouldBe` "[TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}), tlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}]"
-      show [listenerConfig] `shouldBe` "[ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}), tlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}})}]"
-      show [httpAcmeListenerConfig] `shouldBe` "[ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 80, listenerScheme = Http, listenerTls = Nothing, listenerAcme = AcmeConfig {acmeDirectoryUrl = \"https://acme-staging-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"staging.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Just \"/var/lib/harch-web/staging-certs\", acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"renew\"]}}}]"
+      show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = <redacted: 2>}]"
+      show [acmeConfig] `shouldContain` "certbotArguments = <redacted: 2>"
+      show [manualCertificateSource, sharedCertificateSource, acmeCertificateSource] `shouldContain` "certbotArguments = <redacted: 2>"
+      show [tlsConfig] `shouldContain` "certbotArguments = <redacted: 2>"
+      show [listenerConfig] `shouldContain` "certbotArguments = <redacted: 2>"
+      show [httpAcmeListenerConfig] `shouldContain` "certbotArguments = <redacted: 1>"
       show [staticRoot] `shouldBe` "[StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}]"
       show [staticAssetsConfig]
         `shouldBe` ( "[StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticAssetContentTypes = "
                        <> show defaultStaticAssetContentTypes
                        <> ", staticCacheControlSeconds = Just 3600}]"
                    )
-      show [tracingConfig] `shouldBe` "[OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}]"
-      show [observabilityConfig] `shouldBe` "[ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}]"
+      show [tracingConfig] `shouldBe` "[OtlpExporter {otlpEndpoint = <configured>, otlpHeaders = <redacted: 1>}]"
+      show [observabilityConfig] `shouldContain` "otlpHeaders = <redacted: 1>"
       show [TracingSignal, MetricsSignal] `shouldBe` "[TracingSignal,MetricsSignal]"
-      show [exporterStartup] `shouldBe` "[OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]"
-      show [observabilityPlan] `shouldBe` "[ObservabilityStartupPlan {startupExporters = [OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]}]"
+      show [exporterStartup] `shouldBe` "[OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = <configured>, startupHeaders = <redacted: 1>}]"
+      show [observabilityPlan] `shouldContain` "startupHeaders = <redacted: 1>"
       show [serverConfig] `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
 
   describe "planServerStartup" $ do
+    it "redacts Certbot argv from direct and nested diagnostics" $ do
+      let secretArgument = "certbot-argv-sentinel" :: String
+          certbotConfig = CertbotConfig {certbotExecutable = "certbot", certbotArguments = ["certbot-argv-sentinel"]}
+          acmeConfig =
+            AcmeConfig
+              { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                acmeContactEmails = ["ops@example.com"],
+                acmeDomains = ["example.com"],
+                acmeHttp01Port = 80,
+                acmeCertificateDirectory = Nothing,
+                acmeCertbotConfig = certbotConfig
+              }
+      expectAll
+        ( (show certbotConfig `shouldNotContain` secretArgument)
+            :| [ show [certbotConfig] `shouldNotContain` secretArgument,
+                 show acmeConfig `shouldNotContain` secretArgument,
+                 show acmeConfig `shouldContain` "certbotArguments = <redacted: 1>"
+               ]
+        )
+
     it "groups HTTP listeners into the expected bind plan" $ do
       let firstEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = 5001}
           secondEndpoint = ListenerEndpoint {endpointHost = "0.0.0.0", endpointPort = 5002}
@@ -743,8 +763,8 @@ spec = do
             }
       acmePlan `shouldBe` acmePlan
       acmePlan `shouldNotBe` acmePlan {acmeEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = 5444}}
-      show acmePlan `shouldBe` "AcmeBindPlan {acmeEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, acmeTlsEndpoint = Just (ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}), acmeListenerConfig = AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}, acmeTlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}"
-      show [acmePlan] `shouldBe` "[AcmeBindPlan {acmeEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, acmeTlsEndpoint = Just (ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}), acmeListenerConfig = AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}, acmeTlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}]"
+      show acmePlan `shouldContain` "certbotArguments = <redacted: 2>"
+      show [acmePlan] `shouldContain` "certbotArguments = <redacted: 2>"
 
     it "rejects listeners whose TLS mode does not match their scheme" $ do
       let httpTlsListener =

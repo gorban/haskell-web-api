@@ -94,6 +94,26 @@ general arbitrary-attribute escape hatch would create a parallel, less-safe auth
 new primitive continues to use the central renderer, so dynamic text and language values are
 escaped exactly as for every existing typed attribute.
 
+### Decision record — configuration diagnostics and Certbot credential policy (PR-SEC5, 2026-08-28)
+
+**Decision: preserve the existing configuration and startup-plan boundaries, but make their
+diagnostic rendering non-disclosing and retire the arbitrary runtime Certbot-argument setting.**
+OTLP headers are explicitly designed to carry exporter credentials, so a generic logging wrapper
+would be a second, weaker observability boundary; the existing exporter/configuration types own
+the data and redact it in their `Show` instances. Malformed header configuration reports the
+environment key and one-based entry position, never the whole value. Derived application startup
+types remain safe because they render those same nested values.
+
+Certbot's built-in HTTP-01 flow has all of its non-secret inputs represented in `AcmeConfig`.
+Accepting an unconstrained comma-delimited argv override cannot reliably distinguish a custom DNS
+credential from an ordinary option, and command arguments can be exposed in process inspection or
+persisted by Certbot renewal state. `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` is therefore rejected
+without rendering its value. Literal secret arguments are unsupported. Operators needing DNS-01
+or another custom authenticator use the existing executable-path override to run their own wrapper;
+that wrapper owns protected credential files or its managed environment and its lifecycle/security
+policy. This removes the framework from credential transport rather than inventing a partial
+secret-argv filter.
+
 **Worked example.** A native file-upload form needed to set a `Set-Cookie` header from a plain page
 response for a double-submit CSRF cookie, and the response type had no header field at all. The gap
 was worked around silently: a single-use, server-held token replaced the cookie-based scheme the

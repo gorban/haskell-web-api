@@ -1041,10 +1041,13 @@ behavior.
 than the default `certbot` on `PATH`.
 
 Set `LISTENER_<n>_ACME_DOMAINS` to the certificate domains you want the ACME order to cover. The
-certbot runtime path reuses that list when its arguments do not already declare `-d` / `--domain` /
-`--domains`, and when `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` is unset it also derives a working
-`certonly --non-interactive --agree-tos --webroot` invocation plus `--webroot-path`, `--server`,
-`--email`, and `--domains` from the ACME listener config. During that certbot run, the HTTP
+certbot runtime path derives a working `certonly --non-interactive --agree-tos --webroot` invocation plus
+`--webroot-path`, `--server`, `--email`, and `--domains` from the ACME listener config. Arbitrary
+`LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` are deliberately unsupported because their values are visible in
+the spawned process's argument list and may be retained by Certbot renewal configuration. For DNS-01
+or another custom authenticator, point `LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` at an operator-owned
+wrapper; keep its credentials in a root-owned credential file (typically mode `0600`) or in the
+wrapper's managed environment, never in framework configuration or argv. During that certbot run, the HTTP
 listener serves `/.well-known/acme-challenge/*` files from the temporary derived webroot path. The
 native in-process backend uses the same domain list for its ACME order identifiers and CSR.
 When `LISTENER_<n>_ACME_DIRECTORY_URL` is omitted, runtime config defaults it to the production Let's

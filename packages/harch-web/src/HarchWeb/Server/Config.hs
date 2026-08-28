@@ -66,7 +66,26 @@ data CertbotConfig = CertbotConfig
   { certbotExecutable :: FilePath,
     certbotArguments :: [Text]
   }
-  deriving (Eq, Show)
+  deriving (Eq)
+
+-- | Certbot's configured argv is intentionally not rendered: a Certbot
+-- plugin can accept a credential-looking value and process arguments are a
+-- disclosure surface. Runtime environment configuration therefore no longer
+-- accepts arbitrary Certbot arguments; the derived HTTP-01 invocation is the
+-- supported built-in path. DNS or other custom authentication belongs in an
+-- operator-controlled executable wrapper that obtains its own credentials
+-- from a root-owned file or managed environment, never from this framework's
+-- configuration (PR-SEC5, 2026-08-28).
+instance Show CertbotConfig where
+  showsPrec precedence certbotConfig =
+    showParen
+      (precedence > 10)
+      ( showString "CertbotConfig {certbotExecutable = "
+          . showString (show (certbotExecutable certbotConfig))
+          . showString ", certbotArguments = <redacted: "
+          . shows (length (certbotArguments certbotConfig))
+          . showString ">}"
+      )
 
 data AcmeConfig = AcmeConfig
   { acmeDirectoryUrl :: Text,

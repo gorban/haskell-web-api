@@ -42,10 +42,9 @@ spec = do
         `shouldBe` TlsConfig {certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}, tlsPolicy = defaultTlsPolicy}
       show sharedCertificateSource
         `shouldBe` "SharedCertificateFiles (SharedTlsCertificateFiles {certificateDirectory = \"/var/lib/web-api/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles Nothing})"
-      show tlsSource
-        `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})"
+      show tlsSource `shouldContain` "certbotArguments = <redacted: 2>"
       show exporter
-        `shouldBe` "OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"x-api-key\",\"secret\")]}"
+        `shouldBe` "OtlpExporter {otlpEndpoint = <configured>, otlpHeaders = <redacted: 1>}"
 
     it "reads exported selectors from the remaining public config and page-model types" $ do
       let manualCertificateSource =
@@ -272,9 +271,9 @@ spec = do
       SecondPage secondPageModel `shouldBe` SecondPage secondPageModel
       NotFoundPage notFoundPageModel `shouldBe` NotFoundPage notFoundPageModel
       show certbotConfig
-        `shouldBe` "CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}"
+        `shouldBe` "CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = <redacted: 2>}"
       show certbotConfig
-        `shouldBe` "CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}"
+        `shouldBe` "CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = <redacted: 2>}"
       show
         AcmeConfig
           { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
@@ -284,9 +283,9 @@ spec = do
             acmeCertificateDirectory = Nothing,
             acmeCertbotConfig = certbotConfig
           }
-        `shouldBe` "AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}"
+        `shouldContain` "certbotArguments = <redacted: 2>"
       show acmeCertificateSource
-        `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})"
+        `shouldContain` "certbotArguments = <redacted: 2>"
       show (TlsConfig {certificateSource = manualCertificateSource, tlsPolicy = defaultTlsPolicy})
         `shouldBe` "TlsConfig {certificateSource = ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}), tlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}"
       show sharedCertificateSource
@@ -318,7 +317,7 @@ spec = do
               metricsExporter = Nothing
             }
         )
-        `shouldBe` "ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"x-api-key\",\"secret\")]}), metricsExporter = Nothing}"
+        `shouldContain` "otlpHeaders = <redacted: 1>"
       show
         ( AppRequestContext
             { requestLocale = Spanish,
@@ -768,17 +767,17 @@ spec = do
               }
       Http `shouldNotBe` Https
       show [Http, Https] `shouldBe` "[Http,Https]"
-      show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
+      show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = <redacted: 2>}]"
       show [certbotConfig]
-        `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
+        `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = <redacted: 2>}]"
       show [acmeConfig]
-        `shouldBe` "[AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}]"
+        `shouldContain` "certbotArguments = <redacted: 2>"
       show [manualCertificateSource, acmeCertificateSource]
-        `shouldBe` "[ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}),AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})]"
+        `shouldContain` "certbotArguments = <redacted: 2>"
       show [tlsConfig]
-        `shouldBe` "[TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}), tlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}]"
+        `shouldContain` "certbotArguments = <redacted: 2>"
       show [listenerConfig]
-        `shouldBe` "[ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 5443, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}), tlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}})}]"
+        `shouldContain` "certbotArguments = <redacted: 2>"
       show [staticRoot] `shouldBe` "[StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}]"
       show [staticAssetsConfig]
         `shouldBe` ( "[StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticAssetContentTypes = "
@@ -786,9 +785,9 @@ spec = do
                        <> ", staticCacheControlSeconds = Just 3600}]"
                    )
       show [exporter]
-        `shouldBe` "[OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}]"
+        `shouldBe` "[OtlpExporter {otlpEndpoint = <configured>, otlpHeaders = <redacted: 1>}]"
       show [observabilityConfig]
-        `shouldBe` "[ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]})}]"
+        `shouldContain` "otlpHeaders = <redacted: 1>"
       show [appConfig]
         `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
       show [English, Spanish] `shouldBe` "[English,Spanish]"

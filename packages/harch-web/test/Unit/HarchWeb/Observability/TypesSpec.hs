@@ -509,6 +509,24 @@ movedSpec = do
               ]
           }
 
+    it "redacts exporter credentials through configuration and startup-plan diagnostics" $ do
+      let secretHeader = "otlp-header-sentinel" :: String
+          exporter =
+            OtlpExporter
+              { otlpEndpoint = "https://collector.example/v1/traces",
+                otlpHeaders = [("authorization", "otlp-header-sentinel")]
+              }
+          observabilityConfig = ObservabilityConfig {tracingExporter = Just exporter, metricsExporter = Nothing}
+          startupPlan = planObservabilityStartup observabilityConfig
+      expectAll
+        ( (show exporter `shouldNotContain` secretHeader)
+            :| [ show exporter `shouldNotContain` "collector.example",
+                 show observabilityConfig `shouldNotContain` secretHeader,
+                 show startupPlan `shouldNotContain` secretHeader,
+                 show startupPlan `shouldContain` "startupHeaders = <redacted: 1>"
+               ]
+        )
+
 spec = do
   existingSpec
   movedSpec

@@ -512,7 +512,7 @@ spec = do
           ("LISTENER_0_TLS_SOURCE", "acme"),
           ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
           ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
-          ("LISTENER_0_ACME_CERTBOT_ARGUMENTS", "certonly,--webroot,--cert-name,prod/example")
+          ("LISTENER_0_ACME_DOMAINS", "prod.example")
         ]
         []
         []
@@ -532,13 +532,13 @@ spec = do
                                   AcmeConfig
                                     { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
                                       acmeContactEmails = ["ops@example.com"],
-                                      acmeDomains = [],
+                                      acmeDomains = ["prod.example"],
                                       acmeHttp01Port = 80,
-                                      acmeCertificateDirectory = Just ".tls/prod/example",
+                                      acmeCertificateDirectory = Just ".tls/prod.example",
                                       acmeCertbotConfig =
                                         CertbotConfig
                                           { certbotExecutable = "certbot",
-                                            certbotArguments = ["certonly", "--webroot", "--cert-name", "prod/example"]
+                                            certbotArguments = []
                                           }
                                     },
                               tlsPolicy = defaultTlsPolicy
@@ -752,8 +752,7 @@ spec = do
               ("LISTENER_2_TLS_SOURCE", "acme"),
               ("LISTENER_2_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
               ("LISTENER_2_ACME_CONTACT_EMAILS", "ops@example.com"),
-              ("LISTENER_2_ACME_DOMAINS", "example.com"),
-              ("LISTENER_2_ACME_CERTBOT_ARGUMENTS", "certonly,--webroot,--agree-tos")
+              ("LISTENER_2_ACME_DOMAINS", "example.com")
             ]
       parseRuntimeAppConfig committedDefaults [] []
         `shouldBe` Right
@@ -820,7 +819,7 @@ spec = do
                                       acmeCertbotConfig =
                                         CertbotConfig
                                           { certbotExecutable = "certbot",
-                                            certbotArguments = ["certonly", "--webroot", "--agree-tos"]
+                                            certbotArguments = []
                                           }
                                     },
                               tlsPolicy = defaultTlsPolicy
@@ -841,6 +840,45 @@ spec = do
                     metricsExporter = Nothing
                   }
             }
+
+    it "rejects raw Certbot argv without rendering a configured secret" $ do
+      let secretArgument = "--dns-provider-api-token=certbot-argv-sentinel" :: String
+          result =
+            parseRuntimeAppConfig
+              [ ("APP_TITLE_PREFIX", "runtime-test"),
+                ("LISTENER_0_HOST", "127.0.0.1"),
+                ("LISTENER_0_PORT", "5443"),
+                ("LISTENER_0_SCHEME", "https"),
+                ("LISTENER_0_TLS_SOURCE", "acme"),
+                ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
+                ("LISTENER_0_ACME_DOMAINS", "example.com"),
+                ("LISTENER_0_ACME_CERTBOT_ARGUMENTS", "--dns-provider-api-token=certbot-argv-sentinel")
+              ]
+              []
+              []
+      result `shouldBe` Left (UnsupportedConfigValue "LISTENER_0_ACME_CERTBOT_ARGUMENTS")
+      show result `shouldNotContain` secretArgument
+
+    it "redacts OTLP credentials through top-level app configuration and startup errors" $ do
+      let secretHeader = "startup-otlp-header-sentinel" :: String
+          exporter =
+            OtlpExporter
+              { otlpEndpoint = "https://collector.example/v1/traces",
+                otlpHeaders = [("authorization", "startup-otlp-header-sentinel")]
+              }
+          appConfig =
+            defaultAppConfig
+              { observability = ObservabilityConfig {tracingExporter = Just exporter, metricsExporter = Nothing}
+              }
+          startupConfig = defaultAppStartupConfig {startupAppConfig = appConfig}
+          startupError = AppStartupConfigParseError (InvalidConfigEntry "OTLP_TRACING_HEADERS" 2)
+      expectAll
+        ( (show appConfig `shouldNotContain` secretHeader)
+            :| [ show startupConfig `shouldNotContain` secretHeader,
+                 show startupError `shouldNotContain` secretHeader,
+                 show startupError `shouldContain` "InvalidConfigEntry \"OTLP_TRACING_HEADERS\" 2"
+               ]
+        )
 
     it "rejects invalid listener scheme and TLS source values" $ do
       parseRuntimeAppConfig
@@ -1409,10 +1447,7 @@ spec = do
           ("OTLP_METRICS_HEADERS", "x-scope=metrics;broken-entry")
         ]
         `shouldBe` Left
-          ( InvalidConfigValue
-              "OTLP_METRICS_HEADERS"
-              "x-scope=metrics;broken-entry"
-          )
+          (InvalidConfigEntry "OTLP_METRICS_HEADERS" 2)
 
     -- The three Right-case its below were split out of what was one
     -- "fails invalid runtime values with explicit errors" it: each
@@ -1598,7 +1633,7 @@ spec = do
     [ ("rejects a zero listener port", [("APP_TITLE_PREFIX", "runtime-test"), ("LISTENER_0_HOST", "127.0.0.1"), ("LISTENER_0_PORT", "0"), ("LISTENER_0_SCHEME", "http")], [], [], InvalidConfigValue "LISTENER_0_PORT" "0"),
       ("rejects an ACME listener with an empty ACME_CONTACT_EMAILS value", [("APP_TITLE_PREFIX", "runtime-test"), ("LISTENER_0_HOST", "127.0.0.1"), ("LISTENER_0_PORT", "5001"), ("LISTENER_0_SCHEME", "https"), ("LISTENER_0_TLS_SOURCE", "acme"), ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"), ("LISTENER_0_ACME_CONTACT_EMAILS", ""), ("LISTENER_0_ACME_DOMAINS", "")], [], [], InvalidConfigValue "LISTENER_0_ACME_CONTACT_EMAILS" ""),
       ("rejects an ACME listener with an empty ACME_DOMAINS value", [("APP_TITLE_PREFIX", "runtime-test"), ("LISTENER_0_HOST", "127.0.0.1"), ("LISTENER_0_PORT", "5001"), ("LISTENER_0_SCHEME", "https"), ("LISTENER_0_TLS_SOURCE", "acme"), ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"), ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"), ("LISTENER_0_ACME_DOMAINS", "")], [], [], InvalidConfigValue "LISTENER_0_ACME_DOMAINS" ""),
-      ("rejects an unrecognized ACME_CHALLENGE_BACKEND value", [("APP_TITLE_PREFIX", "runtime-test"), ("LISTENER_0_HOST", "127.0.0.1"), ("LISTENER_0_PORT", "5001"), ("LISTENER_0_SCHEME", "https"), ("LISTENER_0_TLS_SOURCE", "acme"), ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"), ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"), ("LISTENER_0_ACME_CHALLENGE_BACKEND", "shell-script")], [], [], InvalidConfigValue "LISTENER_0_ACME_CHALLENGE_BACKEND" "shell-script"),
+      ("rejects removed ACME_CHALLENGE_BACKEND without rendering its value", [("APP_TITLE_PREFIX", "runtime-test"), ("LISTENER_0_HOST", "127.0.0.1"), ("LISTENER_0_PORT", "5001"), ("LISTENER_0_SCHEME", "https"), ("LISTENER_0_TLS_SOURCE", "acme"), ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"), ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"), ("LISTENER_0_ACME_CHALLENGE_BACKEND", "shell-script")], [], [], UnsupportedConfigValue "LISTENER_0_ACME_CHALLENGE_BACKEND"),
       ("rejects a negative STATIC_CACHE_CONTROL_SECONDS value", [("APP_TITLE_PREFIX", "runtime-test"), ("LISTENER_0_HOST", "127.0.0.1"), ("LISTENER_0_PORT", "5001"), ("LISTENER_0_SCHEME", "http"), ("STATIC_CACHE_CONTROL_SECONDS", "-1")], [], [], InvalidConfigValue "STATIC_CACHE_CONTROL_SECONDS" "-1"),
       ("rejects a static asset content type extension without a leading dot", committedRuntimeDefaults, [], [("STATIC_ASSET_CONTENT_TYPE_1_EXTENSION", "wasm"), ("STATIC_ASSET_CONTENT_TYPE_1_MIME_TYPE", "application/wasm")], InvalidConfigValue "STATIC_ASSET_CONTENT_TYPE_1_EXTENSION" "wasm"),
       ("rejects a static asset content type with an empty MIME type", committedRuntimeDefaults, [], [("STATIC_ASSET_CONTENT_TYPE_1_EXTENSION", ".wasm"), ("STATIC_ASSET_CONTENT_TYPE_1_MIME_TYPE", "")], InvalidConfigValue "STATIC_ASSET_CONTENT_TYPE_1_MIME_TYPE" ""),

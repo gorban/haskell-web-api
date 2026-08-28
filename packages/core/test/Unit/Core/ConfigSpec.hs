@@ -183,8 +183,10 @@ spec = do
           ]
 
     it "rejects malformed entries instead of discarding them" $
-      CoreConfig.parseHeaders "OTLP_HEADERS" "authorization=Bearer token; broken"
-        `shouldBe` Left (CoreConfig.InvalidConfigValue "OTLP_HEADERS" "authorization=Bearer token; broken")
+      let result = CoreConfig.parseHeaders "OTLP_HEADERS" "authorization=otlp-header-sentinel; broken"
+       in do
+            result `shouldBe` Left (CoreConfig.InvalidConfigEntry "OTLP_HEADERS" 2)
+            show result `shouldNotContain` "otlp-header-sentinel"
 
   describe "declaredIndices" $ do
     it "extracts sorted unique indices while ignoring malformed keys" $ do
@@ -209,6 +211,8 @@ spec = do
     it "renders parse errors predictably" $ do
       let missingPort = CoreConfig.MissingConfigValue "PORT"
           invalidPort = CoreConfig.InvalidConfigValue "PORT" "abc"
+          invalidHeaderEntry = CoreConfig.InvalidConfigEntry "OTLP_HEADERS" 2
+          unsupportedSecretInput = CoreConfig.UnsupportedConfigValue "LISTENER_0_ACME_CERTBOT_ARGUMENTS"
           brokenLine = CoreConfig.InvalidConfigOverridesLine 2 "BROKEN_LINE"
           unreadableFile = CoreConfig.UnreadableConfigOverridesFile "permission denied"
       expectAll
@@ -220,11 +224,15 @@ spec = do
                  show [missingPort] `shouldBe` "[MissingConfigValue \"PORT\"]",
                  show [brokenLine] `shouldBe` "[InvalidConfigOverridesLine 2 \"BROKEN_LINE\"]",
                  show [unreadableFile] `shouldBe` "[UnreadableConfigOverridesFile \"permission denied\"]",
+                 show invalidHeaderEntry `shouldBe` "InvalidConfigEntry \"OTLP_HEADERS\" 2",
+                 show unsupportedSecretInput `shouldBe` "UnsupportedConfigValue \"LISTENER_0_ACME_CERTBOT_ARGUMENTS\"",
+                 show [invalidHeaderEntry, unsupportedSecretInput] `shouldBe` "[InvalidConfigEntry \"OTLP_HEADERS\" 2,UnsupportedConfigValue \"LISTENER_0_ACME_CERTBOT_ARGUMENTS\"]",
                  missingPort `shouldBe` missingPort,
                  missingPort `shouldNotBe` invalidPort,
                  brokenLine `shouldBe` brokenLine,
                  brokenLine `shouldNotBe` CoreConfig.InvalidConfigOverridesLine 3 "OTHER_LINE",
                  unreadableFile `shouldBe` unreadableFile,
-                 unreadableFile `shouldNotBe` brokenLine
+                 unreadableFile `shouldNotBe` brokenLine,
+                 invalidHeaderEntry `shouldNotBe` unsupportedSecretInput
                ]
         )

@@ -33,6 +33,13 @@ import Text.Read (readMaybe)
 data ConfigParseError
   = MissingConfigValue Text
   | InvalidConfigValue Text Text
+  | -- | An invalid entry in a configuration value whose entries may contain
+    -- credentials. Unlike 'InvalidConfigValue', this keeps only the owning key
+    -- and one-based entry position so startup diagnostics cannot disclose a
+    -- valid earlier OTLP authorization header while explaining a later malformed
+    -- entry (PR-SEC5, 2026-08-28).
+    InvalidConfigEntry Text Int
+  | UnsupportedConfigValue Text
   deriving (Eq, Show)
 
 data ConfigOverridesFileError
@@ -141,13 +148,13 @@ parseDelimitedTextsUnsafe delimiter =
 
 parseHeaders :: Text -> Text -> Either ConfigParseError [(Text, Text)]
 parseHeaders key value =
-  traverse parseHeaderPair (parseDelimitedTextsUnsafe ";" value)
+  traverse parseHeaderPair (zip [1 :: Int ..] (parseDelimitedTextsUnsafe ";" value))
   where
-    parseHeaderPair headerEntry =
+    parseHeaderPair (entryIndex, headerEntry) =
       let (rawHeaderName, headerValueWithSeparator) = Text.breakOn "=" headerEntry
           headerName = Text.strip rawHeaderName
        in if Text.null headerName || Text.null headerValueWithSeparator
-            then Left (InvalidConfigValue key value)
+            then Left (InvalidConfigEntry key entryIndex)
             else Right (headerName, Text.strip (Text.drop 1 headerValueWithSeparator))
 
 declaredIndices :: Text -> [(Text, Text)] -> [Int]
