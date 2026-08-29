@@ -22,9 +22,7 @@ spec = do
           databaseOperation = DatabaseOperation "load-second-page-summary" "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;" Nothing Nothing
           databaseResult = DatabaseResult (Right secondPageData) [databaseOperation]
           seededDatabase = DatabaseSeed (Right secondPageData) (Left secondError)
-      secondPageData `shouldBe` secondPageData
       secondPageData `shouldNotBe` otherSecondPageData
-      secondError `shouldBe` secondError
       secondError `shouldNotBe` SecondPageDataError "other failure"
       databaseOperation `shouldNotBe` databaseOperation {databaseOperationName = "other-operation"}
       databaseResult `shouldNotBe` databaseResult {databaseResultOperations = []}

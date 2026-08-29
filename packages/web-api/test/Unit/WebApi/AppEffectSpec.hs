@@ -58,7 +58,6 @@ spec = do
     it "keeps failure codes comparable and inspectable" $ do
       let registrationFailure = AppEffect.RegistrationStoreFailure
           loginFailure = AppEffect.LoginSessionFailure
-      registrationFailure `shouldBe` registrationFailure
       registrationFailure `shouldNotBe` loginFailure
       show registrationFailure `shouldBe` "RegistrationStoreFailure"
       show [registrationFailure] `shouldBe` "[RegistrationStoreFailure]"

@@ -29,11 +29,8 @@ spec =
 
     it "keeps normal and void tag values comparable and diagnosable" $
       expectAll
-        ( (Markup.divTag == Markup.divTag `shouldBe` True)
-            :| [ Markup.divTag /= Markup.sectionTag `shouldBe` True,
-                 Markup.breakTag == Markup.breakTag `shouldBe` True,
-                 Markup.breakTag /= Markup.imageTag `shouldBe` True,
-                 show Markup.divTag `shouldBe` "NormalTag {normalTagText = \"div\"}",
+        ( (Markup.divTag /= Markup.sectionTag `shouldBe` True)
+            :| [ show Markup.divTag `shouldBe` "NormalTag {normalTagText = \"div\"}",
                  show Markup.breakTag `shouldBe` "VoidTag {voidTagText = \"br\"}",
                  length (show [Markup.divTag]) `shouldSatisfy` (> 0),
                  length (show [Markup.breakTag]) `shouldSatisfy` (> 0)

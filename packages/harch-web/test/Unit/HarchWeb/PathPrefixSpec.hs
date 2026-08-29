@@ -85,7 +85,6 @@ spec = do
                      show canonicalPrefix `shouldBe` "PathPrefix \"/app\"",
                      showsPrec 11 canonicalPrefix "" `shouldBe` "(PathPrefix \"/app\")",
                      showList [canonicalPrefix] "" `shouldBe` "[PathPrefix \"/app\"]",
-                     (PathPrefixMultipleSlashes == PathPrefixMultipleSlashes) `shouldBe` True,
                      (PathPrefixMultipleSlashes == PathPrefixUnsafeCharacter) `shouldBe` False,
                      (PathPrefixMultipleSlashes /= PathPrefixUnsafeCharacter) `shouldBe` True,
                      show PathPrefixAmbiguousSegment `shouldBe` "PathPrefixAmbiguousSegment",

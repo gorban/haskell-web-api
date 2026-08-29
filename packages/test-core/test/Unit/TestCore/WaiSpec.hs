@@ -4,10 +4,11 @@
 {-# SPEC #-}
 
 import Control.Exception (ErrorCall, evaluate, try)
+import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (newIORef)
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
-import TestCore.Wai (nextRequestBodyChunk, performWaiRequest, readResponseBody, requiredWaiResponseOrDie, waiRequest)
+import TestCore.Wai (nextRequestBodyChunk, performWaiRequest, readResponseBody, readResponseBodyWithFlushCount, requiredWaiResponseOrDie, waiRequest)
 
 spec = do
   describe "waiRequest" $ do
@@ -24,12 +25,13 @@ spec = do
       response <- performWaiRequest (pure staticTextApplication) (waiRequest ["ping"])
       Wai.responseStatus response `shouldBe` Http.status200
       body <- readResponseBody response
-      body `shouldBe` "pong"
+      body `shouldBe` "/ping"
 
     it "reads a response whose streaming body flushes between chunks" $ do
       response <- performWaiRequest (pure flushingApplication) (waiRequest [])
-      body <- readResponseBody response
+      (body, flushCount) <- readResponseBodyWithFlushCount response
       body `shouldBe` "first-second"
+      flushCount `shouldBe` 1
 
   describe "requiredWaiResponseOrDie" $ do
     it "unwraps a present response" $
@@ -53,8 +55,8 @@ spec = do
       exhaustedChunk `shouldBe` ""
 
 staticTextApplication :: Wai.Application
-staticTextApplication _request respond =
-  respond (Wai.responseLBS Http.status200 [] "pong")
+staticTextApplication request respond =
+  respond (Wai.responseLBS Http.status200 [] (LazyByteString.fromStrict (Wai.rawPathInfo request)))
 
 flushingApplication :: Wai.Application
 flushingApplication _request respond =

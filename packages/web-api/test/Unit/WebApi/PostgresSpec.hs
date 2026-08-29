@@ -990,15 +990,10 @@ spec = do
           runnerError = PostgresCommandFailed command commandResult
           migrationError = PostgresMigrationFailed "migration protocol failed"
           unexpectedRowsError = UnexpectedQueryRows "expected exactly one row" ["first", "second"]
-      command `shouldBe` command
       command `shouldNotBe` command {postgresArguments = ["--command", "SELECT 2;"]}
-      commandResult `shouldBe` commandResult
       commandResult `shouldNotBe` commandResult {postgresStdout = "2"}
-      runnerError `shouldBe` runnerError
       runnerError `shouldNotBe` PostgresCommandFailed command failedCommandResult
-      migrationError `shouldBe` migrationError
       migrationError `shouldNotBe` PostgresMigrationFailed "other migration failure"
-      unexpectedRowsError `shouldBe` unexpectedRowsError
       unexpectedRowsError `shouldNotBe` UnexpectedQueryRows "expected exactly one row" ["first"]
       show command
         `shouldBe` "PostgresCommand {postgresExecutable = \"psql\", postgresArguments = <redacted>, postgresEnvironment = <redacted>}"

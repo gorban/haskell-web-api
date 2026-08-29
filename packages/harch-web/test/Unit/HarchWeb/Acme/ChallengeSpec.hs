@@ -7,7 +7,6 @@ import Control.Concurrent (newMVar, readMVar)
 import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (atomicModifyIORef', newIORef, readIORef)
-import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
@@ -31,17 +30,14 @@ defaultRequestPolicy =
 
 spec =
   describe "ACME challenge matching and store helpers" $ do
-    it "covers derived Eq and Show instances for internal ACME helper types" $ do
+    it "renders internal ACME helper types" $ do
       let challenge =
             ActiveAcmeChallenge
               { activeAcmeChallengeDomain = "example.com",
                 activeAcmeChallengeToken = "token",
                 activeAcmeChallengeResponse = "token.thumbprint"
               }
-      expectAll
-        ( (challenge `shouldBe` challenge)
-            :| [show challenge `shouldContain` "activeAcmeChallengeDomain = \"example.com\""]
-        )
+      show challenge `shouldContain` "activeAcmeChallengeDomain = \"example.com\""
 
     it "covers challenge matching and store update helpers" $ do
       challengeStore <- AcmeChallengeStore <$> newMVar []

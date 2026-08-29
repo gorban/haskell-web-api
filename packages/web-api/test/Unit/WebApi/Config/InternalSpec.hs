@@ -1805,12 +1805,10 @@ spec = do
       databasePassword productionDatabaseConfig `shouldBe` "super-secret"
       Development `shouldNotBe` Test
       Test `shouldNotBe` Production
-      productionDatabaseConfig `shouldBe` productionDatabaseConfig
       productionDatabaseConfig
         `shouldNotBe` productionDatabaseConfig
           { databasePassword = "different-secret"
           }
-      productionEnvironmentConfig `shouldBe` productionEnvironmentConfig
       productionEnvironmentConfig
         `shouldNotBe` productionEnvironmentConfig
           { appMode = Test
@@ -1890,7 +1888,6 @@ spec = do
         shows sslMode "!" `shouldBe` renderedMode <> "!"
         show [sslMode] `shouldBe` "[" <> renderedMode <> "]"
         sslMode `shouldNotBe` differentSslMode
-        transport `shouldBe` transport
         transport `shouldNotBe` DatabaseTransportLibpqDefault
         show transport `shouldBe` "DatabaseTransportSsl " <> renderedMode <> " Nothing"
         show [transport] `shouldBe` "[DatabaseTransportSsl " <> renderedMode <> " Nothing]"
@@ -2117,7 +2114,6 @@ spec = do
     it "keeps load-error equality and rendering deterministic" $ do
       let fileLoadError = AppEnvironmentOverridesFileError ".env" (InvalidConfigOverridesLine 1 "BROKEN")
           parseLoadError = AppEnvironmentConfigParseError (InvalidConfigValue "DATABASE_PORT" "0")
-      fileLoadError `shouldBe` fileLoadError
       fileLoadError `shouldNotBe` parseLoadError
       show fileLoadError
         `shouldBe` "AppEnvironmentOverridesFileError \".env\" (InvalidConfigOverridesLine 1 \"BROKEN\")"
@@ -2303,13 +2299,11 @@ spec = do
               }
           fileLoadError = AppStartupOverridesFileError ".env" (InvalidConfigOverridesLine 1 "BROKEN")
           parseLoadError = AppStartupConfigParseError (InvalidConfigValue "LISTENER_0_PORT" "0")
-      startupConfig `shouldBe` startupConfig
       startupConfig `shouldNotBe` differentStartupConfig
       show startupConfig
         `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
       show [startupConfig]
         `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
-      fileLoadError `shouldBe` fileLoadError
       fileLoadError `shouldNotBe` parseLoadError
       show fileLoadError
         `shouldBe` "AppStartupOverridesFileError \".env\" (InvalidConfigOverridesLine 1 \"BROKEN\")"

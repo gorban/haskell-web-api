@@ -121,13 +121,10 @@ spec = do
           getAttributes = defaultActionFormAttributes {actionFormCapabilities = [NativeFallback getFallback]}
           getForm = renderHtml (renderActionForm (actionForm testActionCodec defaultContext "save" getAttributes []))
       expectAll
-        ( (FormGet `shouldBe` FormGet)
-            :| [ FormGet `shouldNotBe` FormPost,
-                 length (show FormGet) + length (showList [FormGet] "") `shouldSatisfy` (> 0),
-                 getFallback `shouldBe` getFallback,
+        ( (FormGet `shouldNotBe` FormPost)
+            :| [ length (show FormGet) + length (showList [FormGet] "") `shouldSatisfy` (> 0),
                  getFallback `shouldNotBe` postFallback,
                  length (show getFallback) + length (showList [getFallback] "") `shouldSatisfy` (> 0),
-                 idempotencyA `shouldBe` idempotencyA,
                  idempotencyA `shouldNotBe` idempotencyB,
                  length (show idempotencyA) + length (showList [idempotencyA] "") `shouldSatisfy` (> 0),
                  Text.isInfixOf "action=\"/native-get\" method=\"get\"" getForm `shouldBe` True

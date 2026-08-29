@@ -48,10 +48,13 @@ newtype NormalTag = NormalTag
   }
   deriving (Eq, Show)
 
+-- | An opaque selector for a fixed void-element spelling. It intentionally has
+-- no 'Eq' instance: framework rendering consumes it, while application code
+-- has no valid tag-identity decision to make.
 newtype VoidTag = VoidTag
   { voidTagText :: Text
   }
-  deriving (Eq, Show)
+  deriving (Show)
 
 data Attribute = Attribute AttributeName (Maybe Text)
 

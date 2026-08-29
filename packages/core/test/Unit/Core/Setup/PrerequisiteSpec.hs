@@ -67,7 +67,6 @@ spec = do
       expectAll
         ( (parseError `shouldBe` Prerequisite.InvalidTracingEndpointPort "not-a-port")
             :| [ parseError `shouldNotBe` Prerequisite.InvalidTracingEndpointPort "other-port",
-                 tcpEndpoint `shouldBe` tcpEndpoint,
                  tcpEndpoint `shouldNotBe` Prerequisite.TcpEndpoint {Prerequisite.tcpEndpointHost = "other", Prerequisite.tcpEndpointPort = 4318},
                  show tcpEndpoint `shouldBe` "TcpEndpoint {tcpEndpointHost = \"collector\", tcpEndpointPort = 4318}",
                  showsPrec 11 tcpEndpoint "" `shouldBe` "(TcpEndpoint {tcpEndpointHost = \"collector\", tcpEndpointPort = 4318})",

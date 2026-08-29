@@ -227,11 +227,8 @@ spec = do
                  show invalidHeaderEntry `shouldBe` "InvalidConfigEntry \"OTLP_HEADERS\" 2",
                  show unsupportedSecretInput `shouldBe` "UnsupportedConfigValue \"LISTENER_0_ACME_CERTBOT_ARGUMENTS\"",
                  show [invalidHeaderEntry, unsupportedSecretInput] `shouldBe` "[InvalidConfigEntry \"OTLP_HEADERS\" 2,UnsupportedConfigValue \"LISTENER_0_ACME_CERTBOT_ARGUMENTS\"]",
-                 missingPort `shouldBe` missingPort,
                  missingPort `shouldNotBe` invalidPort,
-                 brokenLine `shouldBe` brokenLine,
                  brokenLine `shouldNotBe` CoreConfig.InvalidConfigOverridesLine 3 "OTHER_LINE",
-                 unreadableFile `shouldBe` unreadableFile,
                  unreadableFile `shouldNotBe` brokenLine,
                  invalidHeaderEntry `shouldNotBe` unsupportedSecretInput
                ]

@@ -36,18 +36,14 @@ spec = do
           runtimeConfigSetupError = DatabaseSetupRuntimeConfigLoadError runtimeLoadError
           migrationSetupError = DatabaseSetupMigrationError (UnexpectedQueryRows "expected exactly one row" ["first", "second"])
           seedSetupError = DatabaseSetupSeedError (UnexpectedQueryRows "expected exactly one row" ["seed"])
-      MigrateDatabase `shouldBe` MigrateDatabase
       MigrateDatabase `shouldNotBe` SeedDatabase
       show MigrateDatabase `shouldBe` "MigrateDatabase"
       show SeedDatabase `shouldBe` "SeedDatabase"
       show MigrateAndSeedDatabase `shouldBe` "MigrateAndSeedDatabase"
       show [MigrateDatabase, SeedDatabase, MigrateAndSeedDatabase]
         `shouldBe` "[MigrateDatabase,SeedDatabase,MigrateAndSeedDatabase]"
-      configSetupError `shouldBe` configSetupError
       configSetupError `shouldNotBe` migrationSetupError
-      runtimeConfigSetupError `shouldBe` runtimeConfigSetupError
       runtimeConfigSetupError `shouldNotBe` configSetupError
-      seedSetupError `shouldBe` seedSetupError
       show configSetupError
         `shouldBe` "DatabaseSetupConfigLoadError (InvalidConfigValue \"WEB_API_MIGRATION_DATABASE_PORT\" \"0\")"
       show runtimeConfigSetupError

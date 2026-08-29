@@ -292,7 +292,6 @@ spec = do
                  show [config] `shouldContain'` "BrowserConfig",
                  processError `shouldBe` BrowserRunnerProcessError (ExitFailure 4) "out" "err",
                  assertionError `shouldBe` BrowserAssertionFailed "failed" ["trace.zip"],
-                 errors `shouldBe` errors,
                  BrowserRunnerLaunchError "one" `shouldNotBe` BrowserRunnerLaunchError "two",
                  BrowserRunnerProcessError ExitSuccess "out" "err" `shouldNotBe` processError,
                  BrowserRunnerProtocolError "one" `shouldNotBe` BrowserRunnerProtocolError "two",

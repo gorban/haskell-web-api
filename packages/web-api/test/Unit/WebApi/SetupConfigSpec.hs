@@ -379,7 +379,6 @@ spec = do
           }
       setupAutostartDatabase (setupAutostartConfig setupConfig) `shouldBe` True
       setupAutostartJaeger (setupAutostartConfig setupConfig) `shouldBe` False
-      defaultSetupAutostartConfig `shouldBe` defaultSetupAutostartConfig
       defaultSetupAutostartConfig
         `shouldNotBe` SetupAutostartConfig
           { setupAutostartDatabase = False,
@@ -391,7 +390,6 @@ spec = do
         `shouldBe` "(SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False})"
       show [defaultSetupAutostartConfig]
         `shouldBe` "[SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}]"
-      setupConfig `shouldBe` setupConfig
       setupConfig
         `shouldNotBe` setupConfig
           { setupAutostartConfig =
@@ -406,7 +404,6 @@ spec = do
         `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
       show [setupConfig]
         `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
-      fileLoadError `shouldBe` fileLoadError
       fileLoadError `shouldNotBe` parseLoadError
       show fileLoadError
         `shouldBe` "AppSetupOverridesFileError \".env\" (InvalidConfigOverridesLine 1 \"BROKEN\")"

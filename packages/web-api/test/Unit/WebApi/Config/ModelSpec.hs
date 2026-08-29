@@ -249,27 +249,6 @@ spec = do
                       callToActionHref = "/"
                     }
               }
-      Http `shouldBe` Http
-      Https `shouldBe` Https
-      certbotConfig `shouldBe` certbotConfig
-      certbotConfig `shouldBe` certbotConfig
-      TlsConfig {certificateSource = manualCertificateSource, tlsPolicy = defaultTlsPolicy}
-        `shouldBe` TlsConfig {certificateSource = manualCertificateSource, tlsPolicy = defaultTlsPolicy}
-      sharedCertificateSource `shouldBe` sharedCertificateSource
-      acmeCertificateSource `shouldBe` acmeCertificateSource
-      staticRoot `shouldBe` staticRoot
-      English `shouldBe` English
-      Spanish `shouldBe` Spanish
-      Page WebApi.Route.HomePage `shouldBe` HomeRoute
-      Api WebApi.Route.StatusApi `shouldBe` StatusApiRoute
-      HomeRoute `shouldBe` HomeRoute
-      SecondRoute `shouldBe` SecondRoute
-      StatusApiRoute `shouldBe` StatusApiRoute
-      NotFoundRoute `shouldBe` NotFoundRoute
-      UnsupportedLocalePrefix "de" `shouldBe` UnsupportedLocalePrefix "de"
-      UnsupportedPath "/missing" `shouldBe` UnsupportedPath "/missing"
-      SecondPage secondPageModel `shouldBe` SecondPage secondPageModel
-      NotFoundPage notFoundPageModel `shouldBe` NotFoundPage notFoundPageModel
       show certbotConfig
         `shouldBe` "CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = <redacted: 2>}"
       show certbotConfig
@@ -487,43 +466,27 @@ spec = do
               }
       certbotExecutable certbotConfig `shouldBe` "certbot"
       certbotArguments certbotConfig `shouldBe` ["certonly", "--webroot"]
-      certbotConfig `shouldBe` certbotConfig
       certbotConfig `shouldNotBe` otherCertbotConfig
-      acmeConfig `shouldBe` acmeConfig
       acmeConfig `shouldNotBe` otherAcmeConfig
-      manualCertificateSource `shouldBe` manualCertificateSource
       manualCertificateSource `shouldNotBe` acmeCertificateSource
-      acmeCertificateSource `shouldBe` acmeCertificateSource
       acmeCertificateSource `shouldNotBe` AcmeCertificateSource otherAcmeConfig
-      tlsConfig `shouldBe` tlsConfig
       tlsConfig `shouldNotBe` TlsConfig {certificateSource = acmeCertificateSource, tlsPolicy = defaultTlsPolicy}
-      listenerConfig `shouldBe` listenerConfig
       listenerConfig `shouldNotBe` secureListenerConfig
-      staticRoot `shouldBe` staticRoot
       staticRoot `shouldNotBe` StaticAssetRoot {staticUrlPrefix = "/static", staticDirectory = "public"}
-      staticAssetsConfig `shouldBe` staticAssetsConfig
       staticAssetsConfig
         `shouldNotBe` StaticAssetsConfig
           { staticAssetRoots = [],
             staticAssetContentTypes = defaultStaticAssetContentTypes,
             staticCacheControlSeconds = Nothing
           }
-      exporter `shouldBe` exporter
       exporter `shouldNotBe` OtlpExporter {otlpEndpoint = "http://other-collector:4318", otlpHeaders = []}
-      observabilityConfig `shouldBe` observabilityConfig
       observabilityConfig `shouldNotBe` ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}
-      appConfig `shouldBe` appConfig
       appConfig `shouldNotBe` appConfig {listenerConfigs = [listenerConfig]}
       English `shouldNotBe` Spanish
-      requestContext `shouldBe` requestContext
       requestContext `shouldNotBe` defaultRequestContext
-      callToAction `shouldBe` callToAction
       callToAction `shouldNotBe` callToAction {callToActionHref = "/es"}
-      secondPageModel `shouldBe` secondPageModel
       secondPageModel `shouldNotBe` secondPageModel {secondHighlights = ["Different"]}
-      spacesPageModel `shouldBe` spacesPageModel
       spacesPageModel `shouldNotBe` spacesPageModel {spacesSummary = "Different"}
-      notFoundPageModel `shouldBe` notFoundPageModel
       notFoundPageModel `shouldNotBe` notFoundPageModel {notFoundSummary = "Missing"}
       SecondPage secondPageModel `shouldNotBe` NotFoundPage notFoundPageModel
       SpacesPage spacesPageModel `shouldNotBe` SecondPage secondPageModel

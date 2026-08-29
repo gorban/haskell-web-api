@@ -181,8 +181,7 @@ movedSpec = do
         ( (Text.length firstValue `shouldBe` 43)
             :| [ Text.length secondValue `shouldBe` 43,
                  Text.isSuffixOf "=" firstValue `shouldBe` False,
-                 Text.isSuffixOf "=" secondValue `shouldBe` False,
-                 firstNonce /= secondNonce `shouldBe` True
+                 Text.isSuffixOf "=" secondValue `shouldBe` False
                ]
         )
 

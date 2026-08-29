@@ -168,7 +168,6 @@ spec = do
                  headerCountLimit `shouldNotBe` differentHeaderCountLimit,
                  show byteLimit `shouldBe` "Just (RequestByteLimit 8)",
                  show headerCountLimit `shouldBe` "Just (RequestHeaderCountLimit 2)",
-                 boundedHeadLimits `shouldBe` boundedHeadLimits,
                  show boundedHeadLimits
                    `shouldBe` "RequestHeadLimits {requestTargetByteLimit = Just (RequestByteLimit 8), requestHeaderByteLimit = Nothing, requestHeaderCountLimit = Just (RequestHeaderCountLimit 2), requestHeaderValueByteLimit = Nothing, requestCookieCountLimit = Just (RequestItemCountLimit 4), requestCookieNameByteLimit = Just (RequestByteLimit 8), requestCookieValueByteLimit = Just (RequestByteLimit 9), requestPathSegmentCountLimit = Nothing, requestPathSegmentByteLimit = Nothing, requestQueryFieldCountLimit = Nothing, requestQueryFieldByteLimit = Nothing}",
                  boundedHeadLimits `shouldNotBe` differentBoundedHeadLimits,
@@ -189,7 +188,6 @@ spec = do
                  requestTimeoutSecondsValue timeoutSecondsValue `shouldBe` 12,
                  show timeoutSecondsValue `shouldBe` "RequestTimeoutSeconds 12",
                  show [timeoutSecondsValue] `shouldBe` "[RequestTimeoutSeconds 12]",
-                 transportLimits `shouldBe` transportLimits,
                  transportLimits /= differentTransportLimits `shouldBe` True,
                  show transportLimits `shouldBe` "RequestTransportLimits {requestNetworkTimeout = Just (RequestTimeoutSeconds 12), requestSlowlorisByteLimit = Just (RequestByteLimit 8)}",
                  show [transportLimits] `shouldBe` "[RequestTransportLimits {requestNetworkTimeout = Just (RequestTimeoutSeconds 12), requestSlowlorisByteLimit = Just (RequestByteLimit 8)}]",
@@ -257,12 +255,10 @@ spec = do
                  declaredOversizedResult `shouldBe` Left RequestBodyLimitExceeded,
                  malformedDeclaredLengthResult `shouldBe` Right "",
                  negativeLimitResult `shouldBe` Left RequestBodyLimitExceeded,
-                 -- 'RequestBodyReadFailure' has exactly one nullary constructor, so
-                 -- there is no other value to distinguish it from; these reflexivity
-                 -- checks are the only way to exercise its derived 'Eq' at all. Both
-                 -- '==' and '/=' are needed: 'deriving' only writes '==' itself, and
-                 -- GHC's HPC instrumentation attributes the unoverridden '/=' default
-                 -- method to its own separate, otherwise-permanently-unticked box.
+                 -- 'RequestBodyLimitExceeded' is the complete error domain: there is
+                 -- no distinct inhabitant with which a caller can compare it. These
+                 -- assertions therefore document its observable equality contract,
+                 -- including the complementary default implementation of '(/=').
                  RequestBodyLimitExceeded == RequestBodyLimitExceeded `shouldBe` True,
                  RequestBodyLimitExceeded /= RequestBodyLimitExceeded `shouldBe` False,
                  length (show RequestBodyLimitExceeded) `shouldSatisfy` (> 0),

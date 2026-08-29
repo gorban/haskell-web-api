@@ -258,9 +258,8 @@ spec = do
             PrerequisiteConfig.SetupPrerequisiteConfigParseError
               (CoreConfig.InvalidConfigValue "SETUP_AUTOSTART_DATABASE" "maybe")
       expectAll
-        ( (fileLoadError `shouldBe` fileLoadError)
-            :| [ fileLoadError `shouldNotBe` parseLoadError,
-                 show fileLoadError `shouldBe` "SetupPrerequisiteOverridesFileError \".env\" (InvalidConfigOverridesLine 1 \"BROKEN\")",
+        ( (fileLoadError `shouldNotBe` parseLoadError)
+            :| [ show fileLoadError `shouldBe` "SetupPrerequisiteOverridesFileError \".env\" (InvalidConfigOverridesLine 1 \"BROKEN\")",
                  show parseLoadError `shouldBe` "SetupPrerequisiteConfigParseError (InvalidConfigValue \"SETUP_AUTOSTART_DATABASE\" \"maybe\")"
                ]
         )

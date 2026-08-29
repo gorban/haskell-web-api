@@ -176,18 +176,15 @@ spec = do
               { databasePrerequisitePlan = databasePlan,
                 tracingPrerequisitePlan = Just tracingPlan
               }
-      PodmanRuntime `shouldBe` PodmanRuntime
       PodmanRuntime `shouldNotBe` DockerRuntime
       show PodmanRuntime `shouldBe` "PodmanRuntime"
       show [PodmanRuntime, DockerRuntime] `shouldBe` "[PodmanRuntime,DockerRuntime]"
       autostartRuntimes defaultContainerAutostartPlan
         `shouldBe` [PodmanRuntime, DockerRuntime]
-      defaultContainerAutostartPlan `shouldBe` defaultContainerAutostartPlan
       defaultContainerAutostartPlan
         `shouldNotBe` ContainerAutostartPlan {autostartRuntimes = [DockerRuntime]}
       show defaultContainerAutostartPlan
         `shouldBe` "ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]}"
-      databaseEndpoint `shouldBe` databaseEndpoint
       databaseEndpoint
         `shouldNotBe` TcpEndpoint
           { tcpEndpointHost = "db.other",
@@ -204,7 +201,6 @@ spec = do
           { tcpEndpointHost = "db.internal",
             tcpEndpointPort = 6543
           }
-      databasePlan `shouldBe` databasePlan
       databasePlan
         `shouldNotBe` databasePlan
           { databaseAutostartPlan = Nothing
@@ -214,7 +210,6 @@ spec = do
       showsPrec 11 databasePlan ""
         `shouldBe` "(DatabasePrerequisitePlan {databaseCheckEndpoint = TcpEndpoint {tcpEndpointHost = \"db.internal\", tcpEndpointPort = 6543}, databaseAutostartPlan = Just (ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]})})"
       databaseAutostartPlan databasePlan `shouldBe` Just defaultContainerAutostartPlan
-      tracingPlan `shouldBe` tracingPlan
       tracingPlan
         `shouldNotBe` tracingPlan
           { tracingCheckEndpoint = "http://127.0.0.1:9999"
@@ -227,7 +222,6 @@ spec = do
         `shouldBe` "(TracingPrerequisitePlan {tracingCheckEndpoint = \"http://127.0.0.1:4318\", tracingAutostartPlan = Nothing})"
       databasePrerequisitePlan appPlan `shouldBe` databasePlan
       tracingPrerequisitePlan appPlan `shouldBe` Just tracingPlan
-      appPlan `shouldBe` appPlan
       appPlan
         `shouldNotBe` appPlan
           { tracingPrerequisitePlan = Nothing

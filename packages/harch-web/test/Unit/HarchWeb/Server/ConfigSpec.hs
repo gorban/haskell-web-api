@@ -91,7 +91,6 @@ spec = do
       tlsPolicySupports (TlsPolicy {tlsAllowedVersions = Tls10 :| [], tlsCipherSuites = TlsEcdheRsaAes256CbcSha :| []}) `shouldBe` True
       tlsPolicySupports (TlsPolicy {tlsAllowedVersions = Tls10 :| [], tlsCipherSuites = Tls13Aes256GcmSha384 :| []}) `shouldBe` False
       let legacyTlsPolicy = TlsPolicy {tlsAllowedVersions = Tls10 :| [], tlsCipherSuites = TlsEcdheRsaAes256CbcSha :| []}
-      legacyTlsPolicy `shouldBe` legacyTlsPolicy
       legacyTlsPolicy `shouldNotBe` TlsPolicy {tlsAllowedVersions = Tls13 :| [], tlsCipherSuites = Tls13Aes256GcmSha384 :| []}
       show legacyTlsPolicy `shouldContain` "TlsEcdheRsaAes256CbcSha"
       show [legacyTlsPolicy] `shouldContain` "TlsEcdheRsaAes256CbcSha"
@@ -381,55 +380,34 @@ spec = do
                 observability = observabilityConfig
               }
       Http `shouldNotBe` Https
-      certbotConfig `shouldBe` certbotConfig
       certbotConfig `shouldNotBe` otherCertbotConfig
-      strictTransportSecurityConfig `shouldBe` strictTransportSecurityConfig
       strictTransportSecurityConfig `shouldNotBe` otherStrictTransportSecurityConfig
-      corsPolicyConfig `shouldBe` corsPolicyConfig
       corsPolicyConfig `shouldNotBe` otherCorsPolicyConfig
-      responseSecurityHeadersConfig `shouldBe` responseSecurityHeadersConfig
       responseSecurityHeadersConfig `shouldNotBe` otherResponseSecurityHeadersConfig
-      requestPolicyConfig `shouldBe` requestPolicyConfig
       requestPolicyConfig `shouldNotBe` otherRequestPolicyConfig
-      acmeConfig `shouldBe` acmeConfig
       acmeConfig `shouldNotBe` otherAcmeConfig
-      manualCertificateSource `shouldBe` manualCertificateSource
-      sharedCertificateSource `shouldBe` sharedCertificateSource
       manualCertificateSource `shouldNotBe` acmeCertificateSource
       sharedCertificateSource `shouldNotBe` manualCertificateSource
       sharedCertificateSource `shouldNotBe` acmeCertificateSource
-      acmeCertificateSource `shouldBe` acmeCertificateSource
       acmeCertificateSource `shouldNotBe` AcmeCertificateSource otherAcmeConfig
-      tlsConfig `shouldBe` tlsConfig
       tlsConfig `shouldNotBe` TlsConfig {certificateSource = manualCertificateSource, tlsPolicy = defaultTlsPolicy}
       tlsConfig `shouldNotBe` TlsConfig {certificateSource = sharedCertificateSource, tlsPolicy = defaultTlsPolicy}
-      listenerConfig `shouldBe` listenerConfig
       listenerConfig `shouldNotBe` otherListenerConfig
       httpAcmeListenerConfig `shouldNotBe` listenerConfig
-      staticRoot `shouldBe` staticRoot
       staticRoot `shouldNotBe` StaticAssetRoot {staticUrlPrefix = "/static", staticDirectory = "public"}
-      staticAssetsConfig `shouldBe` staticAssetsConfig
       staticAssetsConfig
         `shouldNotBe` StaticAssetsConfig
           { staticAssetRoots = [],
             staticAssetContentTypes = defaultStaticAssetContentTypes,
             staticCacheControlSeconds = Nothing
           }
-      tracingConfig `shouldBe` tracingConfig
       tracingConfig `shouldNotBe` otherTracingConfig
-      observabilityConfig `shouldBe` observabilityConfig
       observabilityConfig `shouldNotBe` ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}
-      ManualTlsCredentials `shouldBe` ManualTlsCredentials
       ManualTlsCredentials `shouldNotBe` SharedTlsCredentials
-      AwaitCertificateFiles Nothing `shouldBe` AwaitCertificateFiles Nothing
       AwaitCertificateFiles Nothing `shouldNotBe` RequireCertificateFiles
-      TracingSignal `shouldBe` TracingSignal
       TracingSignal `shouldNotBe` MetricsSignal
-      exporterStartup `shouldBe` exporterStartup
       exporterStartup `shouldNotBe` otherExporterStartup
-      observabilityPlan `shouldBe` observabilityPlan
       observabilityPlan `shouldNotBe` ObservabilityStartupPlan {startupExporters = []}
-      serverConfig `shouldBe` serverConfig
       serverConfig `shouldNotBe` serverConfig {listenerConfigs = [otherListenerConfig]}
       show Http `shouldBe` "Http"
       show Https `shouldBe` "Https"
@@ -573,11 +551,8 @@ spec = do
                 acmeBindPlans = []
               }
       planServerStartup (serverConfigWithListeners [firstListener, secondListener]) `shouldBe` Right startupPlan
-      firstEndpoint `shouldBe` firstEndpoint
       firstEndpoint `shouldNotBe` secondEndpoint
-      httpBindPlan `shouldBe` httpBindPlan
       httpBindPlan `shouldNotBe` HttpBindPlan {httpEndpoints = [firstEndpoint]}
-      startupPlan `shouldBe` startupPlan
       startupPlan `shouldNotBe` startupPlan {httpBindPlan = HttpBindPlan {httpEndpoints = [firstEndpoint]}}
       show firstEndpoint `shouldBe` "ListenerEndpoint {endpointHost = \"127.0.0.1\", endpointPort = 5001}"
       show [firstEndpoint, secondEndpoint] `shouldBe` "[ListenerEndpoint {endpointHost = \"127.0.0.1\", endpointPort = 5001},ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5002}]"
@@ -640,7 +615,6 @@ spec = do
               manualTlsBindPlans = [manualPlan],
               acmeBindPlans = []
             }
-      manualPlan `shouldBe` manualPlan
       manualPlan `shouldNotBe` manualPlan {tlsCertificateFile = "other.pem"}
       show manualPlan `shouldBe` "ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5443}, tlsCertificateFile = \"cert.pem\", tlsPrivateKeyFile = \"key.pem\", tlsCredentialSourceKind = ManualTlsCredentials, tlsStartupMode = RequireCertificateFiles, tlsBindPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}"
       show [manualPlan] `shouldBe` "[ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5443}, tlsCertificateFile = \"cert.pem\", tlsPrivateKeyFile = \"key.pem\", tlsCredentialSourceKind = ManualTlsCredentials, tlsStartupMode = RequireCertificateFiles, tlsBindPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}]"
@@ -677,7 +651,6 @@ spec = do
               manualTlsBindPlans = [manualPlan],
               acmeBindPlans = []
             }
-      manualPlan `shouldBe` manualPlan
       manualPlan `shouldNotBe` manualPlan {tlsPrivateKeyFile = "other-privkey.pem"}
       show manualPlan `shouldBe` "ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, tlsCertificateFile = \"/var/lib/harch-web/shared-certs/fullchain.pem\", tlsPrivateKeyFile = \"/var/lib/harch-web/shared-certs/privkey.pem\", tlsCredentialSourceKind = SharedTlsCredentials, tlsStartupMode = AwaitCertificateFiles Nothing, tlsBindPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}"
       show [manualPlan] `shouldBe` "[ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, tlsCertificateFile = \"/var/lib/harch-web/shared-certs/fullchain.pem\", tlsPrivateKeyFile = \"/var/lib/harch-web/shared-certs/privkey.pem\", tlsCredentialSourceKind = SharedTlsCredentials, tlsStartupMode = AwaitCertificateFiles Nothing, tlsBindPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [Tls13], tlsCipherSuites = TlsEcdheEcdsaAes256GcmSha384 :| [TlsEcdheEcdsaChacha20Poly1305Sha256,TlsEcdheEcdsaAes128GcmSha256,TlsEcdheRsaAes256GcmSha384,TlsEcdheRsaChacha20Poly1305Sha256,TlsEcdheRsaAes128GcmSha256,Tls13Aes256GcmSha384,Tls13Chacha20Poly1305Sha256,Tls13Aes128GcmSha256]}}]"
@@ -761,7 +734,6 @@ spec = do
               manualTlsBindPlans = [],
               acmeBindPlans = [acmePlan]
             }
-      acmePlan `shouldBe` acmePlan
       acmePlan `shouldNotBe` acmePlan {acmeEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = 5444}}
       show acmePlan `shouldContain` "certbotArguments = <redacted: 2>"
       show [acmePlan] `shouldContain` "certbotArguments = <redacted: 2>"

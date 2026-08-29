@@ -169,20 +169,13 @@ existingSpec = do
             :| [ Observability.TextAttribute "page" `shouldNotBe` Observability.TextAttribute "body",
                  Observability.IntAttribute 200 `shouldBe` Observability.IntAttribute 200,
                  Observability.IntAttribute 200 `shouldNotBe` Observability.IntAttribute 404,
-                 Observability.PageResponseKind `shouldBe` Observability.PageResponseKind,
                  Observability.PageResponseKind `shouldNotBe` Observability.BodyResponseKind,
-                 pageKindAttribute `shouldBe` pageKindAttribute,
                  pageKindAttribute `shouldNotBe` statusAttribute,
-                 requestSpan `shouldBe` requestSpan,
                  requestSpan `shouldNotBe` requestSpan {Observability.requestSpanDisplayName = "GET /second"},
-                 httpServerMetrics `shouldBe` httpServerMetrics,
                  httpServerMetrics `shouldNotBe` httpServerMetrics {Observability.activeRequestsMetricName = "other.metric"},
-                 requestObservability `shouldBe` requestObservability,
                  requestObservability `shouldNotBe` requestObservability {Observability.observabilityRequestSpan = requestSpan {Observability.requestSpanDisplayName = "POST /"}},
-                 traceContext `shouldBe` traceContext,
                  traceContext `shouldNotBe` traceContext {Observability.traceContextState = Nothing},
                  Observability.withRequestTraceContext traceContext requestObservability `shouldBe` requestObservability {Observability.observabilityTraceContext = Just traceContext},
-                 connectionObservability `shouldBe` connectionObservability,
                  connectionObservability `shouldNotBe` connectionObservability {Observability.observabilityConnectionSpan = requestSpan {Observability.requestSpanDisplayName = "POST /"}}
                ]
         )

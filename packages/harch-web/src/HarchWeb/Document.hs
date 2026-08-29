@@ -303,10 +303,13 @@ data RuntimeDescriptor
       }
   deriving (Eq, Show)
 
+-- | An opaque, single-response CSP capability. It intentionally has no 'Eq'
+-- instance: callers must pass the generated nonce to rendering and headers,
+-- never compare or reuse it as application data.
 newtype RuntimeNonce = RuntimeNonce
   { runtimeNonceValue :: Text
   }
-  deriving (Eq, Show)
+  deriving (Show)
 
 data ResolvedNavigationItem route = ResolvedNavigationItem
   { navigationLabel :: Text,

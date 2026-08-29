@@ -269,12 +269,8 @@ spec = do
           failedResult =
             TracingAutostart.TracingAutostartFailed [failedRuntime]
       expectAll
-        ( (failedRuntime `shouldBe` failedRuntime)
-            :| [ failedRuntime `shouldNotBe` failedRuntime {DatabaseAutostart.containerRuntimeFailureMessage = "docker failed"},
-                 skippedResult `shouldBe` skippedResult,
-                 skippedResult `shouldNotBe` succeededResult,
-                 succeededResult `shouldBe` succeededResult,
-                 failedResult `shouldBe` failedResult,
+        ( (failedRuntime `shouldNotBe` failedRuntime {DatabaseAutostart.containerRuntimeFailureMessage = "docker failed"})
+            :| [ skippedResult `shouldNotBe` succeededResult,
                  show skippedResult `shouldBe` "TracingAutostartSkipped \"automatic Jaeger autostart only supports OTLP_TRACING_ENDPOINT hosts 127.0.0.1 or 0.0.0.0, but got collector.internal\"",
                  show succeededResult `shouldBe` "TracingAutostartSucceeded DockerRuntime",
                  show failedResult `shouldBe` "TracingAutostartFailed [ContainerRuntimeFailure {failedContainerRuntime = PodmanRuntime, containerRuntimeFailureMessage = \"podman failed\"}]",

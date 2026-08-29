@@ -72,8 +72,7 @@ spec = do
           differentPolicy = RouteExecutionPolicy (mkRequestConcurrencyLimit 2)
       expectAll
         ( (routeExecutionConcurrencyLimit unboundedRouteExecutionPolicy `shouldBe` Nothing)
-            :| [ boundedPolicy == boundedPolicy `shouldBe` True,
-                 boundedPolicy /= differentPolicy `shouldBe` True,
+            :| [ boundedPolicy /= differentPolicy `shouldBe` True,
                  show boundedPolicy `shouldBe` "RouteExecutionPolicy {routeExecutionConcurrencyLimit = Just (RequestConcurrencyLimit 1)}",
                  show [boundedPolicy] `shouldBe` "[RouteExecutionPolicy {routeExecutionConcurrencyLimit = Just (RequestConcurrencyLimit 1)}]"
                ]

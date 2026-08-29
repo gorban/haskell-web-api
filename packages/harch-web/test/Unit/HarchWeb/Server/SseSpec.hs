@@ -44,8 +44,7 @@ spec =
           clientActionResponse = ClientActionBodyResponse actionResponse :: Response () ()
       expectAll
         ( (streamResponse `shouldBe` eventStreamResponse secondSource)
-            :| [ clientActionResponse `shouldBe` clientActionResponse,
-                 streamResponse `shouldNotBe` BodyResponse responseBodyValue,
+            :| [ streamResponse `shouldNotBe` BodyResponse responseBodyValue,
                  showsPrec 11 (RedirectResponse responseBodyValue "/next" :: Response () ()) "" `shouldBe` "(RedirectResponse (ResponseBody {responseStatus = Status {statusCode = 204, statusMessage = \"No Content\"}, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Done\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}) \"/next\")",
                  showsPrec 11 clientActionResponse "" `shouldBe` "(ClientActionBodyResponse (ClientActionResponse {clientActionStatus = Status {statusCode = 200, statusMessage = \"OK\"}, clientActionPatches = [], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}))"
                ]

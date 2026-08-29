@@ -763,12 +763,23 @@ spec = do
                   protocolResponseDatabaseOperations = []
                 } ::
               Response TestRoute TestContext
+          sameMetadataDifferentStream =
+            ProtocolResponseResult
+              ProtocolResponse
+                { protocolResponseStatus = Http.status200,
+                  protocolResponseHeaders = [(Http.hContentType, "application/octet-stream")],
+                  protocolResponseBody = ProtocolResponseStream (\write _ -> write (Builder.byteString "other stream")),
+                  protocolResponseObservabilityAttributes = [],
+                  protocolResponseLogEntries = [],
+                  protocolResponseDatabaseOperations = []
+                } ::
+              Response TestRoute TestContext
       response <- performWaiRequest (toWaiApplication protocolApplication) (waiRequest ["known"])
       expectAll
         ( (lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/octet-stream")
             :| [ Wai.responseStatus response `shouldBe` Http.status200,
                  readResponseBody response `shouldReturn` "first-second",
-                 renderedResponse `shouldBe` renderedResponse,
+                 renderedResponse `shouldBe` sameMetadataDifferentStream,
                  renderedResponse `shouldNotBe` strictResponse,
                  show renderedResponse `shouldSatisfy` isInfixOf "ProtocolResponseStream <stream>"
                ]

@@ -43,7 +43,6 @@ spec = do
               { routeDataResult = SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Shared domain summary", secondRouteHighlights = []})),
                 routeDataDatabaseOperations = [databaseOperation]
               }
-      routeDataSelection `shouldBe` routeDataSelection
       routeDataSelection
         `shouldNotBe` routeDataSelection
           { routeDataDatabaseOperations = []
@@ -75,7 +74,6 @@ spec = do
       secondRouteSummary secondRouteData `shouldBe` "Shared domain summary"
       secondRouteHighlights secondRouteData `shouldBe` ["Shared loader"]
       secondRouteData `shouldNotBe` secondRouteData {secondRouteHighlights = []}
-      routeDataResult `shouldBe` routeDataResult
       routeDataResult `shouldNotBe` NotFoundRouteDataResult
       show secondRouteData
         `shouldBe` "SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = [\"Shared loader\"]}"

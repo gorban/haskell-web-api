@@ -921,9 +921,6 @@ spec = do
               }
       PrerequisiteReport.databasePrerequisiteStatus report `shouldBe` databaseStatus
       PrerequisiteReport.tracingPrerequisiteStatus report `shouldBe` Just tracingStatus
-      databaseStatus `shouldBe` databaseStatus
-      tracingStatus `shouldBe` tracingStatus
-      report `shouldBe` report
       tracingStatus
         `shouldNotBe` PrerequisiteReport.TracingPrerequisiteReachable "http://collector:4318/v1/traces"
       report

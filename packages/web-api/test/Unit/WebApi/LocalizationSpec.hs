@@ -35,7 +35,6 @@ spec =
                      CheckVerificationInbox,
                      ChooseProfileAction
                    ]
-      AddAuthenticatorSecret `shouldBe` AddAuthenticatorSecret
       AddAuthenticatorSecret `shouldNotBe` SecondPageLoadFailed
       show AddAuthenticatorSecret `shouldBe` "AddAuthenticatorSecret"
       showsPrec 11 AddAuthenticatorSecret "" `shouldBe` "AddAuthenticatorSecret"

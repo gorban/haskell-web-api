@@ -346,11 +346,7 @@ movedSpec = do
       show [navigationRuntime] `shouldBe` "[NavigationRuntime {navigationRuntimePath = \"/assets/navigation.js\", navigationRuntimeScript = \"console.log('nav');\"}]"
       (inlineBootstrap /= otherInlineBootstrap) `shouldBe` True
       show inlineBootstrap `shouldBe` "InlineBootstrap {runtimeDescriptorName = \"capture\", runtimeDescriptorSource = \"window.capture = true;\"}"
-      (runtimeNonce /= otherRuntimeNonce) `shouldBe` True
-      -- 'deriving' only writes '==' itself; GHC's HPC instrumentation
-      -- attributes the same-value '==' path to its own box, separate from
-      -- the different-value path the '/=' check above already exercises.
-      (runtimeNonce == runtimeNonce) `shouldBe` True
+      runtimeNonceValue runtimeNonce `shouldNotBe` runtimeNonceValue otherRuntimeNonce
       show runtimeNonce `shouldContain` "RuntimeNonce {runtimeNonceValue = \""
       show [runtimeNonce] `shouldContain` "[RuntimeNonce {runtimeNonceValue = \""
       (stylesheetPath /= otherStylesheetPath) `shouldBe` True

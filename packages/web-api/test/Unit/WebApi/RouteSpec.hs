@@ -13,13 +13,6 @@ spec = do
     it "keeps every page and API constructor enumerable, comparable, and inspectable" $ do
       let pageRoutes = [minBound .. maxBound] :: [PageRoute]
           apiRoutes = [minBound .. maxBound] :: [ApiRoute]
-      exerciseClosedEnumeration
-        pageRoutes
-        WebApi.Route.HomePage
-        WebApi.Route.SecondPage
-        WebApi.Route.ProfilePage
-        WebApi.Route.PageNotFound
-      exerciseClosedEnumeration apiRoutes StatusApi SecondApi SecondApi ApiNotFound
       pageRoutes
         `shouldBe` [ WebApi.Route.HomePage,
                      WebApi.Route.SecondPage,
@@ -33,7 +26,15 @@ spec = do
                      WebApi.Route.PageNotFound
                    ]
       apiRoutes `shouldBe` [StatusApi, SecondApi, ApiNotFound]
-      map renderedValue pageRoutes
+      minBound `shouldBe` WebApi.Route.HomePage
+      maxBound `shouldBe` WebApi.Route.PageNotFound
+      succ WebApi.Route.HomePage `shouldBe` WebApi.Route.SecondPage
+      pred WebApi.Route.PageNotFound `shouldBe` WebApi.Route.ProfilePage
+      WebApi.Route.HomePage `shouldNotBe` WebApi.Route.SecondPage
+      enumFrom WebApi.Route.HomePage `shouldBe` pageRoutes
+      enumFromThen WebApi.Route.HomePage WebApi.Route.SecondPage `shouldBe` pageRoutes
+      enumFromThenTo WebApi.Route.HomePage WebApi.Route.SecondPage WebApi.Route.PageNotFound `shouldBe` pageRoutes
+      map show pageRoutes
         `shouldBe` [ "HomePage",
                      "SecondPage",
                      "SpacesPage",
@@ -45,11 +46,21 @@ spec = do
                      "ProfilePage",
                      "PageNotFound"
                    ]
-      map renderedValue apiRoutes `shouldBe` ["StatusApi", "SecondApi", "ApiNotFound"]
-      renderedValue SecondApiRoute `shouldBe` "SecondApiRoute"
-      renderedValue ApiNotFoundRoute `shouldBe` "ApiNotFoundRoute"
-      equalValues (Page WebApi.Route.HomePage) (Page WebApi.Route.HomePage) `shouldBe` True
-      equalValues (Api StatusApi) (Api ApiNotFound) `shouldBe` False
+      showList pageRoutes ""
+        `shouldBe` "[HomePage,SecondPage,SpacesPage,RegistrationPage,EmailVerificationPage,MfaEnrollmentPage,LoginPage,LogoutPage,ProfilePage,PageNotFound]"
+      minBound `shouldBe` StatusApi
+      maxBound `shouldBe` ApiNotFound
+      succ StatusApi `shouldBe` SecondApi
+      pred ApiNotFound `shouldBe` SecondApi
+      StatusApi `shouldNotBe` SecondApi
+      enumFrom StatusApi `shouldBe` apiRoutes
+      enumFromThen StatusApi SecondApi `shouldBe` apiRoutes
+      enumFromThenTo StatusApi SecondApi ApiNotFound `shouldBe` apiRoutes
+      map show apiRoutes `shouldBe` ["StatusApi", "SecondApi", "ApiNotFound"]
+      showList apiRoutes "" `shouldBe` "[StatusApi,SecondApi,ApiNotFound]"
+      show SecondApiRoute `shouldBe` "SecondApiRoute"
+      show ApiNotFoundRoute `shouldBe` "ApiNotFoundRoute"
+      Page WebApi.Route.HomePage `shouldNotBe` Api ApiNotFound
 
   describe "parseRoute" $ do
     it "maps bare and default-locale paths to the same home route" $ do

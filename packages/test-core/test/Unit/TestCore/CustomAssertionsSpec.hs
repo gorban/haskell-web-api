@@ -7,11 +7,6 @@ import Data.List (isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
 import Test.HUnit.Lang (FailureReason (ExpectedButGot, Reason), HUnitFailure (HUnitFailure))
 
--- | A minimal closed, contiguous 'Bounded'/'Enum' fixture type, used only to
--- exercise 'exerciseClosedEnumeration' and its component helpers below.
-data SampleEnumeration = SampleFirst | SampleSecond | SampleThird
-  deriving (Bounded, Enum, Eq, Show)
-
 spec = do
   describe "shouldContain'" $ do
     it "should match a substring" $ do
@@ -50,17 +45,3 @@ spec = do
       result <- try $ expectAll (pure () :| [throwIO (userError "unexpected")])
       exception <- $([|result|] `shouldMatch` [p|Left exception|])
       show (exception :: IOException) `shouldContain'` "unexpected"
-
-  describe "exerciseClosedEnumeration" $
-    it "exhaustively exercises a closed Bounded/Enum/Eq/Show family, including every named wrapper" $ do
-      exerciseClosedEnumeration
-        [SampleFirst, SampleSecond, SampleThird]
-        SampleFirst
-        SampleSecond
-        SampleSecond
-        SampleThird
-      equalValues SampleFirst SampleThird `shouldBe` False
-      notEqualValues SampleFirst SampleFirst `shouldBe` False
-      renderedValue SampleSecond `shouldBe` "SampleSecond"
-      renderedWithPrecedence 0 SampleSecond "" `shouldBe` "SampleSecond"
-      renderedValueList [SampleFirst, SampleThird] "" `shouldBe` "[SampleFirst,SampleThird]"

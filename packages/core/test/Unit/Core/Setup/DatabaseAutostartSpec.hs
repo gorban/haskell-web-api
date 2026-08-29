@@ -260,12 +260,8 @@ spec = do
           failedResult =
             DatabaseAutostart.DatabaseAutostartFailed [failedRuntime]
       expectAll
-        ( (failedRuntime `shouldBe` failedRuntime)
-            :| [ failedRuntime `shouldNotBe` failedRuntime {DatabaseAutostart.containerRuntimeFailureMessage = "docker failed"},
-                 skippedResult `shouldBe` skippedResult,
-                 skippedResult `shouldNotBe` succeededResult,
-                 succeededResult `shouldBe` succeededResult,
-                 failedResult `shouldBe` failedResult,
+        ( (failedRuntime `shouldNotBe` failedRuntime {DatabaseAutostart.containerRuntimeFailureMessage = "docker failed"})
+            :| [ skippedResult `shouldNotBe` succeededResult,
                  show failedRuntime `shouldBe` "ContainerRuntimeFailure {failedContainerRuntime = PodmanRuntime, containerRuntimeFailureMessage = \"podman failed\"}",
                  show skippedResult `shouldBe` "DatabaseAutostartSkipped \"automatic database autostart only supports DATABASE_HOST values 127.0.0.1 or 0.0.0.0, but got db.internal\"",
                  show succeededResult `shouldBe` "DatabaseAutostartSucceeded DockerRuntime",

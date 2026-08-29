@@ -116,15 +116,10 @@ spec = do
               }
       expectAll
         ( (PrerequisitePlan.autostartRuntimes PrerequisitePlan.defaultContainerAutostartPlan `shouldBe` [PrerequisitePlan.PodmanRuntime, PrerequisitePlan.DockerRuntime])
-            :| [ PrerequisitePlan.PodmanRuntime `shouldBe` PrerequisitePlan.PodmanRuntime,
-                 PrerequisitePlan.PodmanRuntime `shouldNotBe` PrerequisitePlan.DockerRuntime,
-                 PrerequisitePlan.defaultContainerAutostartPlan `shouldBe` PrerequisitePlan.defaultContainerAutostartPlan,
+            :| [ PrerequisitePlan.PodmanRuntime `shouldNotBe` PrerequisitePlan.DockerRuntime,
                  PrerequisitePlan.defaultContainerAutostartPlan `shouldNotBe` PrerequisitePlan.ContainerAutostartPlan {PrerequisitePlan.autostartRuntimes = [PrerequisitePlan.DockerRuntime]},
-                 databasePlan `shouldBe` databasePlan,
                  databasePlan `shouldNotBe` otherDatabasePlan,
-                 tracingPlan `shouldBe` tracingPlan,
                  tracingPlan `shouldNotBe` otherTracingPlan,
-                 appPlan `shouldBe` appPlan,
                  appPlan `shouldNotBe` PrerequisitePlan.AppPrerequisitePlan {PrerequisitePlan.databasePrerequisitePlan = databasePlan, PrerequisitePlan.tracingPrerequisitePlan = Nothing},
                  show PrerequisitePlan.PodmanRuntime `shouldBe` "PodmanRuntime",
                  showsPrec 11 PrerequisitePlan.PodmanRuntime "" `shouldBe` "PodmanRuntime",

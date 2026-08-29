@@ -202,21 +202,15 @@ spec = do
           pendingAccountDisplayName pendingAccount `shouldBe` Nothing
         _ -> expectationFailure "expected one pending account"
       Account.accountIdText accountId `shouldBe` "account_01"
-      equalValues (AccountStoreUnavailable "database unavailable") (AccountStoreUnavailable "database unavailable") `shouldBe` True
-      equalValues (AccountStoreCorruptData "malformed account") (AccountStoreCorruptData "malformed account") `shouldBe` True
-      equalValues (AccountStoreUnavailable "database unavailable") (AccountStoreCorruptData "database unavailable") `shouldBe` False
-      renderedValue (AccountStoreUnavailable "database unavailable") `shouldBe` "AccountStoreUnavailable \"database unavailable\""
-      renderedValue (AccountStoreCorruptData "malformed account") `shouldBe` "AccountStoreCorruptData \"malformed account\""
-      equalValues ResendVerificationNoLongerPending ResendVerificationNoLongerPending `shouldBe` True
-      equalValues (ResendVerificationStoreError (AccountStoreUnavailable "database unavailable")) (ResendVerificationStoreError (AccountStoreUnavailable "database unavailable")) `shouldBe` True
-      equalValues (ResendVerificationDeliveryFailed "SMTP unavailable") (ResendVerificationDeliveryFailed "SMTP unavailable") `shouldBe` True
-      equalValues ResendVerificationClockOverflow ResendVerificationClockOverflow `shouldBe` True
-      equalValues (ResendVerificationStoreError (AccountStoreUnavailable "database unavailable")) (ResendVerificationDeliveryFailed "SMTP unavailable") `shouldBe` False
-      equalValues ResendVerificationClockOverflow ResendVerificationNoLongerPending `shouldBe` False
-      renderedValue (ResendVerificationStoreError (AccountStoreUnavailable "database unavailable")) `shouldBe` "ResendVerificationStoreError (AccountStoreUnavailable \"database unavailable\")"
-      renderedValue (ResendVerificationDeliveryFailed "SMTP unavailable") `shouldBe` "ResendVerificationDeliveryFailed \"SMTP unavailable\""
-      renderedValue ResendVerificationClockOverflow `shouldBe` "ResendVerificationClockOverflow"
-      renderedValue ResendVerificationNoLongerPending `shouldBe` "ResendVerificationNoLongerPending"
+      AccountStoreUnavailable "database unavailable" `shouldNotBe` AccountStoreCorruptData "database unavailable"
+      show (AccountStoreUnavailable "database unavailable") `shouldBe` "AccountStoreUnavailable \"database unavailable\""
+      show (AccountStoreCorruptData "malformed account") `shouldBe` "AccountStoreCorruptData \"malformed account\""
+      ResendVerificationStoreError (AccountStoreUnavailable "database unavailable") `shouldNotBe` ResendVerificationDeliveryFailed "SMTP unavailable"
+      ResendVerificationClockOverflow `shouldNotBe` ResendVerificationNoLongerPending
+      show (ResendVerificationStoreError (AccountStoreUnavailable "database unavailable")) `shouldBe` "ResendVerificationStoreError (AccountStoreUnavailable \"database unavailable\")"
+      show (ResendVerificationDeliveryFailed "SMTP unavailable") `shouldBe` "ResendVerificationDeliveryFailed \"SMTP unavailable\""
+      show ResendVerificationClockOverflow `shouldBe` "ResendVerificationClockOverflow"
+      show ResendVerificationNoLongerPending `shouldBe` "ResendVerificationNoLongerPending"
       expectAll
         ( ((AccountStoreUnavailable "database unavailable" /= AccountStoreCorruptData "database unavailable") `shouldBe` True)
             :| [ show [AccountStoreUnavailable "database unavailable"] `shouldBe` "[AccountStoreUnavailable \"database unavailable\"]",

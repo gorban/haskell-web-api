@@ -51,13 +51,9 @@ spec =
       exerciseModel missingError noPagesError
       exerciseModel (Generated ["Route.hs"]) (Unchanged ["Route.hs"])
       expectAll
-        ( (config `shouldBe` config)
-            :| [ show config `shouldContain` "App.Pages.Route.Generated",
-                 pageSpec `shouldBe` pageSpec,
-                 show pageSpec `shouldContain` "HomePage",
-                 errors `shouldBe` errors,
+        ( (show config `shouldContain` "App.Pages.Route.Generated")
+            :| [ show pageSpec `shouldContain` "HomePage",
                  map show errors `shouldSatisfy` (not . any null),
-                 outcomes `shouldBe` outcomes,
                  map show outcomes
                    `shouldBe` ["Generated [\"Route.hs\"]", "Unchanged [\"Route.hs\"]"]
                ]

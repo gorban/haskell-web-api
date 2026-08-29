@@ -50,7 +50,6 @@ spec = do
     it "keeps private context fields comparable and inspectable" $ do
       let clientAddress = Security.RequestContextField "client.address" "203.0.113.8"
           peerAddress = Security.RequestContextField "network.peer.address" "203.0.113.8"
-      clientAddress `shouldBe` clientAddress
       clientAddress `shouldNotBe` peerAddress
       show clientAddress `shouldBe` "RequestContextField {requestContextFieldName = \"client.address\", requestContextFieldValue = \"203.0.113.8\"}"
       show [clientAddress] `shouldBe` "[RequestContextField {requestContextFieldName = \"client.address\", requestContextFieldValue = \"203.0.113.8\"}]"
