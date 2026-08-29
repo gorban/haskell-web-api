@@ -154,8 +154,15 @@ jobs:
         run: |
           tools/check-cabal-packages.sh
 
-      - name: Seed PostgreSQL test database
+      - name: Check executable-file metadata
         if: steps.cabal_check.outcome == 'success'
+        id: executable_file_metadata
+        run: |
+          tools/test-check-executable-file-metadata.sh
+          tools/check-executable-file-metadata.sh
+
+      - name: Seed PostgreSQL test database
+        if: steps.executable_file_metadata.outcome == 'success'
         id: seed_postgres
         run: |
           tools/seed-test-database.sh
