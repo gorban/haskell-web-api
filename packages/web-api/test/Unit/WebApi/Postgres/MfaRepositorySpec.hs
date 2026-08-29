@@ -82,6 +82,8 @@ spec = do
         `shouldReturnEqual` Right (Just (StoredTotpEnrollment "encrypted-envelope" Nothing Nothing))
       loadTotpEnrollment (buildRuntimePostgresMfaStoreWithRunner (\_ _ _ -> pure (Right [["encrypted-envelope", "500", "42"]])) databaseConfig) accountId
         `shouldReturnEqual` Right (Just (StoredTotpEnrollment "encrypted-envelope" (Just 500) (Just 42)))
+      loadTotpEnrollment (buildRuntimePostgresMfaStoreWithRunner (\_ _ _ -> pure (Right [["encrypted-envelope", "500", "not-a-counter"]])) databaseConfig) accountId
+        `shouldReturnEqual` Left (MfaStoreCorruptData "TOTP enrollment has an invalid last-used counter")
       loadTotpEnrollment (buildRuntimePostgresMfaStoreWithRunner (\_ _ _ -> pure (Right [["encrypted-envelope"]])) databaseConfig) accountId
         `shouldReturnEqual` Left (MfaStoreCorruptData "unexpected TOTP enrollment lookup result: row-count=1, column-counts=[1]")
       confirmTotpEnrollment declinedStore accountId ("hash" :| []) 500 `shouldReturnEqual` Right False

@@ -4,7 +4,7 @@
 
 import Control.Concurrent (forkIO, killThread, newEmptyMVar, newMVar, putMVar, readMVar, takeMVar, threadDelay)
 import Control.Exception (AsyncException (ThreadKilled), Exception (displayException), SomeException, finally, throwIO, try)
-import Control.Monad ()
+import Control.Monad (when)
 import Data.ByteString qualified as ByteString (empty, isInfixOf)
 import Data.ByteString.Builder qualified as Builder ()
 import Data.ByteString.Char8 qualified as ByteStringChar8 ()
@@ -19,7 +19,7 @@ import Data.Maybe (isNothing)
 import Data.Text ()
 import Data.Text qualified as Text (Text, isInfixOf, isPrefixOf, pack, unpack)
 import Data.Text.Encoding qualified as TextEncoding ()
-import HarchWeb (AcmeChallengeStore (AcmeChallengeStore), AcmeConfig (AcmeConfig, acmeCertbotConfig, acmeCertificateDirectory, acmeContactEmails, acmeDirectoryUrl, acmeDomains, acmeHttp01Port), Application (applicationRequestPolicy, reportApplicationLog, reportConnectionObservability, reportRequestObservability, requestContextFromRequest), CertbotConfig (CertbotConfig, certbotArguments, certbotExecutable), ListenerConfig (ListenerConfig, listenerAcme, listenerHost, listenerPort, listenerScheme, listenerTls), ListenerScheme (Http, Https), ManualTlsBindPlan, ManualTlsCertificateFiles (ManualTlsCertificateFiles, certificateFile, privateKeyFile), RequestPolicyConfig (forwardedHeaderTrust), TlsCertificateSource (AcmeCertificateSource, ManualCertificateFiles), TlsCipherSuite (TlsEcdheEcdsaAes256CbcSha), TlsConfig (TlsConfig, certificateSource, tlsPolicy), TlsPolicy (TlsPolicy, tlsAllowedVersions, tlsCipherSuites), TlsProtocolVersion (Tls10), acmeChallengeResponseForRequest, defaultTlsPolicy, newCertbotWebrootStore, prepareCertbotManualTlsBindPlan, runServer, runServerWithWaiMiddleware, tlsCipherSuiteValue, validAcmeHttp01ChallengeToken)
+import HarchWeb (AcmeChallengeStore (AcmeChallengeStore), AcmeConfig (AcmeConfig, acmeCertbotConfig, acmeCertificateDirectory, acmeContactEmails, acmeDirectoryUrl, acmeDomains, acmeHttp01Port), Application (applicationRequestPolicy, reportApplicationLog, reportConnectionObservability, reportRequestObservability, requestContextFromRequest), CertbotConfig (CertbotConfig, certbotArguments, certbotExecutable), ListenerConfig (ListenerConfig, listenerAcme, listenerHost, listenerPort, listenerScheme, listenerTls), ListenerScheme (Http, Https), ManualTlsBindPlan, ManualTlsCertificateFiles (ManualTlsCertificateFiles, certificateFile, privateKeyFile), RequestPolicyConfig (forwardedHeaderTrust), TlsCertificateSource (AcmeCertificateSource, ManualCertificateFiles), TlsCipherSuite (TlsEcdheEcdsaAes256CbcSha), TlsConfig (TlsConfig, certificateSource, tlsPolicy), TlsPolicy (TlsPolicy, tlsAllowedVersions, tlsCipherSuites), TlsProtocolVersion (Tls10), acmeChallengeResponseForRequest, defaultTlsPolicy, newCertbotWebrootStore, prepareCertbotManualTlsBindPlan, runServer, runServerWithWaiMiddleware, tlsCipherSuiteValue, validAcmeHttp01ChallengeToken, waitForShutdownSignalWith)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -41,7 +41,7 @@ import System.FilePath ((</>))
 import System.IO (hClose)
 import System.IO.Error (isAlreadyInUseError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
-import System.Posix.Signals (raiseSignal, sigINT, sigTERM)
+import System.Posix.Signals (Handler (Catch, Default), raiseSignal, sigINT, sigTERM)
 import System.Process ()
 import TestCore.CustomAssertions ()
 import TestCore.Wai ()
@@ -49,6 +49,23 @@ import Text.Read ()
 import Unit.HarchWeb.TestSupport (acmeHttpsListener, acmeHttpsListenerWithContacts, acmeHttpsListenerWithDomains, acmeHttpsListenerWithDomainsAndChallengePort, certbotHttp01Backend, certbotHttp01BackendWithExecutable, connectAndCloseLoopbackSocket, connectAndCloseLoopbackSocketFrom, defaultRequestPolicy, expectLoopbackPortReusable, expectMeasuredRootRequestTiming, fakeCertbotScriptPreamble, hasTextAttribute, httpRuntimeListener, manualTlsCertificatePem, manualTlsPrivateKeyPem, readLoopbackHttpResponse, readLoopbackHttpResponseBytesWithHostAndHeadersResult, readLoopbackHttpResponseBytesWithHostResult, readLoopbackHttpResponseBytesWithHostResultFrom, readLoopbackHttpsResponse, readLoopbackHttpsResponseResult, runtimeAcmePlanWithCertbotConfig, sampleApplication, sampleRequestContextFromRequest, serverConfigWithListeners, sharedHttpsListener, stripVolatileRequestTiming, testTrustedForwardedProxy, waitForConnectionObservability, waitForHttpsServerResponse, waitForServerExit, waitForServerResponse, withCustomFakeCertbotExecutable, withEmptyExecutablePath, withFailingFakeCertbotExecutable, withFakeCertbotExecutable, withManualTlsFiles, withOccupiedLoopbackPort, withUnusedLoopbackPort)
 
 spec = do
+  describe "waitForShutdownSignalWith" $
+    it "installs and restores unmasked shutdown handlers" $ do
+      installedCount <- newIORef (0 :: Int)
+      let installSignalHandler _signal handler previousHandler = do
+            case previousHandler of
+              Nothing -> pure ()
+              Just _ -> expectationFailure "shutdown handlers must not mask another handler"
+            installCount <- atomicModifyIORef' installedCount (\count -> (count + 1, count + 1))
+            when (installCount == 2) $
+              case handler of
+                Catch requestShutdown -> requestShutdown
+                _ -> expectationFailure "expected a shutdown-catching handler"
+            pure Default
+      waitForShutdownSignalWith installSignalHandler
+      installedHandlerCount <- readIORef installedCount
+      installedHandlerCount `shouldBe` 4
+
   describe "the Warp accepted-peer handoff" $ do
     it "fails closed for a missing worker handoff" $ do
       tracker <- newActiveConnectionAddresses
@@ -690,6 +707,7 @@ spec = do
                   readIORef logEntriesReference
                     `shouldReturn` [ "ACME certbot webroot registered for listener 127.0.0.1:" <> Text.pack (show httpsPort),
                                      "Launching certbot for ACME listener on 127.0.0.1:" <> Text.pack (show httpsPort),
+                                     "Certbot completed for ACME listener on 127.0.0.1:" <> Text.pack (show httpsPort),
                                      "ACME certbot webroot unregistered for listener 127.0.0.1:" <> Text.pack (show httpsPort)
                                    ]
 
@@ -740,6 +758,7 @@ spec = do
                     readIORef logEntriesReference
                       `shouldReturn` [ "ACME certbot webroot registered for listener 127.0.0.1:" <> Text.pack (show challengePort),
                                        "Launching certbot for ACME listener on 127.0.0.1:" <> Text.pack (show challengePort),
+                                       "Certbot completed for ACME listener on 127.0.0.1:" <> Text.pack (show challengePort),
                                        "ACME certbot webroot unregistered for listener 127.0.0.1:" <> Text.pack (show challengePort),
                                        "Published ACME certificate files to shared directory " <> Text.pack sharedDirectory
                                      ]

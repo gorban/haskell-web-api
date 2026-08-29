@@ -55,6 +55,7 @@ module HarchWeb.Server
     reloadTlsCredentialsIfChanged,
     runServer,
     runServerWithWaiMiddleware,
+    waitForShutdownSignalWith,
     startHttpRuntimeServerWithStarter,
     startManualTlsRuntimeServerWithStarter,
     startWarpRuntimeServerOnSocket,

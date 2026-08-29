@@ -177,7 +177,6 @@ spec =
                    routeHref (Page LiveDataPage) `shouldBe` "/live-data",
                    routeHref (Api LiveDataEvents) `shouldBe` "/live-data/events",
                    routeHref (Custom NativeSubscriptionFallback) `shouldBe` "/native-subscribe",
-                   ExampleRoutes.twoPageActionContext `shouldBe` (),
                    ExampleRoutes.twoPageActionPath () `shouldBe` Just "/actions/subscribe",
                    routeHref (Page PageNotFound) `shouldBe` "/404",
                    twoPageNavigationPath (NavigationPage HomePage) `shouldBe` "/",
@@ -190,7 +189,7 @@ spec =
           )
 
       it "raises the unsafe-URL diagnostic when a rendered navigation path is not a safe URL" $
-        evaluate (ExampleRoutes.twoPageNavigationHref "javascript:alert(1)" Nothing `seq` ())
+        evaluate (ExampleRoutes.twoPageNavigationHref "javascript:alert(1)" `seq` ())
           `shouldThrow` \case
             ErrorCall message -> "twoPageNavigationPath: rendered an unsafe URL: javascript:alert(1)" `isInfixOf` message
 

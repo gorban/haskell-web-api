@@ -34,7 +34,7 @@ import Network.HTTP.Types qualified as Http
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress, opaqueSession, sessionIdValue, testSessionId)
 import Unit.WebApi.TestSupport qualified as TestSupport (databaseConfig)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), defaultPendingRegistrationStoragePolicy, mkRegistrationDeliveryTimeout, pendingRegistrationClaimLeaseNanoseconds, pendingRegistrationMaximumAccounts)
-import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), VerificationForm (..), accountActions, authorizeAccountActionCsrf, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, pageCsrfTokenForAccountPage, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderPendingProfileRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
+import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), VerificationForm (..), accountActions, authorizeAccountActionCsrf, emptyRegistrationForm, handleAccountAction, initialPendingProfileForm, mfaEnrollmentFailureDiagnostics, pageCsrfTokenForAccountPage, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderPendingProfileRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buildActionCodecOrDie)
 import WebApi.App (buildRuntimeAppWithDatabaseBuilder, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
@@ -230,26 +230,23 @@ existingSpec = do
       expect (workflow (Right True) delivery (Right (Just (opaqueSession maxBound))) (Right (Just pendingProfile)) (maxBound - 1)) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 503 "Tu perfil no esta disponible"
 
     it "keeps PendingProfileForm comparable and its rendered region free of a false error flag" $
-      expectAll
-        ( ( ( PendingProfileForm "person@example.test" Nothing False "Resend verification email"
-                == PendingProfileForm "person@example.test" Nothing False "Resend verification email"
-            )
-              `shouldBe` True
-          )
-            :| [ ( PendingProfileForm "person@example.test" Nothing False "Resend verification email"
-                     /= PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email"
-                 )
-                   `shouldBe` True,
-                 ( PendingProfileForm "person@example.test" Nothing False "Resend verification email"
-                     /= PendingProfileForm "person@example.test" Nothing True "Resend verification email"
-                 )
-                   `shouldBe` True,
-                 (PendingProfileForm "person@example.test" Nothing False "Resend verification email" /= PendingProfileForm "person@example.test" Nothing False "Send again")
-                   `shouldBe` True,
-                 renderPendingProfileRegion defaultRequestContext UpdateProfileTarget (PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email")
-                   `shouldSatisfy` (not . Text.isInfixOf "data-message-error=\"true\"")
-               ]
+      expectAll $
+        ( initialPendingProfileForm "person@example.test" "Resend verification email"
+            `shouldBe` PendingProfileForm "person@example.test" Nothing False "Resend verification email"
         )
+          :| [ ( PendingProfileForm "person@example.test" Nothing False "Resend verification email"
+                   /= PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email"
+               )
+                 `shouldBe` True,
+               ( PendingProfileForm "person@example.test" Nothing False "Resend verification email"
+                   /= PendingProfileForm "person@example.test" Nothing True "Resend verification email"
+               )
+                 `shouldBe` True,
+               (PendingProfileForm "person@example.test" Nothing False "Resend verification email" /= PendingProfileForm "person@example.test" Nothing False "Send again")
+                 `shouldBe` True,
+               renderPendingProfileRegion defaultRequestContext UpdateProfileTarget (PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email")
+                 `shouldSatisfy` (not . Text.isInfixOf "data-message-error=\"true\"")
+             ]
 
 existingSessionStore :: Either AccountSessionStoreError (Maybe (OpaqueSession AccountId)) -> AccountSessionStore
 existingSessionStore result =

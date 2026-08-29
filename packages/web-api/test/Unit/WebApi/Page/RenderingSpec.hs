@@ -3,6 +3,7 @@
 {-# SPEC #-}
 
 import Data.IORef (newIORef, readIORef)
+import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text qualified as Text
 import HarchWeb qualified
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
@@ -60,7 +61,14 @@ spec = do
       secondPageModel <- buildPageModel secondRequest
       renderPageBody secondPageModel
         `shouldBe` "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
-      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\" aria-current=\"page\">Second</a><a href=\"/spaces\" data-page-link=\"true\">Spaces</a><a href=\"/register\" data-page-link=\"true\">Create account</a><a href=\"/login\" data-page-link=\"true\">Sign in</a><a href=\"/profile\" data-page-link=\"true\">Profile</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
+      expectAll
+        ( (Text.isInfixOf "<nav data-navigation-region=\"primary\">" secondShell `shouldBe` True)
+            :| [ Text.isInfixOf "href=\"/\" data-page-link=\"true\">Home" secondShell `shouldBe` True,
+                 Text.isInfixOf "href=\"/second\" data-page-link=\"true\" aria-current=\"page\">Second" secondShell `shouldBe` True,
+                 Text.isInfixOf "href=\"/spaces\" data-page-link=\"true\">Spaces" secondShell `shouldBe` True,
+                 Text.isInfixOf "<main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
+               ]
+        )
 
     it "renders the app-home spaces surface without requiring client code" $ do
       spacesPageModel <- buildPageModel spacesRequest

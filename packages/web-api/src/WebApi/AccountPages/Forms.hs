@@ -5,6 +5,7 @@ module WebApi.AccountPages.Forms
     RegistrationForm (..),
     VerificationForm (..),
     emptyRegistrationForm,
+    initialPendingProfileForm,
   )
 where
 
@@ -66,3 +67,10 @@ data LoginForm = LoginForm
 
 emptyRegistrationForm :: RegistrationForm
 emptyRegistrationForm = RegistrationForm Text.empty Text.empty Text.empty Nothing False
+
+-- | The server-rendered pending-profile page has no action outcome yet.  This
+-- constructor keeps that valid initial state named and reusable rather than
+-- making callers repeat an unrelated error flag.
+initialPendingProfileForm :: Text -> Text -> PendingProfileForm
+initialPendingProfileForm emailAddress =
+  PendingProfileForm emailAddress Nothing False

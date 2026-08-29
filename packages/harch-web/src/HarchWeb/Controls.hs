@@ -20,6 +20,7 @@ module HarchWeb.Controls
     defaultActionRecoveryCopy,
     pageLink,
     renderActionForm,
+    staticActionForm,
   )
 where
 
@@ -32,6 +33,7 @@ import HarchWeb.Action
     actionMethod,
     actionMethodText,
     actionPath,
+    staticActionPath,
   )
 import HarchWeb.Markup
 
@@ -136,6 +138,15 @@ pageLink renderPageTarget target =
 actionForm :: (Eq target) => ActionCodec target context action -> context -> target -> ActionFormAttributes -> [Html] -> ActionFormRendering
 actionForm codec context target attributes children =
   case (actionPath codec context target, actionMethod codec target) of
+    (Just targetPath, Just targetMethod) -> CapturingActionForm (renderCapturingActionForm targetPath targetMethod attributes children)
+    _ -> UndeclaredActionForm (renderUndeclaredActionForm children)
+
+-- | Render a form only for an action whose declaration proves that its path
+-- does not depend on request context. Dynamic action declarations remain
+-- available through 'actionForm'.
+staticActionForm :: (Eq target) => ActionCodec target context action -> target -> ActionFormAttributes -> [Html] -> ActionFormRendering
+staticActionForm codec target attributes children =
+  case (staticActionPath codec target, actionMethod codec target) of
     (Just targetPath, Just targetMethod) -> CapturingActionForm (renderCapturingActionForm targetPath targetMethod attributes children)
     _ -> UndeclaredActionForm (renderUndeclaredActionForm children)
 

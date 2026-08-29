@@ -85,12 +85,6 @@ decodeMatchingAccount errorPrefix accountId rows =
       | returnedAccountId == accountIdText accountId -> Right True
     _ -> Left (MfaStoreCorruptData (errorPrefix <> renderUnexpectedResultShape rows))
 
--- | Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the @$!@
--- below on the second field label is a last resort, confirmed directly
--- rather than assumed. @"last-used counter"@ is a unique literal, not
--- written anywhere else in this module, so there is no duplicate expression
--- to deduplicate.
-{-# ANN decodeTotpEnrollment ("HLint: ignore Redundant $!" :: String) #-}
 decodeTotpEnrollment :: [[Text]] -> Either MfaStoreError (Maybe StoredTotpEnrollment)
 decodeTotpEnrollment rows =
   case rows of
@@ -99,7 +93,7 @@ decodeTotpEnrollment rows =
       Just
         <$> ( StoredTotpEnrollment encryptedSecret
                 <$> decodeOptionalUnixTimeNanoseconds "confirmation timestamp" confirmedAtValue
-                <*> (decodeOptionalWord64 $! "last-used counter") lastUsedCounterValue
+                <*> decodeOptionalWord64 "last-used counter" lastUsedCounterValue
             )
     _ -> Left (MfaStoreCorruptData ("unexpected TOTP enrollment lookup result: " <> renderUnexpectedResultShape rows))
 

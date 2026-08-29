@@ -20,6 +20,7 @@ import HarchWeb.Action
   ( ActionCodec,
     ActionDecoder,
     ActionEndpoint,
+    FieldValue,
     action,
     actionCodec,
     formField,
@@ -104,50 +105,39 @@ accountActionEndpoints =
     action
       UpdateProfileTarget
       (postAt "/profile" (`accountActionPath` ProfileRoute))
-      (UpdateProfile . ProfileSubmission <$> singleOrDefault emptyFieldDefault (formField "intent" textValue)),
+      (UpdateProfile . ProfileSubmission <$> textFormField "intent" textValue),
     action LogoutAccountTarget (postAt "/logout" (`accountActionPath` LogoutRoute)) (pure LogoutAccount)
   ]
 
--- | The empty-'Text' default, named once instead of written at each call site
--- below: identical bare literal defaults written separately at multiple
--- top-level definitions get merged by GHC into one shared CAF, crediting only
--- the first call site's own HPC tick even though every one genuinely runs in
--- tests. Naming the shared value once removes the *duplicate-literal* form
--- of that gap (see 'UpdateProfileTarget'\'s own single, unforced use above),
--- but does not fully close it: confirmed directly rather than assumed, since
--- 'emptyFieldDefault' is trivial enough that GHC's @-O2@ optimizer inlines it
--- back to a bare @""@ at each of the applicative-chain call sites below,
--- reproducing the same CSE-sharing gap the naming was meant to remove. The
--- @$!@ on each remaining reference is the last-resort fix per
--- @docs/design-guidance.md@'s never-mask-a-gate-finding rule.
-emptyFieldDefault :: Text
-emptyFieldDefault = Text.empty
+-- | The text-field convention is part of the action contract: missing fields
+-- decode to empty text while duplicate and malformed fields still carry their
+-- decoder errors. Keeping it in one codec builder prevents separate defaults
+-- from becoming coverage-oriented evaluation sites.
+textFormField :: Text -> FieldValue Text -> ActionDecoder Text
+textFormField fieldName field = singleOrDefault Text.empty (formField fieldName field)
 
-{-# ANN registrationSubmission ("HLint: ignore Redundant $!" :: String) #-}
 registrationSubmission :: ActionDecoder RegistrationSubmission
 registrationSubmission =
   RegistrationSubmission
-    <$> (singleOrDefault $! emptyFieldDefault) (formField "username" textValue)
-    <*> (singleOrDefault $! emptyFieldDefault) (formField "email" textValue)
-    <*> singleOrDefault emptyFieldDefault (formField "displayName" textValue)
-    <*> (singleOrDefault $! emptyFieldDefault) (formField "password" textValue)
+    <$> textFormField "username" textValue
+    <*> textFormField "email" textValue
+    <*> textFormField "displayName" textValue
+    <*> textFormField "password" textValue
 
-{-# ANN mfaEnrollmentSubmission ("HLint: ignore Redundant $!" :: String) #-}
 mfaEnrollmentSubmission :: ActionDecoder MfaEnrollmentSubmission
 mfaEnrollmentSubmission =
   MfaEnrollmentSubmission
-    <$> (singleOrDefault $! emptyFieldDefault) (formField "intent" textValue)
-    <*> singleOrDefault emptyFieldDefault (formField "code" textValue)
+    <$> textFormField "intent" textValue
+    <*> textFormField "code" textValue
 
-{-# ANN loginSubmission ("HLint: ignore Redundant $!" :: String) #-}
 loginSubmission :: ActionDecoder LoginSubmission
 loginSubmission =
   LoginSubmission
-    <$> (singleOrDefault $! emptyFieldDefault) (formField "email" textValue)
-    <*> singleOrDefault emptyFieldDefault (formField "username" textValue)
-    <*> (singleOrDefault $! emptyFieldDefault) (formField "password" textValue)
-    <*> (singleOrDefault $! emptyFieldDefault) (formField "proof" textValue)
-    <*> (singleOrDefault $! emptyFieldDefault) (formField "code" textValue)
+    <$> textFormField "email" textValue
+    <*> textFormField "username" textValue
+    <*> textFormField "password" textValue
+    <*> textFormField "proof" textValue
+    <*> textFormField "code" textValue
 
 accountActionPath :: AppRequestContext -> AppRoute -> Text
 accountActionPath requestContext route =

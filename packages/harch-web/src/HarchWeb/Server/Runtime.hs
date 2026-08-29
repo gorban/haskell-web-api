@@ -5,6 +5,7 @@
 module HarchWeb.Server.Runtime
   ( runServer,
     runServerWithWaiMiddleware,
+    waitForShutdownSignalWith,
   )
 where
 
@@ -32,7 +33,7 @@ import HarchWeb.Server.Transport
   )
 import Network.Wai qualified as Wai
 import System.IO (Handle, hFlush, hPutStrLn)
-import System.Posix.Signals (Handler (Catch), installHandler, sigINT, sigTERM)
+import System.Posix.Signals (Handler (Catch), Signal, SignalSet, installHandler, sigINT, sigTERM)
 import Text.Read (readMaybe)
 
 runServer ::
@@ -176,10 +177,17 @@ listenerSchemePrefix listenerScheme =
     Https -> "HTTPS Server listening at https://"
 
 waitForShutdownSignal :: IO ()
-waitForShutdownSignal = do
+waitForShutdownSignal = waitForShutdownSignalWith installHandler
+
+-- | Install and restore the SIGINT/SIGTERM handlers around one shutdown wait.
+-- Keeping the OS call as a parameter lets the focused runtime test prove that
+-- every installation uses the unmasked-handler policy and that both original
+-- handlers are restored, rather than treating the policy value as coverage
+-- scaffolding.
+waitForShutdownSignalWith :: (Signal -> Handler -> Maybe SignalSet -> IO Handler) -> IO ()
+waitForShutdownSignalWith installSignalHandler = do
   shutdownSignal <- newEmptyMVar
-  let noSignalMask = Nothing
-      installShutdownHandler signal handler = noSignalMask `seq` installHandler signal handler $! noSignalMask
+  let installShutdownHandler signal handler = installSignalHandler signal handler Nothing
       requestShutdown = void (tryPutMVar shutdownSignal ())
   previousInterruptHandler <- installShutdownHandler sigINT (Catch requestShutdown)
   previousTerminationHandler <- installShutdownHandler sigTERM (Catch requestShutdown)

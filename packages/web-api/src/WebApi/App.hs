@@ -36,10 +36,7 @@ import WebApi.Account (AccountProfileStore (..), AccountStore (..), AccountStore
 import WebApi.AccountPages (AccountAction, accountActions, authorizeAccountActionCsrf, handleAccountAction, pageCsrfTokenForAccountPage)
 import WebApi.Api.Endpoints (secondApiRouteDefinition, statusApiRouteDefinition)
 import WebApi.App.Observability
-  ( ignoreApplicationLog,
-    ignoreConnectionObservability,
-    ignoreRequestObservability,
-    runtimeApplicationLogReporter,
+  ( runtimeApplicationLogReporter,
     runtimeConnectionObservabilityReporter,
     runtimeRequestObservabilityReporter,
   )
@@ -97,7 +94,7 @@ buildAppWithDatabaseAndAccountWorkflow ::
   AccountWorkflow ->
   HarchWeb.Application AppRoute AccountAction AppRequestContext
 buildAppWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow =
-  buildAppWithDatabaseAndReporters config pageRepository accountWorkflow ignoreRequestObservability ignoreConnectionObservability ignoreApplicationLog
+  buildAppWithDatabaseAndOptionalReporters config pageRepository accountWorkflow Nothing
 
 buildAppWithDatabaseAndReporters ::
   AppConfig ->
@@ -108,29 +105,58 @@ buildAppWithDatabaseAndReporters ::
   (Text.Text -> IO ()) ->
   HarchWeb.Application AppRoute AccountAction AppRequestContext
 buildAppWithDatabaseAndReporters config pageRepository !accountWorkflow requestObservabilityReporter connectionObservabilityReporter applicationLogReporter =
+  buildAppWithDatabaseAndOptionalReporters
+    config
+    pageRepository
+    accountWorkflow
+    (Just (requestObservabilityReporter, connectionObservabilityReporter, applicationLogReporter))
+
+-- | The ordinary application leaves observability on the framework's default
+-- disabled policy. Runtime setup supplies all three concrete reporters
+-- together, so no local fake callbacks are needed to bridge the two modes.
+buildAppWithDatabaseAndOptionalReporters ::
+  AppConfig ->
+  PageRepository ->
+  AccountWorkflow ->
+  Maybe
+    ( Observability.RequestObservability -> IO (),
+      Observability.ConnectionObservability -> IO (),
+      Text.Text -> IO ()
+    ) ->
+  HarchWeb.Application AppRoute AccountAction AppRequestContext
+buildAppWithDatabaseAndOptionalReporters config pageRepository !accountWorkflow maybeReporters =
   Site.buildSiteApplication
-    ( ( Site.simpleSite
-          "web-api"
-          defaultRequestContext
-          routeCodec
-          (buildAppPageShellConfig config)
-          appNavigationRoutes
-          (buildAppRouteDefinition config pageRepository accountWorkflow)
-      )
-        { Site.siteRequestContextFromRequest =
-            requestContextFromWaiRequest (requestPolicy config),
-          Site.siteStaticAssets = staticAssets config,
-          Site.siteNavigationRuntimePathPrefix = requestPathPrefix,
-          Site.siteRequestPolicy = requestPolicy config,
-          Site.siteDecodeClientAction = decodeAction accountActions,
-          Site.sitePageCsrfToken = pageCsrfTokenForAccountPage accountWorkflow,
-          Site.siteAuthorizeClientActionCsrf = authorizeAccountActionCsrf accountWorkflow,
-          Site.siteReportRequestObservability = requestObservabilityReporter,
-          Site.siteReportConnectionObservability = connectionObservabilityReporter,
-          Site.siteReportApplicationLog = applicationLogReporter,
-          Site.siteHandleClientAction = handleAccountAction accountWorkflow
-        }
+    ( configureReporters
+        ( ( Site.simpleSite
+              "web-api"
+              defaultRequestContext
+              routeCodec
+              (const (buildAppPageShellConfig config))
+              appNavigationRoutes
+              (buildAppRouteDefinition config pageRepository accountWorkflow)
+          )
+            { Site.siteRequestContextFromRequest =
+                requestContextFromWaiRequest (requestPolicy config),
+              Site.siteStaticAssets = staticAssets config,
+              Site.siteNavigationRuntimePathPrefix = requestPathPrefix,
+              Site.siteRequestPolicy = requestPolicy config,
+              Site.siteDecodeClientAction = decodeAction accountActions,
+              Site.sitePageCsrfToken = pageCsrfTokenForAccountPage accountWorkflow,
+              Site.siteAuthorizeClientActionCsrf = authorizeAccountActionCsrf accountWorkflow,
+              Site.siteHandleClientAction = handleAccountAction accountWorkflow
+            }
+        )
     )
+  where
+    configureReporters site =
+      case maybeReporters of
+        Nothing -> site
+        Just (requestObservabilityReporter, connectionObservabilityReporter, applicationLogReporter) ->
+          site
+            { Site.siteReportRequestObservability = requestObservabilityReporter,
+              Site.siteReportConnectionObservability = connectionObservabilityReporter,
+              Site.siteReportApplicationLog = applicationLogReporter
+            }
 
 buildApp :: AppConfig -> HarchWeb.Application AppRoute AccountAction AppRequestContext
 buildApp config =

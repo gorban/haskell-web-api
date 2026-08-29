@@ -113,12 +113,9 @@ simpleSite name defaultContext codec shellBuilder navigationRoutes routeDefiniti
       siteAuthorizeClientActionCsrf = \_ _ -> pure True,
       siteHandleClientAction = const (pure Nothing),
       sitePageShell = shellBuilder,
-      siteReportRequestObservability = \requestObservability ->
-        Observability.forceRequestObservability requestObservability `seq` pure (),
-      siteReportConnectionObservability = \connectionObservability ->
-        Observability.forceConnectionObservability connectionObservability `seq` pure (),
-      siteReportApplicationLog = \logEntry ->
-        logEntry `seq` pure ()
+      siteReportRequestObservability = const (pure ()),
+      siteReportConnectionObservability = const (pure ()),
+      siteReportApplicationLog = const (pure ())
     }
 
 -- | Compose a site whose route table contains protocol endpoints only. It

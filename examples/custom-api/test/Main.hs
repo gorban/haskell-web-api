@@ -11,6 +11,8 @@ import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
+import Data.Text qualified as Text
+import HarchWeb.Api (ApiBodyDecoder (apiBodyDecoderParse))
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
@@ -104,6 +106,11 @@ mainSpec application = describe "Unit.App.Api.Declarative" $ do
       Wai.responseStatus response `shouldBe` HttpTypes.status406
 
   describe "POST /api/greeting" $ do
+    it "retains its custom decoder's malformed-object diagnostic" $
+      case apiBodyDecoderParse greetingRequestBodyDecoder "\"not an object\"" of
+        Left parseError -> parseError `shouldSatisfy` Text.isInfixOf "GreetingRequest"
+        Right _ -> expectationFailure "unexpectedly decoded malformed JSON"
+
     it "decodes a JSON body and greets the requested name" $ do
       request <- jsonRequest "POST" "/api/greeting" "{\"requestedName\":\"Ada\"}"
       response <- performWaiRequest application request

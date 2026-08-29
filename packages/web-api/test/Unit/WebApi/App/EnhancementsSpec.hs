@@ -111,15 +111,14 @@ spec = do
 
     it "keeps the legacy page-shell shim aligned with the app shell seam" $ do
       renderedPage <- renderPage defaultAppConfig secondRequest
-      LegacyPageShell.buildAppPageShell defaultAppConfig renderedPage
-        `shouldBe` buildAppPageShell defaultAppConfig renderedPage
+      HarchWeb.renderDocumentForTests (LegacyPageShell.buildAppPageShell defaultAppConfig renderedPage)
+        `shouldBe` HarchWeb.renderDocumentForTests (buildAppPageShell defaultAppConfig renderedPage)
       navigationRenderedPage <- renderPage navigationAppConfig secondRequest
-      LegacyPageShell.buildAppPageShell navigationAppConfig navigationRenderedPage
-        `shouldBe` buildAppPageShell navigationAppConfig navigationRenderedPage
+      HarchWeb.renderDocumentForTests (LegacyPageShell.buildAppPageShell navigationAppConfig navigationRenderedPage)
+        `shouldBe` HarchWeb.renderDocumentForTests (buildAppPageShell navigationAppConfig navigationRenderedPage)
 
     it "keeps the shell configuration seam aligned with the rendered shell entry point" $ do
-      renderedPage <- renderPage navigationAppConfig secondRequest
-      let shellConfig = buildAppPageShellConfig navigationAppConfig renderedPage
+      let shellConfig = buildAppPageShellConfig navigationAppConfig
       HarchWeb.shellNavigationItems shellConfig `shouldBe` []
       HarchWeb.shellRuntimeDescriptors shellConfig `shouldBe` []
 

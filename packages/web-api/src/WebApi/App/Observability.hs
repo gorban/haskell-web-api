@@ -1,10 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module WebApi.App.Observability
-  ( ignoreApplicationLog,
-    ignoreConnectionObservability,
-    ignoreRequestObservability,
-    runtimeApplicationLogReporter,
+  ( runtimeApplicationLogReporter,
     runtimeConnectionObservabilityReporter,
     runtimeRequestObservabilityReporter,
   )
@@ -13,7 +10,7 @@ where
 import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TBQueue (TBQueue, isFullTBQueue, newTBQueueIO, readTBQueue, writeTBQueue)
-import Control.Exception (SomeException, displayException, evaluate, try)
+import Control.Exception (SomeException, displayException, try)
 import Control.Monad (forM_, forever, unless)
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.Text qualified as Text
@@ -149,18 +146,3 @@ exportFailureMessage observabilityKind exportError =
 runtimeApplicationLogReporter :: Text.Text -> IO ()
 runtimeApplicationLogReporter =
   TextIO.hPutStrLn stderr . ("ERROR " <>)
-
-ignoreRequestObservability :: Observability.RequestObservability -> IO ()
-ignoreRequestObservability requestObservability =
-  let ignored = mempty :: ()
-   in Observability.forceRequestObservability requestObservability `seq` ignored `seq` evaluate ignored
-
-ignoreConnectionObservability :: Observability.ConnectionObservability -> IO ()
-ignoreConnectionObservability connectionObservability =
-  let ignored = mempty :: ()
-   in Observability.forceConnectionObservability connectionObservability `seq` ignored `seq` evaluate ignored
-
-ignoreApplicationLog :: Text.Text -> IO ()
-ignoreApplicationLog logEntry =
-  let ignored = mempty :: ()
-   in Text.length logEntry `seq` ignored `seq` evaluate ignored

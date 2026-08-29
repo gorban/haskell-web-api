@@ -19,8 +19,8 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text (isInfixOf, null)
 import Data.Text.Encoding qualified as TextEncoding (encodeUtf8)
-import HarchWeb (ActionCapability (ConditionalLeaveConfirmation, HandlerSafeRetry, IdempotentMutationRetry, NativeFallback), ActionFormAttributes (actionFormCapabilities), ActionIdempotency (actionIdempotencyKey), ActionRecoveryCopy (actionCancelCopy, actionCancelledCopy, actionDelayedCopy, actionPendingCopy, actionReadyCopy, actionRecoverableCopy, actionRetryCopy), FormMethod (FormGet, FormPost), NativeActionFallback (NativeActionFallback, nativeActionFallbackCsrfToken, nativeActionFallbackMethod, nativeActionFallbackPath), actionForm, actionIdempotency, defaultActionFormAttributes, defaultActionRecoveryCopy, defaultCaptureKernelByteBudget, defaultCaptureKernelScript, renderActionForm, renderHtml, text)
-import HarchWeb.Action qualified as Action (ActionCodec, ActionCodecError (..), ActionDecoder, ActionMethod (ActionDelete, ActionGet, ActionPatch, ActionPost, ActionPut), ClientActionDecodeResult (..), ClientActionParseError (DuplicateActionField, InvalidActionField, MissingActionField), ClientActionPayload (ClientActionPayload, clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod, clientActionPath, clientActionPayloadContext), action, actionCodec, actionMethod, actionMethodText, actionPath, decodeAction, delete, deleteAt, emptyActionCodec, exactlyOne, formField, get, getAt, methodAt, optional, parseField, patch, patchAt, post, postAt, put, putAt, required, singleActionCodec, singleOrDefault, textValue)
+import HarchWeb (ActionCapability (ConditionalLeaveConfirmation, HandlerSafeRetry, IdempotentMutationRetry, NativeFallback), ActionFormAttributes (actionFormCapabilities), ActionIdempotency (actionIdempotencyKey), ActionRecoveryCopy (actionCancelCopy, actionCancelledCopy, actionDelayedCopy, actionPendingCopy, actionReadyCopy, actionRecoverableCopy, actionRetryCopy), FormMethod (FormGet, FormPost), NativeActionFallback (NativeActionFallback, nativeActionFallbackCsrfToken, nativeActionFallbackMethod, nativeActionFallbackPath), actionForm, actionIdempotency, defaultActionFormAttributes, defaultActionRecoveryCopy, defaultCaptureKernelByteBudget, defaultCaptureKernelScript, renderActionForm, renderHtml, staticActionForm, text)
+import HarchWeb.Action qualified as Action (ActionCodec, ActionCodecError (..), ActionDecoder, ActionMethod (ActionDelete, ActionGet, ActionPatch, ActionPost, ActionPut), ClientActionDecodeResult (..), ClientActionParseError (DuplicateActionField, InvalidActionField, MissingActionField), ClientActionPayload (ClientActionPayload, clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod, clientActionPath, clientActionPayloadContext), action, actionCodec, actionMethod, actionMethodText, actionPath, decodeAction, delete, deleteAt, emptyActionCodec, exactlyOne, formField, get, getAt, methodAt, optional, parseField, patch, patchAt, post, postAt, put, putAt, required, singleActionCodec, singleOrDefault, staticActionPath, textValue)
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
 import HarchWeb.Observability qualified as Observability ()
@@ -59,6 +59,22 @@ spec = do
                  Text.isInfixOf "data-harch-action-status" renderedForm `shouldBe` True,
                  Text.isInfixOf "data-harch-action-retry" renderedForm `shouldBe` True,
                  Text.isInfixOf "data-harch-action-cancel" renderedForm `shouldBe` True
+               ]
+        )
+
+    it "renders a declaration-proven static action without inventing request context" $ do
+      let staticCodec :: Action.ActionCodec Text TestContext Text
+          staticCodec =
+            fromRight (error "invalid static action codec") $
+              Action.actionCodec [Action.action "save" (Action.post "/actions/save") (pure "save")]
+          renderedForm = renderHtml (renderActionForm (staticActionForm staticCodec "save" defaultActionFormAttributes [text "Save"]))
+          dynamicRenderedForm = renderHtml (renderActionForm (staticActionForm testActionCodec "save" defaultActionFormAttributes [text "Save"]))
+      expectAll
+        ( (Action.staticActionPath staticCodec "save" `shouldBe` Just "/actions/save")
+            :| [ Action.staticActionPath testActionCodec "save" `shouldBe` Nothing,
+                 Text.isInfixOf "data-harch-action-path=\"/actions/save\"" renderedForm `shouldBe` True,
+                 Text.isInfixOf "data-harch-action-configuration-error" dynamicRenderedForm `shouldBe` True,
+                 Text.isInfixOf "data-harch-action=\"true\"" dynamicRenderedForm `shouldBe` False
                ]
         )
 

@@ -62,9 +62,8 @@ data TypedActionFormProps = TypedActionFormProps
 typedActionForm :: TypedActionFormProps -> [Html] -> Html
 typedActionForm TypedActionFormProps {action, ariaLabel} children =
   HarchWeb.renderActionForm
-    ( HarchWeb.actionForm
+    ( HarchWeb.staticActionForm
         typedActionCodec
-        ()
         action
         HarchWeb.defaultActionFormAttributes
           { HarchWeb.actionFormAriaLabel = Just ariaLabel

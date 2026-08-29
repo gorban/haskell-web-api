@@ -12,6 +12,12 @@
 -- to the stable 'InvalidClientActionDecoder' value rather than throwing. This keeps an
 -- undeclared control from claiming capture readiness while preserving its
 -- authored content for an accessible configuration diagnostic.
+--
+-- Decision record (FQ1, 2026-08-29): a static action path is now represented
+-- explicitly in 'ActionPath', rather than as a dynamic renderer applied to
+-- @()@. 'staticActionPath' can therefore render only an action declaration
+-- that proves it is context-free. Dynamic paths retain 'actionPath' and their
+-- explicit context; a static renderer never invents one.
 module HarchWeb.Action
   ( ActionCodec,
     ActionCodecError (..),
@@ -50,6 +56,7 @@ module HarchWeb.Action
     required,
     singleActionCodec,
     singleOrDefault,
+    staticActionPath,
     textValue,
   )
 where
@@ -116,7 +123,8 @@ data ActionCodecError
 data ActionPath context = ActionPath
   { actionPathMethod :: ActionMethod,
     actionPathIdentity :: Text,
-    renderActionPath :: context -> Text
+    renderActionPath :: context -> Text,
+    actionStaticPath :: Maybe Text
   }
 
 data ActionEndpoint target context action = ActionEndpoint target (ActionPath context) (ActionDecoder action)
@@ -166,6 +174,13 @@ actionPath :: (Eq target) => ActionCodec target context action -> context -> tar
 actionPath (ActionCodec endpoints) context target =
   renderActionPath <$> actionTargetPath endpoints target <*> pure context
 
+-- | Look up a declaration that proves its path is independent of request
+-- context. A dynamic declaration returns 'Nothing' rather than receiving an
+-- invented context value.
+staticActionPath :: (Eq target) => ActionCodec target context action -> target -> Maybe Text
+staticActionPath (ActionCodec endpoints) target =
+  actionStaticPath =<< actionTargetPath endpoints target
+
 -- | Look up the method of a declared target. Pair this with 'actionPath' or
 -- use 'HarchWeb.Controls.actionForm', which makes an undeclared target an
 -- explicit rendering result.
@@ -202,7 +217,8 @@ methodAt methodValue identity render =
   ActionPath
     { actionPathMethod = methodValue,
       actionPathIdentity = identity,
-      renderActionPath = render
+      renderActionPath = render,
+      actionStaticPath = Nothing
     }
 
 get :: Text -> ActionPath context
@@ -236,7 +252,13 @@ deleteAt :: Text -> (context -> Text) -> ActionPath context
 deleteAt = methodAt ActionDelete
 
 staticPath :: ActionMethod -> Text -> ActionPath context
-staticPath methodValue path = methodAt methodValue path (const path)
+staticPath methodValue path =
+  ActionPath
+    { actionPathMethod = methodValue,
+      actionPathIdentity = path,
+      renderActionPath = const path,
+      actionStaticPath = Just path
+    }
 
 formField :: Text -> FieldValue value -> FormField value
 formField fieldName valueDecoder =

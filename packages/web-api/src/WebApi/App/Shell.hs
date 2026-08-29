@@ -14,24 +14,33 @@ import WebApi.Route
     routeCodec,
   )
 
--- | Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the @$!@
--- below on 'page'\'s first reference is a last resort, confirmed directly
--- rather than assumed. 'page' is already a single, correctly-factored
--- function argument, referenced once each by 'buildAppPageShellConfig' and
--- 'HarchWeb.buildPageShell' — the correct shape for this code, not
--- duplication to remove. GHC shares the two references to this one thunk,
--- and only the second (the trailing bare argument) earns its own HPC tick
--- when forced; the first does not.
-{-# ANN buildAppPageShell ("HLint: ignore Redundant $!" :: String) #-}
 buildAppPageShell :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> HarchWeb.Document AppRoute
-buildAppPageShell config page =
-  HarchWeb.buildPageShell routeCodec (addAppNavigationItems (buildAppPageShellConfig config $! page)) page
+buildAppPageShell config =
+  HarchWeb.buildPageShell routeCodec (standalonePageShell (buildAppPageShellConfig config))
 
--- | The page argument is part of the shell-config callback shape
--- 'HarchWeb.Site.simpleSite' expects, even though this application's shell
--- does not currently vary by page.
-buildAppPageShellConfig :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> HarchWeb.PageShell AppRoute AppRequestContext
-buildAppPageShellConfig config _page =
+-- | The compatibility renderer is a complete standalone document builder, so
+-- it supplies the same declared navigation that 'HarchWeb.Site' supplies for
+-- the normal application path.  'buildAppPageShellConfig' intentionally does
+-- not include these items: adding them there would duplicate Site-owned
+-- navigation in the running application.
+standalonePageShell :: HarchWeb.PageShell AppRoute AppRequestContext -> HarchWeb.PageShell AppRoute AppRequestContext
+standalonePageShell shell =
+  shell {HarchWeb.shellNavigationItems = appNavigationItems}
+
+appNavigationItems :: [HarchWeb.NavigationItem AppRoute]
+appNavigationItems =
+  [ HarchWeb.NavigationItem "Home" HomeRoute,
+    HarchWeb.NavigationItem "Second" SecondRoute,
+    HarchWeb.NavigationItem "Spaces" SpacesRoute,
+    HarchWeb.NavigationItem "Create account" RegistrationRoute,
+    HarchWeb.NavigationItem "Sign in" LoginRoute,
+    HarchWeb.NavigationItem "Profile" ProfileRoute
+  ]
+
+-- | Application shell configuration is independent of the rendered page.
+-- 'WebApi.App' adapts this value with 'const' for 'HarchWeb.Site.simpleSite'.
+buildAppPageShellConfig :: AppConfig -> HarchWeb.PageShell AppRoute AppRequestContext
+buildAppPageShellConfig config =
   HarchWeb.PageShell
     { HarchWeb.shellBodyAttributes =
         [ HarchWeb.HtmlAttribute
@@ -45,7 +54,7 @@ buildAppPageShellConfig config _page =
               HarchWeb.attributeValue = "primary"
             }
         ],
-      HarchWeb.shellNavigationItems = [],
+      HarchWeb.shellNavigationItems = noAppShellNavigationItems,
       HarchWeb.shellMainId = "app-main",
       HarchWeb.shellMainAttributes =
         [ HarchWeb.HtmlAttribute
@@ -57,21 +66,8 @@ buildAppPageShellConfig config _page =
       HarchWeb.shellRuntimeDescriptors = []
     }
 
-addAppNavigationItems :: HarchWeb.PageShell AppRoute AppRequestContext -> HarchWeb.PageShell AppRoute AppRequestContext
-addAppNavigationItems shell =
-  shell
-    { HarchWeb.shellNavigationItems =
-        [ HarchWeb.NavigationItem
-            { HarchWeb.navigationLabel = "Home",
-              HarchWeb.navigationRoute = HomeRoute
-            },
-          HarchWeb.NavigationItem
-            { HarchWeb.navigationLabel = "Second",
-              HarchWeb.navigationRoute = SecondRoute
-            },
-          HarchWeb.NavigationItem
-            { HarchWeb.navigationLabel = "Spaces",
-              HarchWeb.navigationRoute = SpacesRoute
-            }
-        ]
-    }
+-- | Route navigation belongs to 'HarchWeb.Site' through the application's
+-- declared navigation routes.  The app shell deliberately contributes no
+-- duplicate static entries.
+noAppShellNavigationItems :: [HarchWeb.NavigationItem AppRoute]
+noAppShellNavigationItems = []

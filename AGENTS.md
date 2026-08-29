@@ -92,10 +92,12 @@ format-only change is exempt from the formatter check.
 
 # Post-push GitHub Actions verification
 
-After pushing a task-sized commit, verify the GitHub Actions run for the exact full commit SHA, never
-an abbreviated SHA. First capture it with `git rev-parse HEAD`. When the current branch has a PR,
-also resolve that PR's head OID and require it to be the same commit before treating any PR-level
-output as relevant:
+After pushing a task-sized commit, verify the required `CI` workflow run for the exact full commit
+SHA, never an abbreviated SHA. A GitHub Actions URL that ends in `/job/<job-id>` identifies one job
+inside a workflow run: inspect its parent run's `headSha`, not the job URL or its displayed PR label.
+First capture the commit with `git rev-parse HEAD`. When the current branch has a PR, also resolve
+that PR's head OID and require it to be the same commit before treating any PR-level output as
+relevant:
 
 ```sh
 task_sha="$(git rev-parse HEAD)"
@@ -110,22 +112,30 @@ test "$pr_head_sha" = "$task_sha" || {
 
 If the branch deliberately has no PR, `gh pr view` will fail; skip that PR-head comparison and use
 the exact-SHA run query below. If the PR is not the current branch's PR, give `gh pr view` its PR
-number or URL explicitly. Then inspect the matching run with the host GitHub CLI:
+number or URL explicitly. Then inspect the matching `CI` workflow run with the host GitHub CLI:
 
 ```sh
 distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh run list \
-  --commit "$task_sha" --limit 20 \
-  --json databaseId,headSha,status,conclusion,url \
+  --workflow ci.yml --commit "$task_sha" --limit 20 \
+  --json databaseId,workflowName,headSha,status,conclusion,createdAt,url \
   --jq ".[] | select(.headSha == \"$task_sha\")"
 ```
 
 Only after the OIDs match, `gh pr checks --watch` is a useful PR-level progress view. It is
 supplementary: it can include checks for another commit after a new push, and must not replace the
 exact-SHA query above. A missing result from a short-SHA filter is not evidence that no run exists.
+For a run or job URL supplied by someone else, verify it directly before relying on it:
+
+```sh
+distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh run view <run-id> \
+  --json databaseId,workflowName,headSha,status,conclusion,url,jobs
+```
+
 If the matching run is failed, queued, cancelled, or otherwise not green, use `gh run view <run-id>`
 and `gh run view <run-id> --log-failed` to identify the failed step before continuing. Do not start the
-next task until the exact SHA's CI run is green; a truncated local terminal stream, a green PR check for
-a different head OID, or a previous commit's run cannot substitute for that evidence.
+next task until the current PR head and the exact SHA's required `CI` run are green; a truncated local
+terminal stream, a green PR check for a different head OID, or a previous commit's run cannot substitute
+for that evidence.
 
 ## GitHub Actions pin updates
 

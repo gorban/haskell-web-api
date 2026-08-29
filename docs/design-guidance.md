@@ -465,6 +465,14 @@ intermediate `apiRouteEndpointMiddleware` that derived `404`/`405`/`Allow`/`HEAD
 registry. Both were deleted once every application in this repository had migrated onto the family
 registry; see the AK decision record below for why that made deletion, not relocation, the right call.
 
+### Decision record — FQ1: context-free static action rendering (2026-08-29)
+
+**Decision: extend the established `ActionPath` representation, not add an application-local
+wrapper or a second action declaration surface.** Static action declarations now retain their fixed
+path alongside the dynamic renderer, allowing `staticActionPath` and `staticActionForm` to require
+that proof instead of passing an artificial unit context. Dynamic declarations still require the
+existing explicit context APIs, so a static renderer cannot silently use an arbitrary request value.
+
 ### Decision record — AC typed declarative endpoint boundary (2026-08-12)
 
 **Decision: extend the shared `RouteCodec`/`RouteDefinition` and server-response boundary (option 1),

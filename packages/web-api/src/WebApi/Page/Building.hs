@@ -161,15 +161,6 @@ buildSecondPageModel routeRequest secondRouteDataResult =
                 secondPrimaryAction = returnHome
               }
 
--- | Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the @$!@
--- below on 'renderedPath'\'s first reference is a last resort, confirmed
--- directly rather than assumed. 'renderedPath' is already a single,
--- correctly-factored local binding, used once as 'buildCallToActionHref'\'s
--- first argument and once inside 'HarchWeb.mkSafeUrl' — the correct shape
--- for this code, not duplication to remove. GHC shares the two references
--- to this one thunk, and only the second (inside 'HarchWeb.mkSafeUrl')
--- earns its own HPC tick when forced; the first does not.
-{-# ANN buildCallToAction ("HLint: ignore Redundant $!" :: String) #-}
 buildCallToAction :: HarchWeb.RouteRequest AppRoute AppRequestContext -> AppRoute -> Text -> CallToAction
 buildCallToAction routeRequest route label =
   CallToAction
@@ -179,13 +170,12 @@ buildCallToAction routeRequest route label =
       -- route table, never from unvalidated caller text — a rejection here
       -- would mean a route itself renders an unsafe URL, a programming
       -- mistake in the route table, not a runtime condition this
-      -- function's own callers need to handle. The failure path is
-      -- extracted into 'buildCallToActionHref' (same shape as
+      -- function's own callers need to handle. The failure path is extracted
+      -- into 'buildCallToActionHref' (same shape as
       -- 'WebApi.Login.requiredPasswordHashOrDie') so a dedicated test can
-      -- force it directly with a deliberately unsafe 'Nothing', rather than
-      -- forcing the diagnostic message eagerly at this always-safe call
-      -- site.
-      callToActionHref = (buildCallToActionHref $! renderedPath) (HarchWeb.mkSafeUrl renderedPath)
+      -- force it directly with deliberately unsafe text, rather than forcing
+      -- the diagnostic message eagerly at this always-safe call site.
+      callToActionHref = buildCallToActionHref renderedPath
     }
   where
     renderedPath =
@@ -196,12 +186,13 @@ buildCallToAction routeRequest route label =
           }
 
 -- | Requires a route's rendered path to already be a safe relative URL,
--- taking the rendered path itself (rather than just the resulting
--- 'Maybe') so the failure diagnostic can be forced directly by a test —
--- see 'Unit.WebApiSpec' for the case that exercises the 'Nothing' branch.
-buildCallToActionHref :: Text -> Maybe HarchWeb.SafeUrl -> HarchWeb.SafeUrl
+-- so its failure diagnostic can be forced directly by a test — see
+-- 'Unit.WebApiSpec' for the unsafe-path case.
+buildCallToActionHref :: Text -> HarchWeb.SafeUrl
 buildCallToActionHref renderedPath =
-  HarchWeb.requiredSafeUrlOrDie ("buildCallToAction: rendered an unsafe URL: " <> renderedPath)
+  HarchWeb.requiredSafeUrlOrDie
+    ("buildCallToAction: rendered an unsafe URL: " <> renderedPath)
+    (HarchWeb.mkSafeUrl renderedPath)
 
 localizedText :: HarchWeb.RouteRequest AppRoute AppRequestContext -> AppMessage -> Text
 localizedText routeRequest = localizedMessage (requestLocale (HarchWeb.requestContext routeRequest))

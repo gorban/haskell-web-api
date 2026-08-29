@@ -10,6 +10,7 @@ module WebApi.AccountPages
     accountActions,
     authorizeAccountActionCsrf,
     emptyRegistrationForm,
+    initialPendingProfileForm,
     handleAccountAction,
     mfaEnrollmentFailureDiagnostics,
     pageCsrfTokenForAccountPage,

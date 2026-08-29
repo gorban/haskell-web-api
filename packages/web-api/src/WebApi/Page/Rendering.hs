@@ -8,7 +8,7 @@ where
 
 import Data.Text (Text)
 import HarchWeb qualified
-import WebApi.AccountPages.Forms (PendingProfileForm (..))
+import WebApi.AccountPages.Forms (initialPendingProfileForm)
 import WebApi.AccountPages.Rendering
   ( renderLoginPageHtml,
     renderLogoutPageHtml,
@@ -64,17 +64,13 @@ renderPageBodyForLocale context locale pageModel =
           renderCallToAction (notFoundPrimaryAction notFoundPage)
         ]
 
--- | Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the @$!@
--- below on the pending form's @False@ literal is a last resort, confirmed
--- directly rather than assumed against this module's own test suite.
-{-# ANN renderProfilePageBody ("HLint: ignore Redundant $!" :: String) #-}
 renderProfilePageBody :: AppRequestContext -> ProfilePageModel -> HarchWeb.Html
 renderProfilePageBody context profilePage =
   case profilePage of
     SignedOutProfilePage SignedOutProfilePageDetails {signedOutProfileHeading, signedOutProfileSummary, signedOutProfileSignInAction, signedOutProfileRegistrationAction} ->
       profilePageSection signedOutProfileHeading signedOutProfileSummary [renderCallToAction signedOutProfileSignInAction, renderCallToAction signedOutProfileRegistrationAction]
     PendingProfilePage PendingProfilePageDetails {pendingProfileHeading, pendingProfileSummary, pendingProfileEmail, pendingProfileUsername, pendingProfileDisplayName, pendingProfileResendPath, pendingProfileResendLabel, pendingProfileSignOutAction} ->
-      profilePageSection pendingProfileHeading pendingProfileSummary [renderProfileIdentity pendingProfileUsername pendingProfileDisplayName, renderPendingProfileRegionHtml context pendingProfileResendPath ((PendingProfileForm pendingProfileEmail Nothing $! False) pendingProfileResendLabel), renderCallToAction pendingProfileSignOutAction]
+      profilePageSection pendingProfileHeading pendingProfileSummary [renderProfileIdentity pendingProfileUsername pendingProfileDisplayName, renderPendingProfileRegionHtml context pendingProfileResendPath (initialPendingProfileForm pendingProfileEmail pendingProfileResendLabel), renderCallToAction pendingProfileSignOutAction]
     AuthenticatedProfilePage AuthenticatedProfilePageDetails {authenticatedProfileHeading, authenticatedProfileSummary, authenticatedProfileEmail, authenticatedProfileUsername, authenticatedProfileDisplayName, authenticatedProfileSignOutAction} ->
       profilePageSection authenticatedProfileHeading authenticatedProfileSummary [renderProfileIdentity authenticatedProfileUsername authenticatedProfileDisplayName, renderProfileEmail authenticatedProfileEmail, renderCallToAction authenticatedProfileSignOutAction]
     UnavailableProfilePage UnavailableProfilePageDetails {unavailableProfileHeading, unavailableProfileSummary, unavailableProfileSignInAction} ->

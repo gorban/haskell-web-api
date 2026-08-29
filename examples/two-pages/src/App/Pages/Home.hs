@@ -27,7 +27,6 @@ import App.Routes
   ( CustomRoute (NativeSubscriptionFallback),
     TwoPageNavigationTarget (NavigationPage),
     TwoPageRoute,
-    twoPageActionContext,
     twoPageActions,
   )
 import App.Routes qualified as Routes
@@ -118,7 +117,8 @@ homePage routeRequest =
 nativeSubscriptionFallbackForm :: Html
 nativeSubscriptionFallbackForm =
   Controls.renderActionForm
-    ( (Controls.actionForm twoPageActions $! twoPageActionContext)
+    ( Controls.staticActionForm
+        twoPageActions
         ()
         Controls.defaultActionFormAttributes
           { Controls.actionFormAriaLabel = Just "Native fallback subscription",

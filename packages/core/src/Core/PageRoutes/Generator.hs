@@ -254,13 +254,9 @@ kebabCase value =
     renderCharacter character
       | isUpper character =
           Text.cons
-            (characterFromCodePoint 45)
+            '-'
             (Text.singleton (toLower character))
       | otherwise = Text.singleton character
-
-characterFromCodePoint :: Int -> Char
-characterFromCodePoint = toEnum
-{-# NOINLINE characterFromCodePoint #-}
 
 validModuleSegment :: String -> Bool
 validModuleSegment segment =

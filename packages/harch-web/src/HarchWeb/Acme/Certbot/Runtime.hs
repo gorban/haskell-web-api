@@ -23,9 +23,8 @@ module HarchWeb.Acme.Certbot.Runtime
 where
 
 import Control.Applicative ((<|>))
-import Control.Exception (IOException, bracket_, evaluate, onException, try)
-import Control.Monad (void)
-import Data.Foldable (for_)
+import Control.Exception (IOException, bracket_, onException, try)
+import Data.Foldable (for_, traverse_)
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -175,7 +174,7 @@ runtimeAcmeManualTlsBindPlan runtimeAcmePlan resolvedCertificatePath resolvedPri
 
 prepareCertbotManualTlsBindPlan :: CertbotWebrootStore -> RuntimeAcmeBindPlan -> CertbotConfig -> IO (Maybe ManualTlsBindPlan, FilePath)
 prepareCertbotManualTlsBindPlan webrootStore =
-  prepareCertbotManualTlsBindPlanWithLogger webrootStore ignoreTextLog
+  prepareCertbotManualTlsBindPlanWithOptionalLogger webrootStore Nothing
 
 -- | Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the @$!@
 -- below on 'unregisterCertbotAcmeChallengeWebroot'\'s last argument is a
@@ -195,6 +194,13 @@ prepareCertbotManualTlsBindPlan webrootStore =
 {-# ANN prepareCertbotManualTlsBindPlanWithLogger ("HLint: ignore Redundant $!" :: String) #-}
 prepareCertbotManualTlsBindPlanWithLogger :: CertbotWebrootStore -> (Text -> IO ()) -> RuntimeAcmeBindPlan -> CertbotConfig -> IO (Maybe ManualTlsBindPlan, FilePath)
 prepareCertbotManualTlsBindPlanWithLogger webrootStore applicationLogger runtimeAcmePlan certbotConfig = do
+  prepareCertbotManualTlsBindPlanWithOptionalLogger webrootStore (Just applicationLogger) runtimeAcmePlan certbotConfig
+
+-- | The public preparation helper has no application logger.  Keeping that
+-- absence explicit avoids manufacturing a no-op callback solely to satisfy a
+-- common implementation; the runtime variant supplies a real logger.
+prepareCertbotManualTlsBindPlanWithOptionalLogger :: CertbotWebrootStore -> Maybe (Text -> IO ()) -> RuntimeAcmeBindPlan -> CertbotConfig -> IO (Maybe ManualTlsBindPlan, FilePath)
+prepareCertbotManualTlsBindPlanWithOptionalLogger webrootStore maybeApplicationLogger runtimeAcmePlan certbotConfig = do
   let endpointText = Text.pack (renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan))
   tempDirectory <- getCanonicalTemporaryDirectory
   stateDirectory <- createTempDirectory tempDirectory "harch-web-certbot"
@@ -221,13 +227,13 @@ prepareCertbotManualTlsBindPlanWithLogger webrootStore applicationLogger runtime
           pure
           (certbotCertificateName runtimeAcmePlan)
       bracket_
-        ( applicationLogger ("ACME certbot webroot registered for listener " <> endpointText)
+        ( recordCertbotLog maybeApplicationLogger ("ACME certbot webroot registered for listener " <> endpointText)
             >> registerCertbotAcmeChallengeWebroot webrootStore webrootDirectory
         )
         ( (unregisterCertbotAcmeChallengeWebroot webrootStore $! webrootDirectory)
-            >> applicationLogger ("ACME certbot webroot unregistered for listener " <> endpointText)
+            >> recordCertbotLog maybeApplicationLogger ("ACME certbot webroot unregistered for listener " <> endpointText)
         )
-        (runCertbotAcmeChallengeWithLogger applicationLogger runtimeAcmePlan certbotConfig directories)
+        (runCertbotAcmeChallengeWithLogger maybeApplicationLogger runtimeAcmePlan certbotConfig directories)
       let certificateDirectory = configDirectory </> "live" </> Text.unpack certificateName
           certificatePath = certificateDirectory </> "fullchain.pem"
           privateKeyPath = certificateDirectory </> "privkey.pem"
@@ -239,17 +245,17 @@ prepareCertbotManualTlsBindPlanWithLogger webrootStore applicationLogger runtime
             pure (certificatePath, privateKeyPath)
           Just sharedDirectory -> do
             publishedPaths <- publishCertificateFiles sharedDirectory certificatePath privateKeyPath
-            applicationLogger ("Published ACME certificate files to shared directory " <> Text.pack sharedDirectory)
+            recordCertbotLog maybeApplicationLogger ("Published ACME certificate files to shared directory " <> Text.pack sharedDirectory)
             pure publishedPaths
       pure
         ( runtimeAcmeManualTlsBindPlan runtimeAcmePlan resolvedCertificatePath resolvedPrivateKeyPath,
           stateDirectory
         )
 
-runCertbotAcmeChallengeWithLogger :: (Text -> IO ()) -> RuntimeAcmeBindPlan -> CertbotConfig -> CertbotDirectories -> IO ()
-runCertbotAcmeChallengeWithLogger applicationLogger runtimeAcmePlan certbotConfig directories = do
+runCertbotAcmeChallengeWithLogger :: Maybe (Text -> IO ()) -> RuntimeAcmeBindPlan -> CertbotConfig -> CertbotDirectories -> IO ()
+runCertbotAcmeChallengeWithLogger maybeApplicationLogger runtimeAcmePlan certbotConfig directories = do
   let endpointText = Text.pack (renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan))
-  applicationLogger ("Launching certbot for ACME listener on " <> endpointText)
+  recordCertbotLog maybeApplicationLogger ("Launching certbot for ACME listener on " <> endpointText)
   let commandArguments =
         certbotRuntimeArguments runtimeAcmePlan certbotConfig directories
   processResult <-
@@ -257,16 +263,16 @@ runCertbotAcmeChallengeWithLogger applicationLogger runtimeAcmePlan certbotConfi
       IO (Either IOException (ExitCode, String, String))
   case processResult of
     Left launchError -> do
-      applicationLogger ("Failed to launch certbot for ACME listener on " <> endpointText <> ": " <> Text.pack (show launchError))
+      recordCertbotLog maybeApplicationLogger ("Failed to launch certbot for ACME listener on " <> endpointText <> ": " <> Text.pack (show launchError))
       ioError . userError $
         "Failed to launch certbot for ACME listener on "
           <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
           <> ": "
           <> show launchError
-    Right (ExitSuccess, stdoutText, stderrText) -> do
-      void (evaluate (length stdoutText + length stderrText))
+    Right (ExitSuccess, _, _) ->
+      recordCertbotLog maybeApplicationLogger ("Certbot completed for ACME listener on " <> endpointText)
     Right (exitCode, stdoutText, stderrText) -> do
-      applicationLogger ("Certbot failed for ACME listener on " <> endpointText <> " with exit code " <> Text.pack (show exitCode))
+      recordCertbotLog maybeApplicationLogger ("Certbot failed for ACME listener on " <> endpointText <> " with exit code " <> Text.pack (show exitCode))
       ioError . userError $
         "Certbot failed for ACME listener on "
           <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
@@ -277,8 +283,9 @@ runCertbotAcmeChallengeWithLogger applicationLogger runtimeAcmePlan certbotConfi
           <> "\nstderr:\n"
           <> stderrText
 
-ignoreTextLog :: Text -> IO ()
-ignoreTextLog textValue = void (evaluate (Text.length textValue))
+recordCertbotLog :: Maybe (Text -> IO ()) -> Text -> IO ()
+recordCertbotLog maybeApplicationLogger entry =
+  traverse_ ($ entry) maybeApplicationLogger
 
 certbotRuntimeArguments :: RuntimeAcmeBindPlan -> CertbotConfig -> CertbotDirectories -> [String]
 certbotRuntimeArguments runtimeAcmePlan certbotConfig directories =

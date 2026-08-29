@@ -14,7 +14,7 @@ import WebApi.RouteData (RouteDataResult (..), SecondRouteData (..))
 spec = do
   describe "buildCallToActionHref" $ do
     it "raises the unsafe-URL diagnostic when a rendered path is not a safe URL" $
-      evaluate (buildCallToActionHref "javascript:alert(1)" Nothing `seq` ())
+      evaluate (buildCallToActionHref "javascript:alert(1)" `seq` ())
         `shouldThrow` \case
           ErrorCall message -> "buildCallToAction: rendered an unsafe URL: javascript:alert(1)" `isInfixOf` message
 

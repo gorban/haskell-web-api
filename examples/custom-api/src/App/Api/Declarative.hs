@@ -26,6 +26,7 @@ module App.Api.Declarative
     declarativeApiEndpoints,
     declarativeApiApplication,
     declarativeApiSite,
+    greetingRequestBodyDecoder,
   )
 where
 
@@ -76,12 +77,12 @@ greetingRequestBodyDecoder =
     { apiBodyDecoderMediaType = jsonMediaType,
       apiBodyDecoderParse = \bodyBytes ->
         case Aeson.eitherDecodeStrict bodyBytes >>= Aeson.Types.parseEither parseGreetingRequest of
-          Left errorMessage -> Left $! Text.pack errorMessage
+          Left errorMessage -> Left (Text.pack errorMessage)
           Right greetingRequest -> Right greetingRequest
     }
 
 parseGreetingRequest :: Aeson.Value -> Aeson.Types.Parser GreetingRequest
-parseGreetingRequest = (Aeson.withObject $! "GreetingRequest") $ \fields ->
+parseGreetingRequest = Aeson.withObject "GreetingRequest" $ \fields ->
   GreetingRequest <$> fields Aeson.Types..: "requestedName"
 
 newtype GreetingResponse = GreetingResponse {greetingText :: Text}

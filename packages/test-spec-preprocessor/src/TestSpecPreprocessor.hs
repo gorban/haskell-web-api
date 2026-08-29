@@ -119,7 +119,7 @@ inferModuleName hsSourceDir absolutePath =
   case absolutePath of
     [] ->
       let defaultModule = "Spec"
-       in null hsSourceDir `seq` buildModuleName [] defaultModule
+       in buildModuleName [] defaultModule
     _ ->
       let pathParts = splitDirectories $ normalise absolutePath
           baseName = takeBaseName absolutePath
