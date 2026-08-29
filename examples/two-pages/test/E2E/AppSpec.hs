@@ -1,3 +1,4 @@
+{-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 
@@ -13,7 +14,7 @@ spec =
       withBrowserAndServer $ \browser server -> do
         let homeUrl = localServerBaseUrl server <> "/"
             secondUrl = localServerBaseUrl server <> "/second"
-        ( runBrowserScenario browser $ do
+        ( runBrowserScenario browser do
             visit homeUrl
             assertAll
               ((,,) <$> textContent (byRole Heading `named` "Home") <*> attributeValue (css "link[rel='stylesheet']") "href" <*> attributeValue (css "section[data-page='home']") "class")
@@ -39,7 +40,7 @@ spec =
       withBrowserAndServer $ \browser server -> do
         let homeUrl = localServerBaseUrl server <> "/"
             secondUrl = localServerBaseUrl server <> "/second"
-        ( runBrowserScenario browser $ do
+        ( runBrowserScenario browser do
             visit homeUrl
             click (byRole Link `named` "Go to the second page")
             assertUrl (`shouldBe` secondUrl)
@@ -59,7 +60,7 @@ spec =
         let homeUrl = localServerBaseUrl server <> "/"
             subscriptionForm = byRole Form `named` "Subscription"
             emailField = byLabel "Email address"
-        ( runBrowserScenario browser $ do
+        ( runBrowserScenario browser do
             blockRequestsMatching "**/assets/navigation.js"
             visit homeUrl
             fill emailField "ada@example"
@@ -95,7 +96,7 @@ spec =
         let homeUrl = localServerBaseUrl server <> "/"
             subscriptionForm = byRole Form `named` "Subscription"
             emailField = byLabel "Email address"
-        ( runBrowserScenario browser $ do
+        ( runBrowserScenario browser do
             visitWithoutScripts homeUrl
             fill emailField "ada@example.com"
             submit subscriptionForm
@@ -115,7 +116,7 @@ spec =
         let homeUrl = localServerBaseUrl server <> "/"
             fallbackForm = byRole Form `named` "Native fallback subscription"
             fallbackEmail = byLabel "Native fallback email address"
-        ( runBrowserScenario browser $ do
+        ( runBrowserScenario browser do
             visitWithoutScripts homeUrl
             setCookie homeUrl "harch-native-fallback-csrf" "two-pages-native-fallback"
             visitWithoutScripts homeUrl
@@ -134,7 +135,7 @@ spec =
       withBrowserAndServer $ \browser server -> do
         let homeUrl = localServerBaseUrl server <> "/"
             fallbackForm = byRole Form `named` "Native fallback subscription"
-        ( runBrowserScenario browser $ do
+        ( runBrowserScenario browser do
             visitWithoutScripts homeUrl
             submit fallbackForm
             assertAll
@@ -152,7 +153,7 @@ spec =
             subscriptionForm = byRole Form `named` "Subscription"
             emailField = byLabel "Email address"
             actionStatus = within subscriptionForm (css "[data-harch-action-status]")
-        ( runBrowserScenario browser $ do
+        ( runBrowserScenario browser do
             blockRequestsMatching "**/assets/navigation.js"
             visit homeUrl
             fill emailField "ada@example.com"
@@ -181,7 +182,7 @@ spec =
             subscriptionForm = byRole Form `named` "Subscription"
             emailField = byLabel "Email address"
             actionStatus = within subscriptionForm (css "[data-harch-action-status]")
-        ( runBrowserScenario browser $ do
+        ( runBrowserScenario browser do
             blockRequestsMatching "**/assets/navigation.js"
             visit homeUrl
             fill emailField "ada@example.com"
@@ -205,7 +206,7 @@ spec =
             actionStatus = within subscriptionForm (css "[data-harch-action-status]")
             handler =
               "window.__harchCaptureKernel.register(window.__harchCaptureKernel.eventTypes.Submit, (capturedAction) => { const email = capturedAction.fields.find(([name]) => name === 'email')?.[1]; if (email === 'throw@example.com') { throw new Error('test failure'); } return Promise.reject(new Error('test rejection')); });"
-        ( runBrowserScenario browser $ do
+        ( runBrowserScenario browser do
             blockRequestsMatching "**/assets/navigation.js"
             visit homeUrl
             _ <- runPageScript handler
@@ -230,7 +231,7 @@ spec =
               "let attempts = 0; document.querySelector('form[data-harch-action=\"true\"]').dataset.harchActionCapabilities = 'handler-safe-retry'; window.__harchCaptureKernel.register(window.__harchCaptureKernel.eventTypes.Submit, (capturedAction, settlement) => { attempts += 1; document.body.dataset.harchRetryEvidence = String(attempts) + ':' + capturedAction.fields.find(([name]) => name === 'email')?.[1]; if (attempts === 1) { return Promise.reject(new Error('recoverable')); } settlement.completed(); });"
             idempotentRetry =
               "let attempts = 0; const form = document.querySelector('form[data-harch-action=\"true\"]'); form.dataset.harchActionCapabilities = 'idempotent-mutation-retry'; form.dataset.harchActionIdempotencyKey = 'mutation-1'; window.__harchCaptureKernel.register(window.__harchCaptureKernel.eventTypes.Submit, (capturedAction, settlement) => { attempts += 1; document.body.dataset.harchIdempotencyEvidence = String(attempts) + ':' + capturedAction.idempotencyKey; if (attempts === 1) { return Promise.reject(new Error('recoverable')); } settlement.completed(); });"
-        ( runBrowserScenario browser $ do
+        ( runBrowserScenario browser do
             blockRequestsMatching "**/assets/navigation.js"
             visit homeUrl
             _ <- runPageScript handlerSafeRetry
@@ -266,7 +267,7 @@ spec =
             actionStatus = within subscriptionForm (css "[data-harch-action-status]")
             handler =
               "window.__harchCaptureKernel.register(window.__harchCaptureKernel.eventTypes.Submit, (_capturedAction, settlement) => { window.__harchTestSettlement = settlement; });"
-        ( runBrowserScenario browser $ do
+        ( runBrowserScenario browser do
             blockRequestsMatching "**/assets/navigation.js"
             visit homeUrl
             _ <- runPageScript "document.querySelector('form[data-harch-action=\"true\"]').dataset.harchActionCapabilities = 'conditional-leave-confirmation';"
@@ -303,7 +304,7 @@ spec =
               "const first = document.querySelector('form[data-harch-action=\"true\"]'); const second = first.cloneNode(true); second.setAttribute('aria-label', 'Second subscription'); const label = second.querySelector('label'); const input = second.querySelector('input[name=\"email\"]'); label.htmlFor = 'second-subscription-email'; label.textContent = 'Second email address'; input.id = 'second-subscription-email'; first.after(second);"
             handler =
               "window.__harchCaptureKernel.register(window.__harchCaptureKernel.eventTypes.Submit, () => {});"
-        ( runBrowserScenario browser $ do
+        ( runBrowserScenario browser do
             blockRequestsMatching "**/assets/navigation.js"
             visit homeUrl
             _ <- runPageScript addSecondControl
@@ -331,7 +332,7 @@ spec =
             subscriptionForm = byRole Form `named` "Subscription"
             emailField = byLabel "Email address"
             actionStatus = within subscriptionForm (css "[data-harch-action-status]")
-        ( runBrowserScenario browser $ do
+        ( runBrowserScenario browser do
             blockRequestsMatching "**/assets/navigation.js"
             visit homeUrl
             fill emailField "ada@example.com"
@@ -350,7 +351,7 @@ spec =
       withBrowserAndServer $ \browser server -> do
         let homeUrl = localServerBaseUrl server <> "/"
             secondUrl = localServerBaseUrl server <> "/second"
-        ( runBrowserScenario browser $ do
+        ( runBrowserScenario browser do
             visit secondUrl
             reload
             assertText (byRole Heading `named` "Second") (`shouldBe` "Second")
@@ -370,7 +371,7 @@ spec =
     it "preserves the server-rendered live status until the optional EventSource module updates it" $
       withBrowserAndServer $ \browser server -> do
         let liveDataUrl = localServerBaseUrl server <> "/live-data"
-        ( runBrowserScenario browser $ do
+        ( runBrowserScenario browser do
             visitWithoutScripts liveDataUrl
             assertAll
               ((,) <$> textContent (byRole Heading `named` "Live updates") <*> textContent (css "#live-data-status"))

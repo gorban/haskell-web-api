@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {-# SPEC #-}
@@ -15,6 +16,7 @@ import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb (ClientActionPayload (..), ClientActionRequest (..), ForwardedHeaderTrust (..), ListenerConfig (..), RouteMethod (..), RouteRequest (..), appName, applicationStaticAssets, corsPolicy, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, forwardedHeaderTrust, httpsRedirectAuthority, httpsRedirectPort, listenerConfigs, metricsExporter, notFoundRequest, observability, parseRoute, redirectHttpToHttps, renderRoute, requestConcurrencyLimit, requestPolicy, requestTransportLimits, responseSecurityHeaders, staticAssetContentTypes, staticAssetRoots, staticAssets, staticCacheControlSeconds, strictTransportSecurity, toWaiApplication, tracingExporter, warpDefaultRequestTransportLimits)
@@ -30,7 +32,7 @@ spec =
     describe "twoPageSite" $ do
       it "keeps the example site wiring small and explicit" $ do
         let previewSlug =
-              maybe (error "expected valid test preview slug") id (mkPreviewSlug "summer-release")
+              fromMaybe (error "expected valid test preview slug") (mkPreviewSlug "summer-release")
         exerciseGeneratedPageRouteInstances
         expectAll
           ( (siteName twoPageSite `shouldBe` "two-pages-example")
@@ -103,7 +105,7 @@ spec =
     describe "routeCodec" $ do
       it "parses and renders the supported two-page routes" $ do
         let previewSlug =
-              maybe (error "expected valid test preview slug") id (mkPreviewSlug "summer-release")
+              fromMaybe (error "expected valid test preview slug") (mkPreviewSlug "summer-release")
         actionTargetReference <- newIORef ()
         actionTarget <- readIORef actionTargetReference
         expectAll
@@ -329,7 +331,7 @@ spec =
 
       it "renders an explicit typed dynamic route as complete SSR HTML" $ do
         let previewSlug =
-              maybe (error "expected valid test preview slug") id (mkPreviewSlug "summer-release")
+              fromMaybe (error "expected valid test preview slug") (mkPreviewSlug "summer-release")
             previewRoute = Custom (PreviewPage previewSlug)
         response <-
           performWaiRequest
@@ -583,10 +585,9 @@ readResponseBody response =
 
 nextRequestBodyChunk :: IORef [ByteString.ByteString] -> IO ByteString.ByteString
 nextRequestBodyChunk chunksReference =
-  atomicModifyIORef' chunksReference $ \chunks ->
-    case chunks of
-      [] -> ([], ByteString.empty)
-      chunk : remainingChunks -> (remainingChunks, chunk)
+  atomicModifyIORef' chunksReference $ \case
+    [] -> ([], ByteString.empty)
+    chunk : remainingChunks -> (remainingChunks, chunk)
 
 readResponseBytes :: Wai.Response -> IO LazyByteString.ByteString
 readResponseBytes response = do

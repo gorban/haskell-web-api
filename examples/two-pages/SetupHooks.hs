@@ -69,31 +69,31 @@ registerPageRouteRule
     { localBuildInfo = buildInfo,
       targetInfo = target
     } = do
-  let pagesDirectory = "src/App/Pages"
-      generatedDirectory =
-        autogenComponentModulesDir
-          buildInfo
-          (targetCLBI target)
-  (sourceDirectories, sourceFiles) <- liftIO (discoverPageInputs pagesDirectory)
-  monitoredDirectories <- liftIO (traverse makeAbsolute sourceDirectories)
-  -- Recompute the rule when a page is added to or removed from any discovered directory.
-  addRuleMonitors (map monitorDirectory monitoredDirectories)
-  registerRule_ "harch-page-routes" $
-    staticRule
-      ( mkCommand
-          (static Dict)
-          (static runPageGeneration)
-          (pagesDirectory, getSymbolicPath generatedDirectory)
-      )
-      [ FileDependency
-          (Location (makeSymbolicPath ".") (makeRelativePathEx sourceFile))
-      | sourceFile <- sourceFiles
-      ]
-      ( Location generatedDirectory (makeRelativePathEx "App/Pages/Route/Generated.hs")
-          :| [ Location generatedDirectory (makeRelativePathEx "App/Pages/Generated.hs"),
-               Location generatedDirectory (makeRelativePathEx "harch-page-routes.manifest")
-             ]
-      )
+    let pagesDirectory = "src/App/Pages"
+        generatedDirectory =
+          autogenComponentModulesDir
+            buildInfo
+            (targetCLBI target)
+    (sourceDirectories, sourceFiles) <- liftIO (discoverPageInputs pagesDirectory)
+    monitoredDirectories <- liftIO (traverse makeAbsolute sourceDirectories)
+    -- Recompute the rule when a page is added to or removed from any discovered directory.
+    addRuleMonitors (map monitorDirectory monitoredDirectories)
+    registerRule_ "harch-page-routes" $
+      staticRule
+        ( mkCommand
+            (static Dict)
+            (static runPageGeneration)
+            (pagesDirectory, getSymbolicPath generatedDirectory)
+        )
+        [ FileDependency
+            (Location (makeSymbolicPath ".") (makeRelativePathEx sourceFile))
+        | sourceFile <- sourceFiles
+        ]
+        ( Location generatedDirectory (makeRelativePathEx "App/Pages/Route/Generated.hs")
+            :| [ Location generatedDirectory (makeRelativePathEx "App/Pages/Generated.hs"),
+                 Location generatedDirectory (makeRelativePathEx "harch-page-routes.manifest")
+               ]
+        )
 
 runPageGeneration :: (FilePath, FilePath) -> IO ()
 runPageGeneration (pagesDirectory, generatedDirectory) = do

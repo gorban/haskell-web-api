@@ -48,13 +48,46 @@ fi
 
 format_ok=0
 
-if [ ! -d "$format_root/packages" ]; then
-  printf 'Formatting target root has no packages directory: %s\n' "$format_root" >&2
+project_file="$format_root/cabal.project"
+if [ ! -f "$project_file" ]; then
+  printf 'Formatting target root has no cabal.project file: %s\n' "$format_root" >&2
   exit 1
 fi
 
-mapfile -t cabal_files < <(find "$format_root/packages" -name '*.cabal' -type f ! -path "$format_root/packages/hspec-expectations-match/*" -print | sort)
-mapfile -t haskell_files < <(find "$format_root/packages" -name '*.hs' -type f ! -path "$format_root/packages/hspec-expectations-match/*" -print | sort)
+mapfile -t package_directories < <(
+  awk '
+    /^packages:[[:space:]]*$/ { collecting = 1; next }
+    collecting && /^[[:space:]]+/ { print $1; next }
+    collecting { exit }
+  ' "$project_file"
+)
+
+if [ "${#package_directories[@]}" -eq 0 ]; then
+  printf 'No package directories were found in cabal.project: %s\n' "$project_file" >&2
+  exit 1
+fi
+
+cabal_files=()
+haskell_files=()
+for package_directory in "${package_directories[@]}"; do
+  case "$package_directory" in
+    packages/hspec-expectations-match/) continue ;;
+  esac
+
+  package_root="$format_root/$package_directory"
+  if [ ! -d "$package_root" ]; then
+    printf 'Cabal project package directory does not exist: %s\n' "$package_root" >&2
+    exit 1
+  fi
+
+  while IFS= read -r cabal_file; do
+    cabal_files+=("$cabal_file")
+  done < <(find "$package_root" -name '*.cabal' -type f -print | sort)
+
+  while IFS= read -r haskell_file; do
+    haskell_files+=("$haskell_file")
+  done < <(find "$package_root" -name '*.hs' -type f -print | sort)
+done
 
 if [ "${#cabal_files[@]}" -eq 0 ]; then
   printf '%s\n' 'No Cabal files were found for formatting checks.' >&2
@@ -87,8 +120,8 @@ for haskell_file in "${haskell_files[@]}"; do
 done
 
 if [ "$format_ok" -ne 0 ]; then
-  echo 'Found formatting issues in packages/ files'
+  echo 'Found formatting issues in project-owned package files'
   exit 1
 fi
 
-echo 'No formatting issues in packages/ files'
+echo 'No formatting issues in project-owned package files'

@@ -1,3 +1,4 @@
+{-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 
@@ -15,7 +16,7 @@ spec =
         withTempFile "multipart-upload-e2e" [] "attachment.txt" $ \(_tempRoot, filePath) -> do
           writeFile filePath "e2e file contents"
           let uploadUrl = localServerBaseUrl server <> "/native-upload"
-          ( runBrowserScenario browser $ do
+          ( runBrowserScenario browser do
               visit uploadUrl
               setInputFiles (css "#native-upload-file") filePath
               submit (byRole Form `named` "Upload a file")
@@ -34,7 +35,7 @@ spec =
         withTempFile "multipart-upload-e2e-no-js" [] "attachment.txt" $ \(_tempRoot, filePath) -> do
           writeFile filePath "e2e file contents, no scripts"
           let uploadUrl = localServerBaseUrl server <> "/native-upload"
-          ( runBrowserScenario browser $ do
+          ( runBrowserScenario browser do
               visitWithoutScripts uploadUrl
               setInputFiles (css "#native-upload-file") filePath
               submit (byRole Form `named` "Upload a file")

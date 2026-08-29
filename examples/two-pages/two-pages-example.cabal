@@ -32,8 +32,14 @@ custom-setup
 
 common common
   ghc-options:
-    -Wall -Wcompat -Wincomplete-uni-patterns -Wincomplete-record-updates
-    -Wpartial-fields -Wredundant-constraints -Wunused-packages
+    -Wall
+    -Wcompat
+    -Wincomplete-uni-patterns
+    -Wincomplete-record-updates
+    -Wpartial-fields
+    -Wredundant-constraints
+    -Wunused-packages
+
   default-language: GHC2024
 
 library

@@ -131,7 +131,7 @@ submitUploadEndpoint state =
         (at nativeUploadPath)
         (ApiEndpointContract ApiPost noRequestFields (ApiMultipartRequestBody inMemoryMultipartStorage defaultMultipartLimits) htmlResponseEncoders ApiUseGenericFieldFailure)
     )
-    (\endpointRequest -> handleUploadSubmission state (apiEndpointRequestBody endpointRequest))
+    (handleUploadSubmission state . apiEndpointRequestBody)
 
 issueUploadToken :: NativeUploadState -> IO CsrfToken
 issueUploadToken state = do

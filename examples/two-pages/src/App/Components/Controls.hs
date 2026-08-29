@@ -35,6 +35,7 @@ actionForm ActionFormProps {action, ariaLabel} children =
     ( (Controls.actionForm twoPageActions $! twoPageActionContext)
         action
         Controls.defaultActionFormAttributes
-          {Controls.actionFormAriaLabel = Just ariaLabel}
+          { Controls.actionFormAriaLabel = Just ariaLabel
+          }
         children
     )
