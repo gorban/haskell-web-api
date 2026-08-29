@@ -1325,6 +1325,23 @@ tests can prove ordering, version skipping, reconciliation, rollback, and error 
 preserving the obsolete one-`psql`-process-per-statement fixture contract. This is a precise
 extension of the existing migration boundary, not a parallel runtime query API.
 
+### Follow-up decision — FQ4: migrations use one typed post-BEGIN failure rail (2026-08-29)
+
+**Decision: express the existing migration transaction as `ExceptT PostgresRunnerError IO`, rather
+than manually forwarding `Either` through each migration phase or adding a second transaction
+runner.** `WebApi.Postgres.Migration` already owns the sole short-lived privileged connection and
+the transaction boundary named by AX. `BEGIN` remains outside the post-BEGIN rail so a failed begin
+does not attempt rollback; every later operation, including `COMMIT`, uses the one rail and its
+boundary performs best-effort `ROLLBACK` before returning the original typed failure. The executor
+adapter lifts into that rail once, so an adapter-level decode failure cannot bypass cleanup.
+
+Applied-version cells remain raw optional libpq bytes until the same typed boundary decodes them.
+`NULL` and invalid UTF-8 now return stable `PostgresMigrationFailed` values and trigger rollback;
+they no longer rely on the schema's current primary-key invariant or `fromJust`/partial UTF-8
+decoding. This is deliberate defence against an old or manually altered table shape. Focused
+tests cover both malformed wire values and preserve the existing proofs for every post-BEGIN
+failure, including `COMMIT`.
+
 ### Follow-up decision — AY: add `connect_timeout` now, defer a hard TLS default until a deployment decision (2026-08-21)
 
 **Decision: implement `DATABASE_CONNECT_TIMEOUT_SECONDS`/`connect_timeout` unconditionally, but do

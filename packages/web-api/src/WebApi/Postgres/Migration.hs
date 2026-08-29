@@ -22,8 +22,11 @@ module WebApi.Postgres.Migration
 where
 
 import Control.Exception (bracket)
-import Control.Monad (void)
-import Data.Maybe (fromJust)
+import Control.Monad (unless, void)
+import Control.Monad.Except (ExceptT, runExceptT, throwError)
+import Core.Control.Error (liftEitherWith)
+import Data.Bifunctor (first)
+import Data.ByteString qualified as ByteString
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -40,17 +43,21 @@ import WebApi.Postgres.Runtime
 
 -- | A connection-scoped SQL executor.  It is deliberately migration-specific:
 -- tests can record transaction and version-table operations without preserving
--- the old one-process-per-statement @psql@ fixture contract.
+-- the old one-process-per-statement @psql@ fixture contract.  Its result is on
+-- the same typed rail as the transaction: an adapter can report a malformed
+-- wire value without throwing or inventing a schema version.
 newtype PostgresMigrationExecutor = PostgresMigrationExecutor
-  { executeMigrationSql :: Text -> IO (Maybe PostgresMigrationResult)
+  { executeMigrationSql :: Text -> IO (Either PostgresRunnerError (Maybe PostgresMigrationResult))
   }
 
 -- | The two successful shapes the migration protocol accepts.  Commands and
 -- queries are intentionally distinct, so a test or libpq interpreter cannot
 -- accidentally treat an empty command result as an applied-version query.
+-- Query cells stay as raw optional bytes until the transaction's typed
+-- decoding boundary, where NULL and invalid UTF-8 become explicit failures.
 data PostgresMigrationResult
   = PostgresMigrationCommandSucceeded
-  | PostgresMigrationRows [Text]
+  | PostgresMigrationRows [Maybe ByteString.ByteString]
 
 -- | One ordered, durable schema change.  The version is recorded only after
 -- every statement in this migration has succeeded, while the surrounding
@@ -73,105 +80,74 @@ runPostgresMigrationsForRuntime migrationDatabaseConfig runtimeDatabaseConfig =
 
 runPostgresMigrationsWithExecutor :: PostgresMigrationExecutor -> DatabaseConfig -> DatabaseConfig -> IO (Either PostgresRunnerError ())
 runPostgresMigrationsWithExecutor executor migrationDatabaseConfig runtimeDatabaseConfig = do
-  begun <- executeMigration executor "BEGIN;"
+  begun <- runExceptT (executeMigration executor "BEGIN;")
   case begun of
     Left failure -> pure (Left failure)
     Right () -> do
-      result <- runMigrationTransaction executor migrationDatabaseConfig runtimeDatabaseConfig
+      result <-
+        runExceptT $ do
+          runMigrationTransaction executor migrationDatabaseConfig runtimeDatabaseConfig
+          executeMigration executor "COMMIT;"
       case result of
-        Right () -> do
-          commitResult <- executeMigration executor "COMMIT;"
-          case commitResult of
-            Right () -> pure (Right ())
-            Left failure -> rollbackAfterFailure executor failure
-        Left failure -> do
-          rollbackAfterFailure executor failure
+        Right () -> pure (Right ())
+        Left failure -> rollbackAfterFailure executor failure
 
 rollbackAfterFailure :: PostgresMigrationExecutor -> PostgresRunnerError -> IO (Either PostgresRunnerError ())
 rollbackAfterFailure executor failure = do
-  void (executeMigration executor "ROLLBACK;")
+  void (runExceptT (executeMigration executor "ROLLBACK;"))
   pure (Left failure)
 
-runMigrationTransaction :: PostgresMigrationExecutor -> DatabaseConfig -> DatabaseConfig -> IO (Either PostgresRunnerError ())
+runMigrationTransaction :: PostgresMigrationExecutor -> DatabaseConfig -> DatabaseConfig -> ExceptT PostgresRunnerError IO ()
 runMigrationTransaction executor migrationDatabaseConfig runtimeDatabaseConfig = do
-  lockResult <- executeMigrationQuery executor "SELECT pg_advisory_xact_lock(782476311);"
-  case lockResult of
-    Left failure -> pure (Left failure)
-    Right () -> do
-      bootstrapResult <- runMigrationStatements executor migrationBootstrapStatements
-      case bootstrapResult of
-        Left failure -> pure (Left failure)
-        Right () -> do
-          versionsResult <- executeMigrationRows executor "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
-          case versionsResult of
-            Left failure -> pure (Left failure)
-            Right appliedVersions -> do
-              pendingResult <- runPendingMigrations executor appliedVersions migrations
-              case pendingResult of
-                Left failure -> pure (Left failure)
-                Right () -> runMigrationStatements executor (migrationReconciliationStatementsFor migrationDatabaseConfig runtimeDatabaseConfig)
+  executeMigrationQuery executor "SELECT pg_advisory_xact_lock(782476311);"
+  runMigrationStatements executor migrationBootstrapStatements
+  appliedVersions <- executeMigrationRows executor "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
+  runPendingMigrations executor appliedVersions migrations
+  runMigrationStatements executor (migrationReconciliationStatementsFor migrationDatabaseConfig runtimeDatabaseConfig)
 
-runPendingMigrations :: PostgresMigrationExecutor -> [Text] -> [PostgresMigration] -> IO (Either PostgresRunnerError ())
+runPendingMigrations :: PostgresMigrationExecutor -> [Text] -> [PostgresMigration] -> ExceptT PostgresRunnerError IO ()
 runPendingMigrations executor appliedVersions migrationPlan =
   case unknownAppliedVersions appliedVersions migrationPlan of
-    unknownVersion : _ -> pure (Left (PostgresMigrationFailed ("Unknown PostgreSQL schema migration version: " <> unknownVersion)))
-    [] -> go migrationPlan
+    unknownVersion : _ -> throwError (PostgresMigrationFailed ("Unknown PostgreSQL schema migration version: " <> unknownVersion))
+    [] -> mapM_ runMigration migrationPlan
   where
-    go remainingMigrations =
-      case remainingMigrations of
-        [] -> pure (Right ())
-        migration : rest ->
-          case postgresMigrationVersion migration `elem` appliedVersions of
-            True -> go rest
-            False -> do
-              statementsResult <- runMigrationStatements executor (postgresMigrationStatements migration)
-              case statementsResult of
-                Left failure -> pure (Left failure)
-                Right () -> do
-                  recordResult <-
-                    executeMigration
-                      executor
-                      ("INSERT INTO web_api.schema_migrations (version) VALUES (" <> sqlLiteral (postgresMigrationVersion migration) <> ");")
-                  case recordResult of
-                    Left failure -> pure (Left failure)
-                    Right () -> go rest
+    runMigration migration =
+      unless (postgresMigrationVersion migration `elem` appliedVersions) $ do
+        runMigrationStatements executor (postgresMigrationStatements migration)
+        executeMigration
+          executor
+          ("INSERT INTO web_api.schema_migrations (version) VALUES (" <> sqlLiteral (postgresMigrationVersion migration) <> ");")
 
 unknownAppliedVersions :: [Text] -> [PostgresMigration] -> [Text]
 unknownAppliedVersions appliedVersions migrationPlan =
   filter (`notElem` map postgresMigrationVersion migrationPlan) appliedVersions
 
-runMigrationStatements :: PostgresMigrationExecutor -> [Text] -> IO (Either PostgresRunnerError ())
-runMigrationStatements executor = go
-  where
-    go statements =
-      case statements of
-        [] -> pure (Right ())
-        statement : remainingStatements -> do
-          statementResult <- executeMigration executor statement
-          case statementResult of
-            Left failure -> pure (Left failure)
-            Right () -> go remainingStatements
+runMigrationStatements :: PostgresMigrationExecutor -> [Text] -> ExceptT PostgresRunnerError IO ()
+runMigrationStatements executor = mapM_ (executeMigration executor)
 
-executeMigration :: PostgresMigrationExecutor -> Text -> IO (Either PostgresRunnerError ())
+executeMigration :: PostgresMigrationExecutor -> Text -> ExceptT PostgresRunnerError IO ()
 executeMigration executor sql = do
-  result <- executeMigrationSql executor sql
-  pure $
-    case result of
-      Nothing -> Left (PostgresMigrationFailed "PostgreSQL migration command failed")
-      Just PostgresMigrationCommandSucceeded -> Right ()
-      Just (PostgresMigrationRows _) -> Left (PostgresMigrationFailed "PostgreSQL migration command returned rows")
+  result <- runMigrationSql executor sql
+  case result of
+    Nothing -> throwError (PostgresMigrationFailed "PostgreSQL migration command failed")
+    Just PostgresMigrationCommandSucceeded -> pure ()
+    Just (PostgresMigrationRows _) -> throwError (PostgresMigrationFailed "PostgreSQL migration command returned rows")
 
-executeMigrationRows :: PostgresMigrationExecutor -> Text -> IO (Either PostgresRunnerError [Text])
+executeMigrationRows :: PostgresMigrationExecutor -> Text -> ExceptT PostgresRunnerError IO [Text]
 executeMigrationRows executor sql = do
-  result <- executeMigrationSql executor sql
-  pure $
-    case result of
-      Nothing -> Left (PostgresMigrationFailed "PostgreSQL migration command failed")
-      Just PostgresMigrationCommandSucceeded -> Left (PostgresMigrationFailed "PostgreSQL migration version query returned no rows")
-      Just (PostgresMigrationRows rows) -> Right rows
+  result <- runMigrationSql executor sql
+  case result of
+    Nothing -> throwError (PostgresMigrationFailed "PostgreSQL migration command failed")
+    Just PostgresMigrationCommandSucceeded -> throwError (PostgresMigrationFailed "PostgreSQL migration version query returned no rows")
+    Just (PostgresMigrationRows rows) -> liftEitherWith id (pure (traverse decodeMigrationVersion rows))
 
-executeMigrationQuery :: PostgresMigrationExecutor -> Text -> IO (Either PostgresRunnerError ())
-executeMigrationQuery executor sql = void <$> executeMigrationRows executor sql
+executeMigrationQuery :: PostgresMigrationExecutor -> Text -> ExceptT PostgresRunnerError IO ()
+executeMigrationQuery executor sql = do
+  void (executeMigrationRows executor sql)
+
+runMigrationSql :: PostgresMigrationExecutor -> Text -> ExceptT PostgresRunnerError IO (Maybe PostgresMigrationResult)
+runMigrationSql executor sql =
+  liftEitherWith id (executeMigrationSql executor sql)
 
 migrationBootstrapStatements :: [Text]
 migrationBootstrapStatements =
@@ -211,28 +187,33 @@ libpqMigrationExecutor :: LibPQ.Connection -> PostgresMigrationExecutor
 libpqMigrationExecutor connection =
   PostgresMigrationExecutor (runLibpqMigrationSql connection)
 
-runLibpqMigrationSql :: LibPQ.Connection -> Text -> IO (Maybe PostgresMigrationResult)
+runLibpqMigrationSql :: LibPQ.Connection -> Text -> IO (Either PostgresRunnerError (Maybe PostgresMigrationResult))
 runLibpqMigrationSql connection sql = do
   maybeResult <- LibPQ.exec connection (TextEncoding.encodeUtf8 sql)
   case maybeResult of
-    Nothing -> pure Nothing
+    Nothing -> pure (Right Nothing)
     Just result -> do
       status <- LibPQ.resultStatus result
       if status == LibPQ.CommandOk
-        then pure (Just PostgresMigrationCommandSucceeded)
+        then pure (Right (Just PostgresMigrationCommandSucceeded))
         else
           if status == LibPQ.TuplesOk
-            then fmap (Just . PostgresMigrationRows) (readMigrationRows result)
-            else pure Nothing
+            then fmap (Right . Just . PostgresMigrationRows) (readMigrationRows result)
+            else pure (Right Nothing)
 
-readMigrationRows :: LibPQ.Result -> IO [Text]
+readMigrationRows :: LibPQ.Result -> IO [Maybe ByteString.ByteString]
 readMigrationRows result = do
   rowCount <- LibPQ.ntuples result
-  values <- traverse (\rowIndex -> LibPQ.getvalue result rowIndex 0) [0 .. rowCount - 1]
-  -- @schema_migrations.version@ is the primary key created above, hence SQL
-  -- cannot return NULL here.  Keeping that invariant at the database boundary
-  -- avoids turning an impossible wire value into a fake migration version.
-  pure (fmap (TextEncoding.decodeUtf8 . fromJust) values)
+  traverse (\rowIndex -> LibPQ.getvalue result rowIndex 0) [0 .. rowCount - 1]
+
+decodeMigrationVersion :: Maybe ByteString.ByteString -> Either PostgresRunnerError Text
+decodeMigrationVersion maybeValue =
+  case maybeValue of
+    Nothing -> Left (PostgresMigrationFailed "PostgreSQL migration version row was NULL")
+    Just value ->
+      first
+        (const (PostgresMigrationFailed "PostgreSQL migration version row contained invalid UTF-8"))
+        (TextEncoding.decodeUtf8' value)
 
 runPostgresSeed :: DatabaseConfig -> IO (Either PostgresRunnerError ())
 runPostgresSeed = runPostgresSeedWithRunner runPostgresCommand

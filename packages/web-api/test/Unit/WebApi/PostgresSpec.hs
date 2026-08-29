@@ -756,7 +756,7 @@ spec = do
       let executor =
             PostgresMigrationExecutor $ \sql -> do
               modifyIORef' recordedSqlReference (<> [sql])
-              pure $
+              pure . Right $
                 if sql == "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;" || sql == "SELECT pg_advisory_xact_lock(782476311);"
                   then Just (PostgresMigrationRows [])
                   else Just PostgresMigrationCommandSucceeded
@@ -785,9 +785,9 @@ spec = do
       let executor =
             PostgresMigrationExecutor $ \sql -> do
               modifyIORef' recordedSqlReference (<> [sql])
-              pure $
+              pure . Right $
                 if sql == "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;" || sql == "SELECT pg_advisory_xact_lock(782476311);"
-                  then Just (PostgresMigrationRows ["initial-schema"])
+                  then Just (PostgresMigrationRows [Just (TextEncoding.encodeUtf8 "initial-schema")])
                   else Just PostgresMigrationCommandSucceeded
       runPostgresMigrationsWithExecutor executor migrationPostgresTestConfig postgresTestConfig `shouldReturn` Right ()
       recordedSql <- readIORef recordedSqlReference
@@ -806,9 +806,9 @@ spec = do
       let executor appliedVersions failingSql =
             PostgresMigrationExecutor $ \sql -> do
               modifyIORef' recordedSqlReference (<> [sql])
-              pure $
+              pure . Right $
                 if sql == "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;" || sql == "SELECT pg_advisory_xact_lock(782476311);"
-                  then Just (PostgresMigrationRows appliedVersions)
+                  then Just (PostgresMigrationRows (fmap (Just . TextEncoding.encodeUtf8) appliedVersions))
                   else
                     if sql == failingSql
                       then Nothing
@@ -852,7 +852,7 @@ spec = do
             let executor =
                   PostgresMigrationExecutor $ \sql -> do
                     modifyIORef' recordedSqlReference (<> [sql])
-                    pure (resultFor sql)
+                    pure (Right (resultFor sql))
             result <- runPostgresMigrationsWithExecutor executor migrationConfig runtimeConfig
             recordedSql <- readIORef recordedSqlReference
             pure (result, recordedSql)
@@ -861,8 +861,20 @@ spec = do
             | sql == "SELECT pg_advisory_xact_lock(782476311);" = Just (PostgresMigrationRows [])
             | otherwise = Just PostgresMigrationCommandSucceeded
           versionRows versions sql
-            | sql == "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;" || sql == "SELECT pg_advisory_xact_lock(782476311);" = Just (PostgresMigrationRows versions)
+            | sql == "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;" || sql == "SELECT pg_advisory_xact_lock(782476311);" = Just (PostgresMigrationRows (fmap (Just . TextEncoding.encodeUtf8) versions))
             | otherwise = commandSuccess sql
+          runWithExecutorFailure failingSql = do
+            recordedSqlReference <- newIORef []
+            let executor =
+                  PostgresMigrationExecutor $ \sql -> do
+                    modifyIORef' recordedSqlReference (<> [sql])
+                    pure $
+                      if sql == failingSql
+                        then Left (PostgresMigrationFailed "PostgreSQL migration executor failed")
+                        else Right (versionRows [] sql)
+            result <- runPostgresMigrationsWithExecutor executor migrationPostgresTestConfig postgresTestConfig
+            recordedSql <- readIORef recordedSqlReference
+            pure (result, recordedSql)
       (beginResult, beginSql) <-
         runWith migrationPostgresTestConfig postgresTestConfig (const migrationFailure)
       beginResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
@@ -887,6 +899,32 @@ spec = do
         runWith migrationPostgresTestConfig postgresTestConfig commandSuccess
       rowlessVersionResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration version query returned no rows")
       rowlessVersionSql `shouldBe` setupSql <> ["ROLLBACK;"]
+
+      (nullVersionResult, nullVersionSql) <-
+        runWith
+          migrationPostgresTestConfig
+          postgresTestConfig
+          (\sql -> if sql == "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;" then Just (PostgresMigrationRows [Nothing]) else versionRows [] sql)
+      nullVersionResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration version row was NULL")
+      nullVersionSql `shouldBe` setupSql <> ["ROLLBACK;"]
+
+      (invalidUtf8VersionResult, invalidUtf8VersionSql) <-
+        runWith
+          migrationPostgresTestConfig
+          postgresTestConfig
+          (\sql -> if sql == "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;" then Just (PostgresMigrationRows [Just (ByteString.pack [0xC3, 0x28])]) else versionRows [] sql)
+      invalidUtf8VersionResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration version row contained invalid UTF-8")
+      invalidUtf8VersionSql `shouldBe` setupSql <> ["ROLLBACK;"]
+
+      (beginAdapterFailureResult, beginAdapterFailureSql) <-
+        runWithExecutorFailure "BEGIN;"
+      beginAdapterFailureResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration executor failed")
+      beginAdapterFailureSql `shouldBe` ["BEGIN;"]
+
+      (versionAdapterFailureResult, versionAdapterFailureSql) <-
+        runWithExecutorFailure "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
+      versionAdapterFailureResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration executor failed")
+      versionAdapterFailureSql `shouldBe` setupSql <> ["ROLLBACK;"]
 
       (rowCommandResult, rowCommandSql) <-
         runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "BEGIN;" then Just (PostgresMigrationRows []) else versionRows [] sql)
