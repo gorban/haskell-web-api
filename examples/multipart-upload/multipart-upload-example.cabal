@@ -60,10 +60,15 @@ test-suite multipart-upload-example-tests
   type: exitcode-stdio-1.0
   main-is: Main.hs
   hs-source-dirs: test
+  -- hspec-discover imports every test module. Keep this complete and let the
+  -- manifest check verify it against test/ rather than suppress Cabal's warning.
+  other-modules:
+    E2E.MultipartUploadSpec
+    Unit.MultipartUploadSpec
+
   ghc-options:
     -F
     -pgmF=spec-preprocessor
-    -Wno-missing-home-modules
     -rtsopts
     -threaded
     -with-rtsopts=-N

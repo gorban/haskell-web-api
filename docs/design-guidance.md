@@ -61,6 +61,16 @@ per-source option for the standalone matcher spec; ordinary `SPEC` and `E2E_SPEC
 unchanged.  This makes the convention available across the package graph without weakening either
 the default test prelude or the matcher package's dependency boundary.
 
+**Module-graph boundary (FQ3, 2026-08-29): Cabal manifests, not the test preprocessor, own each
+test suite's complete home-module graph.** Cabal configures a component before `hspec-discover` and
+the `SPEC` processor compile generated inputs, so a preprocessor cannot provide truthful
+`other-modules` metadata at the point Cabal needs it. Each affected test suite lists every
+checked-in test and test-support module in `other-modules`, while normal generated application
+modules remain in Cabal's `autogen-modules`. The manifest gate derives the expected names from the
+declared source roots and rejects either a missing or a stale entry. This keeps the processor's
+single responsibility (source transformation) intact and lets the compiler report a genuine
+home-module omission instead of suppressing it.
+
 ### When implementation hits a missing framework capability
 
 If finishing a task requires a capability the framework does not yet expose — for example, a

@@ -115,15 +115,19 @@ test-suite test-core-tests
   -- Common test suite settings.
   type: exitcode-stdio-1.0
   hs-source-dirs: test
-  -- Suppress warnings about missing home modules in test suite;
-  -- Otherwise, we'd have to list all test modules in other-modules.
-  -- Add -keep-tmp-files to the end to keep the generated files for inspection.
-  -- E.g. in %LOCALAPPDATA%\Temp
-  -- Search "name:ghc_tmp* extension:hspp"
+  -- hspec-discover imports every test module. Keep this complete and let the
+  -- manifest check verify it against test/ rather than suppress Cabal's warning.
+  other-modules:
+    Integration.SpecPreprocessorSpec
+    Unit.TestCore.Browser.ConfigSpec
+    Unit.TestCore.Browser.ScenarioSpec
+    Unit.TestCore.CustomAssertionsSpec
+    Unit.TestCore.SpecPreprocessorSpec
+    Unit.TestCore.WaiSpec
+
   ghc-options:
     -F
     -pgmF=spec-preprocessor
-    -Wno-missing-home-modules
     -rtsopts
     -threaded
     -with-rtsopts=-N

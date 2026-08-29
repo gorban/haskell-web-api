@@ -197,10 +197,71 @@ test-suite harch-web-tests
   type: exitcode-stdio-1.0
   -- Directories containing source files.
   hs-source-dirs: test
+  -- hspec-discover imports every test module. Keep this complete and let the
+  -- manifest check verify it against test/ rather than suppress Cabal's warning.
+  other-modules:
+    Unit.HarchWeb.AccountSpec
+    Unit.HarchWeb.Acme.Certbot.OptionsSpec
+    Unit.HarchWeb.Acme.Certbot.RuntimeSpec
+    Unit.HarchWeb.Acme.ChallengeSpec
+    Unit.HarchWeb.Acme.JsonSpec
+    Unit.HarchWeb.AcmeSpec
+    Unit.HarchWeb.ActionSpec
+    Unit.HarchWeb.Api.EndpointSpec
+    Unit.HarchWeb.Api.Multipart.DispositionSpec
+    Unit.HarchWeb.Api.Multipart.ScannerSpec
+    Unit.HarchWeb.Api.MultipartSpec
+    Unit.HarchWeb.Api.NegotiationSpec
+    Unit.HarchWeb.Api.RequestSpec
+    Unit.HarchWeb.Api.ResponseSpec
+    Unit.HarchWeb.DatabaseSpec
+    Unit.HarchWeb.DevSmtpSpec
+    Unit.HarchWeb.DocumentSpec
+    Unit.HarchWeb.EmailSpec
+    Unit.HarchWeb.FacadeSpec
+    Unit.HarchWeb.GmailSpec
+    Unit.HarchWeb.GoogleWorkspaceSpec
+    Unit.HarchWeb.LocalizationSpec
+    Unit.HarchWeb.LoginProtectionSpec
+    Unit.HarchWeb.Markup.AttributesSpec
+    Unit.HarchWeb.Markup.ElementsSpec
+    Unit.HarchWeb.Markup.Quasi.LoweringHygieneSpec
+    Unit.HarchWeb.Markup.Quasi.LoweringSpec
+    Unit.HarchWeb.Markup.RegionsSpec
+    Unit.HarchWeb.Markup.UnsafeSpec
+    Unit.HarchWeb.MarkupComponents
+    Unit.HarchWeb.MarkupRejection
+    Unit.HarchWeb.Observability.Otlp.ExportSpec
+    Unit.HarchWeb.Observability.Otlp.TestSupport
+    Unit.HarchWeb.Observability.TypesSpec
+    Unit.HarchWeb.ObservabilitySpec
+    Unit.HarchWeb.PasswordSpec
+    Unit.HarchWeb.PathPrefixSpec
+    Unit.HarchWeb.RecoveryCodeSpec
+    Unit.HarchWeb.RoutingSpec
+    Unit.HarchWeb.SecretSpec
+    Unit.HarchWeb.Security.ForwardedTrustSpec
+    Unit.HarchWeb.Security.RequestLimitsSpec
+    Unit.HarchWeb.SecuritySpec
+    Unit.HarchWeb.Server.ApplicationSpec
+    Unit.HarchWeb.Server.ConfigSpec
+    Unit.HarchWeb.Server.LocalTestSpec
+    Unit.HarchWeb.Server.RequestExecutionSpec
+    Unit.HarchWeb.Server.RuntimeSpec
+    Unit.HarchWeb.Server.SseSpec
+    Unit.HarchWeb.Server.Transport.TlsSpec
+    Unit.HarchWeb.Server.TransportSpec
+    Unit.HarchWeb.SessionSpec
+    Unit.HarchWeb.SiteSpec
+    Unit.HarchWeb.StaticAssetsSpec
+    Unit.HarchWeb.TestSupport
+    Unit.HarchWeb.TimeSpec
+    Unit.HarchWeb.TotpSpec
+    Unit.HarchWeb.UsernameSpec
+
   ghc-options:
     -F
     -pgmF=spec-preprocessor
-    -Wno-missing-home-modules
     -rtsopts
     -threaded
     -with-rtsopts=-N

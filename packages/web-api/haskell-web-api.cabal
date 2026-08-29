@@ -187,15 +187,47 @@ test-suite haskell-web-api-tests
   -- Common test suite settings.
   type: exitcode-stdio-1.0
   hs-source-dirs: test
-  -- Suppress warnings about missing home modules in test suite;
-  -- Otherwise, we'd have to list all test modules in other-modules.
-  -- Add -keep-tmp-files to the end to keep the generated files for inspection.
-  -- E.g. in %LOCALAPPDATA%\Temp
-  -- Search "name:ghc_tmp* extension:hspp"
+  -- hspec-discover imports every test module. Keep this complete and let the
+  -- manifest check verify it against test/ rather than suppress Cabal's warning.
+  other-modules:
+    E2E.WebApiSpec
+    Integration.WebApiSpec
+    TestSupport.RealPostgres
+    Unit.WebApi.AccountPagesSpec
+    Unit.WebApi.AccountSpec
+    Unit.WebApi.App.EnhancementsSpec
+    Unit.WebApi.AppEffectSpec
+    Unit.WebApi.AppSpec
+    Unit.WebApi.Config.InternalSpec
+    Unit.WebApi.Config.ModelSpec
+    Unit.WebApi.DatabaseSetupSpec
+    Unit.WebApi.DatabaseSpec
+    Unit.WebApi.LocalizationSpec
+    Unit.WebApi.LoginSpec
+    Unit.WebApi.MfaEnrollmentSessionSpec
+    Unit.WebApi.MfaEnrollmentSpec
+    Unit.WebApi.Page.BuildingSpec
+    Unit.WebApi.Page.RenderingSpec
+    Unit.WebApi.PageSpec
+    Unit.WebApi.Postgres.AccountRepositorySpec
+    Unit.WebApi.Postgres.LoginAttemptRepositorySpec
+    Unit.WebApi.Postgres.MfaEnrollmentSessionRepositorySpec
+    Unit.WebApi.Postgres.MfaRepositorySpec
+    Unit.WebApi.Postgres.PoolSpec
+    Unit.WebApi.Postgres.SessionRepositorySpec
+    Unit.WebApi.PostgresSpec
+    Unit.WebApi.ProfileSpec
+    Unit.WebApi.ResponseSpec
+    Unit.WebApi.RouteDataSpec
+    Unit.WebApi.RouteSpec
+    Unit.WebApi.SessionSpec
+    Unit.WebApi.SetupConfigSpec
+    Unit.WebApi.SetupPlanSpec
+    Unit.WebApi.TestSupport
+
   ghc-options:
     -F
     -pgmF=spec-preprocessor
-    -Wno-missing-home-modules
     -rtsopts
     -threaded
     -with-rtsopts=-N

@@ -107,10 +107,26 @@ test-suite core-tests
     test
     test-core-src/src
 
+  -- hspec-discover imports every test module. The checked-in TestCore snapshot
+  -- is also a home-module dependency of those tests, so list both source roots.
+  other-modules:
+    TestCore.CustomAssertions
+    TestCore.Prelude
+    Unit.Core.ConfigSpec
+    Unit.Core.Control.ErrorSpec
+    Unit.Core.PageRoutes.GeneratorSpec
+    Unit.Core.Setup.DatabaseAutostartSpec
+    Unit.Core.Setup.PrerequisiteConfigSpec
+    Unit.Core.Setup.PrerequisitePlanSpec
+    Unit.Core.Setup.PrerequisiteReportSpec
+    Unit.Core.Setup.PrerequisiteSpec
+    Unit.Core.Setup.TestSupport
+    Unit.Core.Setup.TracingAutostartSpec
+    Unit.Core.System.PathSpec
+
   ghc-options:
     -F
     -pgmF=spec-preprocessor
-    -Wno-missing-home-modules
     -rtsopts
     -threaded
     -with-rtsopts=-N

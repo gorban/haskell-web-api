@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# OPTIONS_GHC -Wno-orphans #-}
 
 {-# SPEC #-}
 
@@ -7,6 +6,7 @@ import Control.Concurrent (newMVar, readMVar)
 import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (atomicModifyIORef', newIORef, readIORef)
+import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
@@ -30,14 +30,16 @@ defaultRequestPolicy =
 
 spec =
   describe "ACME challenge matching and store helpers" $ do
-    it "renders internal ACME helper types" $ do
+    it "exposes active challenge values through public projections" $ do
       let challenge =
             ActiveAcmeChallenge
               { activeAcmeChallengeDomain = "example.com",
                 activeAcmeChallengeToken = "token",
                 activeAcmeChallengeResponse = "token.thumbprint"
               }
-      show challenge `shouldContain` "activeAcmeChallengeDomain = \"example.com\""
+      activeAcmeChallengeDomain challenge `shouldBe` "example.com"
+      activeAcmeChallengeToken challenge `shouldBe` "token"
+      activeAcmeChallengeResponse challenge `shouldBe` "token.thumbprint"
 
     it "covers challenge matching and store update helpers" $ do
       challengeStore <- AcmeChallengeStore <$> newMVar []
@@ -76,7 +78,15 @@ spec =
       matchesRuntimeAcmeChallenge defaultRequestPolicy missingTokenRequest challenge `shouldBe` False
       registerAcmeChallenges challengeStore [challenge]
       registeredChallenges <- unwrapChallengeStore challengeStore
-      registeredChallenges `shouldBe` [challenge]
+      case registeredChallenges of
+        [registeredChallenge] ->
+          expectAll
+            ( (activeAcmeChallengeDomain registeredChallenge `shouldBe` "example.com")
+                :| [ activeAcmeChallengeToken registeredChallenge `shouldBe` "token-1",
+                     activeAcmeChallengeResponse registeredChallenge `shouldBe` "response-1"
+                   ]
+            )
+        _ -> expectationFailure "expected exactly one registered ACME challenge"
       challengeResponse <- acmeChallengeResponseForRequest defaultRequestPolicy challengeStore webrootStore matchingRequest
       case challengeResponse of
         Just response -> do
@@ -85,28 +95,15 @@ spec =
           readResponseBody response `shouldReturn` "response-1"
         Nothing -> expectationFailure "expected a registered ACME challenge response"
       unregisterAcmeChallenges challengeStore [challenge]
-      unwrapChallengeStore challengeStore `shouldReturn` []
+      remainingChallenges <- unwrapChallengeStore challengeStore
+      case remainingChallenges of
+        [] -> pure ()
+        _ -> expectationFailure "expected unregister to clear the ACME challenge store"
       registerCertbotAcmeChallengeWebroot webrootStore "/tmp/webroot-a"
       registerCertbotAcmeChallengeWebroot webrootStore "/tmp/webroot-b"
       unwrapWebrootStore webrootStore `shouldReturn` ["/tmp/webroot-b", "/tmp/webroot-a"]
       unregisterCertbotAcmeChallengeWebroot webrootStore "/tmp/webroot-a"
       unwrapWebrootStore webrootStore `shouldReturn` ["/tmp/webroot-b"]
-
-instance Eq ActiveAcmeChallenge where
-  left == right =
-    activeAcmeChallengeDomain left == activeAcmeChallengeDomain right
-      && activeAcmeChallengeToken left == activeAcmeChallengeToken right
-      && activeAcmeChallengeResponse left == activeAcmeChallengeResponse right
-
-instance Show ActiveAcmeChallenge where
-  show challenge =
-    "ActiveAcmeChallenge {activeAcmeChallengeDomain = "
-      <> show (activeAcmeChallengeDomain challenge)
-      <> ", activeAcmeChallengeToken = "
-      <> show (activeAcmeChallengeToken challenge)
-      <> ", activeAcmeChallengeResponse = "
-      <> show (activeAcmeChallengeResponse challenge)
-      <> "}"
 
 readResponseBody :: Wai.Response -> IO Text
 readResponseBody response = do
