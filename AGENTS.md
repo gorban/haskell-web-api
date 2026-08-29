@@ -121,21 +121,25 @@ workflow runs with the host GitHub CLI:
 ```sh
 distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh run list \
   --workflow ci.yml --commit "$task_sha" --limit 20 \
-  --json databaseId,workflowName,headSha,status,conclusion,createdAt,url \
-  --jq ".[] | select(.headSha == \"$task_sha\")"
+  --json databaseId,workflowName,headSha,event,status,conclusion,createdAt,url \
+  --jq ".[] | select(.headSha == \"$task_sha\" and .event == \"pull_request\")"
 ```
 
-Read every row returned by the exact-SHA query. No row means the run has not been created or is not
-the requested workflow; it is not a pass. A matching row is acceptable only when its `status` and
-`conclusion` are respectively `completed` and `success`. Only after the OIDs match, `gh pr checks
+Read every row returned by the exact-SHA query. For a PR, the matching `CI` run must also have
+event `pull_request`: a `push` run for the same SHA is not PR evidence (this repository only
+pushes `CI` from `main`). No row means the run has not been created or is not the requested
+workflow; it is not a pass. A matching row is acceptable only when its `status` and `conclusion`
+are respectively `completed` and `success`. Only after the OIDs match, `gh pr checks
 --watch` is a useful PR-level progress view. It is supplementary: it can include checks for another
 commit after a new push, and must not replace the exact-SHA query above. A missing result from a
 short-SHA filter is not evidence that no run exists. For a run or job URL supplied by someone else,
-use the URL's `<run-id>` as above and verify it directly before relying on it:
+use the URL's `<run-id>` as above and verify it directly before relying on it. A supplied URL may
+be useful to diagnose an older or failed run, but is merge evidence only if both its `headSha`
+equals `task_sha` and its event is `pull_request`:
 
 ```sh
 distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh run view <run-id> \
-  --json databaseId,workflowName,headSha,status,conclusion,url,jobs
+  --json databaseId,workflowName,headSha,event,status,conclusion,url,jobs
 ```
 
 Use `gh run view <run-id> --exit-status` as the final command-level success check after inspecting

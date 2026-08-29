@@ -1040,9 +1040,18 @@ counting depth-0 `->` occurrences in the signature instead of tokenizing the equ
 the equation-head heuristic now runs only for the rarer case of a top-level binding with no preceding
 signature. Re-running against the two files DJ's report cited confirms the fix: `TestCore.Browser.Protocol`
 now reports arity 3 (was 10) and `TestCore.SpecPreprocessor` reports arity 3 (was 17), both matching
-their real signatures. A multi-line signature's continuation lines are not merged in, which can still
-undercount arity but — unlike the bug just fixed — can never fabricate a violation, which is the
-failure mode that actually mattered here.
+their real signatures.
+
+Correction (FQ5, 2026-08-29): a signature that begins with `name ::` and places its arrows on
+indented continuation lines was still silently undercounted, so the "can never fabricate a
+violation" rationale did not justify leaving a mandatory follow-up trigger incomplete. The report
+now carries lexical state across the complete top-level signature: line/block comments and strings
+are ignored; parentheses, brackets, and braces suppress nested arrows; and ordinary plus
+parenthesized-operator names are recognized. A complex untyped equation pattern remains
+conservatively uncounted rather than whitespace-tokenized. The fixture covers these boundaries,
+and the real-tree comparison exposes the FQ6--FQ9 records instead of treating their prior low
+numbers as closure evidence. This keeps the metric an advisory review signal, but makes it a
+reliable trigger for the design review AGENTS.md requires.
 
 ### Follow-up decision — BP: total action-target and API-family matching (2026-08-18)
 

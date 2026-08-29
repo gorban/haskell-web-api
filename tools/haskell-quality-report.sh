@@ -128,47 +128,140 @@ module_max_arity_for() {
     # LHS pattern (cons chains, character literals, operator sections) is
     # not reliably splittable by whitespace, and an import list can itself
     # contain a bare "=" (e.g. the "(.=)" aeson operator), so those must be
-    # skipped rather than misread as an equation. A signature is only
-    # recognised on the line it starts on; a continuation line of a
-    # multi-line signature is not merged in, which can undercount but never
-    # fabricates a violation.
-    /^import[[:space:]]+/ { next }
-    /^[A-Za-z_][A-Za-z0-9_\047]*[[:space:]]*::/ {
-      name = $1
-      signature_text = $0
-      sub(/^[A-Za-z_][A-Za-z0-9_\047]*[[:space:]]*::/, "", signature_text)
-      depth = 0
-      arrow_count = 0
+    # skipped rather than misread as an equation. Type signatures can span
+    # indented continuation lines, so retain the lexical depth and comment
+    # state until the next top-level declaration. Only arrows outside (),
+    # [], and {} are function inputs; nested higher-order arguments, record
+    # fields, promoted syntax, constraints, and comments do not add arity.
+    function scan_signature_line(line,    position, signature_length, character, next_character) {
       position = 1
-      signature_length = length(signature_text)
+      signature_length = length(line)
       while (position <= signature_length) {
-        character = substr(signature_text, position, 1)
-        if (character == "(" || character == "[") {
-          depth++
+        character = substr(line, position, 1)
+        next_character = substr(line, position + 1, 1)
+        if (block_comment_depth > 0) {
+          if (character == "{" && next_character == "-") {
+            block_comment_depth++
+            position += 2
+          } else if (character == "-" && next_character == "}") {
+            block_comment_depth--
+            position += 2
+          } else {
+            position++
+          }
+        } else if (in_string_literal) {
+          if (character == "\\") {
+            position += 2
+          } else if (character == "\"") {
+            in_string_literal = 0
+            position++
+          } else {
+            position++
+          }
+        } else if (character == "-" && next_character == "-") {
+          return
+        } else if (character == "{" && next_character == "-") {
+          block_comment_depth = 1
+          position += 2
+        } else if (character == "\"") {
+          in_string_literal = 1
           position++
-        } else if (character == ")" || character == "]") {
-          depth--
+        } else if (character == "(" || character == "[" || character == "{") {
+          delimiter_depth++
           position++
-        } else if (depth == 0 && substr(signature_text, position, 2) == "->") {
-          arrow_count++
+        } else if (character == ")" || character == "]" || character == "}") {
+          if (delimiter_depth > 0) delimiter_depth--
+          position++
+        } else if (delimiter_depth == 0 && character == "-" && next_character == ">") {
+          signature_arrow_count++
           position += 2
         } else {
           position++
         }
       }
-      signature_arity[name] = arrow_count
+    }
+
+    function finish_signature() {
+      signature_arity[signature_name] = signature_arrow_count
+      signature_active = 0
+      signature_name = ""
+    }
+
+    function starts_named_signature(line) {
+      return line ~ /^[A-Za-z_][A-Za-z0-9_\047]*[[:space:]]*::/
+    }
+
+    function starts_operator_signature(line) {
+      return line ~ /^\([^[:space:]()]+\)[[:space:]]*::/
+    }
+
+    function start_signature(line,    signature_text) {
+      signature_name = line
+      if (starts_named_signature(line)) {
+        sub(/[[:space:]]*::.*/, "", signature_name)
+        sub(/[[:space:]]*$/, "", signature_name)
+        signature_text = line
+        sub(/^[A-Za-z_][A-Za-z0-9_\047]*[[:space:]]*::/, "", signature_text)
+      } else {
+        sub(/^[[:space:]]*\(/, "", signature_name)
+        sub(/\)[[:space:]]*::.*/, "", signature_name)
+        signature_name = "(" signature_name ")"
+        signature_text = line
+        sub(/^\([^[:space:]()]+\)[[:space:]]*::/, "", signature_text)
+      }
+      signature_active = 1
+      signature_arrow_count = 0
+      delimiter_depth = 0
+      block_comment_depth = 0
+      in_string_literal = 0
+      scan_signature_line(signature_text)
+    }
+
+    function continues_signature(line) {
+      return line ~ /^[[:space:]]/ || line ~ /^--/ || line ~ /^\{-/
+    }
+
+    function plain_equation_arity(line,    left, name, arguments, argument_count) {
+      left = line
+      sub(/[[:space:]]*=.*/, "", left)
+      name = left
+      sub(/[[:space:]].*/, "", name)
+      arguments = left
+      sub(/^[A-Za-z_][A-Za-z0-9_\047]*/, "", arguments)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", arguments)
+      if (arguments == "") return 0
+      # A complex pattern without a signature is not safe to tokenize. Leave
+      # it at zero so this advisory report cannot manufacture a health signal.
+      if (index(arguments, "(") || index(arguments, ")") || index(arguments, "[") || index(arguments, "]") || index(arguments, "{") || index(arguments, "}") || index(arguments, ":") || index(arguments, ",") || index(arguments, "\"") || index(arguments, "@") || index(arguments, sprintf("%c", 39))) return 0
+      argument_count = split(arguments, pieces, /[[:space:]]+/)
+      return argument_count
+    }
+
+    {
+      if (signature_active) {
+        if (continues_signature($0)) {
+          scan_signature_line($0)
+          next
+        }
+        finish_signature()
+      }
+    }
+
+    /^import[[:space:]]+/ { next }
+    starts_named_signature($0) || starts_operator_signature($0) {
+      start_signature($0)
       next
     }
     /^[A-Za-z_][A-Za-z0-9_\047]*([[:space:]]+[^=]+)?[[:space:]]*=/ {
       left = $0
-      sub(/[[:space:]]*=.*/, "", left)
       if (left ~ /::/) next
       name = $1
       if (name in signature_arity) next
-      count = split(left, pieces, /[[:space:]]+/) - 1
+      count = plain_equation_arity($0)
       if (count > maximum) maximum = count
     }
     END {
+      if (signature_active) finish_signature()
       for (signature_name in signature_arity) {
         if (signature_arity[signature_name] > maximum) maximum = signature_arity[signature_name]
       }

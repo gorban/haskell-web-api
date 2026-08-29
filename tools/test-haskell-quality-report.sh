@@ -21,6 +21,31 @@ printf '%s\n' 'module Repeat where' 'manual action = withExceptT Wrap (ExceptT a
 printf '%s\n' 'module Alpha (alpha, alphaPair) where' 'import Beta' 'alpha value = beta value' 'alphaPair first second = first + second' >"$fixture_root/packages/core/src/Alpha.hs"
 printf '%s\n' 'module Beta (beta) where' 'import Alpha' 'beta value = value' >"$fixture_root/packages/core/src/Beta.hs"
 printf '%s\n' 'module Spec where' 'import Alpha' 'spec = alpha 1' 'helper value = if value then 1 else 2' >"$fixture_root/packages/core/test/Spec.hs"
+printf '%s\n' \
+  'module Arity where' \
+  '' \
+  'multiLine ::' \
+  '  (Show input, Eq (nested -> result)) =>' \
+  '  {- this block comment starts and contains a misleading -> arrow' \
+  '     but ends here -}' \
+  '  input -- this line comment contains a misleading -> arrow' \
+  '  -> (callback -> callbackResult)' \
+  "  -> '[input, callback]" \
+  "  -> '{handler :: callback -> callbackResult}" \
+  '  -> "a -> type-level string"' \
+  '  -> output' \
+  'multiLine = undefined' >"$fixture_root/packages/core/src/Arity.hs"
+printf '%s\n' \
+  'module Operator where' \
+  '' \
+  '(.+.) ::' \
+  '  left ->' \
+  '  (nested -> intermediate) ->' \
+  '  right ->' \
+  '  result' \
+  '(.+.) = undefined' >"$fixture_root/packages/core/src/Operator.hs"
+printf '%s\n' 'module Imports where' 'import Data.Aeson ((.=))' >"$fixture_root/packages/core/src/Imports.hs"
+printf '%s\n' 'module Pattern where' 'patternOnly (First : Second : rest) = rest' >"$fixture_root/packages/core/src/Pattern.hs"
 printf '%s\n' 'module Vendor where' 'vendored value = case value of Left problem -> Left problem; Right result -> Right result' >"$fixture_root/packages/hspec-expectations-match/src/Vendor.hs"
 
 printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\\n" "$*" >>"$QUALITY_ARGON_CALLS"' 'printf "%s\\n" "fixture/Production.hs" "  1:1 productionHotspot - 12" "  2:1 spec - 120" "  3:1 helperHotspot - 9"' >"$fixture_root/bin/argon"
@@ -50,6 +75,10 @@ printf '%s' "$report_output" | grep -qE 'Module-health report: production \(advi
 printf '%s' "$report_output" | grep -qE 'Module-health report: test \(advisory\)'
 printf '%s' "$report_output" | grep -qE 'lines.*decls.*imports.*exports.*arity.*fan-out.*fan-in'
 printf '%s' "$report_output" | grep -qE 'Alpha[[:space:]]+4[[:space:]]+2[[:space:]]+1[[:space:]]+2[[:space:]]+2[[:space:]]+1[[:space:]]+2'
+printf '%s\n' "$report_output" | awk '$1 == "Arity" && $6 == 5 { found = 1 } END { exit !found }'
+printf '%s\n' "$report_output" | awk '$1 == "Imports" && $6 == 0 { found = 1 } END { exit !found }'
+printf '%s\n' "$report_output" | awk '$1 == "Operator" && $6 == 3 { found = 1 } END { exit !found }'
+printf '%s\n' "$report_output" | awk '$1 == "Pattern" && $6 == 0 { found = 1 } END { exit !found }'
 printf '%s' "$report_output" | grep -qE 'packages/core/test/Spec.hs'
 printf '%s' "$report_output" | grep -qE 'Alpha -> Beta -> Alpha'
 if printf '%s' "$report_output" | grep -qE 'Vendor.hs'; then
