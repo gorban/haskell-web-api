@@ -69,7 +69,8 @@ spec = do
                  parseRequestPathPrefix "/app\NULnested" `shouldBe` Left PathPrefixUnsafeCharacter,
                  parseRequestPathPrefix "/app//" `shouldBe` Left PathPrefixMultipleSlashes,
                  parseRequestPathPrefix "/app/" `shouldBe` Right (validPathPrefix "/app"),
-                 parseRequestPathPrefix "/app/./nested" `shouldBe` Left PathPrefixAmbiguousSegment
+                 parseRequestPathPrefix "/app/./nested" `shouldBe` Left PathPrefixAmbiguousSegment,
+                 parseRequestPathPrefix "/app/../nested" `shouldBe` Left PathPrefixAmbiguousSegment
                ]
         )
 
