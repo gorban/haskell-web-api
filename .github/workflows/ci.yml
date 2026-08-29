@@ -6,21 +6,11 @@ on:
   pull_request:
     branches: [main]
 
-# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
-# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
-
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
 jobs:
   build-and-test:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     env:
       DATABASE_HOST: 127.0.0.1
       DATABASE_PORT: 5432
@@ -58,12 +48,12 @@ jobs:
     steps:
       - name: Checkout
         id: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Setup Haskell
         if: steps.checkout.outcome == 'success'
         id: setup_haskell
-        uses: haskell-actions/setup@v2
+        uses: haskell-actions/setup@6037f33647c3f17758a2356c80fc4a53d7e0685d # v2
         with:
           ghc-version: '9.14.1'
           cabal-version: '3.16.1.0'
@@ -71,7 +61,7 @@ jobs:
       - name: Setup Node
         if: steps.setup_haskell.outcome == 'success'
         id: setup_node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
           cache: npm
@@ -134,7 +124,7 @@ jobs:
       - name: Restore Cabal cache
         if: steps.playwright.outcome == 'success'
         id: cabal_cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             ~/.cabal/bin
@@ -161,8 +151,14 @@ jobs:
           tools/test-check-executable-file-metadata.sh
           tools/check-executable-file-metadata.sh
 
-      - name: Seed PostgreSQL test database
+      - name: Check CI workflow policy
         if: steps.executable_file_metadata.outcome == 'success'
+        id: workflow_policy
+        run: |
+          tools/test-ci-workflow-policy.sh
+
+      - name: Seed PostgreSQL test database
+        if: steps.workflow_policy.outcome == 'success'
         id: seed_postgres
         run: |
           tools/seed-test-database.sh
@@ -179,8 +175,8 @@ jobs:
         run: |
           tools/run-code-coverage-check.sh
 
-      - name: Prepare coverage report for GitHub Pages
-        id: prepare_coverage_report
+      - name: Prepare coverage report artifact
+        id: prepare_coverage_artifact
         if: github.ref == 'refs/heads/main' && steps.coverage.outcome == 'success'
         run: |
           set -euo pipefail
@@ -213,22 +209,13 @@ jobs:
           # Replace with same-origin check for GitHub Pages (https://*.github.io/*)
           sed -i 's@if (!/^file:/i\.test(data\.href)) return;@if (new URL(data.href, window.location.href).origin !== window.location.origin) return;@g' _site/index.html
 
-      - name: Setup Pages
-        id: setup_pages
-        if: github.ref == 'refs/heads/main' && steps.prepare_coverage_report.outcome == 'success'
-        uses: actions/configure-pages@v5
-
       - name: Upload coverage artifact
         id: upload_coverage_artifact
-        if: github.ref == 'refs/heads/main' && steps.setup_pages.outcome == 'success'
-        uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main' && steps.prepare_coverage_artifact.outcome == 'success'
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
+          name: coverage-site
           path: _site
-
-      - name: Deploy to GitHub Pages
-        if: github.ref == 'refs/heads/main' && steps.upload_coverage_artifact.outcome == 'success'
-        id: deployment
-        uses: actions/deploy-pages@v4
 
       - name: Install formatting and Ormolu test tools
         if: steps.coverage.outcome == 'success'
@@ -256,7 +243,7 @@ jobs:
 
       - name: Upload Playwright failure artifacts
         if: failure() && steps.run_tests_skip_unit.outcome == 'failure'
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: playwright-failures
           path: '**/test-results/playwright/'
@@ -268,18 +255,47 @@ jobs:
           steps.cabal_cache.outputs.cache-hit != 'true' &&
           (
             success() ||
+            steps.workflow_policy.outcome == 'failure' ||
             steps.coverage.outcome == 'failure' ||
-            steps.prepare_coverage_report.outcome == 'failure' ||
-            steps.setup_pages.outcome == 'failure' ||
+            steps.prepare_coverage_artifact.outcome == 'failure' ||
             steps.upload_coverage_artifact.outcome == 'failure' ||
-            steps.deployment.outcome == 'failure' ||
             steps.formatting_checks.outcome == 'failure' ||
             steps.vscode_ormolu_formatter_checks.outcome == 'failure' ||
             steps.run_tests_skip_unit.outcome == 'failure'
           )
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             ~/.cabal/bin
             ~/.cabal/store
           key: ${{ steps.cabal_cache.outputs.cache-primary-key }}
+
+  publish-coverage:
+    if: github.ref == 'refs/heads/main'
+    needs: build-and-test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: "pages"
+      cancel-in-progress: false
+    steps:
+      - name: Download coverage artifact
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: coverage-site
+          path: _site
+
+      - name: Setup Pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+
+      - name: Upload coverage artifact to Pages
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

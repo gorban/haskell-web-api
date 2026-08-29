@@ -94,10 +94,28 @@ format-only change is exempt from the formatter check.
 
 After pushing a task-sized commit, verify the GitHub Actions run for the exact full commit SHA, never
 an abbreviated SHA. First capture it with `git rev-parse HEAD`, then inspect the matching run with the
-host GitHub CLI. A missing result from a short-SHA filter is not evidence that no run exists. If the
-matching run is failed, queued, cancelled, or otherwise not green, use `gh run view <run-id>` and
-`gh run view <run-id> --log-failed` to identify the failed step before continuing. Do not start the
-next task until the exact SHA's CI run is green; a truncated local terminal stream or a previous
-commit's run cannot substitute for that evidence.
+host GitHub CLI:
+
+```sh
+task_sha="$(git rev-parse HEAD)"
+distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh run list \
+  --commit "$task_sha" --limit 20 \
+  --json databaseId,headSha,status,conclusion,url \
+  --jq ".[] | select(.headSha == \"$task_sha\")"
+```
+
+`gh pr checks --watch` is a useful PR-level progress view when a PR exists, but it is supplementary:
+it can include checks for another commit and must not replace the exact-SHA query above. A missing result
+from a short-SHA filter is not evidence that no run exists. If the matching run is failed, queued,
+cancelled, or otherwise not green, use `gh run view <run-id>` and `gh run view <run-id> --log-failed`
+to identify the failed step before continuing. Do not start the next task until the exact SHA's CI run
+is green; a truncated local terminal stream or a previous commit's run cannot substitute for that evidence.
+
+## GitHub Actions pin updates
+
+Action references use full immutable commit SHAs, with the reviewed major version retained in a trailing
+comment. To update one, resolve the intended upstream tag with the host GitHub CLI (following an annotated
+tag to its commit when necessary), replace both the SHA and comment, then run
+`tools/test-ci-workflow-policy.sh`. Never replace a pin with a mutable tag merely to pick up an update.
 
 📦

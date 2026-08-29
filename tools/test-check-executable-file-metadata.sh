@@ -15,6 +15,7 @@ expected_executables=(
   generate-code-coverage.sh
   tools/check-build-diagnostics.sh
   tools/check-cabal-packages.sh
+  tools/check-ci-workflow-policy.sh
   tools/check-executable-file-metadata.sh
   tools/check-vscode-ormolu-formatter.sh
   tools/haskell-quality-report.sh
@@ -28,6 +29,7 @@ expected_executables=(
   tools/seed-test-database.sh
   tools/test-check-build-diagnostics.sh
   tools/test-check-executable-file-metadata.sh
+  tools/test-ci-workflow-policy.sh
   tools/test-formatting-checks.sh
   tools/test-generate-code-coverage.sh
   tools/test-haskell-quality-report.sh
