@@ -13,7 +13,7 @@ import HarchWeb.Email qualified as Email
 import HarchWeb.Password qualified as Password
 import HarchWeb.Username qualified as Username
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress)
-import WebApi.Account (AccountProfile (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), EmailVerificationEnvironment (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), RegistrationEnvironment (..), RegistrationError (..), RegistrationRequest (..), RegistrationResult (..), ResendVerificationError (..), VerificationDeliveryFailure (..), confirmEmailVerificationAt, defaultPendingRegistrationStoragePolicy, defaultRegistrationDeliveryTimeout, mkPendingRegistrationStoragePolicy, mkRegistrationDeliveryTimeout, pendingRegistrationClaimLeaseNanoseconds, pendingRegistrationMaximumAccounts, registerAccount, resendEmailVerificationAt)
+import WebApi.Account (AccountProfile (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), EmailVerificationEnvironment (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), RegistrationEnvironment (..), RegistrationError (..), RegistrationRequest (..), RegistrationResult (..), ResendVerificationError (..), VerificationDeliveryEnvironment (..), VerificationDeliveryFailure (..), confirmEmailVerificationAt, defaultPendingRegistrationStoragePolicy, defaultRegistrationDeliveryTimeout, mkPendingRegistrationStoragePolicy, mkRegistrationDeliveryTimeout, pendingRegistrationClaimLeaseNanoseconds, pendingRegistrationMaximumAccounts, registerAccount, resendEmailVerificationAt)
 
 spec = do
   describe "WebApi.Account" $ do
@@ -37,10 +37,13 @@ spec = do
                 registrationVerificationEnvironment =
                   EmailVerificationEnvironment
                     { verificationStore = accountStore,
-                      verificationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
-                      verificationDelivery = Email.EmailDelivery (\_ -> error "email delivery must not run after password-work rejection"),
-                      verificationLocale = Email.EmailEnglish,
-                      verificationUrl = const "https://account.example.test/verify",
+                      verificationDeliveryEnvironment =
+                        VerificationDeliveryEnvironment
+                          { verificationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
+                            verificationDelivery = Email.EmailDelivery (\_ -> error "email delivery must not run after password-work rejection"),
+                            verificationLocale = Email.EmailEnglish,
+                            verificationUrl = const "https://account.example.test/verify"
+                          },
                       verificationNow = 100,
                       verificationLifetime = 200
                     }
@@ -77,10 +80,13 @@ spec = do
               registrationVerificationEnvironment =
                 EmailVerificationEnvironment
                   { verificationStore = accountStore,
-                    verificationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
-                    verificationDelivery = emailDelivery,
-                    verificationLocale = Email.EmailSpanish,
-                    verificationUrl = \token -> "https://account.example.test/es/verify?token=" <> Account.emailVerificationTokenText token,
+                    verificationDeliveryEnvironment =
+                      VerificationDeliveryEnvironment
+                        { verificationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
+                          verificationDelivery = emailDelivery,
+                          verificationLocale = Email.EmailSpanish,
+                          verificationUrl = \token -> "https://account.example.test/es/verify?token=" <> Account.emailVerificationTokenText token
+                        },
                     verificationNow = 100,
                     verificationLifetime = 200
                   }
@@ -144,10 +150,13 @@ spec = do
                 registrationVerificationEnvironment =
                   EmailVerificationEnvironment
                     { verificationStore = accountStore,
-                      verificationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
-                      verificationDelivery = Email.EmailDelivery (\_ -> pure ()),
-                      verificationLocale = Email.EmailEnglish,
-                      verificationUrl = const "https://account.example.test/verify",
+                      verificationDeliveryEnvironment =
+                        VerificationDeliveryEnvironment
+                          { verificationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
+                            verificationDelivery = Email.EmailDelivery (\_ -> pure ()),
+                            verificationLocale = Email.EmailEnglish,
+                            verificationUrl = const "https://account.example.test/verify"
+                          },
                       verificationNow = 100,
                       verificationLifetime = 200
                     }
@@ -269,10 +278,13 @@ spec = do
             resendEmailVerificationAt
               EmailVerificationEnvironment
                 { verificationStore = store,
-                  verificationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
-                  verificationDelivery = emailDelivery,
-                  verificationLocale = Email.EmailSpanish,
-                  verificationUrl = \token -> "https://account.example.test/es/verify?token=" <> Account.emailVerificationTokenText token,
+                  verificationDeliveryEnvironment =
+                    VerificationDeliveryEnvironment
+                      { verificationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
+                        verificationDelivery = emailDelivery,
+                        verificationLocale = Email.EmailSpanish,
+                        verificationUrl = \token -> "https://account.example.test/es/verify?token=" <> Account.emailVerificationTokenText token
+                      },
                   verificationNow = now,
                   verificationLifetime = lifetime
                 }
@@ -295,10 +307,13 @@ spec = do
       resendEmailVerificationAt
         EmailVerificationEnvironment
           { verificationStore = successfulStore,
-            verificationDeliveryTimeout = required "delivery timeout" (mkRegistrationDeliveryTimeout 1),
-            verificationDelivery = Email.EmailDelivery (\_ -> threadDelay 50000),
-            verificationLocale = Email.EmailSpanish,
-            verificationUrl = \token -> "https://account.example.test/es/verify?token=" <> Account.emailVerificationTokenText token,
+            verificationDeliveryEnvironment =
+              VerificationDeliveryEnvironment
+                { verificationDeliveryTimeout = required "delivery timeout" (mkRegistrationDeliveryTimeout 1),
+                  verificationDelivery = Email.EmailDelivery (\_ -> threadDelay 50000),
+                  verificationLocale = Email.EmailSpanish,
+                  verificationUrl = \token -> "https://account.example.test/es/verify?token=" <> Account.emailVerificationTokenText token
+                },
             verificationNow = 100,
             verificationLifetime = 200
           }
@@ -372,7 +387,10 @@ spec = do
             (registrationEnvironmentAt Password.hashPassword accountStore delivery 100 200)
               { registrationVerificationEnvironment =
                   (registrationVerificationEnvironment (registrationEnvironmentAt Password.hashPassword accountStore delivery 100 200))
-                    { verificationUrl = \token -> "https://account.example.test/verify?token=" <> Account.emailVerificationTokenText token
+                    { verificationDeliveryEnvironment =
+                        (verificationDeliveryEnvironment (registrationVerificationEnvironment (registrationEnvironmentAt Password.hashPassword accountStore delivery 100 200)))
+                          { verificationUrl = \token -> "https://account.example.test/verify?token=" <> Account.emailVerificationTokenText token
+                          }
                     }
               }
           retryEnvironment = environmentFor retryStore
@@ -396,7 +414,7 @@ spec = do
         Left (RegistrationDeliveryFailed (VerificationDeliveryTransportFailed detail)) | "SMTP unavailable" `Text.isInfixOf` detail -> pure ()
         _ -> expectationFailure "expected failed delivery to release its claim"
       let timedOutEnvironment = retryEnvironment timedOutDelivery
-      registerAccount (timedOutEnvironment {registrationVerificationEnvironment = (registrationVerificationEnvironment timedOutEnvironment) {verificationDeliveryTimeout = shortTimeout}}) (registrationRequestOf emailAddress) >>= \case
+      registerAccount (timedOutEnvironment {registrationVerificationEnvironment = (registrationVerificationEnvironment timedOutEnvironment) {verificationDeliveryEnvironment = (verificationDeliveryEnvironment (registrationVerificationEnvironment timedOutEnvironment)) {verificationDeliveryTimeout = shortTimeout}}}) (registrationRequestOf emailAddress) >>= \case
         Left (RegistrationDeliveryFailed VerificationDeliveryTimedOut) -> pure ()
         _ -> expectationFailure "expected timed-out delivery to release its claim"
       readIORef releasedClaimsReference >>= \case

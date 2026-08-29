@@ -22,6 +22,7 @@ import WebApi.Account
   ( AccountProfile (..),
     EmailVerificationEnvironment (..),
     ResendVerificationError (..),
+    VerificationDeliveryEnvironment (..),
     resendEmailVerificationAt,
   )
 import WebApi.AccountPages.Actions.Common
@@ -86,10 +87,13 @@ resendEmailVerificationNow actionRequest now profile = do
     resendEmailVerificationAt
       EmailVerificationEnvironment
         { verificationStore = accountWorkflowStore workflow,
-          verificationDeliveryTimeout = accountWorkflowRegistrationDeliveryTimeout workflow,
-          verificationDelivery = accountWorkflowEmailDelivery workflow,
-          verificationLocale = emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)),
-          verificationUrl = accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest),
+          verificationDeliveryEnvironment =
+            VerificationDeliveryEnvironment
+              { verificationDeliveryTimeout = accountWorkflowRegistrationDeliveryTimeout workflow,
+                verificationDelivery = accountWorkflowEmailDelivery workflow,
+                verificationLocale = emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)),
+                verificationUrl = accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest)
+              },
           verificationNow = now,
           verificationLifetime = emailVerificationLifetimeNanoseconds
         }

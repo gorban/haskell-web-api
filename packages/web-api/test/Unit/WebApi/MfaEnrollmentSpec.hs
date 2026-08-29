@@ -13,11 +13,11 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Account (AccountId, mkAccountId)
 import HarchWeb.Password (defaultPasswordHashingPolicy)
-import HarchWeb.RecoveryCode (RecoveryCode, RecoveryCodeHash, hashRecoveryCodeWithSalt, mkRecoveryCode)
-import HarchWeb.Secret (EncryptionNonce, SecretEncryptionKey, encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
-import HarchWeb.Totp (TotpCode, TotpSecret, mkTotpCode, mkTotpSecret, renderTotpSecret, totpCode)
+import HarchWeb.RecoveryCode (RecoveryCode, RecoveryCodeHash, generateRecoveryCode, hashRecoveryCode, hashRecoveryCodeWithSalt, mkRecoveryCode)
+import HarchWeb.Secret (EncryptionNonce, SecretEncryptionKey, encryptSecret, encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
+import HarchWeb.Totp (TotpCode, TotpSecret, generateTotpSecret, mkTotpCode, mkTotpSecret, renderTotpSecret, totpCode)
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
-import WebApi.MfaEnrollment (MfaConfirmationEnvironment (..), MfaEnrollmentConfirmation (..), MfaEnrollmentError (..), MfaEnrollmentStart (..), confirmMfaEnrollment, confirmMfaEnrollmentWith, startMfaEnrollment, startMfaEnrollmentWith)
+import WebApi.MfaEnrollment (MfaConfirmationEnvironment (..), MfaEnrollmentConfirmation (..), MfaEnrollmentEnvironment (..), MfaEnrollmentError (..), MfaEnrollmentStart (..), confirmMfaEnrollment, confirmMfaEnrollmentWith, startMfaEnrollment)
 
 spec = do
   describe "TOTP enrollment workflow" $ do
@@ -37,12 +37,12 @@ spec = do
                 consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption"),
                 markTotpCodeUsed = \_ _ -> pure (error "unexpected TOTP counter update")
               }
-      started <- startMfaEnrollment store encryptionKey accountId 100
+      started <- startMfaEnrollment (productionStartEnvironment store 100) accountId
       case started of
         Left _ -> expectationFailure "expected production enrollment start to succeed"
         Right (MfaEnrollmentStart secret) -> do
           (MfaEnrollmentStart secret == MfaEnrollmentStart secret) `shouldBe` True
-          confirmation <- confirmMfaEnrollment defaultPasswordHashingPolicy store encryptionKey 500 123456 accountId (totpCode 123456 secret)
+          confirmation <- confirmMfaEnrollment (productionConfirmationEnvironment store) accountId (totpCode 123456 secret)
           case confirmation of
             Left _ -> expectationFailure "expected production enrollment confirmation to succeed"
             Right confirmed -> do
@@ -247,8 +247,41 @@ confirmationEnvironment generateCode hashCode store =
       mfaConfirmationNowSeconds = 123456
     }
 
+productionStartEnvironment :: MfaStore -> Integer -> MfaEnrollmentEnvironment
+productionStartEnvironment store now =
+  MfaEnrollmentEnvironment
+    { mfaEnrollmentGenerateSecret = generateTotpSecret,
+      mfaEnrollmentEncryptSecret = \key plaintext -> maybeCryptoError <$> encryptSecret key plaintext,
+      mfaEnrollmentStore = store,
+      mfaEnrollmentEncryptionKey = encryptionKey,
+      mfaEnrollmentNowNanoseconds = fromIntegral now
+    }
+
+productionConfirmationEnvironment :: MfaStore -> MfaConfirmationEnvironment
+productionConfirmationEnvironment store =
+  MfaConfirmationEnvironment
+    { mfaConfirmationGenerateCode = generateRecoveryCode,
+      mfaConfirmationHashCode = hashRecoveryCode defaultPasswordHashingPolicy,
+      mfaConfirmationStore = store,
+      mfaConfirmationEncryptionKey = encryptionKey,
+      mfaConfirmationNowNanoseconds = 500,
+      mfaConfirmationNowSeconds = 123456
+    }
+
 accountId :: AccountId
 accountId =
   case mkAccountId "account_01" of
     Just value -> value
     Nothing -> error "expected a valid account id"
+
+startMfaEnrollmentWith :: IO TotpSecret -> (SecretEncryptionKey -> ByteString.ByteString -> IO (Maybe Text.Text)) -> MfaStore -> SecretEncryptionKey -> AccountId -> Integer -> IO (Either MfaEnrollmentError MfaEnrollmentStart)
+startMfaEnrollmentWith generateSecret encrypt store key enrollmentAccountId now =
+  startMfaEnrollment
+    MfaEnrollmentEnvironment
+      { mfaEnrollmentGenerateSecret = generateSecret,
+        mfaEnrollmentEncryptSecret = encrypt,
+        mfaEnrollmentStore = store,
+        mfaEnrollmentEncryptionKey = key,
+        mfaEnrollmentNowNanoseconds = fromIntegral now
+      }
+    enrollmentAccountId

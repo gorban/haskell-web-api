@@ -1,5 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+-- | Account registration and verification workflows.
+--
+-- Decision (FQ6, 2026-08-29): verification persistence/expiry stays in
+-- 'EmailVerificationEnvironment', while mail transport, locale, URL, and
+-- timeout form 'VerificationDeliveryEnvironment'. Registration and resend
+-- therefore share one explicit delivery capability without conflating it
+-- with credential hashing or account storage.
 module WebApi.Account
   ( AccountStore (..),
     AccountStoreError (..),
@@ -12,6 +19,7 @@ module WebApi.Account
     RegistrationDeliveryTimeout,
     PendingAccount (..),
     EmailVerificationEnvironment (..),
+    VerificationDeliveryEnvironment (..),
     RegistrationEnvironment (..),
     RegistrationRequest (..),
     ResendVerificationError (..),
@@ -211,18 +219,23 @@ data RegistrationRequest = RegistrationRequest
   }
 
 -- | The shared dependencies and clock for creating or replacing an email
--- verification token.  Registration and a later resend have the same
--- persistence, delivery, locale, URL, and expiry concerns, so this is one
--- reusable context rather than forcing the resend path to thread them as
--- seven positional inputs.
+-- verification token. Persistence and the clock/expiry belong to this
+-- lifecycle, while delivery itself is a reusable capability record.
 data EmailVerificationEnvironment = EmailVerificationEnvironment
   { verificationStore :: AccountStore,
-    verificationDeliveryTimeout :: RegistrationDeliveryTimeout,
-    verificationDelivery :: EmailDelivery,
-    verificationLocale :: EmailLocale,
-    verificationUrl :: EmailVerificationToken -> Text,
+    verificationDeliveryEnvironment :: VerificationDeliveryEnvironment,
     verificationNow :: UnixTimeNanoseconds,
     verificationLifetime :: Word64
+  }
+
+-- | All stable inputs to rendering and delivering a verification message.
+-- Keeping them together prevents registration and resend from accidentally
+-- pairing a URL or locale with a different mail transport policy.
+data VerificationDeliveryEnvironment = VerificationDeliveryEnvironment
+  { verificationDeliveryTimeout :: RegistrationDeliveryTimeout,
+    verificationDelivery :: EmailDelivery,
+    verificationLocale :: EmailLocale,
+    verificationUrl :: EmailVerificationToken -> Text
   }
 
 -- | The dependencies specific to creating a pending registration.
@@ -282,11 +295,8 @@ registerAccount environment request =
     passwordWorkGate = registrationPasswordWorkGate environment
     storagePolicy = registrationStoragePolicy environment
     verificationEnvironment = registrationVerificationEnvironment environment
-    deliveryTimeout = verificationDeliveryTimeout verificationEnvironment
+    deliveryEnvironment = verificationDeliveryEnvironment verificationEnvironment
     accountStore = verificationStore verificationEnvironment
-    emailDelivery = verificationDelivery verificationEnvironment
-    locale = verificationLocale verificationEnvironment
-    renderVerificationUrl = verificationUrl verificationEnvironment
     now = verificationNow verificationEnvironment
     verificationLifetimeNanoseconds = verificationLifetime verificationEnvironment
     emailAddress = registrationEmail request
@@ -301,7 +311,7 @@ registerAccount environment request =
     -- token persistence.  The application supplies the bounded capacity and
     -- lease policy; see @docs/design-guidance.md@.
     deliverRegistrationVerification claim token = do
-      deliveryResult <- liftIO (deliverVerificationMessage deliveryTimeout emailDelivery locale emailAddress renderVerificationUrl token)
+      deliveryResult <- liftIO (deliverVerificationMessage deliveryEnvironment emailAddress token)
       case deliveryResult of
         Left deliveryFailure -> do
           _ <- liftAccountStore RegistrationStoreError (releasePendingRegistrationDelivery accountStore claim)
@@ -339,13 +349,10 @@ resendEmailVerificationAt verificationEnvironment profile =
     let verification = mkStoredEmailVerification (accountProfileId profile) (accountProfileEmail profile) expiresAt token
     replaced <- liftAccountStore ResendVerificationStoreError (replaceEmailVerification accountStore verification)
     guardError ResendVerificationNoLongerPending replaced
-    deliverVerificationEmail (ResendVerificationDeliveryFailed . renderVerificationDeliveryFailure) deliveryTimeout emailDelivery locale (accountProfileEmail profile) renderVerificationUrl token
+    deliverVerificationEmail (ResendVerificationDeliveryFailed . renderVerificationDeliveryFailure) deliveryEnvironment (accountProfileEmail profile) token
   where
     accountStore = verificationStore verificationEnvironment
-    deliveryTimeout = verificationDeliveryTimeout verificationEnvironment
-    emailDelivery = verificationDelivery verificationEnvironment
-    locale = verificationLocale verificationEnvironment
-    renderVerificationUrl = verificationUrl verificationEnvironment
+    deliveryEnvironment = verificationDeliveryEnvironment verificationEnvironment
     now = verificationNow verificationEnvironment
     verificationLifetimeNanoseconds = verificationLifetime verificationEnvironment
 
@@ -368,32 +375,31 @@ generateRegistrationInputs passwordHasher passwordHashingPolicy password =
 
 deliverVerificationEmail ::
   (VerificationDeliveryFailure -> error) ->
-  RegistrationDeliveryTimeout ->
-  EmailDelivery ->
-  EmailLocale ->
+  VerificationDeliveryEnvironment ->
   EmailAddress ->
-  (EmailVerificationToken -> Text) ->
   EmailVerificationToken ->
   ExceptT error IO ()
-deliverVerificationEmail toError deliveryTimeout emailDelivery locale emailAddress renderVerificationUrl token =
+deliverVerificationEmail toError deliveryEnvironment emailAddress token =
   either (throwError . toError) pure
-    =<< liftIO (deliverVerificationMessage deliveryTimeout emailDelivery locale emailAddress renderVerificationUrl token)
+    =<< liftIO (deliverVerificationMessage deliveryEnvironment emailAddress token)
 
 deliverVerificationMessage ::
-  RegistrationDeliveryTimeout ->
-  EmailDelivery ->
-  EmailLocale ->
+  VerificationDeliveryEnvironment ->
   EmailAddress ->
-  (EmailVerificationToken -> Text) ->
   EmailVerificationToken ->
   IO (Either VerificationDeliveryFailure ())
-deliverVerificationMessage (RegistrationDeliveryTimeout microseconds) emailDelivery locale emailAddress renderVerificationUrl token = do
+deliverVerificationMessage deliveryEnvironment emailAddress token = do
   deliveryResult <- try (timeout microseconds (deliverEmail emailDelivery (verificationEmail locale emailAddress (renderVerificationUrl token)))) :: IO (Either SomeException (Maybe ()))
   pure $
     case deliveryResult of
       Left deliveryFailure -> Left (VerificationDeliveryTransportFailed (Text.pack (displayException deliveryFailure)))
       Right Nothing -> Left VerificationDeliveryTimedOut
       Right (Just ()) -> Right ()
+  where
+    RegistrationDeliveryTimeout microseconds = verificationDeliveryTimeout deliveryEnvironment
+    emailDelivery = verificationDelivery deliveryEnvironment
+    locale = verificationLocale deliveryEnvironment
+    renderVerificationUrl = verificationUrl deliveryEnvironment
 
 renderVerificationDeliveryFailure :: VerificationDeliveryFailure -> Text
 renderVerificationDeliveryFailure deliveryFailure =

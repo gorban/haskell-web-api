@@ -13,6 +13,7 @@ where
 
 import Control.Applicative ((<|>))
 import Control.Monad.IO.Class (liftIO)
+import Crypto.Error (maybeCryptoError)
 import Data.Foldable (toList)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -23,6 +24,7 @@ import HarchWeb.Email qualified as Email
 import HarchWeb.LoginProtection qualified as LoginProtection
 import HarchWeb.Password qualified as Password
 import HarchWeb.RecoveryCode qualified as RecoveryCode
+import HarchWeb.Secret (encryptSecret)
 import HarchWeb.Session
   ( OpaqueSession (..),
     SessionId,
@@ -53,12 +55,16 @@ import WebApi.Login
   ( LoginIdentifier (..),
     LoginThrottleContext (..),
     MfaLoginProof (..),
+    PasswordLoginEnvironment (..),
     PasswordMfaLoginResult (..),
     SecondFactorContext (..),
     completePasswordLoginWithIdentifier,
+    defaultPasswordRehasher,
   )
 import WebApi.MfaEnrollment
-  ( MfaEnrollmentConfirmation (..),
+  ( MfaConfirmationEnvironment (..),
+    MfaEnrollmentConfirmation (..),
+    MfaEnrollmentEnvironment (..),
     MfaEnrollmentError (..),
     MfaEnrollmentStart (..),
     confirmMfaEnrollment,
@@ -152,7 +158,15 @@ startMfaEnrollmentNow accountId = do
   workflow <- accountWorkflow
   liftIO $ do
     now <- accountWorkflowClock workflow
-    startMfaEnrollment (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) accountId now
+    startMfaEnrollment
+      MfaEnrollmentEnvironment
+        { mfaEnrollmentGenerateSecret = Totp.generateTotpSecret,
+          mfaEnrollmentEncryptSecret = \encryptionKey plaintext -> maybeCryptoError <$> encryptSecret encryptionKey plaintext,
+          mfaEnrollmentStore = accountWorkflowMfaStore workflow,
+          mfaEnrollmentEncryptionKey = accountWorkflowTotpEncryptionKey workflow,
+          mfaEnrollmentNowNanoseconds = now
+        }
+      accountId
 
 startMfaAction :: AccountActionRequest -> AppRequestContext -> Account.AccountId -> AccountActionWorkflow
 startMfaAction actionRequest path accountId = do
@@ -176,7 +190,17 @@ confirmMfaEnrollmentNow accountId code = do
   workflow <- accountWorkflow
   liftIO $ do
     now <- accountWorkflowClock workflow
-    confirmMfaEnrollment Password.defaultPasswordHashingPolicy (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) now (accountWorkflowTotpClock workflow now) accountId code
+    confirmMfaEnrollment
+      MfaConfirmationEnvironment
+        { mfaConfirmationGenerateCode = RecoveryCode.generateRecoveryCode,
+          mfaConfirmationHashCode = RecoveryCode.hashRecoveryCode Password.defaultPasswordHashingPolicy,
+          mfaConfirmationStore = accountWorkflowMfaStore workflow,
+          mfaConfirmationEncryptionKey = accountWorkflowTotpEncryptionKey workflow,
+          mfaConfirmationNowNanoseconds = now,
+          mfaConfirmationNowSeconds = accountWorkflowTotpClock workflow now
+        }
+      accountId
+      code
 
 interpretMfaFailure ::
   AccountActionRequest ->
@@ -217,20 +241,24 @@ completePasswordLoginNow identifier passwordValue proof = do
     nowNanoseconds <- accountWorkflowClock workflow
     loginResult <-
       completePasswordLoginWithIdentifier
-        (accountWorkflowCredentialStore workflow)
         SecondFactorContext
-          { secondFactorMfaStore = accountWorkflowMfaStore workflow,
+          { secondFactorPasswordLoginEnvironment =
+              PasswordLoginEnvironment
+                { passwordLoginCredentialStore = accountWorkflowCredentialStore workflow,
+                  passwordLoginMfaStore = accountWorkflowMfaStore workflow,
+                  passwordLoginThrottle =
+                    LoginThrottleContext
+                      { loginThrottleStore = accountWorkflowLoginAttemptStore workflow,
+                        loginThrottlePolicy = LoginProtection.defaultLoginProtectionPolicy,
+                        loginThrottleNow = nowNanoseconds
+                      },
+                  passwordLoginWorkGate = accountWorkflowPasswordWorkGate workflow,
+                  passwordLoginRehasher = defaultPasswordRehasher
+                },
             secondFactorEncryptionKey = accountWorkflowTotpEncryptionKey workflow,
             secondFactorNowNanoseconds = nowNanoseconds,
             secondFactorNowSeconds = accountWorkflowTotpClock workflow nowNanoseconds,
-            secondFactorProof = proof,
-            secondFactorThrottle =
-              LoginThrottleContext
-                { loginThrottleStore = accountWorkflowLoginAttemptStore workflow,
-                  loginThrottlePolicy = LoginProtection.defaultLoginProtectionPolicy,
-                  loginThrottleNow = nowNanoseconds
-                },
-            secondFactorPasswordWorkGate = accountWorkflowPasswordWorkGate workflow
+            secondFactorProof = proof
           }
         identifier
         (Password.mkPassword passwordValue)

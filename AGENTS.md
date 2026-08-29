@@ -98,12 +98,16 @@ SHA, never an abbreviated SHA. In an Actions URL of the form
 only one job within it. For example, in
 `.../runs/33228591158/job/99037055945`, inspect run `33228591158`; do not pass job
 `99037055945` to `gh run view` or infer the commit from the job's displayed PR label. First capture
-the commit with `git rev-parse HEAD`. When the current branch has a PR, also resolve that PR's head
-OID and require it to be the same commit before treating any PR-level output as relevant:
+the commit with `git rev-parse HEAD`. When the current branch has a PR, resolve its URL once and use
+that explicit URL for every later `gh pr` command. This prevents a worktree, detached HEAD, or a
+similarly named branch causing the CLI to select another PR. Also resolve that PR's head OID and
+require it to be the same commit before treating any PR-level output as relevant:
 
 ```sh
 task_sha="$(git rev-parse HEAD)"
-pr_head_sha="$(distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh pr view \
+pr_url="$(distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh pr view \
+  --json url --jq .url)"
+pr_head_sha="$(distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh pr view "$pr_url" \
   --json headRefOid --jq .headRefOid)"
 test "$pr_head_sha" = "$task_sha" || {
   printf 'PR head is %s; expected pushed commit is %s. Do not use gh pr checks yet.\n' \
@@ -115,8 +119,8 @@ test "$pr_head_sha" = "$task_sha" || {
 Skip the PR-head comparison only after establishing that the branch deliberately has no PR. A failed
 `gh pr view` caused by authentication, an unavailable repository, or an invalid working directory is
 not evidence that there is no PR and must be fixed before relying on PR status. If the PR is not the
-current branch's PR, give `gh pr view` its PR number or URL explicitly. Then inspect matching `CI`
-workflow runs with the host GitHub CLI:
+current branch's PR, give the first `gh pr view` its PR number or URL explicitly. Then inspect
+matching `CI` workflow runs with the host GitHub CLI:
 
 ```sh
 distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh run list \
@@ -145,9 +149,19 @@ distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh run view <run-id> \
 Use `gh run view <run-id> --exit-status` as the final command-level success check after inspecting
 the fields above. If the matching run is failed, queued, cancelled, or otherwise not green, use
 `gh run view <run-id>` and `gh run view <run-id> --log-failed` to identify the failed step before
-continuing. Do not start the next task until the current PR head and the exact SHA's required `CI`
-run are green; a truncated local terminal stream, a green PR check for a different head OID, or a
-previous commit's run cannot substitute for that evidence.
+continuing. The exact `CI` run proves this repository's task gate; it does not by itself prove that
+every branch-protection requirement is satisfied. After the head OID check above, also run the
+repository's required-check view against the explicit PR URL:
+
+```sh
+distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh pr checks "$pr_url" --required
+```
+
+Its exit status must be zero and every displayed required check must be green. An empty required-check
+list is a configuration observation, not proof that `CI` ran; retain the exact-SHA workflow evidence
+above. Do not start the next task until the current PR head, the exact SHA's required `CI` run, and
+the required-check view are green. A truncated local terminal stream, a green PR check for a different
+head OID, or a previous commit's run cannot substitute for that evidence.
 
 ## GitHub Actions pin updates
 

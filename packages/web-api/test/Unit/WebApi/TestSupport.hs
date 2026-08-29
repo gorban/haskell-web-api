@@ -160,7 +160,7 @@ import System.Process (callProcess)
 import Test.Hspec (Expectation, expectationFailure)
 import Text.Read (readMaybe)
 import WebApi (buildApp)
-import WebApi.Account (AccountStore (..), AccountStoreError (..), EmailVerificationEnvironment (..), RegistrationEnvironment (..), RegistrationError (..), RegistrationRequest (..), RegistrationResult (..), defaultPendingRegistrationStoragePolicy, defaultRegistrationDeliveryTimeout)
+import WebApi.Account (AccountStore (..), AccountStoreError (..), EmailVerificationEnvironment (..), RegistrationEnvironment (..), RegistrationError (..), RegistrationRequest (..), RegistrationResult (..), VerificationDeliveryEnvironment (..), defaultPendingRegistrationStoragePolicy, defaultRegistrationDeliveryTimeout)
 import WebApi.AccountPages (AccountAction, accountActions)
 import WebApi.Config (AppConfig (..), DatabaseConfig (..), DatabasePoolCapacity, DatabaseTransportSecurity (..), ForwardedHeaderTrust (..), RequestPolicyConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes, mkDatabasePoolCapacity)
 import WebApi.Database (DatabaseError (..), DatabaseResult (..), PageRepository (..), SecondPageData (..))
@@ -545,10 +545,13 @@ registrationEnvironmentAt passwordHasher accountStore emailDelivery now verifica
       registrationVerificationEnvironment =
         EmailVerificationEnvironment
           { verificationStore = accountStore,
-            verificationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
-            verificationDelivery = emailDelivery,
-            verificationLocale = Email.EmailEnglish,
-            verificationUrl = const "https://account.example.test/verify",
+            verificationDeliveryEnvironment =
+              VerificationDeliveryEnvironment
+                { verificationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
+                  verificationDelivery = emailDelivery,
+                  verificationLocale = Email.EmailEnglish,
+                  verificationUrl = const "https://account.example.test/verify"
+                },
             verificationNow = now,
             verificationLifetime = verificationLifetime
           }

@@ -16,15 +16,17 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
 import HarchWeb.Account (accountIdText)
+import HarchWeb.Email (EmailAddress)
 import HarchWeb.LoginProtection (LoginProtectionPolicy (..), defaultLoginProtectionPolicy, loginProtectionLockoutNanoseconds, loginProtectionWindowNanoseconds)
-import HarchWeb.Password (PasswordHash (..), argon2Iterations, argon2MemoryKib, argon2Parallelism, defaultPasswordHashingPolicy, hashPasswordWithSalt, mkPassword, mkPasswordHashingPolicy, mkPasswordWorkBudget, newPasswordWorkGate, passwordHashText, withPasswordWork)
+import HarchWeb.Password (Password, PasswordHash (..), PasswordWorkGate, argon2Iterations, argon2MemoryKib, argon2Parallelism, defaultPasswordHashingPolicy, hashPasswordWithSalt, mkPassword, mkPasswordHashingPolicy, mkPasswordWorkBudget, newPasswordWorkGate, passwordHashText, withPasswordWork)
 import HarchWeb.RecoveryCode (hashRecoveryCodeWithSalt, mkRecoveryCode, recoveryCodeHashText)
 import HarchWeb.Secret (SecretEncryptionKey, encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
 import HarchWeb.Time (unixTimeNanoseconds)
 import HarchWeb.Totp (mkTotpCode, mkTotpSecret, renderTotpSecret, totpCode)
 import HarchWeb.Username (mkUsername)
 import Unit.WebApi.TestSupport (accountId, emailAddress, required, shouldReturnEqual, testPasswordWorkGate)
-import WebApi.Login
+import WebApi.Login hiding (beginPasswordLogin, beginPasswordLoginWithIdentifier, completePasswordLogin, completePasswordLoginWithIdentifier)
+import WebApi.Login qualified as Login
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 
 spec = do
@@ -224,7 +226,7 @@ spec = do
           complete gate store =
             completePasswordLogin
               (credentialStore (Right (Just verifiedCredential)))
-              ((secondFactorContextFor store (RecoveryCodeLoginProof recoveryCode)) {secondFactorPasswordWorkGate = gate})
+              (withSecondFactorWorkGate gate (secondFactorContextFor store (RecoveryCodeLoginProof recoveryCode)))
               emailAddress
               (mkPassword "correct horse battery staple")
           completeContext secondFactorContext =
@@ -249,10 +251,9 @@ spec = do
                     }
               }
           racedContext =
-            (secondFactorContextFor racedRecoveryStore (RecoveryCodeLoginProof recoveryCode))
-              { secondFactorPasswordWorkGate = testPasswordWorkGate,
-                secondFactorThrottle = settlingThrottle
-              }
+            withSecondFactorThrottle
+              settlingThrottle
+              (withSecondFactorWorkGate testPasswordWorkGate (secondFactorContextFor racedRecoveryStore (RecoveryCodeLoginProof recoveryCode)))
       completeContext racedContext
         `shouldReturnEqual` PasswordMfaLoginRejected
       readIORef consumptionAttempted `shouldReturn` True
@@ -394,7 +395,7 @@ spec = do
           knownCredentialStore = credentialStore (Right (Just verifiedCredential))
       beginPasswordLogin knownCredentialStore unexpectedMfaStore (throttledStoreFor ("account:" <> accountIdText accountId)) testPasswordWorkGate emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordLoginThrottled expectedLockoutEnd
-      completePasswordLogin knownCredentialStore ((secondFactorContextFor unexpectedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456")))) {secondFactorThrottle = throttledStoreFor ("account:" <> accountIdText accountId)}) emailAddress (mkPassword "irrelevant")
+      completePasswordLogin knownCredentialStore (withSecondFactorThrottle (throttledStoreFor ("account:" <> accountIdText accountId)) (secondFactorContextFor unexpectedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456"))))) emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordMfaLoginThrottled expectedLockoutEnd
       let recoveryContext =
             -- 'confirmedMfaStore' lets the password step's and the second-factor
@@ -402,9 +403,7 @@ spec = do
             -- before 'completeRecoveryCode' can even run), while its recovery-code
             -- methods still error out — proving the throttle short-circuits before
             -- the KDF-heavy recovery-code hash comparison this test is guarding.
-            (secondFactorContextFor confirmedMfaStore (RecoveryCodeLoginProof (required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123"))))
-              { secondFactorThrottle = throttledStoreFor ("mfa:" <> accountIdText accountId)
-              }
+            withSecondFactorThrottle (throttledStoreFor ("mfa:" <> accountIdText accountId)) (secondFactorContextFor confirmedMfaStore (RecoveryCodeLoginProof (required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123"))))
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) recoveryContext emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginThrottled expectedLockoutEnd
 
@@ -484,7 +483,7 @@ spec = do
           knownCredentialStore = credentialStore (Right (Just verifiedCredential))
       beginPasswordLogin knownCredentialStore unexpectedMfaStore failingThrottle testPasswordWorkGate emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordLoginAttemptStoreError (LoginAttemptStoreUnavailable "database unavailable")
-      completePasswordLogin knownCredentialStore ((secondFactorContextFor unexpectedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456")))) {secondFactorThrottle = failingThrottle}) emailAddress (mkPassword "irrelevant")
+      completePasswordLogin knownCredentialStore (withSecondFactorThrottle failingThrottle (secondFactorContextFor unexpectedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456"))))) emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordMfaLoginAttemptStoreError (LoginAttemptStoreUnavailable "database unavailable")
 
     it "does not reserve before a typed credential failure and returns cleanup or settlement errors for admitted work" $ do
@@ -758,9 +757,7 @@ spec = do
           -- methods still error out, proving the throttle store's own failure
           -- is what stops 'completeRecoveryCode' before any hash comparison.
           recoveryContext =
-            (secondFactorContextFor confirmedMfaStore (RecoveryCodeLoginProof (required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123"))))
-              { secondFactorThrottle = recoveryFailingThrottle
-              }
+            withSecondFactorThrottle recoveryFailingThrottle (secondFactorContextFor confirmedMfaStore (RecoveryCodeLoginProof (required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123"))))
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) recoveryContext emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginAttemptStoreError (LoginAttemptStoreUnavailable "recovery throttle store down")
 
@@ -779,9 +776,7 @@ spec = do
                 loginThrottleNow = 500
               }
           totpContext =
-            (secondFactorContextFor confirmedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456"))))
-              { secondFactorThrottle = exhaustedTotpThrottle
-              }
+            withSecondFactorThrottle exhaustedTotpThrottle (secondFactorContextFor confirmedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456"))))
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) totpContext emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginThrottled expectedLockoutEnd
 
@@ -799,9 +794,7 @@ spec = do
                 loginThrottleNow = 500
               }
           totpContext =
-            (secondFactorContextFor confirmedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456"))))
-              { secondFactorThrottle = failingTotpThrottle
-              }
+            withSecondFactorThrottle failingTotpThrottle (secondFactorContextFor confirmedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456"))))
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) totpContext emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginAttemptStoreError (LoginAttemptStoreUnavailable "TOTP throttle store down")
 
@@ -836,7 +829,7 @@ spec = do
           complete store proof =
             completePasswordLogin
               (credentialStore (Right (Just verifiedCredential)))
-              ((secondFactorContextFor store proof) {secondFactorThrottle = recordingThrottle})
+              (withSecondFactorThrottle recordingThrottle (secondFactorContextFor store proof))
               emailAddress
               (mkPassword "correct horse battery staple")
       complete totpStore (TotpLoginProof (required "invalid TOTP code" (mkTotpCode "000000")))
@@ -878,7 +871,7 @@ spec = do
           complete store =
             completePasswordLogin
               (credentialStore (Right (Just verifiedCredential)))
-              ((secondFactorContextFor store (RecoveryCodeLoginProof recoveryCode)) {secondFactorThrottle = recordingThrottle})
+              (withSecondFactorThrottle recordingThrottle (secondFactorContextFor store (RecoveryCodeLoginProof recoveryCode)))
               emailAddress
               (mkPassword "correct horse battery staple")
       complete (recoveryStore [recoveryCodeHashText recoveryCodeHash])
@@ -935,9 +928,9 @@ spec = do
           password = mkPassword "correct horse battery staple"
       beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore failingThrottle testPasswordWorkGate emailAddress password
         `shouldReturnEqual` PasswordLoginAttemptStoreError settlementFailure
-      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) ((secondFactorContextFor totpStore (TotpLoginProof (totpCode 123456 secret))) {secondFactorThrottle = secondFactorSettlementFailure}) emailAddress password
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (withSecondFactorThrottle secondFactorSettlementFailure (secondFactorContextFor totpStore (TotpLoginProof (totpCode 123456 secret)))) emailAddress password
         `shouldReturnEqual` PasswordMfaLoginAttemptStoreError settlementFailure
-      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) ((secondFactorContextFor recoveryStore (RecoveryCodeLoginProof recoveryCode)) {secondFactorThrottle = secondFactorSettlementFailure}) emailAddress password
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (withSecondFactorThrottle secondFactorSettlementFailure (secondFactorContextFor recoveryStore (RecoveryCodeLoginProof recoveryCode))) emailAddress password
         `shouldReturnEqual` PasswordMfaLoginAttemptStoreError settlementFailure
 
 credentialStore :: Either AccountCredentialStoreError (Maybe AccountCredential) -> AccountCredentialStore
@@ -1008,13 +1001,70 @@ encryptionKey = required "encryption key" (mkSecretEncryptionKey "AAAAAAAAAAAAAA
 secondFactorContextFor :: MfaStore -> MfaLoginProof -> SecondFactorContext
 secondFactorContextFor mfaStoreValue proof =
   SecondFactorContext
-    { secondFactorMfaStore = mfaStoreValue,
+    { secondFactorPasswordLoginEnvironment =
+        passwordLoginEnvironment
+          (credentialStore (Left (AccountCredentialStoreUnavailable "context credential store is replaced by the test wrapper")))
+          mfaStoreValue
+          permissiveThrottle
+          testPasswordWorkGate
+          defaultPasswordRehasher,
       secondFactorEncryptionKey = encryptionKey,
       secondFactorNowNanoseconds = 500,
       secondFactorNowSeconds = 123456,
-      secondFactorProof = proof,
-      secondFactorThrottle = permissiveThrottle,
-      secondFactorPasswordWorkGate = testPasswordWorkGate
+      secondFactorProof = proof
+    }
+
+passwordLoginEnvironment :: AccountCredentialStore -> MfaStore -> LoginThrottleContext -> PasswordWorkGate -> PasswordRehasher -> PasswordLoginEnvironment
+passwordLoginEnvironment credentialStoreValue mfaStoreValue throttle workGate rehasher =
+  PasswordLoginEnvironment
+    { passwordLoginCredentialStore = credentialStoreValue,
+      passwordLoginMfaStore = mfaStoreValue,
+      passwordLoginThrottle = throttle,
+      passwordLoginWorkGate = workGate,
+      passwordLoginRehasher = rehasher
+    }
+
+beginPasswordLogin :: AccountCredentialStore -> MfaStore -> LoginThrottleContext -> PasswordWorkGate -> EmailAddress -> Password -> IO PasswordLoginResult
+beginPasswordLogin credentialStoreValue mfaStoreValue throttle workGate =
+  Login.beginPasswordLogin (passwordLoginEnvironment credentialStoreValue mfaStoreValue throttle workGate defaultPasswordRehasher)
+
+beginPasswordLoginWithIdentifier :: AccountCredentialStore -> MfaStore -> LoginThrottleContext -> PasswordWorkGate -> LoginIdentifier -> Password -> IO PasswordLoginResult
+beginPasswordLoginWithIdentifier credentialStoreValue mfaStoreValue throttle workGate =
+  Login.beginPasswordLoginWithIdentifier (passwordLoginEnvironment credentialStoreValue mfaStoreValue throttle workGate defaultPasswordRehasher)
+
+beginPasswordLoginWithIdentifierAndRehasher :: PasswordRehasher -> AccountCredentialStore -> MfaStore -> LoginThrottleContext -> PasswordWorkGate -> LoginIdentifier -> Password -> IO PasswordLoginResult
+beginPasswordLoginWithIdentifierAndRehasher rehasher credentialStoreValue mfaStoreValue throttle workGate =
+  Login.beginPasswordLoginWithIdentifier (passwordLoginEnvironment credentialStoreValue mfaStoreValue throttle workGate rehasher)
+
+completePasswordLogin :: AccountCredentialStore -> SecondFactorContext -> EmailAddress -> Password -> IO PasswordMfaLoginResult
+completePasswordLogin credentialStoreValue secondFactorContext =
+  Login.completePasswordLogin (withCredentialStore credentialStoreValue secondFactorContext)
+
+withCredentialStore :: AccountCredentialStore -> SecondFactorContext -> SecondFactorContext
+withCredentialStore credentialStoreValue secondFactorContext =
+  secondFactorContext
+    { secondFactorPasswordLoginEnvironment =
+        (secondFactorPasswordLoginEnvironment secondFactorContext)
+          { passwordLoginCredentialStore = credentialStoreValue
+          }
+    }
+
+withSecondFactorThrottle :: LoginThrottleContext -> SecondFactorContext -> SecondFactorContext
+withSecondFactorThrottle throttle secondFactorContext =
+  secondFactorContext
+    { secondFactorPasswordLoginEnvironment =
+        (secondFactorPasswordLoginEnvironment secondFactorContext)
+          { passwordLoginThrottle = throttle
+          }
+    }
+
+withSecondFactorWorkGate :: PasswordWorkGate -> SecondFactorContext -> SecondFactorContext
+withSecondFactorWorkGate workGate secondFactorContext =
+  secondFactorContext
+    { secondFactorPasswordLoginEnvironment =
+        (secondFactorPasswordLoginEnvironment secondFactorContext)
+          { passwordLoginWorkGate = workGate
+          }
     }
 
 -- | Never denies an attempt and always settles or cancels successfully. Used

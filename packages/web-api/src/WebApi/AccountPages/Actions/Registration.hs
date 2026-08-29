@@ -40,6 +40,7 @@ import WebApi.Account
     RegistrationError (..),
     RegistrationRequest (..),
     RegistrationResult (..),
+    VerificationDeliveryEnvironment (..),
     VerificationDeliveryFailure (..),
     confirmEmailVerificationAt,
     defaultPendingRegistrationStoragePolicy,
@@ -109,10 +110,13 @@ registerAccountNow actionRequest (_, _, displayNameValue, passwordValue, usernam
           registrationVerificationEnvironment =
             EmailVerificationEnvironment
               { verificationStore = accountWorkflowStore workflow,
-                verificationDeliveryTimeout = accountWorkflowRegistrationDeliveryTimeout workflow,
-                verificationDelivery = accountWorkflowEmailDelivery workflow,
-                verificationLocale = emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)),
-                verificationUrl = accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest),
+                verificationDeliveryEnvironment =
+                  VerificationDeliveryEnvironment
+                    { verificationDeliveryTimeout = accountWorkflowRegistrationDeliveryTimeout workflow,
+                      verificationDelivery = accountWorkflowEmailDelivery workflow,
+                      verificationLocale = emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)),
+                      verificationUrl = accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest)
+                    },
                 verificationNow = now,
                 verificationLifetime = emailVerificationLifetimeNanoseconds
               }

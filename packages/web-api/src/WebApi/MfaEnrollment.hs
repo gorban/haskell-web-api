@@ -1,12 +1,18 @@
+-- | MFA enrollment workflows.
+--
+-- Decision (FQ6, 2026-08-29): start and confirmation accept explicit
+-- environment records. This retains one effect interpretation per workflow,
+-- makes production cryptographic dependencies visible at construction, and
+-- gives deterministic tests the same path rather than a parallel protocol.
 module WebApi.MfaEnrollment
   ( MfaConfirmationEnvironment (..),
+    MfaEnrollmentEnvironment (..),
     MfaEnrollmentConfirmation (..),
     MfaEnrollmentError (..),
     MfaEnrollmentStart (..),
     confirmMfaEnrollment,
     confirmMfaEnrollmentWith,
     startMfaEnrollment,
-    startMfaEnrollmentWith,
   )
 where
 
@@ -19,20 +25,16 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Account (AccountId)
-import HarchWeb.Password (PasswordHashingPolicy)
 import HarchWeb.RecoveryCode
   ( RecoveryCode,
     RecoveryCodeHash,
-    generateRecoveryCode,
-    hashRecoveryCode,
     recoveryCodeHashText,
   )
-import HarchWeb.Secret (SecretEncryptionKey, decryptSecretText, encryptSecret)
+import HarchWeb.Secret (SecretEncryptionKey, decryptSecretText)
 import HarchWeb.Time (UnixTimeNanoseconds, UnixTimeSeconds)
 import HarchWeb.Totp
   ( TotpCode,
     TotpSecret,
-    generateTotpSecret,
     mkTotpSecret,
     renderTotpSecret,
     validateTotpCode,
@@ -64,19 +66,19 @@ newtype MfaEnrollmentConfirmation = MfaEnrollmentConfirmation
   }
   deriving (Eq)
 
-startMfaEnrollment :: MfaStore -> SecretEncryptionKey -> AccountId -> UnixTimeNanoseconds -> IO (Either MfaEnrollmentError MfaEnrollmentStart)
-startMfaEnrollment =
-  startMfaEnrollmentWith generateTotpSecret (\encryptionKey plaintext -> maybeCryptoError <$> encryptSecret encryptionKey plaintext)
+-- | Invariant dependencies of a start attempt. Production callers use
+-- 'generateTotpSecret' and 'encryptSecret'; tests supply the same record with
+-- deterministic effects, rather than a second positional API.
+data MfaEnrollmentEnvironment = MfaEnrollmentEnvironment
+  { mfaEnrollmentGenerateSecret :: IO TotpSecret,
+    mfaEnrollmentEncryptSecret :: SecretEncryptionKey -> ByteString.ByteString -> IO (Maybe Text),
+    mfaEnrollmentStore :: MfaStore,
+    mfaEnrollmentEncryptionKey :: SecretEncryptionKey,
+    mfaEnrollmentNowNanoseconds :: UnixTimeNanoseconds
+  }
 
-startMfaEnrollmentWith ::
-  IO TotpSecret ->
-  (SecretEncryptionKey -> ByteString.ByteString -> IO (Maybe Text)) ->
-  MfaStore ->
-  SecretEncryptionKey ->
-  AccountId ->
-  UnixTimeNanoseconds ->
-  IO (Either MfaEnrollmentError MfaEnrollmentStart)
-startMfaEnrollmentWith generateSecret encrypt mfaStore encryptionKey accountId now =
+startMfaEnrollment :: MfaEnrollmentEnvironment -> AccountId -> IO (Either MfaEnrollmentError MfaEnrollmentStart)
+startMfaEnrollment environment accountId =
   runExceptT $ do
     (secret, encryptedSecret) <-
       liftMaybeWith
@@ -85,6 +87,12 @@ startMfaEnrollmentWith generateSecret encrypt mfaStore encryptionKey accountId n
     saved <- liftMfaStore (saveUnconfirmedTotpEnrollment mfaStore accountId encryptedSecret now)
     guardError MfaEnrollmentAccountIsNotEligible saved
     pure (MfaEnrollmentStart secret)
+  where
+    generateSecret = mfaEnrollmentGenerateSecret environment
+    encrypt = mfaEnrollmentEncryptSecret environment
+    mfaStore = mfaEnrollmentStore environment
+    encryptionKey = mfaEnrollmentEncryptionKey environment
+    now = mfaEnrollmentNowNanoseconds environment
 
 generateEncryptedSecret ::
   IO TotpSecret ->
@@ -115,31 +123,11 @@ data MfaConfirmationEnvironment = MfaConfirmationEnvironment
   }
 
 confirmMfaEnrollment ::
-  PasswordHashingPolicy ->
-  MfaStore ->
-  SecretEncryptionKey ->
-  UnixTimeNanoseconds ->
-  UnixTimeSeconds ->
-  AccountId ->
-  TotpCode ->
-  IO (Either MfaEnrollmentError MfaEnrollmentConfirmation)
-confirmMfaEnrollment passwordHashingPolicy mfaStore encryptionKey nowNanoseconds nowSeconds =
-  confirmMfaEnrollmentWith
-    MfaConfirmationEnvironment
-      { mfaConfirmationGenerateCode = generateRecoveryCode,
-        mfaConfirmationHashCode = hashRecoveryCode passwordHashingPolicy,
-        mfaConfirmationStore = mfaStore,
-        mfaConfirmationEncryptionKey = encryptionKey,
-        mfaConfirmationNowNanoseconds = nowNanoseconds,
-        mfaConfirmationNowSeconds = nowSeconds
-      }
-
-confirmMfaEnrollmentWith ::
   MfaConfirmationEnvironment ->
   AccountId ->
   TotpCode ->
   IO (Either MfaEnrollmentError MfaEnrollmentConfirmation)
-confirmMfaEnrollmentWith environment accountId suppliedCode =
+confirmMfaEnrollment environment accountId suppliedCode =
   runExceptT $ do
     enrollment <-
       liftMfaStore (loadTotpEnrollment mfaStore accountId)
@@ -162,6 +150,15 @@ confirmMfaEnrollmentWith environment accountId suppliedCode =
     hashGeneratedRecoveryCode recoveryCode =
       recoveryCodeHashText
         <$> liftMaybeWith MfaEnrollmentRecoveryCodeHashingFailed (hashCode recoveryCode)
+
+-- | Compatibility spelling for adapters that already carry a confirmation
+-- environment. It has the same record-first shape as 'confirmMfaEnrollment'.
+confirmMfaEnrollmentWith ::
+  MfaConfirmationEnvironment ->
+  AccountId ->
+  TotpCode ->
+  IO (Either MfaEnrollmentError MfaEnrollmentConfirmation)
+confirmMfaEnrollmentWith = confirmMfaEnrollment
 
 liftMfaStore :: IO (Either MfaStoreError value) -> ExceptT MfaEnrollmentError IO value
 liftMfaStore = liftEitherWith MfaEnrollmentStoreError

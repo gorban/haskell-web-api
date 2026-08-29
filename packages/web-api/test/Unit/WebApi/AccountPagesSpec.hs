@@ -41,7 +41,7 @@ import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.AppEffect qualified as AppEffect
 import WebApi.Config (AppEnvironmentConfig (..), defaultAppConfig, defaultAppEnvironmentConfig)
 import WebApi.Database (defaultPageRepository)
-import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..), LoginAttemptAdmission (..), LoginAttemptReservation (..), LoginAttemptStore (..), LoginAttemptStoreError (..), LoginIdentifier (..), PasswordLoginResult (..), beginPasswordLoginWithIdentifier)
+import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..), LoginAttemptAdmission (..), LoginAttemptReservation (..), LoginAttemptStore (..), LoginAttemptStoreError (..), LoginIdentifier (..), PasswordLoginEnvironment (..), PasswordLoginResult (..), beginPasswordLoginWithIdentifier, defaultPasswordRehasher)
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), ProfilePageModel (..), SignedOutProfilePageDetails (..), buildPageModelFromRouteData, renderPageFromRouteData)
@@ -1283,10 +1283,13 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
       usernameLoginResult <-
         beginPasswordLoginWithIdentifier
-          (accountWorkflowCredentialStore validWorkflow)
-          (accountWorkflowMfaStore validWorkflow)
-          (permissiveLoginThrottleContext 500)
-          (accountWorkflowPasswordWorkGate validWorkflow)
+          PasswordLoginEnvironment
+            { passwordLoginCredentialStore = accountWorkflowCredentialStore validWorkflow,
+              passwordLoginMfaStore = accountWorkflowMfaStore validWorkflow,
+              passwordLoginThrottle = permissiveLoginThrottleContext 500,
+              passwordLoginWorkGate = accountWorkflowPasswordWorkGate validWorkflow,
+              passwordLoginRehasher = defaultPasswordRehasher
+            }
           (LoginUsername (fromMaybe (error "expected valid username") (Username.mkUsername "person_01")))
           password
       case usernameLoginResult of

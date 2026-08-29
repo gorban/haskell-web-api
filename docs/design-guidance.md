@@ -1351,6 +1351,27 @@ decoding. This is deliberate defence against an old or manually altered table sh
 tests cover both malformed wire values and preserve the existing proofs for every post-BEGIN
 failure, including `COMMIT`.
 
+### Decision record — FQ6: one explicit login environment across password and MFA stages (2026-08-29)
+
+**Decision: split the existing `WebApi.Login` implementation by stable lifecycle responsibility,
+while retaining its public facade and one authentication protocol.** Password credential lookup,
+constant-work verification, and opportunistic rehashing form one stage; MFA proof and reservation
+settlement form the next; the existing reservation-admission helper remains their shared lifecycle
+owner. A `PasswordLoginEnvironment` therefore groups the credential store, MFA store, throttle,
+password-work gate, and injectable rehasher once. `SecondFactorContext` nests that same environment
+alongside the per-attempt proof, encryption key, and operation time, so a password and second-factor
+attempt cannot accidentally use divergent stores, clocks, or admission policy.
+
+This extends the existing account workflow boundary rather than creating an alternate login service
+or an application-local authentication wrapper. `WebApi.Login` stays the consumer-facing facade;
+private password, attempt, and MFA collaborators separate the owned stages without widening the
+framework surface. The same input-record rule applies to MFA enrollment and verification delivery:
+their existing workflow contexts become the public entry points, while response builders derive
+locale and request context from the one action request rather than accepting independently
+transposable copies. The changes are a deliberate API cleanup, not a metric-only relocation; focused
+workflow regressions and the full coverage gate must preserve the present authentication, throttling,
+rehash, and session-enrollment behavior.
+
 ### Follow-up decision — AY: add `connect_timeout` now, defer a hard TLS default until a deployment decision (2026-08-21)
 
 **Decision: implement `DATABASE_CONNECT_TIMEOUT_SECONDS`/`connect_timeout` unconditionally, but do
