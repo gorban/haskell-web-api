@@ -1,6 +1,6 @@
-# ADR-AY: Require authenticated PostgreSQL transport
+# ADR-AY: Configurable PostgreSQL transport security
 
-- Status: **Implemented and verified**
+- Status: **Implemented and verified — configurable policy; unset preserves libpq defaults**
 - Task: [AY — PostgreSQL connection lifecycle and transport](../../TASKS/pr-3-correctness-and-security-defects.md)
 - Date: 2026-08-26
 
@@ -14,7 +14,8 @@ CI use a stock PostgreSQL 17 container with TLS disabled. The application cannot
 transport until deployment provisions server certificates and client trust configuration.
 
 Decision made: expose a closed configuration representation of libpq's supported `sslmode` values.
-When no mode is configured, omit the TLS parameters and preserve libpq's own default. A deployment
+When no mode is configured, omit the TLS parameters and preserve libpq's own default; this is not an
+application guarantee of authenticated transport. A deployment
 that needs authenticated TLS selects `verify-full` and supplies a root certificate either explicitly
 or through libpq's default location; a deployment that selects `require` makes the weaker,
 encryption-only choice explicit.
@@ -140,5 +141,7 @@ the corresponding documented `PGSSLMODE`/`PGSSLROOTCERT` environment variables. 
    and TLS-disabled failure. It verifies deployment provisioning, not configuration parsing.
 6. Run the complete CI-equivalent and module-health gates before committing and pushing.
 
-The configuration and real transport proof are complete. AY closes after the normal repository
+The configurable transport implementation and its strict-mode real transport proof are complete. AY
+does not make omitted configuration authenticated or fail closed; a secure-by-default change requires
+its own architectural decision. AY closes after the normal repository
 gates, commit, push, and green CI evidence.

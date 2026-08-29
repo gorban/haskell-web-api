@@ -109,7 +109,8 @@ test prerequisites. The supported PostgreSQL major version is currently 17.
 ## PostgreSQL transport policy
 
 The application emits no `sslmode` or `sslrootcert` conninfo value when `DATABASE_SSL_MODE` is unset,
-so libpq retains its documented defaults. Set `DATABASE_SSL_MODE=verify-full` and provide
+so libpq retains its documented defaults; unset is not an application guarantee of TLS or server
+authentication. Set `DATABASE_SSL_MODE=verify-full` and provide
 `DATABASE_SSL_ROOT_CERT` (or configure libpq's default root-certificate location) for authenticated
 server TLS; the configured `DATABASE_HOST` must match the server certificate. `require` encrypts but
 does not authenticate the server, while `prefer` can fall back to plaintext. Use those weaker modes
