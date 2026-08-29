@@ -46,7 +46,7 @@ check_test_module_metadata() {
         source_path=${source_path#"$source_directory"/}
         source_path=${source_path%.hs}
         printf '%s\n' "${source_path//\//.}"
-      done < <(rg --files "$source_directory" -g '*.hs' | rg -v '/Main\.hs$')
+      done < <(find "$source_directory" -type f -name '*.hs' -print | grep -v '/Main\.hs$')
     done | LC_ALL=C sort -u
   )"
   local declared_modules
