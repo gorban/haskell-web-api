@@ -25,7 +25,7 @@ if [ "$format_root" = "$repo_root" ]; then
   "$repo_root/tools/test-formatting-checks.sh"
 fi
 
-required_commands=(cabal-gild hlint ormolu dos2unix)
+required_commands=(cabal-gild hlint ormolu)
 missing_commands=()
 
 for command_name in "${required_commands[@]}"; do
@@ -107,7 +107,11 @@ for cabal_file in "${cabal_files[@]}"; do
 done
 
 for haskell_file in "${haskell_files[@]}"; do
-  dos2unix -q "$haskell_file"
+  if LC_ALL=C grep -q $'\r' "$haskell_file"; then
+    printf '%s: CR byte found; use LF line endings.\n' "$haskell_file"
+    format_ok=1
+    continue
+  fi
   output="$(hlint --language=ImportQualifiedPost "$haskell_file" 2>&1)" || {
     printf '%s\n' "$output"
     format_ok=1
