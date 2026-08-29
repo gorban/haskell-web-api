@@ -90,4 +90,14 @@ using a different Ormolu version is not CI-equivalent and must not justify a pus
 commands sequentially and push only after every one has completed successfully; do not assume a
 format-only change is exempt from the formatter check.
 
+# Post-push GitHub Actions verification
+
+After pushing a task-sized commit, verify the GitHub Actions run for the exact full commit SHA, never
+an abbreviated SHA. First capture it with `git rev-parse HEAD`, then inspect the matching run with the
+host GitHub CLI. A missing result from a short-SHA filter is not evidence that no run exists. If the
+matching run is failed, queued, cancelled, or otherwise not green, use `gh run view <run-id>` and
+`gh run view <run-id> --log-failed` to identify the failed step before continuing. Do not start the
+next task until the exact SHA's CI run is green; a truncated local terminal stream or a previous
+commit's run cannot substitute for that evidence.
+
 📦

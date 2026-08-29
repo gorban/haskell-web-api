@@ -6,6 +6,7 @@
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (AsyncException (ThreadKilled), ErrorCall (..), SomeException, evaluate, throwTo, try)
+import Control.Monad (replicateM_, when)
 import Crypto.Error (CryptoFailable, maybeCryptoError)
 import Data.ByteString qualified as ByteString
 import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
@@ -642,15 +643,24 @@ spec = do
 
     it "shares one concurrent password-failure budget across email and username aliases of a resolved account" $ do
       admittedCountReference <- newIORef (0 :: Word64)
-      admittedKeysReference <- newIORef []
-      passwordWorkGate <- newPasswordWorkGate (required "concurrent password-work budget" (mkPasswordWorkBudget 48))
+      reservedKeysReference <- newIORef []
+      lookupCountReference <- newIORef (0 :: Int)
+      allLookupsStarted <- newEmptyMVar
+      releaseLookups <- newEmptyMVar
       let expectedKey = "account:" <> accountIdText accountId
           username = required "username" (mkUsername "person_01")
           aliasCredential = AccountCredential accountId concurrentPasswordHash True
+          awaitConcurrentLookup = do
+            isLastLookup <-
+              atomicModifyIORef' lookupCountReference $ \count ->
+                let nextCount = count + 1
+                 in (nextCount, nextCount == 6)
+            when isLastLookup (putMVar allLookupsStarted ())
+            takeMVar releaseLookups
           aliasCredentialStore =
             AccountCredentialStore
-              { findAccountCredentialByEmail = \_ -> pure (Right (Just aliasCredential)),
-                findAccountCredentialByUsername = \_ -> pure (Right (Just aliasCredential)),
+              { findAccountCredentialByEmail = \_ -> awaitConcurrentLookup >> pure (Right (Just aliasCredential)),
+                findAccountCredentialByUsername = \_ -> awaitConcurrentLookup >> pure (Right (Just aliasCredential)),
                 replacePasswordHashIfCurrent = \_ _ _ -> error "unexpected password-hash replacement for a rejected password"
               }
           sharedThrottle =
@@ -658,19 +668,25 @@ spec = do
               { loginThrottleStore =
                   LoginAttemptStore
                     { reserveLoginAttempt = \key policy now ->
-                        atomicModifyIORef' admittedCountReference $ \count ->
-                          if count < loginProtectionMaximumFailures policy
-                            then
-                              ( count + 1,
-                                Right (LoginAttemptReserved (LoginAttemptReservation key))
-                              )
-                            else
-                              ( count,
-                                Right (LoginAttemptThrottled (now + fromIntegral (loginProtectionLockoutNanoseconds policy)))
-                              ),
-                      settleLoginAttempt = \reservation succeeded -> do
-                        modifyIORef' admittedKeysReference ((showReservation reservation, succeeded) :)
-                        pure (Right ()),
+                        do
+                          admission <-
+                            atomicModifyIORef' admittedCountReference $ \count ->
+                              if count < loginProtectionMaximumFailures policy
+                                then
+                                  ( count + 1,
+                                    LoginAttemptReserved (LoginAttemptReservation key)
+                                  )
+                                else
+                                  ( count,
+                                    LoginAttemptThrottled (now + fromIntegral (loginProtectionLockoutNanoseconds policy))
+                                  )
+                          case admission of
+                            LoginAttemptReserved reservation -> do
+                              atomicModifyIORef' reservedKeysReference $ \keys ->
+                                (showReservation reservation : keys, ())
+                              pure (Right admission)
+                            LoginAttemptThrottled _ -> pure (Right admission),
+                      settleLoginAttempt = \_ _ -> pure (Right ()),
                       cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
@@ -678,7 +694,7 @@ spec = do
               }
           startAttempt identifier resultSlot =
             forkIO $
-              beginPasswordLoginWithIdentifier aliasCredentialStore unexpectedMfaStore sharedThrottle passwordWorkGate identifier (mkPassword "incorrect password")
+              beginPasswordLoginWithIdentifier aliasCredentialStore unexpectedMfaStore sharedThrottle testPasswordWorkGate identifier (mkPassword "incorrect password")
                 >>= putMVar resultSlot
       resultSlots <- sequence [newEmptyMVar, newEmptyMVar, newEmptyMVar, newEmptyMVar, newEmptyMVar, newEmptyMVar]
       sequence_
@@ -689,15 +705,17 @@ spec = do
         [ startAttempt (LoginUsername username) resultSlot
         | resultSlot <- drop 3 resultSlots
         ]
+      takeMVar allLookupsStarted
+      replicateM_ 6 (putMVar releaseLookups ())
       results <- traverse takeMVar resultSlots
       admittedCount <- readIORef admittedCountReference
-      admittedKeys <- fmap fst <$> readIORef admittedKeysReference
+      reservedKeys <- readIORef reservedKeysReference
       let throttledCount = length [() | PasswordLoginThrottled _ <- results]
       expectAll
         ( (admittedCount `shouldBe` loginProtectionMaximumFailures defaultLoginProtectionPolicy)
             :| [ throttledCount `shouldBe` 1,
-                 all (== expectedKey) admittedKeys `shouldBe` True,
-                 length admittedKeys `shouldBe` fromIntegral (loginProtectionMaximumFailures defaultLoginProtectionPolicy)
+                 all (== expectedKey) reservedKeys `shouldBe` True,
+                 length reservedKeys `shouldBe` fromIntegral (loginProtectionMaximumFailures defaultLoginProtectionPolicy)
                ]
         )
 
@@ -945,8 +963,9 @@ passwordHash = required "password hash" (hashPasswordWithSalt defaultPasswordHas
 -- | This focused concurrency proof must not compete for the process-wide test
 -- gate with unrelated specs. It still uses a valid Argon2id hash so each
 -- admitted alias attempt follows the production verification and settlement
--- path; the small work factor keeps all five permitted attempts inside its
--- dedicated 48 KiB gate.
+-- path. Its dedicated concurrent-lookup barrier controls only when aliases
+-- reach admission; the process-wide test work gate keeps that proof from
+-- accidentally asserting an unrelated resource-admission race.
 concurrentPasswordHash :: PasswordHash
 concurrentPasswordHash =
   required
