@@ -101,17 +101,28 @@ only one job within it. For example, in
 the commit with `git rev-parse HEAD`. When the current branch has a PR, resolve its URL once and use
 that explicit URL for every later `gh pr` command. This prevents a worktree, detached HEAD, or a
 similarly named branch causing the CLI to select another PR. Also resolve that PR's head OID and
-require it to be the same commit before treating any PR-level output as relevant:
+require it to be the same commit before treating any PR-level output as relevant. Check the GitHub
+repository identity and that the PR remains open as well: a successful CLI command against a fork or
+a closed PR is not merge evidence for this repository.
 
 ```sh
 task_sha="$(git rev-parse HEAD)"
+repo_name="$(distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh repo view \
+  --json nameWithOwner --jq .nameWithOwner)"
+test "$repo_name" = gorban/haskell-web-api || {
+  printf 'GitHub CLI selected %s, not gorban/haskell-web-api. Stop and fix repository selection.\n' \
+    "$repo_name" >&2
+  exit 1
+}
 pr_url="$(distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh pr view \
   --json url --jq .url)"
 pr_head_sha="$(distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh pr view "$pr_url" \
   --json headRefOid --jq .headRefOid)"
-test "$pr_head_sha" = "$task_sha" || {
-  printf 'PR head is %s; expected pushed commit is %s. Do not use gh pr checks yet.\n' \
-    "$pr_head_sha" "$task_sha" >&2
+pr_state="$(distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh pr view "$pr_url" \
+  --json state --jq .state)"
+test "$pr_state" = OPEN && test "$pr_head_sha" = "$task_sha" || {
+  printf 'PR is %s at %s; expected open PR at pushed commit %s. Do not use gh pr checks yet.\n' \
+    "$pr_state" "$pr_head_sha" "$task_sha" >&2
   exit 1
 }
 ```
@@ -143,7 +154,8 @@ branch label, check name, or a green `gh pr checks` row; all can describe a diff
 For a run or job URL supplied by someone else,
 use the URL's `<run-id>` as above and verify it directly before relying on it. A supplied URL may
 be useful to diagnose an older or failed run, but is merge evidence only if both its `headSha`
-equals `task_sha` and its event is `pull_request`:
+equals `task_sha`, its event is `pull_request`, and it is the `CI` workflow. The last condition
+prevents an unrelated green workflow for the same commit from being treated as the repository gate:
 
 ```sh
 # From .../actions/runs/33228591158/job/99037055945, use 33228591158.
@@ -152,9 +164,11 @@ run_sha="$(distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh run view "$run_
   --json headSha --jq .headSha)"
 run_event="$(distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh run view "$run_id" \
   --json event --jq .event)"
-test "$run_sha" = "$task_sha" && test "$run_event" = pull_request || {
-  printf 'Supplied run is %s (%s); current PR task commit is %s. It is diagnostic only.\n' \
-    "$run_sha" "$run_event" "$task_sha" >&2
+run_workflow="$(distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh run view "$run_id" \
+  --json workflowName --jq .workflowName)"
+test "$run_sha" = "$task_sha" && test "$run_event" = pull_request && test "$run_workflow" = CI || {
+  printf 'Supplied run is %s (%s, %s); current PR task commit is %s. It is diagnostic only.\n' \
+    "$run_sha" "$run_event" "$run_workflow" "$task_sha" >&2
   exit 1
 }
 distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh run view "$run_id" \
