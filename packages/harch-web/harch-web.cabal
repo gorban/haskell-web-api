@@ -131,6 +131,7 @@ library
     HarchWeb.Security.RequestLimits
     HarchWeb.Server.Application
     HarchWeb.Server.ClientAction
+    HarchWeb.Server.ClientAction.Runtime
     HarchWeb.Server.Config
     HarchWeb.Server.LocalTest
     HarchWeb.Server.RequestAdmission

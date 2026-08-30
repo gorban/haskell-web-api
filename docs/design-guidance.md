@@ -1436,6 +1436,18 @@ own length too, so Haskell decodes precisely the returned bytes with `decodeUtf8
 becomes `MessageFormatRejected`, never replacement text or an exception. This keeps the established
 pure, deterministic `Localizer` API and its error rail intact while making the FFI contract truthful.
 
+### Decision record — FQ11: client-action protocol interpreter extraction (2026-08-30)
+
+**Decision: extract the internal client-action protocol interpreter from request execution, while
+retaining the one shared route/timing/finalization lifecycle.** The interpreter's bounded body read,
+origin and double-submit CSRF validation, typed decode, application authorization, and handler
+invocation always occur together after a route context is selected. That stable protocol capability
+belongs in `HarchWeb.Server.ClientAction.Runtime`; it does not add a dispatcher or a second action
+registry. `RequestExecution` continues to own request-head admission, framework early responses,
+middleware, route method selection, concurrency admission, monotonic timing, WAI response delivery,
+and observability. The public WAI adapter therefore has the same execution order while its module
+health falls below the review threshold.
+
 ### Follow-up decision — AY: add `connect_timeout` now, defer a hard TLS default until a deployment decision (2026-08-21)
 
 **Decision: implement `DATABASE_CONNECT_TIMEOUT_SECONDS`/`connect_timeout` unconditionally, but do

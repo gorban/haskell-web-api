@@ -8,6 +8,10 @@
 -- captures only timings that have already happened.  That preserves the
 -- deliberate @seq@ timing boundaries without allowing independently passed
 -- timestamps or reporting dependencies to be transposed.
+-- FQ11 keeps the client-action protocol interpreter in its own internal
+-- module: decoding, bounded body intake, CSRF/origin checks, authorization,
+-- and handler invocation form one protocol lifecycle, while route selection,
+-- timing, and final response reporting stay here.
 module HarchWeb.Server.RequestExecution
   ( concurrencyLimitedMiddleware,
     navigationRuntimeResponse,
@@ -20,7 +24,6 @@ where
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.ByteString qualified as ByteString
-import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Foldable (for_)
 import Data.List.NonEmpty (NonEmpty)
 import Data.Text (Text)
@@ -49,7 +52,6 @@ import HarchWeb.Security
     requestPathPrefix,
     requestPolicyResponseHeaders,
     requestRedirectLocation,
-    requestScheme,
     urlPathText,
     validateRequestHead,
     waiRequestPath,
@@ -57,13 +59,13 @@ import HarchWeb.Security
   )
 import HarchWeb.Server.Application
 import HarchWeb.Server.ClientAction
+import HarchWeb.Server.ClientAction.Runtime (clientActionResponse)
 import HarchWeb.Server.RequestAdmission
   ( RouteConcurrencyGateCache,
     concurrencyLimitedMiddleware,
     newRouteConcurrencyGateCache,
     routeConcurrencyMiddleware,
   )
-import HarchWeb.Server.RequestBody (RequestBodyReadFailure (..), readRequestBodyUpTo)
 import HarchWeb.Server.RequestObservability
   ( RequestExecutionTimings (..),
     RequestObservabilityContext,
@@ -246,11 +248,12 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
   let requestContext = middlewareResultContext middlewareResult
       middlewareTiming = middlewareTimingEntry webApplication middlewareStartedAt middlewareCompletedAt
   routeMatchingStartedAt <- getMonotonicTimeNSec
-  let routeDispatch =
+  let decodedRequestMethod = requestMethodText request
+      routeDispatch =
         matchRouteMethod
           (routeCodec webApplication)
           requestContext
-          (Routing.requestMethod (requestMethodText request))
+          (Routing.requestMethod decodedRequestMethod)
           (Routing.requestPath (waiRequestRouteTarget requestPolicyConfig request))
   routeMatchedAt <- routeDispatch `seq` getMonotonicTimeNSec
   let timingState =
@@ -267,6 +270,7 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
         continueRoutedRequest
           (routedRequestExecution {routedRequestWaiRequest = admittedRequest, routedRequestRespond = admittedRespond})
           timingState
+          decodedRequestMethod
           routeDispatch
           middlewareResult
     )
@@ -293,13 +297,14 @@ continueRoutedRequest ::
   (Eq route) =>
   RoutedRequestExecution route action context ->
   RequestExecutionTimingState ->
+  Text ->
   RouteDispatch route context ->
   MiddlewareResult context ->
   IO Wai.ResponseReceived
-continueRoutedRequest routedRequestExecution timingState routeDispatch middlewareResult = do
+continueRoutedRequest routedRequestExecution timingState decodedRequestMethod routeDispatch middlewareResult = do
   let webApplication = routedRequestApplication routedRequestExecution
   renderStartedAt <- getMonotonicTimeNSec
-  response <- dispatchRoutedRequest routedRequestExecution routeDispatch middlewareResult
+  response <- dispatchRoutedRequest routedRequestExecution decodedRequestMethod routeDispatch middlewareResult
   responseRenderedAt <- response `seq` getMonotonicTimeNSec
   pageSecurity <- responsePageSecurity webApplication response
   let executionTimings =
@@ -342,12 +347,14 @@ middlewareTimingEntry webApplication startedAt completedAt =
 -- turn 'RouteMatchedHead' or 'RouteOptions' into a state-changing action.
 dispatchRoutedRequest ::
   RoutedRequestExecution route action context ->
+  Text ->
   RouteDispatch route context ->
   MiddlewareResult context ->
   IO (Response route context)
-dispatchRoutedRequest _ _ (HaltMiddleware _ responseBody) = pure (BodyResponse responseBody)
+dispatchRoutedRequest _ _ _ (HaltMiddleware _ responseBody) = pure (BodyResponse responseBody)
 dispatchRoutedRequest
   routedRequestExecution
+  decodedRequestMethod
   routeDispatch
   (ContinueMiddleware _) =
     let webApplication = routedRequestApplication routedRequestExecution
@@ -358,54 +365,8 @@ dispatchRoutedRequest
           Right renderDispatch@RenderMatchedHead {} -> renderRouteDispatch webApplication request renderDispatch
           Right renderDispatch
             | isClientActionRequest request ->
-                clientActionResponse routedRequestExecution routedRequestContext
+                clientActionResponse webApplication request decodedRequestMethod (routedRequestPath routedRequestExecution) routedRequestContext
             | otherwise -> renderRouteDispatch webApplication request renderDispatch
-
-clientActionResponse :: RoutedRequestExecution route action context -> context -> IO (Response route context)
-clientActionResponse routedRequestExecution routedRequestContext = do
-  let webApplication = routedRequestApplication routedRequestExecution
-      request = routedRequestWaiRequest routedRequestExecution
-      requestPath = routedRequestPath routedRequestExecution
-      requestPolicyConfig = routedRequestPolicyConfig routedRequestExecution
-  result <- runExceptT $ do
-    let expectedOrigin =
-          (\host -> requestScheme requestPolicyConfig request <> "://" <> host)
-            <$> (lookup "Host" (Wai.requestHeaders request) >>= either (const Nothing) Just . TextEncoding.decodeUtf8')
-    () <- liftClientActionEither (validateClientActionRequest expectedOrigin request)
-    actionBody <- liftIO (readClientActionBody request)
-    actionFields <- liftClientActionEither (actionBody >>= parseClientActionFields)
-    csrfToken <- liftClientActionEither (validateClientActionCsrf request actionFields)
-    let actionPayload =
-          ClientActionPayload
-            { clientActionMethod = requestMethodText request,
-              clientActionPath = requestPath,
-              clientActionFields = actionFields,
-              clientActionCsrfToken = lookup "_harch_csrf" actionFields,
-              clientActionIdempotencyKey = requestIdempotencyKey request,
-              clientActionPayloadContext = routedRequestContext
-            }
-    case decodeClientAction webApplication actionPayload of
-      UnrecognizedClientAction -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound))
-      MethodNotAllowedClientAction allowedMethods -> pure (ClientActionBodyResponse (clientActionMethodNotAllowedResponse allowedMethods))
-      MalformedClientAction _ -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionPayloadMalformed))
-      InvalidClientActionDecoder -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionDecoderInvalid))
-      DecodedClientAction action -> do
-        let actionRequest =
-              ClientActionRequest
-                { clientAction = action,
-                  clientActionRequestIdempotencyKey = requestIdempotencyKey request,
-                  clientActionContext = routedRequestContext
-                }
-        authorized <- liftIO (authorizeClientActionCsrf webApplication actionRequest csrfToken)
-        case authorized of
-          False -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionCsrfRejected))
-          True -> do
-            maybeActionResponse <- liftIO (handleClientAction webApplication actionRequest)
-            pure (maybe (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound)) ClientActionBodyResponse maybeActionResponse)
-  pure (either (BodyResponse . clientActionProtocolErrorResponse) id result)
-
-liftClientActionEither :: Either ClientActionProtocolError value -> ExceptT ClientActionProtocolError IO value
-liftClientActionEither = either throwError pure
 
 data RouteRenderDispatch route context
   = RenderNotFound (RouteRequest route context)
@@ -454,19 +415,6 @@ routeOptionsResponse declaredMethods =
             protocolResponseDatabaseOperations = []
           }
     )
-
-requestIdempotencyKey :: Wai.Request -> Maybe ClientActionIdempotencyKey
-requestIdempotencyKey request =
-  lookup "Idempotency-Key" (Wai.requestHeaders request)
-    >>= either (const Nothing) Just . TextEncoding.decodeUtf8'
-
-readClientActionBody :: Wai.Request -> IO (Either ClientActionProtocolError LazyByteString.ByteString)
-readClientActionBody request = do
-  result <- readRequestBodyUpTo maxClientActionBodyBytes request
-  pure $
-    case result of
-      Left RequestBodyLimitExceeded -> Left ClientActionBodyTooLarge
-      Right requestBody -> Right requestBody
 
 -- | Decision record (AU): 'respond' now runs before 'reportRequestObservability'
 -- and 'reportApplicationLog', not after. Previously an app-supplied reporter
