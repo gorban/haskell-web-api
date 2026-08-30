@@ -132,11 +132,15 @@ distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh run list \
 Read every row returned by the exact-SHA query. For a PR, the matching `CI` run must also have
 event `pull_request`: a `push` run for the same SHA is not PR evidence (this repository only
 pushes `CI` from `main`). No row means the run has not been created or is not the requested
-workflow; it is not a pass. A matching row is acceptable only when its `status` and `conclusion`
+workflow; it is not a pass. A GitHub CLI command failure is likewise an unknown result, not an
+empty result or a pass: preserve its diagnostic and resolve the CLI, authentication, or repository
+problem before continuing. A matching row is acceptable only when its `status` and `conclusion`
 are respectively `completed` and `success`. Only after the OIDs match, `gh pr checks
 --watch` is a useful PR-level progress view. It is supplementary: it can include checks for another
 commit after a new push, and must not replace the exact-SHA query above. A missing result from a
-short-SHA filter is not evidence that no run exists. For a run or job URL supplied by someone else,
+short-SHA filter is not evidence that no run exists. Do not infer the commit from a PR number,
+branch label, check name, or a green `gh pr checks` row; all can describe a different PR head.
+For a run or job URL supplied by someone else,
 use the URL's `<run-id>` as above and verify it directly before relying on it. A supplied URL may
 be useful to diagnose an older or failed run, but is merge evidence only if both its `headSha`
 equals `task_sha` and its event is `pull_request`:

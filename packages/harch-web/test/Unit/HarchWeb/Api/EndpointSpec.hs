@@ -1066,6 +1066,39 @@ spec =
               :| [apiRouteResponseBody response `shouldBe` "abcde"]
           )
 
+      it "validates and supplies streaming endpoint fields before handing over the one-shot body" $ do
+        chunksReference <- newIORef ["abc"]
+        let streamingEndpoint =
+              testApiRouteEndpoint
+                ApiPost
+                (requiredField (queryField "label" apiTextValue))
+                (ApiStreamingRequestBody (bodyByteLimit 5))
+                (textResponseEncoder :| [])
+                ( \endpointRequest -> do
+                    streamedBody <- pullAllStreamingChunks (apiEndpointRequestBody endpointRequest) ""
+                    pure $
+                      case streamedBody of
+                        Left () -> Left ()
+                        Right responseValue ->
+                          Right
+                            ( apiResponse
+                                ( apiEndpointRequestFields endpointRequest
+                                    <> ":"
+                                    <> apiEndpointResponseValue responseValue
+                                )
+                            )
+                )
+                (const ((apiResponse "stream too large") {apiEndpointResponseStatus = HttpTypes.status413}))
+            request =
+              Wai.setRequestBodyChunks
+                (atomicModifyIORef' chunksReference takeNextChunk)
+                (Wai.defaultRequest {Wai.queryString = [("label", Just "present")]})
+        response <- runApiRoute streamingEndpoint request
+        expectAll
+          ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status200)
+              :| [apiRouteResponseBody response `shouldBe` "present:abc"]
+          )
+
       it "leaves a streamed chunk exceeding the declared budget typed for the endpoint handler" $ do
         chunksReference <- newIORef ["ab", "cd", "ef"]
         let streamingEndpoint =

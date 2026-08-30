@@ -4,12 +4,21 @@
 {-# LANGUAGE TypeApplications #-}
 
 -- | Private request decoding and response interpretation for typed API
--- endpoints.  This module owns the effectful request-body boundary; route
+-- endpoints. This module owns the effectful request-body boundary; route
 -- family matching remains in 'HarchWeb.Api.Endpoint.Family'.
+--
+-- Decision (FQ7, 2026-08-29): an 'ApiEndpointExecution' combines one
+-- existing endpoint contract with the one WAI request and its derived request
+-- data. Every endpoint-handler variant now receives that cohesive execution
+-- boundary rather than independently transposable fields, body, encoders,
+-- failure policy, and request values. This is private wiring inside the one
+-- route dispatcher, not an additional endpoint or dispatch abstraction.
 module HarchWeb.Api.Endpoint.Runtime
   ( runApiRouteEndpoint,
     runApiRouteEndpointHandler,
     runApiRouteEndpointHandlerNeverFailing,
+    ApiEndpointExecution,
+    apiEndpointExecution,
     ApiHttpResponse (..),
     apiHttpResponseToProtocolResponse,
     apiResponseBodyToProtocolResponse,
@@ -41,100 +50,178 @@ import HarchWeb.Server.Response
   )
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
+import Numeric.Natural (Natural)
+
+-- | Request-specific values owned by one execution of an already-declared
+-- endpoint contract. The request data is derived once, before body and field
+-- decoding choose their short-circuiting path.
+data ApiEndpointExecution fields body response = ApiEndpointExecution
+  { apiEndpointExecutionContract :: ApiEndpointContract fields body response,
+    apiEndpointExecutionRequestData :: ApiRequestData,
+    apiEndpointExecutionRequest :: Wai.Request
+  }
+
+apiEndpointExecution :: ApiEndpointContract fields body response -> Wai.Request -> ApiEndpointExecution fields body response
+apiEndpointExecution contract request =
+  ApiEndpointExecution
+    { apiEndpointExecutionContract = contract,
+      apiEndpointExecutionRequestData = apiRequestDataFromWaiRequest request,
+      apiEndpointExecutionRequest = request
+    }
 
 runApiRouteEndpoint :: ApiRouteEndpoint fields body domainFailure response -> Wai.Request -> IO ProtocolResponse
-runApiRouteEndpoint endpoint =
+runApiRouteEndpoint endpoint request =
   case endpoint of
-    ApiRouteEndpoint _ _ fields body encoders fieldFailure handler failureResponse ->
-      runApiRouteEndpointHandler fields body encoders fieldFailure handler failureResponse
-    ApiRouteEndpointNeverFailing _ _ fields body encoders fieldFailure handler ->
-      runApiRouteEndpointHandlerNeverFailing fields body encoders fieldFailure handler
+    ApiRouteEndpoint declaration handler failureResponse ->
+      runApiRouteEndpointHandler (apiEndpointExecution (apiRouteEndpointDeclarationContract declaration) request) handler failureResponse
+    ApiRouteEndpointNeverFailing declaration handler ->
+      runApiRouteEndpointHandlerNeverFailing (apiEndpointExecution (apiRouteEndpointDeclarationContract declaration) request) handler
 
 -- | Decode one declared body and its fields before passing them to the
 -- response continuation. Protocol parse failures are interpreted exactly at
 -- this transport boundary rather than forwarded through endpoint handlers.
 runDecodedApiRequest ::
   (Typeable response) =>
-  ApiRequestData ->
-  RequestCodec fields ->
-  ApiRequestBody body ->
-  NonEmpty (ApiResponseEncoder response) ->
-  Maybe ([ApiRequestParseError] -> ApiResponse response) ->
+  ApiEndpointExecution fields body response ->
   (fields -> body -> IO ProtocolResponse) ->
-  Wai.Request ->
   IO ProtocolResponse
-runDecodedApiRequest requestData fields body encoders fieldFailure onDecoded request =
-  decodeBody body
-  where
-    decodeBody requestBody =
-      case requestBody of
-        ApiNoRequestBody -> decodeInitialFields (`onDecoded` ())
-        ApiBufferedRequestBody missingContentTypePolicy maximumBytes decoders -> do
-          decodeInitialFields (decodeBufferedBody missingContentTypePolicy (apiRequestBodyByteLimitValue maximumBytes) decoders . onDecoded)
-        ApiUrlEncodedFormRequestBody missingContentTypePolicy maximumBytes maximumFields ->
-          decodeBufferedBody
-            missingContentTypePolicy
-            (apiRequestBodyByteLimitValue maximumBytes)
-            [urlEncodedFormBodyDecoder maximumFields]
-            (\decodedForm -> decodeFormFields decodedForm (apiRequestDataWithForm decodedForm requestData))
-        ApiStreamingRequestBody maximumBytes -> decodeInitialFieldsWithBody (newApiStreamingRequest (apiRequestBodyByteLimitValue maximumBytes) request)
-        ApiMultipartRequestBody storage limits -> decodeInitialFieldsWithBody (newApiMultipartRequest storage limits request)
-
-    decodeInitialFieldsWithBody newBody =
-      decodeInitialFields $ \decodedFields -> do
-        bodyValue <- newBody
+runDecodedApiRequest execution onDecoded =
+  case apiEndpointContractBody contract of
+    ApiNoRequestBody -> decodeEndpointFields execution (`onDecoded` ())
+    ApiBufferedRequestBody missingContentTypePolicy maximumBytes decoders ->
+      decodeBufferedApiRequest execution missingContentTypePolicy maximumBytes decoders onDecoded
+    ApiUrlEncodedFormRequestBody missingContentTypePolicy maximumBytes maximumFields ->
+      decodeUrlEncodedApiRequest execution missingContentTypePolicy maximumBytes maximumFields onDecoded
+    ApiStreamingRequestBody maximumBytes ->
+      decodeEndpointFields execution $ \decodedFields -> do
+        bodyValue <- newApiStreamingRequest (apiRequestBodyByteLimitValue maximumBytes) request
         onDecoded decodedFields bodyValue
+    ApiMultipartRequestBody storage limits ->
+      decodeEndpointFields execution $ \decodedFields -> do
+        bodyValue <- newApiMultipartRequest storage limits request
+        onDecoded decodedFields bodyValue
+  where
+    contract = apiEndpointExecutionContract execution
+    request = apiEndpointExecutionRequest execution
 
-    decodeInitialFields = decodeRequestFields requestData
+-- | The buffered-body reader either yields the declared body type or a final
+-- transport response. Keeping that decision distinct from field decoding
+-- preserves the declaration-specific order: ordinary buffered bodies are
+-- read before fields, while streams and multipart requests validate fields
+-- before handing a one-shot reader to the handler.
+data ApiBufferedBodyResult body
+  = ApiBufferedBodyRejected ProtocolResponse
+  | ApiBufferedBodyDecoded body
 
-    decodeFormFields decodedForm fieldsData =
-      decodeRequestFields fieldsData (`onDecoded` decodedForm)
+decodeBufferedApiRequest ::
+  (Typeable response) =>
+  ApiEndpointExecution fields body response ->
+  MissingContentTypePolicy ->
+  ApiRequestBodyByteLimit ->
+  [ApiBodyDecoder body] ->
+  (fields -> body -> IO ProtocolResponse) ->
+  IO ProtocolResponse
+decodeBufferedApiRequest execution missingContentTypePolicy maximumBytes decoders onDecoded = do
+  bodyResult <- decodeBufferedApiBody execution missingContentTypePolicy maximumBytes decoders
+  case bodyResult of
+    ApiBufferedBodyRejected response -> pure response
+    ApiBufferedBodyDecoded decodedBody -> decodeEndpointFields execution (`onDecoded` decodedBody)
 
-    decodeRequestFields fieldsData onDecodedFields =
-      case fieldFailure of
-        Nothing ->
-          case runRequestCodec fields fieldsData of
-            ApiRequestDecoded decodedFields -> onDecodedFields decodedFields
-            _ -> pure (apiFailureProtocolResponse encoders HttpTypes.status400 "API request fields were rejected.")
-        Just responseFor ->
-          case runRequestCodec fields fieldsData of
-            ApiRequestDecoded decodedFields -> onDecodedFields decodedFields
-            ApiRequestRejected parseErrors -> pure (fieldFailureResponse responseFor (NonEmpty.toList parseErrors))
-            ApiRequestCodecInvalid -> pure (apiFailureProtocolResponse encoders HttpTypes.status400 "API request fields were rejected.")
+decodeUrlEncodedApiRequest ::
+  (Typeable response) =>
+  ApiEndpointExecution fields ApiForm response ->
+  MissingContentTypePolicy ->
+  ApiRequestBodyByteLimit ->
+  Natural ->
+  (fields -> ApiForm -> IO ProtocolResponse) ->
+  IO ProtocolResponse
+decodeUrlEncodedApiRequest execution missingContentTypePolicy maximumBytes maximumFields onDecoded = do
+  bodyResult <-
+    decodeBufferedApiBody
+      execution
+      missingContentTypePolicy
+      maximumBytes
+      [urlEncodedFormBodyDecoder maximumFields]
+  case bodyResult of
+    ApiBufferedBodyRejected response -> pure response
+    ApiBufferedBodyDecoded decodedForm ->
+      decodeEndpointFields
+        ( execution
+            { apiEndpointExecutionRequestData =
+                apiRequestDataWithForm decodedForm (apiEndpointExecutionRequestData execution)
+            }
+        )
+        (`onDecoded` decodedForm)
 
-    decodeBufferedBody missingContentTypePolicy maximumBytes decoders onDecodedBody = do
-      bodyResult <- readRequestBodyUpTo maximumBytes request
-      case bodyResult of
-        Left RequestBodyLimitExceeded -> pure (apiFailureProtocolResponse encoders HttpTypes.status413 "API request body exceeds its declared limit.")
-        Right lazyBody ->
-          case selectApiBodyDecoder missingContentTypePolicy decoders (contentType requestData) (LazyByteString.toStrict lazyBody) of
-            ApiUnsupportedMediaType _ -> pure (apiFailureProtocolResponse encoders HttpTypes.status415 "API request body has an unsupported media type.")
-            ApiMalformedBody -> pure (apiFailureProtocolResponse encoders HttpTypes.status400 "API request body is malformed.")
-            ApiDecodedBody decodedBody -> onDecodedBody decodedBody
+decodeBufferedApiBody ::
+  (Typeable response) =>
+  ApiEndpointExecution fields body response ->
+  MissingContentTypePolicy ->
+  ApiRequestBodyByteLimit ->
+  [ApiBodyDecoder body] ->
+  IO (ApiBufferedBodyResult body)
+decodeBufferedApiBody execution missingContentTypePolicy maximumBytes decoders = do
+  bodyResult <- readRequestBodyUpTo (apiRequestBodyByteLimitValue maximumBytes) request
+  pure $
+    case bodyResult of
+      Left RequestBodyLimitExceeded -> ApiBufferedBodyRejected (apiFailureProtocolResponse encoders HttpTypes.status413 "API request body exceeds its declared limit.")
+      Right lazyBody ->
+        case selectApiBodyDecoder missingContentTypePolicy decoders (contentType requestData) (LazyByteString.toStrict lazyBody) of
+          ApiUnsupportedMediaType _ -> ApiBufferedBodyRejected (apiFailureProtocolResponse encoders HttpTypes.status415 "API request body has an unsupported media type.")
+          ApiMalformedBody -> ApiBufferedBodyRejected (apiFailureProtocolResponse encoders HttpTypes.status400 "API request body is malformed.")
+          ApiDecodedBody decodedBody -> ApiBufferedBodyDecoded decodedBody
+  where
+    request = apiEndpointExecutionRequest execution
+    requestData = apiEndpointExecutionRequestData execution
+    ApiEndpointContract _ _ _ encoders _ = apiEndpointExecutionContract execution
 
-    fieldFailureResponse responseFor parseErrors =
-      renderEndpointResult
-        encoders
-        requestData
-        ((responseFor parseErrors) {apiEndpointResponseStatus = HttpTypes.status400})
+decodeEndpointFields ::
+  (Typeable response) =>
+  ApiEndpointExecution fields body response ->
+  (fields -> IO ProtocolResponse) ->
+  IO ProtocolResponse
+decodeEndpointFields execution onDecoded =
+  case failurePolicy of
+    ApiUseGenericFieldFailure ->
+      case runRequestCodec fields requestData of
+        ApiRequestDecoded decodedFields -> onDecoded decodedFields
+        _ -> pure (apiFailureProtocolResponse encoders HttpTypes.status400 "API request fields were rejected.")
+    ApiRenderFieldFailures responseFor ->
+      case runRequestCodec fields requestData of
+        ApiRequestDecoded decodedFields -> onDecoded decodedFields
+        ApiRequestRejected parseErrors -> pure (fieldFailureProtocolResponse execution responseFor (NonEmpty.toList parseErrors))
+        ApiRequestCodecInvalid -> pure (apiFailureProtocolResponse encoders HttpTypes.status400 "API request fields were rejected.")
+  where
+    requestData = apiEndpointExecutionRequestData execution
+    ApiEndpointContract _ fields _ encoders failurePolicy = apiEndpointExecutionContract execution
 
--- | Takes exactly the pieces this needs rather than a full
--- 'ApiRouteEndpoint', so a context-aware route definition has no unused
--- path or method to construct.
+fieldFailureProtocolResponse ::
+  (Typeable response) =>
+  ApiEndpointExecution fields body response ->
+  ([ApiRequestParseError] -> ApiResponse response) ->
+  [ApiRequestParseError] ->
+  ProtocolResponse
+fieldFailureProtocolResponse execution responseFor parseErrors =
+  renderEndpointResult
+    encoders
+    (apiEndpointExecutionRequestData execution)
+    ((responseFor parseErrors) {apiEndpointResponseStatus = HttpTypes.status400})
+  where
+    ApiEndpointContract _ _ _ encoders _ = apiEndpointExecutionContract execution
+
+-- | Interpret a declared endpoint contract with an ordinary typed
+-- domain-failure rail.
 runApiRouteEndpointHandler ::
   (Typeable response) =>
-  RequestCodec fields ->
-  ApiRequestBody body ->
-  NonEmpty (ApiResponseEncoder response) ->
-  Maybe ([ApiRequestParseError] -> ApiResponse response) ->
+  ApiEndpointExecution fields body response ->
   (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
   (domainFailure -> ApiResponse response) ->
-  Wai.Request ->
   IO ProtocolResponse
-runApiRouteEndpointHandler fields body encoders fieldFailure handler failureResponse request =
-  runDecodedApiRequest requestData fields body encoders fieldFailure runHandler request
+runApiRouteEndpointHandler execution handler failureResponse =
+  runDecodedApiRequest execution runHandler
   where
-    requestData = apiRequestDataFromWaiRequest request
+    requestData = apiEndpointExecutionRequestData execution
+    ApiEndpointContract _ _ _ encoders _ = apiEndpointExecutionContract execution
 
     runHandler decodedFields decodedBody = do
       handlerResult <- handler (ApiEndpointRequest decodedFields decodedBody)
@@ -144,17 +231,14 @@ runApiRouteEndpointHandler fields body encoders fieldFailure handler failureResp
 -- no impossible error branch for callers to construct.
 runApiRouteEndpointHandlerNeverFailing ::
   (Typeable response) =>
-  RequestCodec fields ->
-  ApiRequestBody body ->
-  NonEmpty (ApiResponseEncoder response) ->
-  Maybe ([ApiRequestParseError] -> ApiResponse response) ->
+  ApiEndpointExecution fields body response ->
   (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
-  Wai.Request ->
   IO ProtocolResponse
-runApiRouteEndpointHandlerNeverFailing fields body encoders fieldFailure handler request =
-  runDecodedApiRequest requestData fields body encoders fieldFailure runHandler request
+runApiRouteEndpointHandlerNeverFailing execution handler =
+  runDecodedApiRequest execution runHandler
   where
-    requestData = apiRequestDataFromWaiRequest request
+    requestData = apiEndpointExecutionRequestData execution
+    ApiEndpointContract _ _ _ encoders _ = apiEndpointExecutionContract execution
 
     runHandler decodedFields decodedBody = do
       responseValue <- handler (ApiEndpointRequest decodedFields decodedBody)

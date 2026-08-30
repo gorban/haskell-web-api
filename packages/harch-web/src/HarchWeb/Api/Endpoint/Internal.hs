@@ -135,28 +135,18 @@ data ApiRouteEndpointDeclaration fields body response = ApiRouteEndpointDeclarat
   }
 
 -- | One typed endpoint declaration for use in the application's shared route
--- table. It owns its path, method, field decoding, exactly one declared body
--- consumer, domain-failure interpretation, and response representations.
+-- table. Its path-owning declaration retains the cohesive request contract;
+-- the constructor adds only the handler's distinct failure mode.
 data ApiRouteEndpoint fields body domainFailure response where
   ApiRouteEndpoint ::
     (Typeable response) =>
-    ApiPath ->
-    ApiMethod ->
-    RequestCodec fields ->
-    ApiRequestBody body ->
-    NonEmpty (ApiResponseEncoder response) ->
-    Maybe ([ApiRequestParseError] -> ApiResponse response) ->
+    ApiRouteEndpointDeclaration fields body response ->
     (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
     (domainFailure -> ApiResponse response) ->
     ApiRouteEndpoint fields body domainFailure response
   ApiRouteEndpointNeverFailing ::
     (Typeable response) =>
-    ApiPath ->
-    ApiMethod ->
-    RequestCodec fields ->
-    ApiRequestBody body ->
-    NonEmpty (ApiResponseEncoder response) ->
-    Maybe ([ApiRequestParseError] -> ApiResponse response) ->
+    ApiRouteEndpointDeclaration fields body response ->
     (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
     ApiRouteEndpoint fields body domainFailure response
 
@@ -242,14 +232,7 @@ apiRouteEndpoint ::
   (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
   (domainFailure -> ApiResponse response) ->
   ApiRouteEndpoint fields body domainFailure response
-apiRouteEndpoint declaration =
-  ApiRouteEndpoint path method fields body encoders fieldFailure
-  where
-    ApiRouteEndpointDeclaration path contract = declaration
-    ApiEndpointContract method fields body encoders failurePolicy = contract
-    fieldFailure = case failurePolicy of
-      ApiUseGenericFieldFailure -> Nothing
-      ApiRenderFieldFailures renderFieldFailures -> Just renderFieldFailures
+apiRouteEndpoint = ApiRouteEndpoint
 
 -- | Construct an endpoint with a total handler and no fabricated domain
 -- failure branch.
@@ -258,23 +241,16 @@ apiRouteEndpointNeverFailing ::
   ApiRouteEndpointDeclaration fields body response ->
   (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
   ApiRouteEndpoint fields body domainFailure response
-apiRouteEndpointNeverFailing declaration =
-  ApiRouteEndpointNeverFailing path method fields body encoders fieldFailure
-  where
-    ApiRouteEndpointDeclaration path contract = declaration
-    ApiEndpointContract method fields body encoders failurePolicy = contract
-    fieldFailure = case failurePolicy of
-      ApiUseGenericFieldFailure -> Nothing
-      ApiRenderFieldFailures renderFieldFailures -> Just renderFieldFailures
+apiRouteEndpointNeverFailing = ApiRouteEndpointNeverFailing
 
 apiRouteEndpointPath :: ApiRouteEndpoint fields body domainFailure response -> ApiPath
 apiRouteEndpointPath endpoint =
   case endpoint of
-    ApiRouteEndpoint path _ _ _ _ _ _ _ -> path
-    ApiRouteEndpointNeverFailing path _ _ _ _ _ _ -> path
+    ApiRouteEndpoint declaration _ _ -> apiRouteEndpointDeclarationPath declaration
+    ApiRouteEndpointNeverFailing declaration _ -> apiRouteEndpointDeclarationPath declaration
 
 apiRouteEndpointMethod :: ApiRouteEndpoint fields body domainFailure response -> ApiMethod
 apiRouteEndpointMethod endpoint =
   case endpoint of
-    ApiRouteEndpoint _ method _ _ _ _ _ _ -> method
-    ApiRouteEndpointNeverFailing _ method _ _ _ _ _ -> method
+    ApiRouteEndpoint declaration _ _ -> apiEndpointContractMethod (apiRouteEndpointDeclarationContract declaration)
+    ApiRouteEndpointNeverFailing declaration _ -> apiEndpointContractMethod (apiRouteEndpointDeclarationContract declaration)

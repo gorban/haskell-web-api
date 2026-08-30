@@ -38,7 +38,6 @@ import Data.Typeable (Typeable)
 import HarchWeb qualified
 import HarchWeb.Api.Endpoint.Internal
 import HarchWeb.Api.Endpoint.Runtime
-import HarchWeb.Api.Request
 import HarchWeb.Api.Response
 import HarchWeb.Server (unboundedRouteExecutionPolicy)
 import HarchWeb.Site (RouteDefinition (..))
@@ -75,17 +74,12 @@ apiRouteDefinitionWithContext contract contextAwareHandler failureResponse =
       routeResponse = \request routeRequest ->
         HarchWeb.ProtocolResponseResult
           <$> runApiRouteEndpointHandler
-            fields
-            body
-            encoders
-            fieldFailure
+            (apiEndpointExecution contract request)
             (contextAwareHandler (HarchWeb.requestContext routeRequest))
             failureResponse
-            request
     }
   where
-    ApiEndpointContract method fields body encoders failurePolicy = contract
-    fieldFailure = fieldFailureRenderer failurePolicy
+    ApiEndpointContract method _ _ _ _ = contract
 
 -- | The total-handler variant has no fabricated failure renderer or
 -- unreachable error branch.
@@ -102,22 +96,11 @@ apiRouteDefinitionWithContextNeverFailing contract contextAwareHandler =
       routeResponse = \request routeRequest ->
         HarchWeb.ProtocolResponseResult
           <$> runApiRouteEndpointHandlerNeverFailing
-            fields
-            body
-            encoders
-            fieldFailure
+            (apiEndpointExecution contract request)
             (contextAwareHandler (HarchWeb.requestContext routeRequest))
-            request
     }
   where
-    ApiEndpointContract method fields body encoders failurePolicy = contract
-    fieldFailure = fieldFailureRenderer failurePolicy
-
-fieldFailureRenderer :: ApiFieldFailurePolicy response -> Maybe ([ApiRequestParseError] -> ApiResponse response)
-fieldFailureRenderer failurePolicy =
-  case failurePolicy of
-    ApiUseGenericFieldFailure -> Nothing
-    ApiRenderFieldFailures renderFieldFailures -> Just renderFieldFailures
+    ApiEndpointContract method _ _ _ _ = contract
 
 -- | A non-empty, unambiguous set of typed endpoint declarations. Construct it
 -- with 'apiEndpointFamily' so a codec and definition cannot be derived from

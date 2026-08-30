@@ -1372,6 +1372,24 @@ transposable copies. The changes are a deliberate API cleanup, not a metric-only
 workflow regressions and the full coverage gate must preserve the present authentication, throttling,
 rehash, and session-enrollment behavior.
 
+### Decision record — FQ7: execution records inside the existing endpoint and multipart boundaries (2026-08-29)
+
+**Decision: retain `ApiEndpointContract` and the single route dispatcher as the API boundary, while
+giving their private interpreters cohesive execution state.** `ApiEndpointExecution` combines one
+already-declared contract with the WAI request and its once-derived request data; buffered, form,
+streaming, and multipart decoding therefore cannot be called with separately transposed fields,
+body declaration, encoders, failure policy, or request. Route definitions still select their method
+from that same contract and invoke the same runtime interpreter. This is an internal wiring record,
+not an additional endpoint family, handler protocol, or WAI dispatcher.
+
+Multipart's existing `MultipartConsumer` remains the explicit storage, limits, reader, and callback
+environment required by its scoped ownership lifecycle. A private `MultipartDriverState` now keeps
+that environment with its scanner, open part, counts, and body-byte total through recursive parser
+steps. It prevents accidental mismatches between state components without changing upload storage,
+promotion/discard ownership, bounded streaming, or typed parse/callback failures. Focused endpoint
+and multipart regressions plus the full coverage gate are the proof that this structural cleanup
+preserves their short-circuiting and resource contracts.
+
 ### Follow-up decision — AY: add `connect_timeout` now, defer a hard TLS default until a deployment decision (2026-08-21)
 
 **Decision: implement `DATABASE_CONNECT_TIMEOUT_SECONDS`/`connect_timeout` unconditionally, but do

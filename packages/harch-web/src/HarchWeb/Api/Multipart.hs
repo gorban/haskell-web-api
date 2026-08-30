@@ -314,18 +314,20 @@ consumeMultipartBodyWithActive activeUploadReference uploadsReference storage li
             multipartConsumerReadChunk = readChunk,
             multipartConsumerOnPart = onPart
           }
-   in runExceptT
-        ( driveMultipartConsumer
-            consumer
-            ( newBoundedMultipartScanner
+      initialDriverState =
+        MultipartDriverState
+          { multipartDriverConsumer = consumer,
+            multipartDriverScanner =
+              newBoundedMultipartScanner
                 (multipartByteLimitAsInt (multipartLimitsMaxPreambleBytes limits))
                 (multipartByteLimitAsInt (multipartLimitsMaxPartHeaderBytes limits))
-                boundary
-            )
-            Nothing
-            initialMultipartPartCounts
-            0
-        )
+                boundary,
+            multipartDriverCurrentPart = Nothing,
+            multipartDriverPartCounts = initialMultipartPartCounts,
+            multipartDriverBodyBytesRead = 0
+          }
+   in runExceptT
+        (driveMultipartConsumer initialDriverState)
 
 data MultipartConsumer stored = MultipartConsumer
   { multipartConsumerStorage :: MultipartStorage stored,
@@ -348,6 +350,22 @@ data MultipartPartCounts = MultipartPartCounts
 initialMultipartPartCounts :: MultipartPartCounts
 initialMultipartPartCounts = MultipartPartCounts 0 0 0
 
+-- | Mutable-through-recursion driver state for exactly one multipart body.
+-- The storage/limits/callback environment is retained in
+-- 'multipartDriverConsumer'; the scanner and accumulators are updated only
+-- by constructing the next state. Keeping them together prevents a recursive
+-- call from pairing a scanner state with another part's counts or byte total.
+-- Its evolving fields are WHNF-strict, preserving the former driver's strict
+-- recursive parameters: a finely chunked body cannot retain a chain of prior
+-- scanners/counts while the next chunk is being read.
+data MultipartDriverState stored = MultipartDriverState
+  { multipartDriverConsumer :: MultipartConsumer stored,
+    multipartDriverScanner :: !MultipartScanner,
+    multipartDriverCurrentPart :: !(Maybe (PartAccumulator stored)),
+    multipartDriverPartCounts :: !MultipartPartCounts,
+    multipartDriverBodyBytesRead :: !Int
+  }
+
 incrementMultipartPartCounts :: PartAccumulator stored -> MultipartPartCounts -> MultipartPartCounts
 incrementMultipartPartCounts accumulator counts =
   case accumulator of
@@ -361,50 +379,60 @@ data MultipartTransition stored
   | FinishMultipartConsumption
 
 driveMultipartConsumer ::
-  MultipartConsumer stored ->
-  MultipartScanner ->
-  Maybe (PartAccumulator stored) ->
-  MultipartPartCounts ->
-  Int ->
+  MultipartDriverState stored ->
   ExceptT MultipartConsumeError IO ()
-driveMultipartConsumer consumer !scanner !currentPart !partCounts !bodyBytesRead = do
+driveMultipartConsumer !state = do
+  let consumer = multipartDriverConsumer state
   chunk <- liftIO (multipartConsumerReadChunk consumer)
   if ByteString.null chunk
-    then case finishMultipartScanner scanner of
+    then case finishMultipartScanner (multipartDriverScanner state) of
       [] -> throwError MultipartTruncatedBody
-      finalEvents -> consumeMultipartEvents consumer finalEvents scanner currentPart partCounts bodyBytesRead True
+      finalEvents -> consumeMultipartEvents finalEvents state True
     else do
       let chunkBytes = ByteString.length chunk
       when
         ( exceedsMultipartLimit
             (multipartLimitsMaxBodyBytes (multipartConsumerLimits consumer))
-            bodyBytesRead
+            (multipartDriverBodyBytesRead state)
             chunkBytes
         )
         (throwError MultipartBodyTooLarge)
-      let (events, scanner') = feedMultipartChunk scanner chunk
-      consumeMultipartEvents consumer events scanner' currentPart partCounts (bodyBytesRead + chunkBytes) False
+      let (events, scanner') = feedMultipartChunk (multipartDriverScanner state) chunk
+          nextState =
+            state
+              { multipartDriverScanner = scanner',
+                multipartDriverBodyBytesRead = multipartDriverBodyBytesRead state + chunkBytes
+              }
+      consumeMultipartEvents events nextState False
 
 consumeMultipartEvents ::
-  MultipartConsumer stored ->
   [MultipartEvent] ->
-  MultipartScanner ->
-  Maybe (PartAccumulator stored) ->
-  MultipartPartCounts ->
-  Int ->
+  MultipartDriverState stored ->
   Bool ->
   ExceptT MultipartConsumeError IO ()
-consumeMultipartEvents consumer events !scanner !currentPart !partCounts !bodyBytesRead atEof =
+consumeMultipartEvents events !state atEof =
   case events of
     []
       | atEof -> throwError MultipartTruncatedBody
-      | otherwise -> driveMultipartConsumer consumer scanner currentPart partCounts bodyBytesRead
+      | otherwise -> driveMultipartConsumer state
     event : rest -> do
-      transition <- applyMultipartEvent consumer event currentPart partCounts
+      transition <-
+        applyMultipartEvent
+          (multipartDriverConsumer state)
+          event
+          (multipartDriverCurrentPart state)
+          (multipartDriverPartCounts state)
       case transition of
         FinishMultipartConsumption -> pure ()
         ContinueMultipartConsumption nextPart nextPartCounts ->
-          consumeMultipartEvents consumer rest scanner nextPart nextPartCounts bodyBytesRead atEof
+          consumeMultipartEvents
+            rest
+            ( state
+                { multipartDriverCurrentPart = nextPart,
+                  multipartDriverPartCounts = nextPartCounts
+                }
+            )
+            atEof
 
 -- | Matched against the current accumulator, not just the event: the scanner
 -- never emits a body event without an unmatched 'MultipartPartStarted' open,
