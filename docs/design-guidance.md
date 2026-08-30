@@ -1425,6 +1425,17 @@ workflow, output handle, and response-facing values stay explicit at the operati
 them. Focused dependency-injection tests plus the full coverage gate remain the proof that failure
 ordering and reporting behavior have not changed.
 
+### Decision record — FQ10: length-delimited ICU UTF-8 boundary (2026-08-30)
+
+**Decision: extend the existing `HarchWeb.Localization` ICU renderer with a length-delimited UTF-8
+ABI, rather than reject NUL values or introduce a second formatter.** Locale identifiers, message
+templates, argument names, and text arguments are application-owned Unicode values; a C-string ABI
+would silently alter those values at the first U+0000. The native boundary now receives an explicit
+byte length for every such value and constructs ICU strings from those spans. ICU's output carries its
+own length too, so Haskell decodes precisely the returned bytes with `decodeUtf8'`; malformed output
+becomes `MessageFormatRejected`, never replacement text or an exception. This keeps the established
+pure, deterministic `Localizer` API and its error rail intact while making the FFI contract truthful.
+
 ### Follow-up decision — AY: add `connect_timeout` now, defer a hard TLS default until a deployment decision (2026-08-21)
 
 **Decision: implement `DATABASE_CONNECT_TIMEOUT_SECONDS`/`connect_timeout` unconditionally, but do

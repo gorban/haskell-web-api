@@ -75,6 +75,7 @@ library
     HarchWeb.Gmail
     HarchWeb.GoogleWorkspace
     HarchWeb.Localization
+    HarchWeb.Localization.Internal
     HarchWeb.Localization.Quasi
     HarchWeb.LoginProtection
     HarchWeb.Markup

@@ -7,6 +7,7 @@ import Data.Int (Int64)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import HarchWeb.Localization
+import HarchWeb.Localization.Internal (decodeRenderedIcuUtf8)
 import HarchWeb.Localization.Quasi (message, validateMessageTemplate)
 
 data TestMessage = ItemCount
@@ -71,6 +72,21 @@ spec =
                  showList [MessageNotFound, MessageFormatRejected] "" `shouldBe` "[MessageNotFound,MessageFormatRejected]"
                ]
         )
+
+    it "preserves embedded NUL bytes across the UTF-8 ICU boundary" $ do
+      let catalog messageKey requestedLocale =
+            case (messageKey, localeText requestedLocale) of
+              (ItemCount, "en") -> Just (messageTemplate "before {na\NULme} after")
+              _ -> Nothing
+      let rendered = renderLocalizedMessage (localizer catalog) ItemCount (locale "en") (messageArguments [("na\NULme", messageText "value\NULdetail")])
+      rendered `shouldBe` Right "before value\NULdetail after"
+
+    it "rejects an embedded NUL in a locale instead of accepting its truncated prefix" $
+      renderLocalizedMessage (localizer (\_ _ -> Just (messageTemplate "Hello"))) ItemCount (locale "en\NULforged") (messageArguments [])
+        `shouldBe` Left MessageFormatRejected
+
+    it "rejects malformed bytes returned by the native UTF-8 boundary" $
+      decodeRenderedIcuUtf8 "\xc3\x28" `shouldBe` Left MessageFormatRejected
 
     it "checks static ICU template brace structure before application compilation" $
       expectAll
