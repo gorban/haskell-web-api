@@ -1,7 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+-- | Setup prerequisite reporting.
+--
+-- FQ9 makes the loader, reachability checks, autostart operations, and output
+-- handle one explicit execution environment. A loaded configuration, plan,
+-- and report remain per-operation values rather than ambient state.
 module Core.Setup.PrerequisiteReport
   ( DatabasePrerequisiteStatus (..),
+    SetupPrerequisiteReportDependencies (..),
     SetupPrerequisiteReport (..),
     TracingPrerequisiteStatus (..),
     checkSetupPrerequisites,
@@ -130,6 +136,15 @@ data SetupPrerequisiteReport = SetupPrerequisiteReport
     tracingPrerequisiteStatus :: Maybe TracingPrerequisiteStatus
   }
   deriving (Eq, Show)
+
+data SetupPrerequisiteReportDependencies = SetupPrerequisiteReportDependencies
+  { setupPrerequisiteLoadConfig :: IO (Either SetupPrerequisiteConfigLoadError PrerequisiteConfig.SetupPrerequisiteConfig),
+    setupPrerequisiteCheckDatabase :: TcpEndpoint -> IO Bool,
+    setupPrerequisiteCheckTracing :: Text -> IO (Either TracingEndpointParseError Bool),
+    setupPrerequisiteAttemptDatabase :: PrerequisiteConfig.SetupPrerequisiteConfig -> DatabasePrerequisitePlan -> IO DatabaseAutostartResult,
+    setupPrerequisiteAttemptTracing :: TracingPrerequisitePlan -> IO TracingAutostartResult,
+    setupPrerequisiteOutputHandle :: Handle
+  }
 
 checkSetupPrerequisites ::
   IO (Either SetupPrerequisiteConfigLoadError SetupPrerequisiteReport)
@@ -296,48 +311,35 @@ renderContainerRuntimeFailure subject runtimeFailure =
 reportSetupPrerequisitesAndReturn :: IO (Either SetupPrerequisiteConfigLoadError SetupPrerequisiteReport)
 reportSetupPrerequisitesAndReturn =
   reportSetupPrerequisitesWithResult
-    loadSetupPrerequisiteConfig
-    checkTcpEndpointReachable
-    checkTracingEndpointReachable
-    attemptDatabaseAutostart
-    attemptTracingAutostart
-    stdout
+    SetupPrerequisiteReportDependencies
+      { setupPrerequisiteLoadConfig = loadSetupPrerequisiteConfig,
+        setupPrerequisiteCheckDatabase = checkTcpEndpointReachable,
+        setupPrerequisiteCheckTracing = checkTracingEndpointReachable,
+        setupPrerequisiteAttemptDatabase = attemptDatabaseAutostart,
+        setupPrerequisiteAttemptTracing = attemptTracingAutostart,
+        setupPrerequisiteOutputHandle = stdout
+      }
 
 reportSetupPrerequisites :: IO ()
 reportSetupPrerequisites =
   void reportSetupPrerequisitesAndReturn
 
-reportSetupPrerequisitesWithResult ::
-  IO (Either SetupPrerequisiteConfigLoadError PrerequisiteConfig.SetupPrerequisiteConfig) ->
-  (TcpEndpoint -> IO Bool) ->
-  (Text -> IO (Either TracingEndpointParseError Bool)) ->
-  (PrerequisiteConfig.SetupPrerequisiteConfig -> DatabasePrerequisitePlan -> IO DatabaseAutostartResult) ->
-  (TracingPrerequisitePlan -> IO TracingAutostartResult) ->
-  Handle ->
-  IO (Either SetupPrerequisiteConfigLoadError SetupPrerequisiteReport)
-reportSetupPrerequisitesWithResult loadConfig checkDatabase checkTracing attemptDatabase attemptTracing outputHandle = do
+reportSetupPrerequisitesWithResult :: SetupPrerequisiteReportDependencies -> IO (Either SetupPrerequisiteConfigLoadError SetupPrerequisiteReport)
+reportSetupPrerequisitesWithResult dependencies = do
   prerequisiteReport <-
-    either (pure . Left) reportLoadedSetupConfig =<< loadConfig
-  mapM_ (TextIO.hPutStrLn outputHandle) (renderSetupPrerequisiteReport prerequisiteReport)
+    either (pure . Left) reportLoadedSetupConfig =<< setupPrerequisiteLoadConfig dependencies
+  mapM_ (TextIO.hPutStrLn (setupPrerequisiteOutputHandle dependencies)) (renderSetupPrerequisiteReport prerequisiteReport)
   pure prerequisiteReport
   where
     reportLoadedSetupConfig setupConfig =
-      checkLoadedSetupConfig checkDatabase checkTracing setupConfig
+      checkLoadedSetupConfig (setupPrerequisiteCheckDatabase dependencies) (setupPrerequisiteCheckTracing dependencies) setupConfig
         >>= traverse (applyAutostart setupConfig)
     applyAutostart setupConfig report = do
-      reportWithDatabase <- applyDatabaseAutostart attemptDatabase setupConfig report
-      applyTracingAutostart attemptTracing reportWithDatabase
+      reportWithDatabase <- applyDatabaseAutostart (setupPrerequisiteAttemptDatabase dependencies) setupConfig report
+      applyTracingAutostart (setupPrerequisiteAttemptTracing dependencies) reportWithDatabase
 
-reportSetupPrerequisitesWith ::
-  IO (Either SetupPrerequisiteConfigLoadError PrerequisiteConfig.SetupPrerequisiteConfig) ->
-  (TcpEndpoint -> IO Bool) ->
-  (Text -> IO (Either TracingEndpointParseError Bool)) ->
-  (PrerequisiteConfig.SetupPrerequisiteConfig -> DatabasePrerequisitePlan -> IO DatabaseAutostartResult) ->
-  (TracingPrerequisitePlan -> IO TracingAutostartResult) ->
-  Handle ->
-  IO ()
-reportSetupPrerequisitesWith loadConfig checkDatabase checkTracing attemptDatabase attemptTracing outputHandle =
-  void (reportSetupPrerequisitesWithResult loadConfig checkDatabase checkTracing attemptDatabase attemptTracing outputHandle)
+reportSetupPrerequisitesWith :: SetupPrerequisiteReportDependencies -> IO ()
+reportSetupPrerequisitesWith = void . reportSetupPrerequisitesWithResult
 
 applyDatabaseAutostart ::
   (PrerequisiteConfig.SetupPrerequisiteConfig -> DatabasePrerequisitePlan -> IO DatabaseAutostartResult) ->

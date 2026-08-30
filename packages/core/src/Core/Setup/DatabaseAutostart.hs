@@ -2,6 +2,7 @@
 
 module Core.Setup.DatabaseAutostart
   ( ContainerRuntimeFailure (..),
+    ContainerAutostartOutcomes (..),
     DatabaseAutostartResult (..),
     attemptDatabaseAutostart,
     attemptDatabaseAutostartWith,
@@ -9,7 +10,8 @@ module Core.Setup.DatabaseAutostart
 where
 
 import Core.Setup.ContainerRuntime
-  ( ContainerRuntimeFailure (..),
+  ( ContainerAutostartOutcomes (..),
+    ContainerRuntimeFailure (..),
     attemptContainerAutostart,
     runContainerRuntimeCommand,
   )
@@ -46,9 +48,11 @@ attemptDatabaseAutostartWith runCommand setupConfig databasePlan =
     (databaseAutostartPlan databasePlan)
     "database autostart is disabled for this setup plan"
     (databaseAutostartArguments setupConfig)
-    DatabaseAutostartSkipped
-    DatabaseAutostartSucceeded
-    DatabaseAutostartFailed
+    ContainerAutostartOutcomes
+      { containerAutostartSkipped = DatabaseAutostartSkipped,
+        containerAutostartSucceeded = DatabaseAutostartSucceeded,
+        containerAutostartFailed = DatabaseAutostartFailed
+      }
 
 databaseAutostartArguments :: SetupPrerequisiteConfig -> Either Text [String]
 databaseAutostartArguments setupConfig = do

@@ -1411,6 +1411,20 @@ already reduced by FQ1 to unforced ordinary no-ops, so this task does not disgui
 ignore callbacks. Existing request/transport/ACME behavior tests and the coverage gate are the
 evidence required for this structural change.
 
+### Decision record — FQ9: injected setup and composition environments (2026-08-30)
+
+**Decision: represent capabilities that are fixed for one execution as cohesive records, while
+keeping each command, plan, report, and user-visible result explicit.** Container autostart groups
+only the caller's skipped/succeeded/failed result constructors; prerequisite reporting groups its
+loader, reachability checks, autostart operations, and destination handle; database setup groups
+its two configuration loaders and migration/seed runners; and web-api runtime construction groups
+its three coordinated observability reporters. These are all stable dependency bundles that would
+otherwise be passed together and can be transposed without a type error. They are not a new
+framework abstraction or ambient service layer: the current plan, command arguments, account
+workflow, output handle, and response-facing values stay explicit at the operation that varies
+them. Focused dependency-injection tests plus the full coverage gate remain the proof that failure
+ordering and reporting behavior have not changed.
+
 ### Follow-up decision — AY: add `connect_timeout` now, defer a hard TLS default until a deployment decision (2026-08-21)
 
 **Decision: implement `DATABASE_CONNECT_TIMEOUT_SECONDS`/`connect_timeout` unconditionally, but do

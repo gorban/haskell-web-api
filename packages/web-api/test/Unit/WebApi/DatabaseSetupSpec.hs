@@ -8,13 +8,34 @@ import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import System.Exit (ExitCode (..))
-import System.IO (hClose)
+import System.IO (Handle, hClose)
 import System.IO.Temp (withSystemTempFile)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, withContainerizedPsqlOnPath)
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi.Config (DatabaseConfig (..), DatabaseSslMode (..), DatabaseTransportSecurity (..))
-import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
+import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupDependencies (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupCommand)
+import WebApi.DatabaseSetup qualified as DatabaseSetup
 import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), seedStatements)
+
+runDatabaseSetupCommandWith :: IO (Either ConfigParseError DatabaseConfig) -> IO (Either ConfigParseError DatabaseConfig) -> (DatabaseConfig -> DatabaseConfig -> IO (Either PostgresRunnerError ())) -> (DatabaseConfig -> IO (Either PostgresRunnerError ())) -> DatabaseSetupCommand -> IO (Either DatabaseSetupError ())
+runDatabaseSetupCommandWith loadMigrationConfig loadRuntimeConfig runMigrations runSeed =
+  DatabaseSetup.runDatabaseSetupCommandWith
+    DatabaseSetupDependencies
+      { databaseSetupLoadMigrationConfig = loadMigrationConfig,
+        databaseSetupLoadRuntimeConfig = loadRuntimeConfig,
+        databaseSetupRunMigrations = runMigrations,
+        databaseSetupRunSeed = runSeed
+      }
+
+runDatabaseSetupArgsWith :: IO (Either ConfigParseError DatabaseConfig) -> IO (Either ConfigParseError DatabaseConfig) -> (DatabaseConfig -> DatabaseConfig -> IO (Either PostgresRunnerError ())) -> (DatabaseConfig -> IO (Either PostgresRunnerError ())) -> Handle -> [String] -> IO ()
+runDatabaseSetupArgsWith loadMigrationConfig loadRuntimeConfig runMigrations runSeed =
+  DatabaseSetup.runDatabaseSetupArgsWith
+    DatabaseSetupDependencies
+      { databaseSetupLoadMigrationConfig = loadMigrationConfig,
+        databaseSetupLoadRuntimeConfig = loadRuntimeConfig,
+        databaseSetupRunMigrations = runMigrations,
+        databaseSetupRunSeed = runSeed
+      }
 
 spec = do
   describe "parseDatabaseSetupCommand" $ do

@@ -1,7 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+-- | Shared container-runtime fallback for setup prerequisites.
+--
+-- FQ9 groups the three stable outcome constructors for a single caller's
+-- domain result. The plan, command arguments, and disabled explanation remain
+-- explicit because they vary for each autostart attempt.
 module Core.Setup.ContainerRuntime
   ( ContainerRuntimeFailure (..),
+    ContainerAutostartOutcomes (..),
     attemptContainerAutostart,
     runContainerRuntimeCommand,
     tryContainerRuntimes,
@@ -21,23 +27,27 @@ data ContainerRuntimeFailure = ContainerRuntimeFailure
   }
   deriving (Eq, Show)
 
+data ContainerAutostartOutcomes result = ContainerAutostartOutcomes
+  { containerAutostartSkipped :: Text -> result,
+    containerAutostartSucceeded :: ContainerRuntime -> result,
+    containerAutostartFailed :: [ContainerRuntimeFailure] -> result
+  }
+
 attemptContainerAutostart ::
   (ContainerRuntime -> [String] -> IO (Either Text ())) ->
   Maybe ContainerAutostartPlan ->
   Text ->
   Either Text [String] ->
-  (Text -> result) ->
-  (ContainerRuntime -> result) ->
-  ([ContainerRuntimeFailure] -> result) ->
+  ContainerAutostartOutcomes result ->
   IO result
-attemptContainerAutostart runCommand maybeAutostartPlan disabledMessage commandArguments skipped succeeded failed =
+attemptContainerAutostart runCommand maybeAutostartPlan disabledMessage commandArguments outcomes =
   case maybeAutostartPlan of
-    Nothing -> pure (skipped disabledMessage)
+    Nothing -> pure (containerAutostartSkipped outcomes disabledMessage)
     Just autostartPlan ->
-      either (pure . skipped) runWithArguments commandArguments
+      either (pure . containerAutostartSkipped outcomes) runWithArguments commandArguments
       where
         runWithArguments arguments =
-          either failed succeeded
+          either (containerAutostartFailed outcomes) (containerAutostartSucceeded outcomes)
             <$> tryContainerRuntimes
               (autostartRuntimes autostartPlan)
               (`runCommand` arguments)

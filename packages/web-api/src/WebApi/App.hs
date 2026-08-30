@@ -1,6 +1,11 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
+-- | Web-api application composition.
+--
+-- FQ9 groups the three reporters runtime setup always supplies together in
+-- 'RuntimeApplicationReporters'; page, account, policy, and route values
+-- remain explicit because they vary per application composition.
 module WebApi.App
   ( buildAppWithDatabase,
     buildAppWithDatabaseAndAccountWorkflow,
@@ -100,16 +105,20 @@ buildAppWithDatabaseAndReporters ::
   AppConfig ->
   PageRepository ->
   AccountWorkflow ->
-  (Observability.RequestObservability -> IO ()) ->
-  (Observability.ConnectionObservability -> IO ()) ->
-  (Text.Text -> IO ()) ->
+  RuntimeApplicationReporters ->
   HarchWeb.Application AppRoute AccountAction AppRequestContext
-buildAppWithDatabaseAndReporters config pageRepository !accountWorkflow requestObservabilityReporter connectionObservabilityReporter applicationLogReporter =
+buildAppWithDatabaseAndReporters config pageRepository !accountWorkflow reporters =
   buildAppWithDatabaseAndOptionalReporters
     config
     pageRepository
     accountWorkflow
-    (Just (requestObservabilityReporter, connectionObservabilityReporter, applicationLogReporter))
+    (Just reporters)
+
+data RuntimeApplicationReporters = RuntimeApplicationReporters
+  { runtimeApplicationRequestObservabilityReporter :: Observability.RequestObservability -> IO (),
+    runtimeApplicationConnectionObservabilityReporter :: Observability.ConnectionObservability -> IO (),
+    runtimeApplicationReporterLog :: Text.Text -> IO ()
+  }
 
 -- | The ordinary application leaves observability on the framework's default
 -- disabled policy. Runtime setup supplies all three concrete reporters
@@ -118,11 +127,7 @@ buildAppWithDatabaseAndOptionalReporters ::
   AppConfig ->
   PageRepository ->
   AccountWorkflow ->
-  Maybe
-    ( Observability.RequestObservability -> IO (),
-      Observability.ConnectionObservability -> IO (),
-      Text.Text -> IO ()
-    ) ->
+  Maybe RuntimeApplicationReporters ->
   HarchWeb.Application AppRoute AccountAction AppRequestContext
 buildAppWithDatabaseAndOptionalReporters config pageRepository !accountWorkflow maybeReporters =
   Site.buildSiteApplication
@@ -153,11 +158,11 @@ buildAppWithDatabaseAndOptionalReporters config pageRepository !accountWorkflow 
     configureReporters site =
       case maybeReporters of
         Nothing -> site
-        Just (requestObservabilityReporter, connectionObservabilityReporter, applicationLogReporter) ->
+        Just reporters ->
           site
-            { Site.siteReportRequestObservability = requestObservabilityReporter,
-              Site.siteReportConnectionObservability = connectionObservabilityReporter,
-              Site.siteReportApplicationLog = applicationLogReporter
+            { Site.siteReportRequestObservability = runtimeApplicationRequestObservabilityReporter reporters,
+              Site.siteReportConnectionObservability = runtimeApplicationConnectionObservabilityReporter reporters,
+              Site.siteReportApplicationLog = runtimeApplicationReporterLog reporters
             }
 
 buildApp :: AppConfig -> HarchWeb.Application AppRoute AccountAction AppRequestContext
@@ -219,9 +224,7 @@ buildRuntimeApp pool config environmentConfig =
         (withPublicBaseUrlRedirectAuthority environmentConfig config)
         pageRepository
         accountWorkflow
-        (runtimeRequestObservabilityReporter (appMode environmentConfig) config)
-        (runtimeConnectionObservabilityReporter (appMode environmentConfig) config)
-        runtimeApplicationLogReporter
+        (runtimeApplicationReporters environmentConfig config)
 
 buildRuntimeAppWithDatabaseBuilder ::
   AppConfig ->
@@ -234,9 +237,15 @@ buildRuntimeAppWithDatabaseBuilder config buildPageRepository environmentConfig 
         (withPublicBaseUrlRedirectAuthority environmentConfig config)
         pageRepository
         unavailableAccountWorkflow
-        (runtimeRequestObservabilityReporter (appMode environmentConfig) config)
-        (runtimeConnectionObservabilityReporter (appMode environmentConfig) config)
-        runtimeApplicationLogReporter
+        (runtimeApplicationReporters environmentConfig config)
+
+runtimeApplicationReporters :: AppEnvironmentConfig -> AppConfig -> RuntimeApplicationReporters
+runtimeApplicationReporters environmentConfig config =
+  RuntimeApplicationReporters
+    { runtimeApplicationRequestObservabilityReporter = runtimeRequestObservabilityReporter (appMode environmentConfig) config,
+      runtimeApplicationConnectionObservabilityReporter = runtimeConnectionObservabilityReporter (appMode environmentConfig) config,
+      runtimeApplicationReporterLog = runtimeApplicationLogReporter
+    }
 
 buildRuntimeAccountWorkflow :: PostgresPool -> AppEnvironmentConfig -> AccountWorkflow
 buildRuntimeAccountWorkflow pool !environmentConfig =

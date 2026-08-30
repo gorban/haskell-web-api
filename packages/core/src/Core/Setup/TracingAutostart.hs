@@ -8,7 +8,8 @@ module Core.Setup.TracingAutostart
 where
 
 import Core.Setup.ContainerRuntime
-  ( ContainerRuntimeFailure (..),
+  ( ContainerAutostartOutcomes (..),
+    ContainerRuntimeFailure (..),
     attemptContainerAutostart,
     runContainerRuntimeCommand,
   )
@@ -45,9 +46,11 @@ attemptTracingAutostartWith runCommand tracingPlan =
     (tracingAutostartPlan tracingPlan)
     "tracing autostart is disabled for this setup plan"
     (tracingAutostartArguments tracingPlan)
-    TracingAutostartSkipped
-    TracingAutostartSucceeded
-    TracingAutostartFailed
+    ContainerAutostartOutcomes
+      { containerAutostartSkipped = TracingAutostartSkipped,
+        containerAutostartSucceeded = TracingAutostartSucceeded,
+        containerAutostartFailed = TracingAutostartFailed
+      }
 
 tracingAutostartArguments :: TracingPrerequisitePlan -> Either Text [String]
 tracingAutostartArguments tracingPlan = do
