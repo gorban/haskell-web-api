@@ -7,9 +7,17 @@
 -- certificate-acquisition orchestration. Keeping the transport layer here
 -- makes those concerns independently testable without coupling them to the
 -- application/WAI request pipeline.
+--
+-- FQ8 groups the request limits and rendered application shared by every
+-- listener in one runtime.  Per-listener endpoint, TLS plan, socket, startup
+-- signal, and reporter values stay explicit, so distinct listeners cannot be
+-- mistaken for one another while repeated runtime dependencies no longer
+-- travel as positional arguments.
 module HarchWeb.Server.Transport
   ( ActiveConnectionAddresses,
+    ManualTlsServerStarter,
     ReloadingTlsCredentials,
+    RuntimeTransportDependencies (..),
     RunningRuntimeServer,
     TlsCertificateFilePath,
     TlsPrivateKeyFilePath,
@@ -27,12 +35,12 @@ module HarchWeb.Server.Transport
     reloadTlsCredentialsIfChanged,
     socketPort,
     startHttpRuntimeServerWithStarter,
-    startHttpRuntimeServersWithRequestTransportLimits,
-    startManualTlsRuntimeServerWithRequestTransportLimits,
+    startHttpRuntimeServers,
+    startManualTlsRuntimeServer,
     startManualTlsRuntimeServerWithStarter,
-    startManualTlsRuntimeServersWithRequestTransportLimits,
+    startManualTlsRuntimeServers,
     startWarpRuntimeServerOnSocket,
-    startWarpServerOnSocketWithRequestTransportLimits,
+    startWarpServerOnSocket,
     stopRuntimeServer,
     stopRuntimeServers,
     tlsCertificateFilePath,
@@ -87,6 +95,42 @@ data RunningRuntimeServer = RunningRuntimeServer
     runningRuntimeThreadId :: ThreadId
   }
 
+-- | Dependencies shared by all HTTP, manual-TLS, and ACME-adjacent listener
+-- starts in one runtime.  Endpoint plans and connection reporters remain
+-- separate because they are listener-specific.
+data RuntimeTransportDependencies = RuntimeTransportDependencies
+  { runtimeTransportRequestHeadLimits :: RequestHeadLimits,
+    runtimeTransportRequestLimits :: RequestTransportLimits,
+    runtimeTransportApplication :: Wai.Application
+  }
+
+-- | Values fixed while one TLS listener is being started.  The shared
+-- transport dependencies are distinct from the listener's endpoint,
+-- credentials, socket, and connection reporter.
+data RuntimeTlsServerStart = RuntimeTlsServerStart
+  { runtimeTlsStartTransportDependencies :: RuntimeTransportDependencies,
+    runtimeTlsStartEndpoint :: ListenerEndpoint,
+    runtimeTlsStartSettings :: WarpTLS.TLSSettings,
+    runtimeTlsStartSocket :: Socket.Socket,
+    runtimeTlsStartConnectionReporter :: Observability.ConnectionObservability -> IO ()
+  }
+
+-- | The complete internal Warp settings environment after startup has
+-- allocated the readiness signal and peer tracker for this listener.
+data RuntimeTlsListenerDependencies = RuntimeTlsListenerDependencies
+  { runtimeTlsListenerTransportDependencies :: RuntimeTransportDependencies,
+    runtimeTlsListenerScheme :: ListenerScheme,
+    runtimeTlsListenerEndpoint :: ListenerEndpoint,
+    runtimeTlsListenerStartupSignal :: MVar (Either SomeException RuntimeServerReady),
+    runtimeTlsListenerActiveConnectionAddresses :: ActiveConnectionAddresses,
+    runtimeTlsListenerConnectionReporter :: Observability.ConnectionObservability -> IO ()
+  }
+
+-- | The narrowly scoped injected operation used to prove listener-socket
+-- cleanup. It names one test seam rather than making TLS start dependencies
+-- positional at the public helper.
+type ManualTlsServerStarter = ListenerEndpoint -> WarpTLS.TLSSettings -> Socket.Socket -> (Observability.ConnectionObservability -> IO ()) -> Wai.Application -> IO ThreadId
+
 data ActiveConnectionAddresses = ActiveConnectionAddresses
   { -- | A one-place handoff from Warp's accept-loop thread to its worker
     -- factory.  Warp 3.3.24+ calls @settingsAccept@ then @settingsFork@
@@ -101,25 +145,26 @@ data ActiveConnectionAddresses = ActiveConnectionAddresses
     activeConnectionAddresses :: IORef [(ThreadId, Socket.SockAddr)]
   }
 
--- | Start HTTP listeners with all opt-in Warp request transport controls.
-startHttpRuntimeServersWithRequestTransportLimits :: RequestHeadLimits -> RequestTransportLimits -> [ListenerEndpoint] -> Wai.Application -> IO [RunningRuntimeServer]
-startHttpRuntimeServersWithRequestTransportLimits requestHeadLimits transportLimits endpoints waiApplication =
-  go [] endpoints
+-- | Start HTTP listeners with the runtime's shared request transport policy.
+startHttpRuntimeServers :: RuntimeTransportDependencies -> [ListenerEndpoint] -> IO [RunningRuntimeServer]
+startHttpRuntimeServers dependencies =
+  go []
   where
     go runningServers remainingEndpoints =
       case remainingEndpoints of
         [] -> pure (reverse runningServers)
         endpoint : remaining ->
           ( do
-              runningServer <- startHttpRuntimeServer requestHeadLimits transportLimits endpoint waiApplication
+              runningServer <- startHttpRuntimeServer dependencies endpoint
               go (runningServer : runningServers) remaining
                 `onException` stopRuntimeServers (runningServer : runningServers)
           )
             `onException` stopRuntimeServers runningServers
 
--- | Start manual-TLS listeners with all opt-in Warp request transport controls.
-startManualTlsRuntimeServersWithRequestTransportLimits :: RequestHeadLimits -> RequestTransportLimits -> [ManualTlsBindPlan] -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO [RunningRuntimeServer]
-startManualTlsRuntimeServersWithRequestTransportLimits requestHeadLimits transportLimits manualTlsPlans waiApplication connectionReporter =
+-- | Start manual-TLS listeners with the runtime's shared request transport
+-- policy and an explicit connection reporter.
+startManualTlsRuntimeServers :: RuntimeTransportDependencies -> [ManualTlsBindPlan] -> (Observability.ConnectionObservability -> IO ()) -> IO [RunningRuntimeServer]
+startManualTlsRuntimeServers dependencies manualTlsPlans connectionReporter =
   connectionReporter `seq` go [] manualTlsPlans
   where
     go runningServers remainingPlans =
@@ -127,16 +172,23 @@ startManualTlsRuntimeServersWithRequestTransportLimits requestHeadLimits transpo
         [] -> pure (reverse runningServers)
         manualTlsPlan : remaining ->
           ( do
-              runningServer <- startManualTlsRuntimeServerWithRequestTransportLimits requestHeadLimits transportLimits manualTlsPlan waiApplication connectionReporter
+              runningServer <- startManualTlsRuntimeServer dependencies manualTlsPlan connectionReporter
               go (runningServer : runningServers) remaining
                 `onException` stopRuntimeServers (runningServer : runningServers)
           )
             `onException` stopRuntimeServers runningServers
 
-startHttpRuntimeServer :: RequestHeadLimits -> RequestTransportLimits -> ListenerEndpoint -> Wai.Application -> IO RunningRuntimeServer
-startHttpRuntimeServer requestHeadLimits transportLimits =
+startHttpRuntimeServer :: RuntimeTransportDependencies -> ListenerEndpoint -> IO RunningRuntimeServer
+startHttpRuntimeServer dependencies endpoint =
   startHttpRuntimeServerWithStarter
-    (startWarpServerOnSocketWithRequestTransportLimits requestHeadLimits transportLimits)
+    ( \listenerEndpoint listeningSocket waiApplication ->
+        startWarpServerOnSocket
+          (dependencies {runtimeTransportApplication = waiApplication})
+          listenerEndpoint
+          listeningSocket
+    )
+    endpoint
+    (runtimeTransportApplication dependencies)
 
 -- | Start one HTTP listener with an injected server starter.  The production
 -- path supplies Warp; the injection keeps the post-bind startup failure path
@@ -154,17 +206,24 @@ startHttpRuntimeServerWithStarter startHttpServer endpoint waiApplication = do
           runningRuntimeThreadId = serverThreadId
         }
 
-startManualTlsRuntimeServerWithRequestTransportLimits :: RequestHeadLimits -> RequestTransportLimits -> ManualTlsBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO RunningRuntimeServer
-startManualTlsRuntimeServerWithRequestTransportLimits requestHeadLimits transportLimits =
-  startManualTlsRuntimeServerWithStarterAndRequestTransportLimits
-    (startWarpTlsServerOnSocketWithRequestTransportLimits requestHeadLimits transportLimits)
+startManualTlsRuntimeServer :: RuntimeTransportDependencies -> ManualTlsBindPlan -> (Observability.ConnectionObservability -> IO ()) -> IO RunningRuntimeServer
+startManualTlsRuntimeServer dependencies manualTlsPlan =
+  startManualTlsRuntimeServerWithStarter
+    ( \endpoint tlsSettings listeningSocket reporter waiApplication ->
+        startWarpTlsServerOnSocket
+          RuntimeTlsServerStart
+            { runtimeTlsStartTransportDependencies = dependencies {runtimeTransportApplication = waiApplication},
+              runtimeTlsStartEndpoint = endpoint,
+              runtimeTlsStartSettings = tlsSettings,
+              runtimeTlsStartSocket = listeningSocket,
+              runtimeTlsStartConnectionReporter = reporter
+            }
+    )
+    manualTlsPlan
+    (runtimeTransportApplication dependencies)
 
-startManualTlsRuntimeServerWithStarter :: (ListenerEndpoint -> WarpTLS.TLSSettings -> Socket.Socket -> (Observability.ConnectionObservability -> IO ()) -> Wai.Application -> IO ThreadId) -> ManualTlsBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO RunningRuntimeServer
-startManualTlsRuntimeServerWithStarter =
-  startManualTlsRuntimeServerWithStarterAndRequestTransportLimits
-
-startManualTlsRuntimeServerWithStarterAndRequestTransportLimits :: (ListenerEndpoint -> WarpTLS.TLSSettings -> Socket.Socket -> (Observability.ConnectionObservability -> IO ()) -> Wai.Application -> IO ThreadId) -> ManualTlsBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO RunningRuntimeServer
-startManualTlsRuntimeServerWithStarterAndRequestTransportLimits startTlsServer manualTlsPlan waiApplication connectionReporter = do
+startManualTlsRuntimeServerWithStarter :: ManualTlsServerStarter -> ManualTlsBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO RunningRuntimeServer
+startManualTlsRuntimeServerWithStarter startTlsServer manualTlsPlan waiApplication connectionReporter = do
   let tlsLabel =
         case tlsCredentialSourceKind manualTlsPlan of
           ManualTlsCredentials -> "Manual TLS"
@@ -243,22 +302,35 @@ openListenerSocket endpoint = do
 
 data RuntimeServerReady = RuntimeServerReady
 
-startWarpServerOnSocketWithRequestTransportLimits :: RequestHeadLimits -> RequestTransportLimits -> ListenerEndpoint -> Socket.Socket -> Wai.Application -> IO ThreadId
-startWarpServerOnSocketWithRequestTransportLimits requestHeadLimits transportLimits endpoint listeningSocket waiApplication =
+startWarpServerOnSocket :: RuntimeTransportDependencies -> ListenerEndpoint -> Socket.Socket -> IO ThreadId
+startWarpServerOnSocket dependencies endpoint listeningSocket =
   startWarpRuntimeServerOnSocket $ \startupSignal ->
-    let settings = runtimeHttpServerSettings requestHeadLimits transportLimits endpoint startupSignal
-     in settings `seq` Warp.runSettingsSocket settings listeningSocket waiApplication
+    let settings = runtimeHttpServerSettings dependencies endpoint startupSignal
+     in settings `seq` Warp.runSettingsSocket settings listeningSocket (runtimeTransportApplication dependencies)
 
-startWarpTlsServerOnSocketWithRequestTransportLimits :: RequestHeadLimits -> RequestTransportLimits -> ListenerEndpoint -> WarpTLS.TLSSettings -> Socket.Socket -> (Observability.ConnectionObservability -> IO ()) -> Wai.Application -> IO ThreadId
-startWarpTlsServerOnSocketWithRequestTransportLimits requestHeadLimits transportLimits endpoint tlsSettings listeningSocket connectionReporter waiApplication = do
+startWarpTlsServerOnSocket :: RuntimeTlsServerStart -> IO ThreadId
+startWarpTlsServerOnSocket tlsServerStart = do
   activeConnectionAddresses <- newActiveConnectionAddresses
   let listenerScheme = Https
+      dependencies = runtimeTlsStartTransportDependencies tlsServerStart
+      endpoint = runtimeTlsStartEndpoint tlsServerStart
+      tlsSettings = runtimeTlsStartSettings tlsServerStart
+      listeningSocket = runtimeTlsStartSocket tlsServerStart
+      connectionReporter = runtimeTlsStartConnectionReporter tlsServerStart
   listenerScheme `seq`
     connectionReporter `seq`
       startWarpRuntimeServerOnSocket $ \startupSignal ->
-        let settings =
-              runtimeServerSettings requestHeadLimits transportLimits listenerScheme endpoint startupSignal activeConnectionAddresses connectionReporter
-         in settings `seq` WarpTLS.runTLSSocket tlsSettings settings listeningSocket waiApplication
+        let listenerDependencies =
+              RuntimeTlsListenerDependencies
+                { runtimeTlsListenerTransportDependencies = dependencies,
+                  runtimeTlsListenerScheme = listenerScheme,
+                  runtimeTlsListenerEndpoint = endpoint,
+                  runtimeTlsListenerStartupSignal = startupSignal,
+                  runtimeTlsListenerActiveConnectionAddresses = activeConnectionAddresses,
+                  runtimeTlsListenerConnectionReporter = connectionReporter
+                }
+            settings = runtimeServerSettings listenerDependencies
+         in settings `seq` WarpTLS.runTLSSocket tlsSettings settings listeningSocket (runtimeTransportApplication dependencies)
 
 startWarpRuntimeServerOnSocket :: (MVar (Either SomeException RuntimeServerReady) -> IO ()) -> IO ThreadId
 startWarpRuntimeServerOnSocket runServerOnSocket = do
@@ -270,18 +342,29 @@ startWarpRuntimeServerOnSocket runServerOnSocket = do
   _ <- waitForRuntimeServerStartup startupSignal
   pure threadId
 
-runtimeServerSettings :: RequestHeadLimits -> RequestTransportLimits -> ListenerScheme -> ListenerEndpoint -> MVar (Either SomeException RuntimeServerReady) -> ActiveConnectionAddresses -> (Observability.ConnectionObservability -> IO ()) -> Warp.Settings
-runtimeServerSettings requestHeadLimits transportLimits listenerScheme endpoint startupSignal activeConnectionAddresses connectionReporter =
+runtimeServerSettings :: RuntimeTlsListenerDependencies -> Warp.Settings
+runtimeServerSettings listenerDependencies =
   Warp.setPort (endpointPort endpoint)
-    . Warp.setOnException (runtimeConnectionExceptionReporter listenerScheme endpoint activeConnectionAddresses connectionReporter (Warp.getOnException Warp.defaultSettings))
+    . Warp.setOnException (runtimeConnectionExceptionReporter listenerDependencies (Warp.getOnException Warp.defaultSettings))
     . Warp.setFork (forkTrackedConnection activeConnectionAddresses)
     . Warp.setAccept (acceptTrackedConnection activeConnectionAddresses)
-    $ applyRequestTransportLimits requestHeadLimits transportLimits (Warp.setBeforeMainLoop (putMVar startupSignal (Right RuntimeServerReady)) Warp.defaultSettings)
+    $ applyRequestTransportLimits
+      (runtimeTransportRequestHeadLimits dependencies)
+      (runtimeTransportRequestLimits dependencies)
+      (Warp.setBeforeMainLoop (putMVar startupSignal (Right RuntimeServerReady)) Warp.defaultSettings)
+  where
+    dependencies = runtimeTlsListenerTransportDependencies listenerDependencies
+    endpoint = runtimeTlsListenerEndpoint listenerDependencies
+    startupSignal = runtimeTlsListenerStartupSignal listenerDependencies
+    activeConnectionAddresses = runtimeTlsListenerActiveConnectionAddresses listenerDependencies
 
-runtimeHttpServerSettings :: RequestHeadLimits -> RequestTransportLimits -> ListenerEndpoint -> MVar (Either SomeException RuntimeServerReady) -> Warp.Settings
-runtimeHttpServerSettings requestHeadLimits transportLimits endpoint startupSignal =
+runtimeHttpServerSettings :: RuntimeTransportDependencies -> ListenerEndpoint -> MVar (Either SomeException RuntimeServerReady) -> Warp.Settings
+runtimeHttpServerSettings dependencies endpoint startupSignal =
   Warp.setPort (endpointPort endpoint) $
-    applyRequestTransportLimits requestHeadLimits transportLimits (Warp.setBeforeMainLoop (putMVar startupSignal (Right RuntimeServerReady)) Warp.defaultSettings)
+    applyRequestTransportLimits
+      (runtimeTransportRequestHeadLimits dependencies)
+      (runtimeTransportRequestLimits dependencies)
+      (Warp.setBeforeMainLoop (putMVar startupSignal (Right RuntimeServerReady)) Warp.defaultSettings)
 
 -- | Warp rejects an oversized header block before it allocates a WAI
 -- request.  The WAI request-head gate still checks count and individual
@@ -350,15 +433,13 @@ untrackActiveConnection tracker currentThreadId =
     (activeConnectionAddresses tracker)
     (\entries -> (filter ((/= currentThreadId) . fst) entries, ()))
 
-runtimeConnectionExceptionReporter :: ListenerScheme -> ListenerEndpoint -> ActiveConnectionAddresses -> (Observability.ConnectionObservability -> IO ()) -> (Maybe Wai.Request -> SomeException -> IO ()) -> Maybe Wai.Request -> SomeException -> IO ()
-runtimeConnectionExceptionReporter listenerScheme endpoint activeConnectionAddresses connectionReporter defaultReporter maybeRequest exception = do
+runtimeConnectionExceptionReporter :: RuntimeTlsListenerDependencies -> (Maybe Wai.Request -> SomeException -> IO ()) -> Maybe Wai.Request -> SomeException -> IO ()
+runtimeConnectionExceptionReporter listenerDependencies defaultReporter maybeRequest exception = do
+  let activeConnectionAddresses = runtimeTlsListenerActiveConnectionAddresses listenerDependencies
+      connectionReporter = runtimeTlsListenerConnectionReporter listenerDependencies
   clearPendingAddressForAcceptLoopFailure activeConnectionAddresses
   maybeConnectionObservability <-
-    buildConnectionExceptionObservability
-      listenerScheme
-      endpoint
-      activeConnectionAddresses
-      exception
+    buildConnectionExceptionObservability listenerDependencies exception
   case maybeConnectionObservability of
     Just connectionObservability ->
       Observability.forceConnectionObservability connectionObservability `seq`
@@ -378,8 +459,8 @@ clearPendingAddressForAcceptLoopFailure tracker = do
     (maybeAcceptThreadId == Just currentThreadId)
     (void (tryTakeMVar (pendingConnectionAddress tracker)))
 
-buildConnectionExceptionObservability :: ListenerScheme -> ListenerEndpoint -> ActiveConnectionAddresses -> SomeException -> IO (Maybe Observability.ConnectionObservability)
-buildConnectionExceptionObservability listenerScheme endpoint activeConnectionAddresses exception =
+buildConnectionExceptionObservability :: RuntimeTlsListenerDependencies -> SomeException -> IO (Maybe Observability.ConnectionObservability)
+buildConnectionExceptionObservability listenerDependencies exception =
   case fromException exception of
     Just warpTlsException ->
       case warpTlsException of
@@ -389,6 +470,9 @@ buildConnectionExceptionObservability listenerScheme endpoint activeConnectionAd
           buildConnectionObservabilityValue "client-closed-connection-prematurely" "ClientClosedConnectionPrematurely"
     Nothing -> pure Nothing
   where
+    listenerScheme = runtimeTlsListenerScheme listenerDependencies
+    endpoint = runtimeTlsListenerEndpoint listenerDependencies
+    activeConnectionAddresses = runtimeTlsListenerActiveConnectionAddresses listenerDependencies
     buildConnectionObservabilityValue eventName exceptionType = do
       maybePeerAddress <-
         fmap (fmap socketAddressText) (lookupActiveConnectionAddress activeConnectionAddresses)

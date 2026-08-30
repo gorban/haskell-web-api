@@ -17,7 +17,7 @@ import HarchWeb qualified
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Session (generateCsrfToken)
-import HarchWeb.Site (RouteDefinition (..), Site (..), apiOnlySite, buildSiteApplication, simpleSite)
+import HarchWeb.Site (RouteDefinition (..), SimpleSiteConfiguration (..), Site (..), apiOnlySite, buildSiteApplication, simpleSite)
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
@@ -333,12 +333,14 @@ spec = do
 sampleSite :: Site SampleRoute () SampleContext
 sampleSite =
   simpleSite
-    "sample"
-    (SampleContext "")
-    sampleRouteCodec
-    samplePageShell
-    [HomeRoute, SecondRoute]
-    sampleRouteDefinition
+    SimpleSiteConfiguration
+      { simpleSiteName = "sample",
+        simpleSiteDefaultRequestContext = SampleContext "",
+        simpleSiteRouteCodec = sampleRouteCodec,
+        simpleSitePageShell = samplePageShell,
+        simpleSiteNavigationRoutes = [HomeRoute, SecondRoute],
+        simpleSiteRouteDefinition = sampleRouteDefinition
+      }
 
 sampleContextPathPrefix :: SampleContext -> HarchWeb.PathPrefix
 sampleContextPathPrefix (SampleContext value) =

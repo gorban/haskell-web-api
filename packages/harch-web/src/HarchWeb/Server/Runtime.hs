@@ -2,6 +2,11 @@
 {-# LANGUAGE TupleSections #-}
 
 -- | Private runtime listener orchestration behind the public 'runServer' facade.
+--
+-- FQ8 groups listener- and ACME-request dependencies that are fixed for one
+-- runtime. WAI request, response, and timing values remain explicit at their
+-- delivery boundary, including the established strict timing point before a
+-- challenge response is reported.
 module HarchWeb.Server.Runtime
   ( runServer,
     runServerWithWaiMiddleware,
@@ -22,13 +27,15 @@ import HarchWeb.Acme
 import HarchWeb.Acme.Certbot.Runtime (RuntimeAcmeServerEnvironment (..), runtimeAcmeBindPlans, startAcmeRuntimeServersWithRequestTransportLimits, stopAcmeRuntimeServers)
 import HarchWeb.Acme.Challenge (acmeChallengeRoutePath)
 import HarchWeb.Observability (planObservabilityStartup)
-import HarchWeb.Security (RequestPolicyConfig, requestHeadLimits, requestTransportLimits)
+import HarchWeb.Security (requestHeadLimits, requestTransportLimits)
 import HarchWeb.Server.Application (Application (..))
 import HarchWeb.Server.Config
 import HarchWeb.Server.RequestExecution (reportEarlyRequestObservability, toWaiApplication)
+import HarchWeb.Server.RequestObservability (requestObservabilityContext)
 import HarchWeb.Server.Transport
-  ( startHttpRuntimeServersWithRequestTransportLimits,
-    startManualTlsRuntimeServersWithRequestTransportLimits,
+  ( RuntimeTransportDependencies (..),
+    startHttpRuntimeServers,
+    startManualTlsRuntimeServers,
     stopRuntimeServers,
   )
 import Network.Wai qualified as Wai
@@ -81,14 +88,27 @@ runServerWithStartupPlan waiMiddleware outputHandle config webApplication startu
   webrootStore <- newCertbotWebrootStore
   let runtimeRequestPolicy = requestPolicy (toServerConfig config)
   gatedWaiApplication <- toWaiApplication webApplication
-  let runtimeApplication = toRuntimeWaiApplication (waiMiddleware gatedWaiApplication) challengeStore webrootStore webApplication
+  let runtimeRequestEnvironment =
+        RuntimeRequestEnvironment
+          { runtimeRenderedWaiApplication = waiMiddleware gatedWaiApplication,
+            runtimeChallengeStore = challengeStore,
+            runtimeWebrootStore = webrootStore,
+            runtimeTypedApplication = webApplication
+          }
+      runtimeApplication = toRuntimeWaiApplication runtimeRequestEnvironment
       connectionReporter = reportConnectionObservability webApplication
       runtimeRequestHeadLimits = requestHeadLimits runtimeRequestPolicy
       runtimeRequestTransportLimits = requestTransportLimits runtimeRequestPolicy
+      runtimeTransportDependencies =
+        RuntimeTransportDependencies
+          { runtimeTransportRequestHeadLimits = runtimeRequestHeadLimits,
+            runtimeTransportRequestLimits = runtimeRequestTransportLimits,
+            runtimeTransportApplication = runtimeApplication
+          }
   connectionReporter `seq`
     observabilityPlan `seq`
       bracket
-        (startHttpRuntimeServersWithRequestTransportLimits runtimeRequestHeadLimits runtimeRequestTransportLimits (httpEndpoints (httpBindPlan startupPlan)) runtimeApplication)
+        (startHttpRuntimeServers runtimeTransportDependencies (httpEndpoints (httpBindPlan startupPlan)))
         stopRuntimeServers
         ( \httpServers ->
             bracket
@@ -106,7 +126,7 @@ runServerWithStartupPlan waiMiddleware outputHandle config webApplication startu
               stopAcmeRuntimeServers
               ( \acmeServers ->
                   bracket
-                    (startManualTlsRuntimeServersWithRequestTransportLimits runtimeRequestHeadLimits runtimeRequestTransportLimits (manualTlsBindPlans startupPlan) runtimeApplication connectionReporter)
+                    (startManualTlsRuntimeServers runtimeTransportDependencies (manualTlsBindPlans startupPlan) connectionReporter)
                     stopRuntimeServers
                     ( \manualTlsServers ->
                         httpServers `seq`
@@ -118,34 +138,41 @@ runServerWithStartupPlan waiMiddleware outputHandle config webApplication startu
               )
         )
 
-toRuntimeWaiApplication ::
-  Wai.Application ->
-  AcmeChallengeStore ->
-  CertbotWebrootStore ->
-  Application route action context ->
-  Wai.Application
-toRuntimeWaiApplication renderedWaiApplication challengeStore webrootStore webApplication request respond = do
+-- | Dependencies fixed for all ACME challenge checks within one running
+-- server. They are deliberately separate from request-specific timing and
+-- responder values so the request adapter does not become another general
+-- dispatch abstraction.
+data RuntimeRequestEnvironment route action context = RuntimeRequestEnvironment
+  { runtimeRenderedWaiApplication :: Wai.Application,
+    runtimeChallengeStore :: AcmeChallengeStore,
+    runtimeWebrootStore :: CertbotWebrootStore,
+    runtimeTypedApplication :: Application route action context
+  }
+
+toRuntimeWaiApplication :: RuntimeRequestEnvironment route action context -> Wai.Application
+toRuntimeWaiApplication runtimeRequestEnvironment request respond = do
   requestStartedAt <- getMonotonicTimeNSec
-  let requestPolicyConfig = applicationRequestPolicy webApplication
-  maybeChallengeResponse <- acmeChallengeResponseForRequest requestPolicyConfig challengeStore webrootStore request
+  let webApplication = runtimeTypedApplication runtimeRequestEnvironment
+      requestPolicyConfig = applicationRequestPolicy webApplication
+  maybeChallengeResponse <- acmeChallengeResponseForRequest requestPolicyConfig (runtimeChallengeStore runtimeRequestEnvironment) (runtimeWebrootStore runtimeRequestEnvironment) request
   maybe
-    (renderedWaiApplication request respond)
-    (respondAcmeChallenge webApplication request requestPolicyConfig requestStartedAt respond)
+    (runtimeRenderedWaiApplication runtimeRequestEnvironment request respond)
+    (respondAcmeChallenge runtimeRequestEnvironment request requestStartedAt respond)
     maybeChallengeResponse
 
 respondAcmeChallenge ::
-  Application route action context ->
+  RuntimeRequestEnvironment route action context ->
   Wai.Request ->
-  RequestPolicyConfig ->
   Word64 ->
   (Wai.Response -> IO Wai.ResponseReceived) ->
   Wai.Response ->
   IO Wai.ResponseReceived
-respondAcmeChallenge webApplication request requestPolicyConfig requestStartedAt respond challengeResponse = do
+respondAcmeChallenge runtimeRequestEnvironment request requestStartedAt respond challengeResponse = do
+  let webApplication = runtimeTypedApplication runtimeRequestEnvironment
+      requestPolicyConfig = applicationRequestPolicy webApplication
   challengeResponseReportedAt <- challengeResponse `seq` getMonotonicTimeNSec
   reportEarlyRequestObservability
-    webApplication
-    request
+    (requestObservabilityContext webApplication request requestPolicyConfig)
     requestStartedAt
     challengeResponseReportedAt
     (acmeChallengeRoutePath requestPolicyConfig request)

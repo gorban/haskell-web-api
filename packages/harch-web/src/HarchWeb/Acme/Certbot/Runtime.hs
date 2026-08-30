@@ -9,6 +9,9 @@
 -- key) is removed on every failed preparation. A successful return transfers
 -- cleanup ownership to the running server; failure diagnostics never expose or
 -- preserve that private directory or its logs.
+-- FQ8 passes the existing runtime's shared transport dependency record to the
+-- acquired TLS listener, so ACME cannot accidentally start with a different
+-- request-limit policy or WAI application than its sibling listeners.
 module HarchWeb.Acme.Certbot.Runtime
   ( RunningAcmeRuntimeServer,
     RuntimeAcmeBindPlan (..),
@@ -57,8 +60,9 @@ import HarchWeb.Server.Config
   )
 import HarchWeb.Server.Transport
   ( RunningRuntimeServer,
+    RuntimeTransportDependencies (..),
     ensureRuntimeFileExists,
-    startManualTlsRuntimeServerWithRequestTransportLimits,
+    startManualTlsRuntimeServer,
     stopRuntimeServer,
   )
 import Network.Wai qualified as Wai
@@ -142,7 +146,9 @@ startAcmeRuntimeServer environment runtimeAcmePlan = do
     prepareCertbotManualTlsBindPlanWithLogger webrootStore applicationLogger runtimeAcmePlan certbotConfig
   maybeRunningServer <-
     connectionReporter `seq`
-      traverse (\manualTlsPlan -> startManualTlsRuntimeServerWithRequestTransportLimits requestHeadLimits transportLimits manualTlsPlan waiApplication connectionReporter) maybeManualTlsPlan
+      traverse
+        (\manualTlsPlan -> startManualTlsRuntimeServer transportDependencies manualTlsPlan connectionReporter)
+        maybeManualTlsPlan
         `onException` removePathForcibly cleanupDirectory
   pure
     RunningAcmeRuntimeServer
@@ -154,6 +160,12 @@ startAcmeRuntimeServer environment runtimeAcmePlan = do
     requestHeadLimits = runtimeAcmeRequestHeadLimits environment
     transportLimits = runtimeAcmeRequestTransportLimits environment
     waiApplication = runtimeAcmeApplication environment
+    transportDependencies =
+      RuntimeTransportDependencies
+        { runtimeTransportRequestHeadLimits = requestHeadLimits,
+          runtimeTransportRequestLimits = transportLimits,
+          runtimeTransportApplication = waiApplication
+        }
     connectionReporter = runtimeAcmeConnectionReporter environment
     applicationLogger = runtimeAcmeApplicationLogger environment
 

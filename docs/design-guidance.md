@@ -1390,6 +1390,27 @@ promotion/discard ownership, bounded streaming, or typed parse/callback failures
 and multipart regressions plus the full coverage gate are the proof that this structural cleanup
 preserves their short-circuiting and resource contracts.
 
+### Decision record — FQ8: context records at server ownership boundaries (2026-08-30)
+
+**Decision: group values that remain fixed through one server ownership boundary, but leave each
+changing request, route, response, and timing phase explicit.** `RequestObservabilityContext` owns
+the application, accepted WAI request, and resolved request policy used by both early and routed
+reporting. `RequestExecutionTimingState` owns only timestamps that have already occurred; it becomes
+the complete `RequestExecutionTimings` only after the response has been forced. This preserves the
+existing `seq` points around policy, route dispatch, response rendering, and observability forcing:
+the refactor cannot turn timing into deferred bookkeeping or let pure telemetry exceptions escape at
+an unrelated boundary.
+
+`RuntimeRequestEnvironment` and `RuntimeTransportDependencies` likewise own the rendered
+application, ACME stores, typed application, and shared listener request limits that one runtime
+starts with. Listener-specific endpoint, TLS settings, socket, peer tracker, readiness signal, and
+reporter stay explicit or live in a private per-listener record. `SimpleSiteConfiguration` groups a
+site's declarative route-table and shell inputs; middleware, policy, actions, and observers remain
+ordinary `Site` overrides. The disabled default observers are intentional policy values and were
+already reduced by FQ1 to unforced ordinary no-ops, so this task does not disguise them with new
+ignore callbacks. Existing request/transport/ACME behavior tests and the coverage gate are the
+evidence required for this structural change.
+
 ### Follow-up decision — AY: add `connect_timeout` now, defer a hard TLS default until a deployment decision (2026-08-21)
 
 **Decision: implement `DATABASE_CONNECT_TIMEOUT_SECONDS`/`connect_timeout` unconditionally, but do

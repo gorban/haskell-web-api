@@ -29,6 +29,7 @@ module HarchWeb.Server
     eventStreamResponse,
     isClientActionRequest,
     LocalTestServer (..),
+    ManualTlsServerStarter,
     ReloadingTlsCredentials,
     TlsCertificateFilePath,
     TlsPrivateKeyFilePath,
@@ -82,7 +83,8 @@ import HarchWeb.Server.ResponseRendering
 import HarchWeb.Server.Runtime
 import HarchWeb.Server.Sse
 import HarchWeb.Server.Transport
-  ( ReloadingTlsCredentials,
+  ( ManualTlsServerStarter,
+    ReloadingTlsCredentials,
     TlsCertificateFilePath,
     TlsPrivateKeyFilePath,
     loadReloadingTlsCredentials,

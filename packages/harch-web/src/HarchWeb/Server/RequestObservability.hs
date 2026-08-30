@@ -8,8 +8,17 @@
 -- response paths retain one exact encoding of request identity, timing,
 -- response diagnostics, and trace context without regrowing the execution
 -- facade around observability plumbing.
+--
+-- FQ8 keeps the per-response route, timing, and response values explicit,
+-- while 'RequestObservabilityContext' owns the stable application, WAI
+-- request, and resolved policy that every reporter needs.  The force at this
+-- observability boundary remains deliberate: it makes exceptions from pure
+-- telemetry construction occur where the framework can associate them with
+-- the report, rather than moving evaluation into request delivery.
 module HarchWeb.Server.RequestObservability
   ( RequestExecutionTimings (..),
+    RequestObservabilityContext,
+    requestObservabilityContext,
     reportEarlyRequestObservability,
     reportRoutedResponseObservability,
   )
@@ -46,37 +55,48 @@ data RequestExecutionTimings = RequestExecutionTimings
     requestResponseRenderedAt :: Word64
   }
 
+-- | Values fixed for every observability result emitted by one WAI request.
+-- Response-specific path, timing, route, and diagnostic values intentionally
+-- remain arguments to the reporting operations.
+data RequestObservabilityContext route action context = RequestObservabilityContext
+  { requestObservabilityApplication :: Application route action context,
+    requestObservabilityWaiRequest :: Wai.Request,
+    requestObservabilityPolicyConfig :: RequestPolicyConfig
+  }
+
+requestObservabilityContext :: Application route action context -> Wai.Request -> RequestPolicyConfig -> RequestObservabilityContext route action context
+requestObservabilityContext = RequestObservabilityContext
+
 reportRoutedResponseObservability ::
   (Eq route) =>
-  Application route action context ->
-  Wai.Request ->
-  RequestPolicyConfig ->
+  RequestObservabilityContext route action context ->
   Text ->
   RequestExecutionTimings ->
   RouteRequest route context ->
   Response route context ->
   IO ()
-reportRoutedResponseObservability webApplication request requestPolicyConfig requestPath executionTimings routeRequest response = do
+reportRoutedResponseObservability observabilityContext requestPath executionTimings routeRequest response = do
   let diagnosticValues = responseDiagnostics response
+      webApplication = requestObservabilityApplication observabilityContext
+      request = requestObservabilityWaiRequest observabilityContext
+      requestPolicyConfig = requestObservabilityPolicyConfig observabilityContext
       requestLogFields = requestLogContextFields requestPolicyConfig request
       contextualizedLogs = map (prependRequestLogContext requestLogFields) (diagnosticLogEntries diagnosticValues)
-      observabilityValue = buildRoutedRequestObservability webApplication request requestPolicyConfig requestPath executionTimings routeRequest response diagnosticValues
+      observabilityValue = buildRoutedRequestObservability observabilityContext requestPath executionTimings routeRequest response diagnosticValues
   Observability.forceRequestObservability observabilityValue `seq`
     reportRequestObservability webApplication observabilityValue
       >> mapM_ (reportApplicationLog webApplication) contextualizedLogs
 
 buildRoutedRequestObservability ::
   (Eq route) =>
-  Application route action context ->
-  Wai.Request ->
-  RequestPolicyConfig ->
+  RequestObservabilityContext route action context ->
   Text ->
   RequestExecutionTimings ->
   RouteRequest route context ->
   Response route context ->
   ResponseDiagnostics ->
   Observability.RequestObservability
-buildRoutedRequestObservability webApplication request requestPolicyConfig requestPath executionTimings routeRequest response diagnosticValues =
+buildRoutedRequestObservability observabilityContext requestPath executionTimings routeRequest response diagnosticValues =
   Observability.withDatabaseOperations (diagnosticDatabaseOperations diagnosticValues) $
     maybe id Observability.withRequestTraceContext (requestTraceContext request) $
       Observability.buildRequestObservability
@@ -100,17 +120,22 @@ buildRoutedRequestObservability webApplication request requestPolicyConfig reque
                      ]
               )
         )
+  where
+    webApplication = requestObservabilityApplication observabilityContext
+    request = requestObservabilityWaiRequest observabilityContext
+    requestPolicyConfig = requestObservabilityPolicyConfig observabilityContext
 
 reportEarlyRequestObservability ::
-  Application route action context ->
-  Wai.Request ->
+  RequestObservabilityContext route action context ->
   Word64 ->
   Word64 ->
   Text ->
   Wai.Response ->
   IO ()
-reportEarlyRequestObservability webApplication request requestStartedAt requestCompletedAt routePath response =
-  let requestPolicyConfig = applicationRequestPolicy webApplication
+reportEarlyRequestObservability observabilityContext requestStartedAt requestCompletedAt routePath response =
+  let webApplication = requestObservabilityApplication observabilityContext
+      request = requestObservabilityWaiRequest observabilityContext
+      requestPolicyConfig = requestObservabilityPolicyConfig observabilityContext
       requestObservability =
         maybe id Observability.withRequestTraceContext (requestTraceContext request) $
           Observability.buildRequestObservability

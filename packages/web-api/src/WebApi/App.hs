@@ -128,12 +128,14 @@ buildAppWithDatabaseAndOptionalReporters config pageRepository !accountWorkflow 
   Site.buildSiteApplication
     ( configureReporters
         ( ( Site.simpleSite
-              "web-api"
-              defaultRequestContext
-              routeCodec
-              (const (buildAppPageShellConfig config))
-              appNavigationRoutes
-              (buildAppRouteDefinition config pageRepository accountWorkflow)
+              Site.SimpleSiteConfiguration
+                { Site.simpleSiteName = "web-api",
+                  Site.simpleSiteDefaultRequestContext = defaultRequestContext,
+                  Site.simpleSiteRouteCodec = routeCodec,
+                  Site.simpleSitePageShell = const (buildAppPageShellConfig config),
+                  Site.simpleSiteNavigationRoutes = appNavigationRoutes,
+                  Site.simpleSiteRouteDefinition = buildAppRouteDefinition config pageRepository accountWorkflow
+                }
           )
             { Site.siteRequestContextFromRequest =
                 requestContextFromWaiRequest (requestPolicy config),

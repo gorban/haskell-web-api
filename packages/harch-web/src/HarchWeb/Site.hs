@@ -1,8 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+-- | Declarative site composition.
+--
+-- FQ8 makes the six stable route-table and shell declaration inputs one
+-- 'SimpleSiteConfiguration'. Dynamic policy, middleware, action, and
+-- reporter customizations stay on 'Site' itself. The default disabled
+-- reporters remain ordinary no-op observer policy, not strictness or
+-- coverage-only callbacks.
 module HarchWeb.Site
   ( RouteDefinition (..),
     Site (..),
+    SimpleSiteConfiguration (..),
     apiOnlySite,
     buildSiteApplication,
     pageRoute,
@@ -87,32 +95,41 @@ data Site route action context = Site
     siteReportApplicationLog :: Text -> IO ()
   }
 
+-- | The stable declaration inputs for 'simpleSite'.  Request middleware,
+-- assets, policies, client actions, and reporters remain deliberate
+-- subsequent 'Site' customizations; grouping only the route-table and shell
+-- declaration prevents those six values being transposed at every simple
+-- composition root.
+data SimpleSiteConfiguration route context = SimpleSiteConfiguration
+  { simpleSiteName :: Text,
+    simpleSiteDefaultRequestContext :: context,
+    simpleSiteRouteCodec :: RouteCodec route context,
+    simpleSitePageShell :: Page route context -> PageShell route context,
+    simpleSiteNavigationRoutes :: [route],
+    simpleSiteRouteDefinition :: route -> RouteDefinition route context
+  }
+
 simpleSite ::
-  Text ->
-  context ->
-  RouteCodec route context ->
-  (Page route context -> PageShell route context) ->
-  [route] ->
-  (route -> RouteDefinition route context) ->
+  SimpleSiteConfiguration route context ->
   Site route action context
-simpleSite name defaultContext codec shellBuilder navigationRoutes routeDefinition =
+simpleSite configuration =
   Site
-    { siteName = name,
-      siteDefaultRequestContext = defaultContext,
+    { siteName = simpleSiteName configuration,
+      siteDefaultRequestContext = simpleSiteDefaultRequestContext configuration,
       siteRequestContextFromRequest = \_ requestContext -> requestContext,
       siteStaticAssets = emptyStaticAssetsConfig,
       siteNavigationRuntime = Just defaultNavigationRuntime,
       siteNavigationRuntimePathPrefix = const emptyPathPrefix,
       siteRequestPolicy = defaultSiteRequestPolicy,
       siteRequestMiddleware = [],
-      siteRouteCodec = codec,
-      siteNavigationRoutes = navigationRoutes,
-      siteRouteDefinition = routeDefinition,
+      siteRouteCodec = simpleSiteRouteCodec configuration,
+      siteNavigationRoutes = simpleSiteNavigationRoutes configuration,
+      siteRouteDefinition = simpleSiteRouteDefinition configuration,
       siteDecodeClientAction = const HarchWeb.UnrecognizedClientAction,
       sitePageCsrfToken = const generateCsrfToken,
       siteAuthorizeClientActionCsrf = \_ _ -> pure True,
       siteHandleClientAction = const (pure Nothing),
-      sitePageShell = shellBuilder,
+      sitePageShell = simpleSitePageShell configuration,
       siteReportRequestObservability = const (pure ()),
       siteReportConnectionObservability = const (pure ()),
       siteReportApplicationLog = const (pure ())
@@ -131,7 +148,16 @@ apiOnlySite ::
   (route -> RouteDefinition route context) ->
   Site route action context
 apiOnlySite name defaultContext codec routeDefinition =
-  (simpleSite name defaultContext codec (const apiOnlyFallbackPageShell) [] routeDefinition)
+  ( simpleSite
+      SimpleSiteConfiguration
+        { simpleSiteName = name,
+          simpleSiteDefaultRequestContext = defaultContext,
+          simpleSiteRouteCodec = codec,
+          simpleSitePageShell = const apiOnlyFallbackPageShell,
+          simpleSiteNavigationRoutes = [],
+          simpleSiteRouteDefinition = routeDefinition
+        }
+  )
     { siteNavigationRuntime = Nothing
     }
 

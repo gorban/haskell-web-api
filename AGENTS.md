@@ -146,7 +146,18 @@ be useful to diagnose an older or failed run, but is merge evidence only if both
 equals `task_sha` and its event is `pull_request`:
 
 ```sh
-distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh run view <run-id> \
+# From .../actions/runs/33228591158/job/99037055945, use 33228591158.
+run_id=33228591158
+run_sha="$(distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh run view "$run_id" \
+  --json headSha --jq .headSha)"
+run_event="$(distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh run view "$run_id" \
+  --json event --jq .event)"
+test "$run_sha" = "$task_sha" && test "$run_event" = pull_request || {
+  printf 'Supplied run is %s (%s); current PR task commit is %s. It is diagnostic only.\n' \
+    "$run_sha" "$run_event" "$task_sha" >&2
+  exit 1
+}
+distrobox-host-exec /home/linuxbrew/.linuxbrew/bin/gh run view "$run_id" \
   --json databaseId,workflowName,headSha,event,status,conclusion,url,jobs
 ```
 

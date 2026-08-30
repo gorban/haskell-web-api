@@ -58,6 +58,7 @@ import HarchWeb
 import HarchWeb.Action (decodeAction)
 import HarchWeb.Site
   ( RouteDefinition (..),
+    SimpleSiteConfiguration (..),
     Site (..),
     buildSiteApplication,
     simpleSite,
@@ -73,12 +74,14 @@ buildApplication = buildSiteApplication twoPageSite
 twoPageSite :: Site TwoPageRoute TwoPageAction ()
 twoPageSite =
   ( simpleSite
-      "two-pages-example"
-      ()
-      routeCodec
-      twoPageShell
-      [Page HomePage, Page SecondPage, Page LiveDataPage]
-      routeDefinition
+      SimpleSiteConfiguration
+        { simpleSiteName = "two-pages-example",
+          simpleSiteDefaultRequestContext = (),
+          simpleSiteRouteCodec = routeCodec,
+          simpleSitePageShell = twoPageShell,
+          simpleSiteNavigationRoutes = [Page HomePage, Page SecondPage, Page LiveDataPage],
+          simpleSiteRouteDefinition = routeDefinition
+        }
   )
     { siteStaticAssets = twoPageStaticAssets,
       siteRequestPolicy = twoPageRequestPolicy,

@@ -4,7 +4,10 @@
 --
 -- The public facade exposes 'LocalTestServer', 'withLocalTestServer', and
 -- 'withLocalTestServerForApplication'; raw sockets and server threads stay
--- behind this module boundary.
+-- behind this module boundary. FQ8 constructs the same
+-- 'RuntimeTransportDependencies' record as production startup, so loopback
+-- tests retain transport-policy parity without rebuilding the listener
+-- dependency list positionally.
 module HarchWeb.Server.LocalTest
   ( LocalTestServer (..),
     withLocalTestServer,
@@ -20,7 +23,7 @@ import HarchWeb.Security (RequestHeadLimits, RequestTransportLimits, requestHead
 import HarchWeb.Server.Application (Application (..))
 import HarchWeb.Server.Config (ListenerEndpoint (..), ListenerScheme (..))
 import HarchWeb.Server.RequestExecution (toWaiApplication)
-import HarchWeb.Server.Transport (listenerSchemeText, openLoopbackSocket, socketPort, startWarpServerOnSocketWithRequestTransportLimits)
+import HarchWeb.Server.Transport (RuntimeTransportDependencies (..), listenerSchemeText, openLoopbackSocket, socketPort, startWarpServerOnSocket)
 import Network.Socket qualified as Socket
 import Network.Wai qualified as Wai
 
@@ -74,9 +77,15 @@ startLocalTestServer requestHeadLimits transportLimits waiApplication = do
   localPort <- socketPort listeningSocket
   let listenerScheme = Http
       endpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = localPort}
+      transportDependencies =
+        RuntimeTransportDependencies
+          { runtimeTransportRequestHeadLimits = requestHeadLimits,
+            runtimeTransportRequestLimits = transportLimits,
+            runtimeTransportApplication = waiApplication
+          }
   serverThreadId <-
     endpointHost endpoint `seq`
-      startWarpServerOnSocketWithRequestTransportLimits requestHeadLimits transportLimits endpoint listeningSocket waiApplication
+      startWarpServerOnSocket transportDependencies endpoint listeningSocket
         `onException` Socket.close listeningSocket
   localPort `seq`
     pure

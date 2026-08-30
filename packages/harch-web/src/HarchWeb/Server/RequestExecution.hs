@@ -1,6 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Typed request execution and the public WAI adapter.
+--
+-- FQ8 keeps WAI request, response, and route-dispatch values explicit at
+-- their changing execution stages.  'RoutedRequestExecution' owns the
+-- stable accepted-request dependencies, while 'RequestExecutionTimingState'
+-- captures only timings that have already happened.  That preserves the
+-- deliberate @seq@ timing boundaries without allowing independently passed
+-- timestamps or reporting dependencies to be transposed.
 module HarchWeb.Server.RequestExecution
   ( concurrencyLimitedMiddleware,
     navigationRuntimeResponse,
@@ -59,8 +66,10 @@ import HarchWeb.Server.RequestAdmission
 import HarchWeb.Server.RequestBody (RequestBodyReadFailure (..), readRequestBodyUpTo)
 import HarchWeb.Server.RequestObservability
   ( RequestExecutionTimings (..),
+    RequestObservabilityContext,
     reportEarlyRequestObservability,
     reportRoutedResponseObservability,
+    requestObservabilityContext,
   )
 import HarchWeb.Server.Response
 import HarchWeb.Server.ResponseRendering
@@ -122,6 +131,24 @@ data RoutedRequestExecution route action context = RoutedRequestExecution
     routedRequestPath :: Text
   }
 
+-- | Timing values stable after policy, middleware, and route matching have
+-- completed.  Rendering times are deliberately absent until the response is
+-- forced at the final rendering boundary.
+data RequestExecutionTimingState = RequestExecutionTimingState
+  { requestTimingStartedAt :: Word64,
+    requestTimingPolicyEvaluatedAt :: Word64,
+    requestTimingMiddleware :: [(Text, Word64, Word64)],
+    requestTimingRouteMatchingStartedAt :: Word64,
+    requestTimingRouteMatchedAt :: Word64
+  }
+
+routedRequestObservabilityContext :: RoutedRequestExecution route action context -> RequestObservabilityContext route action context
+routedRequestObservabilityContext routedRequestExecution =
+  requestObservabilityContext
+    (routedRequestApplication routedRequestExecution)
+    (routedRequestWaiRequest routedRequestExecution)
+    (routedRequestPolicyConfig routedRequestExecution)
+
 -- | Adapt a typed application to WAI. Framework-owned early responses,
 -- middleware, route dispatch, and finalization all converge here. The
 -- returned application unconditionally honors 'requestConcurrencyLimit'
@@ -159,7 +186,12 @@ toValidatedWaiApplication routeGateCache webApplication request respond = do
   let respondEarlyRequest (earlyResponsePath, earlyResponseValue) = do
         responseReportedAt <- earlyResponseValue `seq` getMonotonicTimeNSec
         responseReceived <- respond earlyResponseValue
-        reportEarlyRequestObservability webApplication request requestStartedAt responseReportedAt earlyResponsePath earlyResponseValue
+        reportEarlyRequestObservability
+          (requestObservabilityContext webApplication request requestPolicyConfig)
+          requestStartedAt
+          responseReportedAt
+          earlyResponsePath
+          earlyResponseValue
         pure responseReceived
 
       handleRoutedRequestAfterEarlyStages =
@@ -220,21 +252,23 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
           requestContext
           (Routing.requestMethod (requestMethodText request))
           (Routing.requestPath (waiRequestRouteTarget requestPolicyConfig request))
-      routeRequest = routeDispatchRequest routeDispatch
   routeMatchedAt <- routeDispatch `seq` getMonotonicTimeNSec
+  let timingState =
+        RequestExecutionTimingState
+          { requestTimingStartedAt = requestStartedAt,
+            requestTimingPolicyEvaluatedAt = policyEvaluatedAt,
+            requestTimingMiddleware = middlewareTiming,
+            requestTimingRouteMatchingStartedAt = routeMatchingStartedAt,
+            requestTimingRouteMatchedAt = routeMatchedAt
+          }
   routeMiddleware <- routeAdmissionMiddleware routedRequestExecution routeDispatch
   routeMiddleware
     ( \admittedRequest admittedRespond ->
         continueRoutedRequest
           (routedRequestExecution {routedRequestWaiRequest = admittedRequest, routedRequestRespond = admittedRespond})
-          requestStartedAt
-          policyEvaluatedAt
-          middlewareTiming
-          routeMatchingStartedAt
-          routeMatchedAt
+          timingState
           routeDispatch
           middlewareResult
-          routeRequest
     )
     request
     (routedRequestRespond routedRequestExecution)
@@ -258,16 +292,11 @@ routeAdmissionMiddleware routedRequestExecution routeDispatch =
 continueRoutedRequest ::
   (Eq route) =>
   RoutedRequestExecution route action context ->
-  Word64 ->
-  Word64 ->
-  [(Text, Word64, Word64)] ->
-  Word64 ->
-  Word64 ->
+  RequestExecutionTimingState ->
   RouteDispatch route context ->
   MiddlewareResult context ->
-  RouteRequest route context ->
   IO Wai.ResponseReceived
-continueRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt middlewareTiming routeMatchingStartedAt routeMatchedAt routeDispatch middlewareResult routeRequest = do
+continueRoutedRequest routedRequestExecution timingState routeDispatch middlewareResult = do
   let webApplication = routedRequestApplication routedRequestExecution
   renderStartedAt <- getMonotonicTimeNSec
   response <- dispatchRoutedRequest routedRequestExecution routeDispatch middlewareResult
@@ -275,15 +304,15 @@ continueRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt 
   pageSecurity <- responsePageSecurity webApplication response
   let executionTimings =
         RequestExecutionTimings
-          { requestExecutionStartedAt = requestStartedAt,
-            requestPolicyEvaluatedAt = policyEvaluatedAt,
-            requestMiddlewareTimings = middlewareTiming,
-            requestRouteMatchingStartedAt = routeMatchingStartedAt,
-            requestRouteMatchedAt = routeMatchedAt,
+          { requestExecutionStartedAt = requestTimingStartedAt timingState,
+            requestPolicyEvaluatedAt = requestTimingPolicyEvaluatedAt timingState,
+            requestMiddlewareTimings = requestTimingMiddleware timingState,
+            requestRouteMatchingStartedAt = requestTimingRouteMatchingStartedAt timingState,
+            requestRouteMatchedAt = requestTimingRouteMatchedAt timingState,
             requestRenderingStartedAt = renderStartedAt,
             requestResponseRenderedAt = responseRenderedAt
           }
-  finalizeRoutedResponse routedRequestExecution executionTimings routeRequest (isHeadDispatch routeDispatch) pageSecurity response
+  finalizeRoutedResponse routedRequestExecution executionTimings routeDispatch pageSecurity response
 
 routeDispatchRequest :: RouteDispatch route context -> RouteRequest route context
 routeDispatchRequest routeDispatch =
@@ -323,19 +352,21 @@ dispatchRoutedRequest
   (ContinueMiddleware _) =
     let webApplication = routedRequestApplication routedRequestExecution
         request = routedRequestWaiRequest routedRequestExecution
-        requestPath = routedRequestPath routedRequestExecution
-        requestPolicyConfig = routedRequestPolicyConfig routedRequestExecution
         RouteRequest {requestContext = routedRequestContext} = routeDispatchRequest routeDispatch
      in case routeRenderDispatch routeDispatch of
           Left declaredMethods -> routeOptionsResponse declaredMethods
           Right renderDispatch@RenderMatchedHead {} -> renderRouteDispatch webApplication request renderDispatch
           Right renderDispatch
             | isClientActionRequest request ->
-                clientActionResponse webApplication request requestPath requestPolicyConfig routedRequestContext
+                clientActionResponse routedRequestExecution routedRequestContext
             | otherwise -> renderRouteDispatch webApplication request renderDispatch
 
-clientActionResponse :: Application route action context -> Wai.Request -> Text -> RequestPolicyConfig -> context -> IO (Response route context)
-clientActionResponse webApplication request requestPath requestPolicyConfig routedRequestContext = do
+clientActionResponse :: RoutedRequestExecution route action context -> context -> IO (Response route context)
+clientActionResponse routedRequestExecution routedRequestContext = do
+  let webApplication = routedRequestApplication routedRequestExecution
+      request = routedRequestWaiRequest routedRequestExecution
+      requestPath = routedRequestPath routedRequestExecution
+      requestPolicyConfig = routedRequestPolicyConfig routedRequestExecution
   result <- runExceptT $ do
     let expectedOrigin =
           (\host -> requestScheme requestPolicyConfig request <> "://" <> host)
@@ -459,23 +490,28 @@ finalizeRoutedResponse ::
   (Eq route) =>
   RoutedRequestExecution route action context ->
   RequestExecutionTimings ->
-  RouteRequest route context ->
-  Bool ->
+  RouteDispatch route context ->
   Maybe (Document.RuntimeNonce, CsrfToken) ->
   Response route context ->
   IO Wai.ResponseReceived
-finalizeRoutedResponse routedRequestExecution executionTimings routeRequest omitResponseBody pageSecurity response = do
+finalizeRoutedResponse routedRequestExecution executionTimings routeDispatch pageSecurity response = do
   let webApplication = routedRequestApplication routedRequestExecution
       request = routedRequestWaiRequest routedRequestExecution
       respond = routedRequestRespond routedRequestExecution
       requestPolicyConfig = routedRequestPolicyConfig routedRequestExecution
+      routeRequest = routeDispatchRequest routeDispatch
   responseReceived <-
     respond
       ( omitResponseBodyWhen
-          omitResponseBody
+          (isHeadDispatch routeDispatch)
           (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request (fst <$> pageSecurity)) (toWaiResponse [] pageSecurity webApplication response))
       )
-  reportRoutedResponseObservability webApplication request requestPolicyConfig (routedRequestPath routedRequestExecution) executionTimings routeRequest response
+  reportRoutedResponseObservability
+    (routedRequestObservabilityContext routedRequestExecution)
+    (routedRequestPath routedRequestExecution)
+    executionTimings
+    routeRequest
+    response
   pure responseReceived
 
 omitResponseBodyWhen :: Bool -> Wai.Response -> Wai.Response
