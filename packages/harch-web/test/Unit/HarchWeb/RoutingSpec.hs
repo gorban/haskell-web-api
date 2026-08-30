@@ -110,11 +110,11 @@ existingSpec = do
     it "keeps every combined route value comparable and printable" $ do
       let routes :: [RouteFamily RoutingTestRoute SecondFamilyRoute]
           routes = [RouteFamilyA RoutingReadRoute, RouteFamilyA RoutingWriteRoute, RouteFamilyB RoutingSecondOnlyRoute]
-      eqViaDictionary (RouteFamilyA RoutingReadRoute :: RouteFamily RoutingTestRoute SecondFamilyRoute) (RouteFamilyA RoutingReadRoute) `shouldBe` True
-      neqViaDictionary (RouteFamilyA RoutingReadRoute :: RouteFamily RoutingTestRoute SecondFamilyRoute) (RouteFamilyB RoutingSecondOnlyRoute) `shouldBe` True
-      map showViaDictionary routes `shouldSatisfy` not . any null
-      showsPrecViaDictionary 11 (RouteFamilyB RoutingSecondOnlyRoute :: RouteFamily RoutingTestRoute SecondFamilyRoute) "" `shouldSatisfy` not . null
-      showListViaDictionary routes "" `shouldSatisfy` not . null
+      ((RouteFamilyA RoutingReadRoute :: RouteFamily RoutingTestRoute SecondFamilyRoute) == RouteFamilyA RoutingReadRoute) `shouldBe` True
+      ((RouteFamilyA RoutingReadRoute :: RouteFamily RoutingTestRoute SecondFamilyRoute) /= RouteFamilyB RoutingSecondOnlyRoute) `shouldBe` True
+      map show routes `shouldSatisfy` not . any null
+      showsPrec 11 (RouteFamilyB RoutingSecondOnlyRoute :: RouteFamily RoutingTestRoute SecondFamilyRoute) "" `shouldSatisfy` not . null
+      showList routes "" `shouldSatisfy` not . null
 
   describe "matchRouteMethod" $ do
     it "keeps an unknown path as not found rather than manufacturing a 405" $
@@ -199,8 +199,7 @@ existingSpec = do
               RouteOptions writeRequest (RoutePost :| [RoutePut])
             ]
       methods `shouldBe` [RouteGet, RoutePost, RoutePut, RoutePatch, RouteDelete]
-      eqViaDictionary RouteGet RouteGet `shouldBe` True
-      neqViaDictionary RouteGet RoutePost `shouldBe` True
+      (RouteGet /= RoutePost) `shouldBe` True
       dispatches
         `shouldBe` [ RouteNotFound missingRequest,
                      RouteMethodNotAllowed readRequest (RouteGet :| []),
@@ -210,14 +209,14 @@ existingSpec = do
                    ]
       map show methods
         `shouldBe` ["RouteGet", "RoutePost", "RoutePut", "RoutePatch", "RouteDelete"]
-      showViaDictionary RouteDelete `shouldBe` "RouteDelete"
-      showsPrecViaDictionary 11 RouteDelete "" `shouldBe` "RouteDelete"
-      showListViaDictionary [RoutePatch, RouteDelete] "" `shouldBe` "[RoutePatch,RouteDelete]"
-      eqViaDictionary (RouteMatched readRequest) (RouteMatched readRequest) `shouldBe` True
-      neqViaDictionary (RouteMatched readRequest) (RouteMatchedHead readRequest) `shouldBe` True
-      showViaDictionary (RouteOptions writeRequest (RoutePost :| [RoutePut])) `shouldSatisfy` not . null
-      showsPrecViaDictionary 11 (RouteMatchedHead readRequest) "" `shouldSatisfy` not . null
-      showListViaDictionary dispatches "" `shouldSatisfy` not . null
+      show RouteDelete `shouldBe` "RouteDelete"
+      showsPrec 11 RouteDelete "" `shouldBe` "RouteDelete"
+      showList [RoutePatch, RouteDelete] "" `shouldBe` "[RoutePatch,RouteDelete]"
+      (RouteMatched readRequest == RouteMatched (RouteRequest RoutingReadRoute RoutingTestContext)) `shouldBe` True
+      (RouteMatched readRequest /= RouteMatchedHead readRequest) `shouldBe` True
+      show (RouteOptions writeRequest (RoutePost :| [RoutePut])) `shouldSatisfy` not . null
+      showsPrec 11 (RouteMatchedHead readRequest) "" `shouldSatisfy` not . null
+      showList dispatches "" `shouldSatisfy` not . null
       map show dispatches `shouldSatisfy` not . any null
 
 testCodec :: RouteCodec RoutingTestRoute RoutingTestContext
@@ -284,26 +283,6 @@ emptyRequest = RouteRequest RoutingEmptyRoute RoutingTestContext
 
 missingRequest :: RouteRequest RoutingTestRoute RoutingTestContext
 missingRequest = RouteRequest RoutingMissingRoute RoutingTestContext
-
-eqViaDictionary :: (Eq value) => value -> value -> Bool
-eqViaDictionary = (==)
-{-# NOINLINE eqViaDictionary #-}
-
-neqViaDictionary :: (Eq value) => value -> value -> Bool
-neqViaDictionary = (/=)
-{-# NOINLINE neqViaDictionary #-}
-
-showViaDictionary :: (Show value) => value -> String
-showViaDictionary = show
-{-# NOINLINE showViaDictionary #-}
-
-showsPrecViaDictionary :: (Show value) => Int -> value -> ShowS
-showsPrecViaDictionary = showsPrec
-{-# NOINLINE showsPrecViaDictionary #-}
-
-showListViaDictionary :: (Show value) => [value] -> ShowS
-showListViaDictionary = showList
-{-# NOINLINE showListViaDictionary #-}
 
 movedSpec :: Spec
 movedSpec = do

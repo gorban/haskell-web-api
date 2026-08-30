@@ -900,8 +900,22 @@ spec = do
                     )
                 )
           )
-      deliveryFailure <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 (Email.EmailDelivery (\_ -> ioError (userError "mail down")))) (request "/register" validRegistration)
+      let emailAdapterSentinel = "email-adapter-secret-sentinel"
+          emailAdapterSentinelText = Text.pack emailAdapterSentinel
+      deliveryFailure <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 (Email.EmailDelivery (\_ -> ioError (userError emailAdapterSentinel)))) (request "/register" validRegistration)
       deliveryFailure `shouldSatisfy` actionHasStatusAndFocus 502 (Just "registration-email") "could not send"
+      deliveryFailure
+        `shouldSatisfy` maybe
+          False
+          ( \response ->
+              not
+                ( any
+                    (Text.isInfixOf emailAdapterSentinelText)
+                    ( HarchWeb.clientActionLogEntries response
+                        <> map HarchWeb.regionPatchHtml (HarchWeb.clientActionPatches response)
+                    )
+                )
+          )
       spanishDeliveryFailure <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 (Email.EmailDelivery (\_ -> ioError (userError "mail down")))) (spanishAction "/register" validRegistration)
       spanishDeliveryFailure `shouldSatisfy` actionHasStatusAndFocus 502 (Just "registration-email") "No pudimos enviar"
       timeoutFailure <-
@@ -1004,7 +1018,7 @@ spec = do
           (request "/verify" validToken)
       case acceptedVerificationWithSession of
         Just response -> do
-          forceShowValue response `shouldBe` True
+          response `shouldSatisfy` actionResponseHasValidClientActionTransport
           Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` 200
           HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
         Nothing -> expectationFailure "expected a verification action response"
@@ -1074,7 +1088,7 @@ spec = do
       case loginResult of
         Nothing -> expectationFailure "expected login action response"
         Just response -> do
-          forceShowValue response `shouldBe` True
+          response `shouldSatisfy` actionResponseHasValidClientActionTransport
           Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` 200
           HarchWeb.clientActionFocusId response `shouldBe` Nothing
           HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
@@ -1091,7 +1105,7 @@ spec = do
       case logoutResult of
         Nothing -> expectationFailure "expected logout action response"
         Just response -> do
-          forceShowValue response `shouldBe` True
+          response `shouldSatisfy` actionResponseHasValidClientActionTransport
           Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` 200
           HarchWeb.clientActionHeaders response `shouldSatisfy` any (Text.isInfixOf "Max-Age=0" . TextEncoding.decodeUtf8 . snd)
       invalidatedSessions <- readIORef invalidatedSessionsReference
@@ -1253,7 +1267,7 @@ spec = do
           (loginRequest defaultRequestContext validFields)
       case loginEnrollmentRequiredWithSession of
         Just response -> do
-          forceShowValue response `shouldBe` True
+          response `shouldSatisfy` actionResponseHasValidClientActionTransport
           Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` 403
           HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
         Nothing -> expectationFailure "expected a login action response"
@@ -1370,7 +1384,7 @@ spec = do
       logoutSuccess <- handleAccountAction validWorkflow (logoutRequest sessionContext)
       case logoutSuccess of
         Just response -> do
-          forceShowValue response `shouldBe` True
+          response `shouldSatisfy` actionResponseHasValidClientActionTransport
           HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
         Nothing -> expectationFailure "expected a logout action response"
       spanishLogoutSuccess <- handleAccountAction validWorkflow (typedAccountActionRequest "POST" "/es/logout" [] (spanishRequestContext {requestSessionId = Just sessionId}))
@@ -1412,9 +1426,7 @@ spec = do
       started `shouldSatisfy` \case
         Just response -> Http.statusCode (HarchWeb.clientActionStatus response) == 200 && HarchWeb.clientActionFocusId response == Just "mfa-code"
         Nothing -> False
-      case started of
-        Just response -> forceShowValue response `shouldBe` True
-        Nothing -> expectationFailure "expected an enrollment-start action response"
+      started `shouldSatisfy` maybe False actionResponseHasValidClientActionTransport
       secret <-
         case started of
           Just response ->
@@ -1431,9 +1443,7 @@ spec = do
       confirmed `shouldSatisfy` \case
         Just response -> Http.statusCode (HarchWeb.clientActionStatus response) == 200 && any (Text.isInfixOf "data-recovery-codes=\"true\"" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
         Nothing -> False
-      case confirmed of
-        Just response -> forceShowValue response `shouldBe` True
-        Nothing -> expectationFailure "expected an enrollment-confirm action response"
+      confirmed `shouldSatisfy` maybe False actionResponseHasValidClientActionTransport
       confirmationHashes <- readIORef confirmationHashesReference
       length confirmationHashes `shouldBe` 8
       spanishStarted <- handleAccountAction workflow (request "/es/mfa" (defaultRequestContext {requestLocale = Spanish}) [("intent", "start")])

@@ -48,7 +48,7 @@ import HarchWeb.Action
 
 data ApiRoute
   = LiveDataEvents
-  deriving (Eq, Show)
+  deriving (Show)
 
 type TwoPageActionTarget = ()
 
@@ -59,36 +59,43 @@ data TwoPageNavigationTarget
 newtype TwoPageAction = SubscribeAction Text
 
 newtype PreviewSlug = PreviewSlug Text
-  deriving (Eq, Show)
+  deriving (Show)
 
 data CustomRoute
   = PreviewPage PreviewSlug
   | NativeSubscriptionFallback
-  deriving (Eq, Show)
+  deriving (Show)
 
 data TwoPageRoute
   = Page PageRoute
   | Api ApiRoute
   | Custom CustomRoute
-  deriving (Eq, Show)
+  deriving (Show)
+
+-- | Harch's route codec needs one route-identity operation. In this example a
+-- route's rendered internal path is unique, so equality deliberately stays at
+-- that public composition boundary rather than exposing equality for each
+-- route fragment.
+instance Eq TwoPageRoute where
+  leftRoute == rightRoute = routeHref leftRoute == routeHref rightRoute
 
 routeCodec :: RouteCodec TwoPageRoute ()
 routeCodec =
   RouteCodec
-    { parseRoute = \() path ->
+    { parseRoute = \requestContext path ->
         let normalizedPath = routePath path
          in case normalizedPath of
               "/live-data/events" ->
                 Just
                   RouteRequest
                     { requestRoute = Api LiveDataEvents,
-                      requestContext = ()
+                      requestContext = requestContext
                     }
               "/native-subscribe" ->
                 Just
                   RouteRequest
                     { requestRoute = Custom NativeSubscriptionFallback,
-                      requestContext = ()
+                      requestContext = requestContext
                     }
               _ ->
                 case parsePreviewPath normalizedPath of
@@ -96,14 +103,14 @@ routeCodec =
                     Just
                       RouteRequest
                         { requestRoute = Custom (PreviewPage previewSlug),
-                          requestContext = ()
+                          requestContext = requestContext
                         }
                   Nothing ->
-                    (\page -> RouteRequest {requestRoute = Page page, requestContext = ()})
+                    (\page -> RouteRequest {requestRoute = Page page, requestContext = requestContext})
                       <$> parsePageRoute normalizedPath,
       renderRoute = routeHref . requestRoute,
-      notFoundRequest = \() ->
-        RouteRequest {requestRoute = Page PageNotFound, requestContext = ()},
+      notFoundRequest = \requestContext ->
+        RouteRequest {requestRoute = Page PageNotFound, requestContext = requestContext},
       routeMethods = routeMethodPolicy . twoPageRouteMethods
     }
 

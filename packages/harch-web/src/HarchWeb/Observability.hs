@@ -3,9 +3,11 @@ module HarchWeb.Observability
     exportConnectionObservabilityToOtlp,
     exportRequestObservabilityToOtlp,
     newOtlpHttpManager,
+    renderOtlpExportFailure,
+    OtlpExportFailure (..),
   )
 where
 
-import HarchWeb.Observability.Otlp (newOtlpHttpManager)
+import HarchWeb.Observability.Otlp (OtlpExportFailure (..), newOtlpHttpManager, renderOtlpExportFailure)
 import HarchWeb.Observability.Otlp.Export
 import HarchWeb.Observability.Types

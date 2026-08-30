@@ -90,7 +90,7 @@ spec = do
       readIORef queryParametersReference `shouldReturn` [["key", "0", "400", "500", "5", "900000000000", "2"]]
 
     it "keeps login-attempt errors comparable" $ do
-      (LoginAttemptStoreUnavailable "same" == LoginAttemptStoreUnavailable "same") `shouldBe` True
+      (LoginAttemptStoreUnavailable "same" == LoginAttemptStoreUnavailable (Text.concat ["sa", "me"])) `shouldBe` True
       (LoginAttemptStoreUnavailable "same" /= LoginAttemptStoreCorruptData "same") `shouldBe` True
 
     it "executes the native libpq login-attempt adapter against a migrated PostgreSQL database" $ do

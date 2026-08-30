@@ -5,22 +5,30 @@
 
 import Control.Exception (IOException, bracket, displayException, try)
 import Control.Monad (forM_)
+import Crypto.Error (CryptoFailable (..))
 import Data.ByteString qualified as ByteString
 import Data.List.NonEmpty (NonEmpty (..), toList)
 import Data.Maybe (isNothing)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
 import HarchWeb.DevSmtp qualified as DevSmtp
 import HarchWeb.Email qualified as Email
+import HarchWeb.LoginProtection qualified as LoginProtection
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.Secret qualified as Secret
 import System.Environment (lookupEnv)
 import System.IO.Temp (withSystemTempDirectory)
 import Unit.WebApi.TestSupport hiding (databaseConfig)
+import WebApi.Account qualified as Account
 import WebApi.AccountPages (AccountWorkflow (..))
 import WebApi.App (buildRuntimeAccountWorkflow, buildRuntimeApp, runtimeRequestObservabilityReporter)
 import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), DatabaseSslMode (..), DatabaseTransportSecurity (..), ForwardedHeaderTrust (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SharedTlsCertificateFiles (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsCipherSuite (..), TlsConfig (..), TlsPolicy (..), TlsProtocolVersion (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, databasePoolCapacityValue, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, defaultTlsPolicy, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, mkDatabasePoolCapacity, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
+import WebApi.Login qualified as Login
+import WebApi.Mfa qualified as Mfa
 import WebApi.Postgres.Testing (newPostgresPool)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), defaultRequestContext)
+import WebApi.Session qualified as Session
 
 -- Kept in the test only: production configuration must never acquire these
 -- repository-known fixtures by omission.
@@ -1704,10 +1712,12 @@ spec = do
                 }
             baseUrlWithoutTrailingSlash = "https://accounts.example.test:" <> Text.pack (show (DevSmtp.devSmtpPort server))
             token = requiredVerificationToken (Text.replicate 43 "a")
-            recipient = requiredEmailAddress "person@example.test"
         pool <- newPostgresPool (databasePoolCapacity (databaseConfig environmentConfig)) (databaseConfig environmentConfig)
         let workflow = buildRuntimeAccountWorkflow pool environmentConfig
             untrimmedWorkflow = buildRuntimeAccountWorkflow pool (environmentConfig {publicBaseUrl = baseUrlWithoutTrailingSlash})
+            registrationSuffix = Text.pack (show (DevSmtp.devSmtpPort server))
+            registrationUsername = "runtime_" <> registrationSuffix
+            registrationEmail = "runtime-" <> registrationSuffix <> "@example.test"
         accountWorkflowVerificationUrl workflow (defaultRequestContext {requestLocale = Spanish}) token
           `shouldBe` "https://accounts.example.test/es/verify?token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         Text.unpack (accountWorkflowVerificationUrl workflow defaultRequestContext token)
@@ -1715,30 +1725,65 @@ spec = do
         accountWorkflowVerificationUrl untrimmedWorkflow defaultRequestContext token
           `shouldBe` baseUrlWithoutTrailingSlash
           <> "/verify?token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        accountWorkflowStore workflow `seq` pure ()
-        accountWorkflowPasswordHasher workflow `seq` pure ()
-        accountWorkflowPasswordWorkGate workflow `seq` pure ()
-        accountWorkflowRegistrationDeliveryTimeout workflow `seq` pure ()
-        accountWorkflowMfaStore workflow `seq` pure ()
-        accountWorkflowCredentialStore workflow `seq` pure ()
-        accountWorkflowLoginAttemptStore workflow `seq` pure ()
-        accountWorkflowSessionStore workflow `seq` pure ()
-        accountWorkflowMfaEnrollmentSessionStore workflow `seq` pure ()
-        accountWorkflowProfileStore workflow `seq` pure ()
-        accountWorkflowTotpEncryptionKey workflow `seq` pure ()
         accountWorkflowClock workflow >>= (`shouldSatisfy` (> 0))
         accountWorkflowTotpClock workflow 100000000000 `shouldSatisfy` (> 0)
-        case Email.mkEmailMessage (Email.EmailMessageInput recipient "Verification test" "Hello") of
-          Nothing -> expectationFailure "expected a valid SMTP test message"
-          Just message -> Email.deliverEmail (accountWorkflowEmailDelivery workflow) message
-        awaitDevSmtpEmail server "person@example.test"
+        let runtimeApplication = buildRuntimeApp pool defaultAppConfig environmentConfig
+        HarchWeb.handleClientAction
+          runtimeApplication
+          (typedAccountActionRequest "POST" "/register" [("username", registrationUsername), ("email", registrationEmail), ("password", "correct horse battery staple")] defaultRequestContext)
+          >>= (`shouldSatisfy` actionHasStatusAndFocus 202 Nothing "check its inbox")
+        awaitDevSmtpEmail server registrationEmail
           >>= \case
             Just received ->
-              "Subject: Verification test"
+              TextEncoding.encodeUtf8 registrationEmail
                 `ByteString.isInfixOf` DevSmtp.devSmtpRawMessage received
                 `shouldBe` True
             Nothing -> expectationFailure "expected the loopback SMTP server to receive the message"
-        let runtimeApplication = buildRuntimeApp pool defaultAppConfig environmentConfig
+        let probeAccountId = requiredAccountId ("runtime_account_" <> registrationSuffix)
+            workflowMfaStore = accountWorkflowMfaStore workflow
+            workflowCredentialStore = accountWorkflowCredentialStore workflow
+            workflowLoginAttemptStore = accountWorkflowLoginAttemptStore workflow
+            workflowSessionStore = accountWorkflowSessionStore workflow
+            workflowEnrollmentSessionStore = accountWorkflowMfaEnrollmentSessionStore workflow
+            workflowProfileStore = accountWorkflowProfileStore workflow
+        Mfa.loadTotpEnrollment workflowMfaStore probeAccountId
+          >>= \case
+            Right Nothing -> pure ()
+            Right (Just _) -> expectationFailure "expected no enrollment for the runtime probe account"
+            Left _ -> expectationFailure "expected the runtime MFA store to load the probe account"
+        Login.findAccountCredentialByEmail workflowCredentialStore (requiredEmailAddress registrationEmail)
+          >>= \case
+            Right (Just _) -> pure ()
+            Right Nothing -> expectationFailure "expected the runtime registration to create a credential"
+            Left _ -> expectationFailure "expected the runtime credential store to load the registered account"
+        Login.reserveLoginAttempt workflowLoginAttemptStore ("runtime-login:" <> registrationEmail) LoginProtection.defaultLoginProtectionPolicy 1
+          >>= \case
+            Right (Login.LoginAttemptReserved reservation) ->
+              Login.cancelLoginAttempt workflowLoginAttemptStore reservation
+                >>= \case
+                  Right () -> pure ()
+                  Left _ -> expectationFailure "expected the runtime login-attempt reservation to be cancelled"
+            Right (Login.LoginAttemptThrottled _) -> expectationFailure "expected a fresh runtime login-attempt reservation"
+            Left _ -> expectationFailure "expected the runtime login-attempt store to admit a fresh reservation"
+        Session.loadAccountSession workflowSessionStore testSessionId
+          >>= \case
+            Right Nothing -> pure ()
+            Right (Just _) -> expectationFailure "expected no ordinary session for the test-only token"
+            Left _ -> expectationFailure "expected the runtime session store to load the test-only token"
+        Session.loadMfaEnrollmentSession workflowEnrollmentSessionStore testSessionId
+          >>= \case
+            Right Nothing -> pure ()
+            Right (Just _) -> expectationFailure "expected no MFA enrollment session for the test-only token"
+            Left _ -> expectationFailure "expected the runtime MFA enrollment-session store to load the test-only token"
+        Account.findAccountProfile workflowProfileStore probeAccountId
+          >>= \case
+            Right Nothing -> pure ()
+            Right (Just _) -> expectationFailure "expected no profile for the runtime probe account"
+            Left _ -> expectationFailure "expected the runtime profile store to load the probe account"
+        Secret.encryptSecret (accountWorkflowTotpEncryptionKey workflow) "runtime-account-workflow-key-probe"
+          >>= \case
+            CryptoPassed _ -> pure ()
+            CryptoFailed errorValue -> expectationFailure (show errorValue)
         HarchWeb.renderResponse
           runtimeApplication
           (HarchWeb.RouteRequest StatusApiRoute defaultRequestContext)

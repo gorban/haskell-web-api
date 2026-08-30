@@ -2207,7 +2207,9 @@ abstraction or let action handlers attempt to scrub arbitrary text.** PostgreSQL
 stable row count and per-row column counts when their result shape is invalid, but never preserve a
 returned value in the error text. `PostgresRunnerError` uses the same representation when it is
 rendered through an ordinary `Show` path. SMTP and Gmail delivery failures retain only the protocol
-status/category, never a server response line or provider response body. This keeps the useful
+status/category, never a server response line or provider response body. Generic application-selected
+email-adapter exceptions become one closed transport-failure category. OTLP sends use a no-body HTTP
+response path and retain only a rejecting collector status, never its body. This keeps the useful
 low-cardinality diagnosis at the point that knows which input is untrusted, before existing account
 action diagnostics and application log reporters can carry it.
 
@@ -2217,6 +2219,24 @@ redaction beside each adapter also leaves normal client-facing error handling an
 unchanged. Sentinel regressions exercise a password hash, encrypted MFA/recovery data, account
 email/profile data, SMTP response lines, and a Gmail provider body through their error/diagnostic
 boundaries, proving neither a public response nor its attached private log entry retains the value.
+
+### Decision record — PR-SEC8: typed OTLP transport diagnostics (2026-08-30)
+
+**Decision: extend `HarchWeb.Observability.Otlp` with a closed export-failure type at its existing
+HTTP adapter boundary; do not redact `http-client` exception text in the application worker.** An
+OTLP exporter intentionally accepts endpoint queries and arbitrary configured headers, either of
+which can be credentials. `http-client`'s rendered request exception does not promise to redact
+those values. The adapter consequently maps invalid endpoints, transport exceptions, and rejecting
+collector status to payload-free ordinary results before its caller can observe a rendered
+exception. The application worker recognizes that closed type and logs its stable category; any
+unexpected exporter exception receives one generic fallback category rather than being rendered.
+
+This extends the one existing OTLP transport boundary and leaves the bounded queue, manager
+ownership, exporter configuration, and normal request path unchanged. A second logging-redaction
+layer would be incomplete because every future OTLP caller could bypass it. Sentinel coverage drives
+a failed request with an `X-API-Key` value and endpoint query credential through the adapter and the
+worker's final log-message formatter, proving neither secret appears; the existing status/body test
+continues to prove collector response bodies cannot enter diagnostics.
 
 ### Decision record — DT: configurable modern TLS server policy (2026-08-26)
 

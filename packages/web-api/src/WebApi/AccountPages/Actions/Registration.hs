@@ -137,12 +137,11 @@ parseRegistrationForm actionRequest submission =
       emailValue = registrationEmailValue submission
       displayNameValue = registrationDisplayNameValue submission
       passwordValue = registrationPasswordValue submission
-      path = HarchWeb.clientActionContext actionRequest
       form = RegistrationForm usernameValue emailValue displayNameValue
    in case (Username.mkUsername usernameValue, Email.mkEmailAddress emailValue, validPassword passwordValue) of
-        (Nothing, _, _) -> Left (registrationResponse (actionLocale actionRequest) path Http.status422 (form (Just (localized actionRequest UsernameInvalid)) True) (Just "registration-username"))
-        (_, Nothing, _) -> Left (registrationResponse (actionLocale actionRequest) path Http.status422 (form (Just (localized actionRequest EnterValidEmailAddress)) True) (Just "registration-email"))
-        (_, _, False) -> Left (registrationResponse (actionLocale actionRequest) path Http.status422 (form (Just (localized actionRequest PasswordTooShort)) True) (Just "registration-password"))
+        (Nothing, _, _) -> Left (registrationResponse (accountActionResponseContext actionRequest Http.status422 (Just "registration-username") []) (form (Just (localized actionRequest UsernameInvalid)) True))
+        (_, Nothing, _) -> Left (registrationResponse (accountActionResponseContext actionRequest Http.status422 (Just "registration-email") []) (form (Just (localized actionRequest EnterValidEmailAddress)) True))
+        (_, _, False) -> Left (registrationResponse (accountActionResponseContext actionRequest Http.status422 (Just "registration-password") []) (form (Just (localized actionRequest PasswordTooShort)) True))
         (Just username, Just emailAddress, True) -> Right (usernameValue, emailValue, displayNameValue, passwordValue, username, emailAddress)
 
 interpretRegistrationResult ::
@@ -156,8 +155,10 @@ interpretRegistrationResult actionRequest usernameValue emailValue displayNameVa
   Right registrationResult -> pure (registrationResultResponse registrationResult)
   Left registrationError -> throwRegistrationFailure registrationError
   where
-    path = HarchWeb.clientActionContext actionRequest
-    response status message isError = registrationResponse (actionLocale actionRequest) path status (RegistrationForm usernameValue emailValue displayNameValue (Just message) isError)
+    response status message isError focusId =
+      registrationResponse
+        (accountActionResponseContext actionRequest status focusId [])
+        (RegistrationForm usernameValue emailValue displayNameValue (Just message) isError)
     registrationSuccess stage =
       registrationLifecycleResponse
         stage
@@ -184,7 +185,7 @@ interpretRegistrationResult actionRequest usernameValue emailValue displayNameVa
 
     throwRegistrationFailure = \case
       RegistrationDeliveryFailed VerificationDeliveryTimedOut -> throwClientActionFailure deliveryFailureResponse RegistrationDeliveryTimeoutFailure "EmailDeliveryTimeout" "registration verification delivery timed out"
-      RegistrationDeliveryFailed (VerificationDeliveryTransportFailed detail) -> throwClientActionFailure deliveryFailureResponse RegistrationDeliveryFailure "EmailDeliveryError" detail
+      RegistrationDeliveryFailed VerificationDeliveryTransportFailed -> throwClientActionFailure deliveryFailureResponse RegistrationDeliveryFailure "EmailDeliveryError" "registration verification delivery transport failed"
       RegistrationStoreError storeError -> throwClientActionFailure unavailableRegistration RegistrationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
       RegistrationPasswordHashingFailed -> throwClientActionFailure unavailableRegistration RegistrationPasswordHashFailure "PasswordHashingError" "password hashing failed"
       RegistrationPasswordWorkBudgetExhausted -> throwClientActionFailure unavailableRegistration RegistrationPasswordWorkBudgetFailure "PasswordWorkBudgetExhausted" "password work budget is exhausted"
@@ -203,16 +204,15 @@ registrationLifecycleResponse stage response =
 handleVerificationWorkflow :: VerificationWorkflowInput -> AccountActionWorkflow
 handleVerificationWorkflow input =
   let tokenValue = verificationTokenValue submission
-      path = HarchWeb.clientActionContext actionRequest
    in case Account.mkEmailVerificationToken tokenValue of
-        Nothing -> pure (verificationResponse (actionLocale actionRequest) path Http.status422 (VerificationForm tokenValue (Just (localized actionRequest VerificationLinkInvalid)) True) (Just "verification-token") [])
+        Nothing -> pure (verificationResponse (accountActionResponseContext actionRequest Http.status422 (Just "verification-token") []) (VerificationForm tokenValue (Just (localized actionRequest VerificationLinkInvalid)) True))
         Just token -> do
           (now, confirmationResult) <- confirmEmailVerificationNow token
           case confirmationResult of
             Right (Account.EmailVerificationAccepted accountId _) -> issueVerificationEnrollmentSession actionRequest now accountId
-            Right Account.EmailVerificationExpired -> pure (verificationResponse (actionLocale actionRequest) path Http.status422 (VerificationForm tokenValue (Just (localized actionRequest VerificationLinkExpired)) True) (Just "verification-token") [])
-            Right Account.EmailVerificationRejected -> pure (verificationResponse (actionLocale actionRequest) path Http.status422 (VerificationForm tokenValue (Just (localized actionRequest VerificationLinkUsed)) True) (Just "verification-token") [])
-            Left storeError -> throwClientActionFailure (verificationResponse (actionLocale actionRequest) path Http.status503 (VerificationForm tokenValue (Just (localized actionRequest VerificationUnavailable)) True) (Just "verification-token") []) VerificationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
+            Right Account.EmailVerificationExpired -> pure (verificationResponse (accountActionResponseContext actionRequest Http.status422 (Just "verification-token") []) (VerificationForm tokenValue (Just (localized actionRequest VerificationLinkExpired)) True))
+            Right Account.EmailVerificationRejected -> pure (verificationResponse (accountActionResponseContext actionRequest Http.status422 (Just "verification-token") []) (VerificationForm tokenValue (Just (localized actionRequest VerificationLinkUsed)) True))
+            Left storeError -> throwClientActionFailure (verificationResponse (accountActionResponseContext actionRequest Http.status503 (Just "verification-token") []) (VerificationForm tokenValue (Just (localized actionRequest VerificationUnavailable)) True)) VerificationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
   where
     actionRequest = verificationWorkflowRequest input
     submission = verificationWorkflowSubmission input
@@ -234,8 +234,7 @@ confirmEmailVerificationNow token = do
 -- ordinary login session or a client-supplied account id.
 issueVerificationEnrollmentSession :: AccountActionRequest -> UnixTimeNanoseconds -> Account.AccountId -> AccountActionWorkflow
 issueVerificationEnrollmentSession actionRequest now accountId = do
-  let path = HarchWeb.clientActionContext actionRequest
-      successResponse = verificationResponse (actionLocale actionRequest) path Http.status200 (VerificationForm Text.empty (Just (localized actionRequest EmailVerifiedEnrollAuthenticator)) False) Nothing
+  let successResponse headers = verificationResponse (accountActionResponseContext actionRequest Http.status200 Nothing headers) (VerificationForm Text.empty (Just (localized actionRequest EmailVerifiedEnrollAuthenticator)) False)
   issued <- issueMfaEnrollmentSessionNow accountId now
   case issued of
     Right opaqueSession -> pure (successResponse [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie mfaEnrollmentSessionCookiePolicy (sessionId opaqueSession)))])

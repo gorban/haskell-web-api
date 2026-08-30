@@ -11,6 +11,8 @@ module WebApi.AccountPages.Actions.Common
   ( AccountActionRequest,
     AccountActionWorkflow,
     accountWorkflow,
+    AccountActionResponseContext,
+    accountActionResponseContext,
     issueMfaEnrollmentSessionNow,
     pendingProfileForm,
     resendLabel,
@@ -214,14 +216,22 @@ data AccountActionResponseContext = AccountActionResponseContext
     accountActionResponseHeaders :: Http.ResponseHeaders
   }
 
-registrationResponse :: AppLocale -> AppRequestContext -> Http.Status -> RegistrationForm -> Maybe Text -> HarchWeb.ClientActionResponse
-registrationResponse locale requestContext status form focusId =
-  registrationResponseWith
-    (AccountActionResponseContext locale requestContext status focusId [])
-    form
+-- | Derive response metadata from the one action request before a workflow
+-- chooses its form/body. This keeps locale and route context coupled to the
+-- request that supplied them instead of passing transposable copies to every
+-- renderer.
+accountActionResponseContext :: AccountActionRequest -> Http.Status -> Maybe Text -> Http.ResponseHeaders -> AccountActionResponseContext
+accountActionResponseContext actionRequest status focusId headers =
+  AccountActionResponseContext
+    { accountActionResponseLocale = actionLocale actionRequest,
+      accountActionResponseRequestContext = HarchWeb.clientActionContext actionRequest,
+      accountActionResponseStatus = status,
+      accountActionResponseFocusId = focusId,
+      accountActionResponseHeaders = headers
+    }
 
-registrationResponseWith :: AccountActionResponseContext -> RegistrationForm -> HarchWeb.ClientActionResponse
-registrationResponseWith responseContext form =
+registrationResponse :: AccountActionResponseContext -> RegistrationForm -> HarchWeb.ClientActionResponse
+registrationResponse responseContext form =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = replaceRegionPatch (registrationRegion requestContext locale form),
@@ -237,12 +247,8 @@ registrationResponseWith responseContext form =
     focusId = accountActionResponseFocusId responseContext
     headers = accountActionResponseHeaders responseContext
 
-verificationResponse :: AppLocale -> AppRequestContext -> Http.Status -> VerificationForm -> Maybe Text -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
-verificationResponse locale requestContext status form focusId headers =
-  verificationResponseWith (AccountActionResponseContext locale requestContext status focusId headers) form
-
-verificationResponseWith :: AccountActionResponseContext -> VerificationForm -> HarchWeb.ClientActionResponse
-verificationResponseWith responseContext form =
+verificationResponse :: AccountActionResponseContext -> VerificationForm -> HarchWeb.ClientActionResponse
+verificationResponse responseContext form =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = replaceRegionPatch (verificationRegion requestContext locale form),
@@ -258,12 +264,8 @@ verificationResponseWith responseContext form =
     focusId = accountActionResponseFocusId responseContext
     headers = accountActionResponseHeaders responseContext
 
-mfaEnrollmentResponse :: AppLocale -> AppRequestContext -> Http.Status -> MfaEnrollmentForm -> Maybe Text -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
-mfaEnrollmentResponse locale requestContext status form focusId headers =
-  mfaEnrollmentResponseWith (AccountActionResponseContext locale requestContext status focusId headers) form
-
-mfaEnrollmentResponseWith :: AccountActionResponseContext -> MfaEnrollmentForm -> HarchWeb.ClientActionResponse
-mfaEnrollmentResponseWith responseContext form =
+mfaEnrollmentResponse :: AccountActionResponseContext -> MfaEnrollmentForm -> HarchWeb.ClientActionResponse
+mfaEnrollmentResponse responseContext form =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = replaceRegionPatch (mfaEnrollmentRegion requestContext locale form),
@@ -279,12 +281,8 @@ mfaEnrollmentResponseWith responseContext form =
     focusId = accountActionResponseFocusId responseContext
     headers = accountActionResponseHeaders responseContext
 
-loginResponse :: AppLocale -> AppRequestContext -> Http.Status -> LoginForm -> Maybe Text -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
-loginResponse locale requestContext status form focusId headers =
-  loginResponseWith (AccountActionResponseContext locale requestContext status focusId headers) form
-
-loginResponseWith :: AccountActionResponseContext -> LoginForm -> HarchWeb.ClientActionResponse
-loginResponseWith responseContext form =
+loginResponse :: AccountActionResponseContext -> LoginForm -> HarchWeb.ClientActionResponse
+loginResponse responseContext form =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = replaceRegionPatch (loginRegion requestContext locale form),
@@ -300,15 +298,11 @@ loginResponseWith responseContext form =
     focusId = accountActionResponseFocusId responseContext
     headers = accountActionResponseHeaders responseContext
 
-logoutResponse :: AppLocale -> AppRequestContext -> Http.Status -> Maybe Text -> Bool -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
-logoutResponse locale requestContext status message isError headers =
-  logoutResponseWith (AccountActionResponseContext locale requestContext status Nothing headers) message isError
-
-logoutResponseWith :: AccountActionResponseContext -> Maybe Text -> Bool -> HarchWeb.ClientActionResponse
-logoutResponseWith responseContext message isError =
+logoutResponse :: AccountActionResponseContext -> Maybe (Text, Bool) -> HarchWeb.ClientActionResponse
+logoutResponse responseContext message =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = replaceRegionPatch (logoutRegion requestContext locale ((,isError) <$> message)),
+      HarchWeb.clientActionPatches = replaceRegionPatch (logoutRegion requestContext locale message),
       HarchWeb.clientActionFocusId = accountActionResponseFocusId responseContext,
       HarchWeb.clientActionHeaders = headers,
       HarchWeb.clientActionObservabilityAttributes = [],

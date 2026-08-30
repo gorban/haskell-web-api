@@ -32,10 +32,13 @@ spec =
 
     it "keeps generator model values comparable and inspectable" $ do
       let config = defaultGeneratorConfig "pages" "generated"
+          sameConfig = defaultGeneratorConfig "pages" "generated"
           otherConfig = defaultGeneratorConfig "other-pages" "generated"
           pageSpec = PageSpec "Home.hs" "HomePage" "App.Pages.Home" "/" "home-hash"
+          samePageSpec = PageSpec "Home.hs" "HomePage" "App.Pages.Home" "/" "home-hash"
           otherPageSpec = PageSpec "Second.hs" "SecondPage" "App.Pages.Second" "/second" "second-hash"
           missingError = PagesDirectoryMissing "missing"
+          sameMissingError = PagesDirectoryMissing "missing"
           noPagesError = NoPagesDiscovered "empty"
           errors =
             [ missingError,
@@ -46,10 +49,10 @@ spec =
               PathCollision "/same" ["A.hs", "B.hs"]
             ]
           outcomes = [Generated ["Route.hs"], Unchanged ["Route.hs"]]
-      exerciseModel config otherConfig
-      exerciseModel pageSpec otherPageSpec
-      exerciseModel missingError noPagesError
-      exerciseModel (Generated ["Route.hs"]) (Unchanged ["Route.hs"])
+      exerciseModel config sameConfig otherConfig
+      exerciseModel pageSpec samePageSpec otherPageSpec
+      exerciseModel missingError sameMissingError noPagesError
+      exerciseModel (Generated ["Route.hs"]) (Generated ["Route.hs"]) (Unchanged ["Route.hs"])
       expectAll
         ( (show config `shouldContain` "App.Pages.Route.Generated")
             :| [ show pageSpec `shouldContain` "HomePage",
@@ -202,33 +205,13 @@ hasPage expectedConstructor expectedPath pageResult =
       pageConstructor pageSpec == expectedConstructor && pageUrlPath pageSpec == expectedPath
     Left _ -> False
 
-exerciseModel :: (Eq value, Show value) => value -> value -> Expectation
-exerciseModel value otherValue = do
-  eqViaDictionary value value `shouldBe` True
-  neqViaDictionary value otherValue `shouldBe` True
-  showViaDictionary value `shouldSatisfy` not . null
-  showsPrecViaDictionary 11 value "" `shouldSatisfy` not . null
-  showListViaDictionary [value, otherValue] "" `shouldSatisfy` not . null
-
-eqViaDictionary :: (Eq value) => value -> value -> Bool
-eqViaDictionary = (==)
-{-# NOINLINE eqViaDictionary #-}
-
-neqViaDictionary :: (Eq value) => value -> value -> Bool
-neqViaDictionary = (/=)
-{-# NOINLINE neqViaDictionary #-}
-
-showViaDictionary :: (Show value) => value -> String
-showViaDictionary = show
-{-# NOINLINE showViaDictionary #-}
-
-showsPrecViaDictionary :: (Show value) => Int -> value -> ShowS
-showsPrecViaDictionary = showsPrec
-{-# NOINLINE showsPrecViaDictionary #-}
-
-showListViaDictionary :: (Show value) => [value] -> ShowS
-showListViaDictionary = showList
-{-# NOINLINE showListViaDictionary #-}
+exerciseModel :: (Eq value, Show value) => value -> value -> value -> Expectation
+exerciseModel value sameValue otherValue = do
+  (value == sameValue) `shouldBe` True
+  (value /= otherValue) `shouldBe` True
+  show value `shouldSatisfy` not . null
+  showsPrec 11 value "" `shouldSatisfy` not . null
+  showList [value, otherValue] "" `shouldSatisfy` not . null
 
 hasConstructors :: [String] -> Either GenerationError [PageSpec] -> Bool
 hasConstructors expectedConstructors pageResult =

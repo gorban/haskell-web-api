@@ -38,12 +38,11 @@ module WebApi.Account
   )
 where
 
-import Control.Exception (SomeException, displayException, try)
+import Control.Exception (SomeException, try)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Core.Control.Error (fromMaybeError, guardError, liftEitherWith, liftMaybeWith)
 import Data.Text (Text)
-import Data.Text qualified as Text
 import Data.Word (Word64)
 import HarchWeb.Account
   ( AccountId,
@@ -206,7 +205,10 @@ data ResendVerificationError
 -- without recording the recipient, token, or SMTP conversation.
 data VerificationDeliveryFailure
   = VerificationDeliveryTimedOut
-  | VerificationDeliveryTransportFailed Text
+  | -- | An email adapter threw an unexpected exception.  The adapter is an
+    -- application-supplied boundary, so its exception text is untrusted and
+    -- must not enter action diagnostics or production logs.
+    VerificationDeliveryTransportFailed
 
 -- | What is being registered: the applicant-supplied identity and
 -- credential. Grouping these stops a positional call site from, for
@@ -392,7 +394,7 @@ deliverVerificationMessage deliveryEnvironment emailAddress token = do
   deliveryResult <- try (timeout microseconds (deliverEmail emailDelivery (verificationEmail locale emailAddress (renderVerificationUrl token)))) :: IO (Either SomeException (Maybe ()))
   pure $
     case deliveryResult of
-      Left deliveryFailure -> Left (VerificationDeliveryTransportFailed (Text.pack (displayException deliveryFailure)))
+      Left _ -> Left VerificationDeliveryTransportFailed
       Right Nothing -> Left VerificationDeliveryTimedOut
       Right (Just ()) -> Right ()
   where
@@ -405,7 +407,7 @@ renderVerificationDeliveryFailure :: VerificationDeliveryFailure -> Text
 renderVerificationDeliveryFailure deliveryFailure =
   case deliveryFailure of
     VerificationDeliveryTimedOut -> "email delivery timed out"
-    VerificationDeliveryTransportFailed detail -> detail
+    VerificationDeliveryTransportFailed -> "email delivery transport failed"
 
 addNanoseconds :: UnixTimeNanoseconds -> Word64 -> Maybe UnixTimeNanoseconds
 addNanoseconds = addUnixTimeNanoseconds

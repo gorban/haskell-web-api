@@ -286,25 +286,6 @@ withMultipartBodyWith ::
 withMultipartBodyWith storage limits boundary readChunk onPart = Exception.mask $ \restore -> do
   uploadsReference <- IORef.newIORef []
   activeUploadReference <- IORef.newIORef Nothing
-  let discardUnclaimed = IORef.readIORef uploadsReference >>= traverse_ discardMultipartUpload
-      discardUploads = discardActiveMultipartUpload activeUploadReference >> discardUnclaimed
-  result <-
-    restore (consumeMultipartBodyWithActive activeUploadReference uploadsReference storage limits boundary readChunk onPart)
-      `Exception.onException` discardUploads
-  case result of
-    Left consumeError -> discardUploads >> pure (Left consumeError)
-    Right () -> discardUnclaimed >> pure (Right ())
-
-consumeMultipartBodyWithActive ::
-  IORef.IORef (Maybe (MultipartStagedUpload stored)) ->
-  IORef.IORef [MultipartUpload stored] ->
-  MultipartStorage stored ->
-  MultipartLimits ->
-  ByteString ->
-  IO ByteString ->
-  (MultipartScopedPart stored -> IO (Either MultipartConsumeError ())) ->
-  IO (Either MultipartConsumeError ())
-consumeMultipartBodyWithActive activeUploadReference uploadsReference storage limits boundary readChunk onPart =
   let consumer =
         MultipartConsumer
           { multipartConsumerStorage = storage,
@@ -314,6 +295,21 @@ consumeMultipartBodyWithActive activeUploadReference uploadsReference storage li
             multipartConsumerReadChunk = readChunk,
             multipartConsumerOnPart = onPart
           }
+      discardUnclaimed = IORef.readIORef uploadsReference >>= traverse_ discardMultipartUpload
+      discardUploads = discardActiveMultipartUpload activeUploadReference >> discardUnclaimed
+  result <-
+    restore (consumeMultipartBodyWithActive consumer boundary)
+      `Exception.onException` discardUploads
+  case result of
+    Left consumeError -> discardUploads >> pure (Left consumeError)
+    Right () -> discardUnclaimed >> pure (Right ())
+
+consumeMultipartBodyWithActive ::
+  MultipartConsumer stored ->
+  ByteString ->
+  IO (Either MultipartConsumeError ())
+consumeMultipartBodyWithActive consumer boundary =
+  let limits = multipartConsumerLimits consumer
       initialDriverState =
         MultipartDriverState
           { multipartDriverConsumer = consumer,

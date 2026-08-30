@@ -104,7 +104,6 @@ renderAriaRole = Text.toLower . ariaRoleConstructorName
 
 showAriaRole :: AriaRole -> String
 showAriaRole = Text.unpack . ariaRoleConstructorName
-{-# NOINLINE showAriaRole #-}
 
 ariaRoleConstructorName :: AriaRole -> Text
 ariaRoleConstructorName = \case

@@ -1,7 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module WebApi.App.Observability
-  ( runtimeApplicationLogReporter,
+  ( otlpExportFailureMessage,
+    runOtlpExportAction,
+    runtimeApplicationLogReporter,
     runtimeConnectionObservabilityReporter,
     runtimeRequestObservabilityReporter,
   )
@@ -10,7 +12,7 @@ where
 import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TBQueue (TBQueue, isFullTBQueue, newTBQueueIO, readTBQueue, writeTBQueue)
-import Control.Exception (SomeException, displayException, try)
+import Control.Exception (SomeException, try)
 import Control.Monad (forM_, forever, unless)
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.Text qualified as Text
@@ -50,7 +52,7 @@ runtimeObservabilityReporter ::
   AppMode ->
   AppConfig ->
   Text.Text ->
-  (HarchWeb.OtlpExporter -> observabilityValue -> IO ()) ->
+  (HarchWeb.OtlpExporter -> observabilityValue -> IO (Either HarchWeb.OtlpExportFailure ())) ->
   observabilityValue ->
   IO ()
 runtimeObservabilityReporter mode config observabilityKind exportObservability observabilityValue = do
@@ -88,7 +90,7 @@ runtimeObservabilityReporter mode config observabilityKind exportObservability o
 -- this queue already lives, rather than becoming a second framework-owned
 -- global. See @docs/design-guidance.md@'s "Follow-up decision — BZ" for
 -- the full record.
-enqueueOtlpExport :: Text.Text -> IO () -> IO ()
+enqueueOtlpExport :: Text.Text -> IO (Either HarchWeb.OtlpExportFailure ()) -> IO ()
 enqueueOtlpExport observabilityKind exportAction = do
   enqueued <- atomically $ do
     full <- isFullTBQueue otlpExportQueue
@@ -101,7 +103,7 @@ enqueueOtlpExport observabilityKind exportAction = do
 otlpExportQueueCapacity :: Natural
 otlpExportQueueCapacity = 256
 
-otlpExportQueue :: TBQueue (Text.Text, IO ())
+otlpExportQueue :: TBQueue (Text.Text, IO (Either HarchWeb.OtlpExportFailure ()))
 {-# NOINLINE otlpExportQueue #-}
 otlpExportQueue =
   unsafePerformIO $ do
@@ -119,14 +121,28 @@ otlpHttpManager :: HttpClient.Manager
 otlpHttpManager =
   unsafePerformIO HarchWeb.newOtlpHttpManager
 
-otlpExportWorker :: TBQueue (Text.Text, IO ()) -> IO ()
+otlpExportWorker :: TBQueue (Text.Text, IO (Either HarchWeb.OtlpExportFailure ())) -> IO ()
 otlpExportWorker queue = forever $ do
   (observabilityKind, exportAction) <- atomically (readTBQueue queue)
-  exportResult <- try exportAction :: IO (Either SomeException ())
-  either
-    (runtimeApplicationLogReporter . exportFailureMessage observabilityKind)
-    (const (hFlush stderr))
-    exportResult
+  runOtlpExportAction runtimeApplicationLogReporter observabilityKind exportAction
+
+-- | Run an OTLP action off the request path, turning both the closed adapter
+-- failure result and any unexpected I/O exception into a payload-free log
+-- message.  The logger is an explicit dependency so the recovery boundary can
+-- be tested without redirecting process-wide stderr.
+runOtlpExportAction ::
+  (Text.Text -> IO ()) ->
+  Text.Text ->
+  IO (Either HarchWeb.OtlpExportFailure ()) ->
+  IO ()
+runOtlpExportAction reportLog observabilityKind exportAction = do
+  exportResult <- try exportAction :: IO (Either SomeException (Either HarchWeb.OtlpExportFailure ()))
+  case exportResult of
+    Left _ ->
+      reportLog (unexpectedExportFailureMessage observabilityKind)
+    Right (Left otlpFailure) ->
+      reportLog (otlpExportFailureMessage observabilityKind otlpFailure)
+    Right (Right ()) -> hFlush stderr
 
 otlpExportQueueFullMessage :: Text.Text -> Int -> Text.Text
 otlpExportQueueFullMessage observabilityKind droppedTotal =
@@ -136,12 +152,21 @@ otlpExportQueueFullMessage observabilityKind droppedTotal =
     <> Text.pack (show droppedTotal)
     <> " dropped total)"
 
-exportFailureMessage :: Text.Text -> SomeException -> Text.Text
-exportFailureMessage observabilityKind exportError =
+unexpectedExportFailureMessage :: Text.Text -> Text.Text
+unexpectedExportFailureMessage observabilityKind =
+  "Failed to export "
+    <> observabilityKind
+    <> " to OTLP: unexpected exporter failure"
+
+-- | The final production log text for a typed OTLP adapter failure. The
+-- adapter owns classification before this formatter runs, so the message
+-- cannot retain a configured endpoint, header, request, or response payload.
+otlpExportFailureMessage :: Text.Text -> HarchWeb.OtlpExportFailure -> Text.Text
+otlpExportFailureMessage observabilityKind otlpFailure =
   "Failed to export "
     <> observabilityKind
     <> " to OTLP: "
-    <> Text.pack (displayException exportError)
+    <> HarchWeb.renderOtlpExportFailure otlpFailure
 
 runtimeApplicationLogReporter :: Text.Text -> IO ()
 runtimeApplicationLogReporter =

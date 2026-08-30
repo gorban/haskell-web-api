@@ -17,6 +17,7 @@ module WebApi.App
     buildRuntimeAccountWorkflow,
     buildRuntimeApp,
     buildRuntimeAppWithDatabaseBuilder,
+    otlpExportFailureMessage,
     run,
     runWithConfig,
     runtimeRequestObservabilityReporter,
@@ -40,7 +41,8 @@ import WebApi.AccountPages (AccountAction, accountActions, authorizeAccountActio
 import WebApi.Api.Endpoints (secondApiRouteDefinition, statusApiRouteDefinition)
 import WebApi.App.AccountWorkflow (buildRuntimeAccountWorkflow, unavailableAccountWorkflow)
 import WebApi.App.Observability
-  ( runtimeApplicationLogReporter,
+  ( otlpExportFailureMessage,
+    runtimeApplicationLogReporter,
     runtimeConnectionObservabilityReporter,
     runtimeRequestObservabilityReporter,
   )
@@ -187,27 +189,17 @@ routeNavigationLabel route = lookup route navigationLabels
         (ProfileRoute, "Profile")
       ]
 
--- | 'pool' is a bound variable referenced twice in this @let@ (once for
--- 'pageRepository', once below for 'accountWorkflow'); GHC's HPC
--- instrumentation credits only the first reference, the same "repeated
--- bound-variable arguments passed directly to a function call" pattern
--- documented against AW's coverage investigation. The @$!@ below forces the
--- second, uncredited reference directly rather than restructuring around it;
--- no ignore pragma is needed since 'pool' is an opaque function parameter,
--- not a value HLint could ever consider already in WHNF.
 buildRuntimeApp ::
   PostgresPool ->
   AppConfig ->
   AppEnvironmentConfig ->
   HarchWeb.Application AppRoute AccountAction AppRequestContext
 buildRuntimeApp pool config environmentConfig =
-  let pageRepository = buildRuntimePostgresPageRepository pool
-      accountWorkflow = (buildRuntimeAccountWorkflow $! pool) environmentConfig
-   in buildAppWithDatabaseAndReporters
-        (withPublicBaseUrlRedirectAuthority environmentConfig config)
-        pageRepository
-        accountWorkflow
-        (runtimeApplicationReporters environmentConfig config)
+  buildAppWithDatabaseAndReporters
+    (withPublicBaseUrlRedirectAuthority environmentConfig config)
+    (buildRuntimePostgresPageRepository pool)
+    (buildRuntimeAccountWorkflow pool environmentConfig)
+    (runtimeApplicationReporters environmentConfig config)
 
 buildRuntimeAppWithDatabaseBuilder ::
   AppConfig ->

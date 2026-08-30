@@ -41,7 +41,6 @@ spec = do
       case started of
         Left _ -> expectationFailure "expected production enrollment start to succeed"
         Right (MfaEnrollmentStart secret) -> do
-          (MfaEnrollmentStart secret == MfaEnrollmentStart secret) `shouldBe` True
           confirmation <- confirmMfaEnrollment (productionConfirmationEnvironment store) accountId (totpCode 123456 secret)
           case confirmation of
             Left _ -> expectationFailure "expected production enrollment confirmation to succeed"
@@ -152,14 +151,15 @@ spec = do
 
     it "keeps enrollment results comparable without rendering their secrets" $ do
       let secret = requiredTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+          sameSecret = requiredTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
           recoveryCode = requiredRecoveryCode "0123456789ABCDEF0123"
+          sameRecoveryCode = requiredRecoveryCode "0123456789ABCDEF0123"
       expectAll
-        ( (sameMfaEnrollmentError MfaEnrollmentInvalidCode MfaEnrollmentInvalidCode `shouldBe` True)
-            :| [ sameMfaEnrollmentError MfaEnrollmentInvalidCode MfaEnrollmentNotFound `shouldBe` False,
-                 MfaEnrollmentInvalidCode /= MfaEnrollmentNotFound `shouldBe` True,
-                 sameMfaEnrollmentStart (MfaEnrollmentStart secret) (MfaEnrollmentStart secret) `shouldBe` True,
+        ( ((MfaEnrollmentInvalidCode == MfaEnrollmentNotFound) `shouldBe` False)
+            :| [ MfaEnrollmentInvalidCode /= MfaEnrollmentNotFound `shouldBe` True,
+                 (MfaEnrollmentStart secret == MfaEnrollmentStart sameSecret) `shouldBe` True,
                  MfaEnrollmentStart secret /= MfaEnrollmentStart (requiredTotpSecret "KRUGS4ZANFZSAYJAON2HE2LOM4XXXXXX") `shouldBe` True,
-                 sameMfaEnrollmentConfirmation (MfaEnrollmentConfirmation (recoveryCode :| [])) (MfaEnrollmentConfirmation (recoveryCode :| [])) `shouldBe` True,
+                 (MfaEnrollmentConfirmation (recoveryCode :| []) == MfaEnrollmentConfirmation (sameRecoveryCode :| [])) `shouldBe` True,
                  MfaEnrollmentConfirmation (recoveryCode :| []) /= MfaEnrollmentConfirmation (requiredRecoveryCode "ABCDEF0123456789ABCD" :| []) `shouldBe` True
                ]
         )
@@ -182,18 +182,6 @@ storeWithSave result =
 
 nextFrom :: NonEmpty RecoveryCode -> IO RecoveryCode
 nextFrom (firstCode :| _) = pure firstCode
-
-sameMfaEnrollmentError :: MfaEnrollmentError -> MfaEnrollmentError -> Bool
-{-# NOINLINE sameMfaEnrollmentError #-}
-sameMfaEnrollmentError = (==)
-
-sameMfaEnrollmentStart :: MfaEnrollmentStart -> MfaEnrollmentStart -> Bool
-{-# NOINLINE sameMfaEnrollmentStart #-}
-sameMfaEnrollmentStart = (==)
-
-sameMfaEnrollmentConfirmation :: MfaEnrollmentConfirmation -> MfaEnrollmentConfirmation -> Bool
-{-# NOINLINE sameMfaEnrollmentConfirmation #-}
-sameMfaEnrollmentConfirmation = (==)
 
 requiredTotpSecret :: Text.Text -> TotpSecret
 requiredTotpSecret value =

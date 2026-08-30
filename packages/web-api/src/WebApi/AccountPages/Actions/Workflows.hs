@@ -123,8 +123,7 @@ handleVerificationSubmission actionRequest submission =
 -- in an earlier session.
 handleMfaEnrollmentSubmission :: AccountActionRequest -> MfaEnrollmentSubmission -> AccountActionWorkflow
 handleMfaEnrollmentSubmission actionRequest submission = do
-  let path = HarchWeb.clientActionContext actionRequest
-  case requestMfaEnrollmentSessionId path of
+  case requestMfaEnrollmentSessionId (HarchWeb.clientActionContext actionRequest) of
     Nothing -> pure (invalidEnrollmentSessionResponse actionRequest)
     Just enrollmentSessionId -> do
       (now, loadedSession) <- loadMfaEnrollmentSessionNow enrollmentSessionId
@@ -136,14 +135,15 @@ handleMfaEnrollmentSubmission actionRequest submission = do
           | otherwise ->
               let accountId = sessionPrincipal opaqueSession
                in case mfaEnrollmentIntentValue submission of
-                    "start" -> startMfaAction actionRequest path accountId
-                    "confirm" -> confirmMfaAction actionRequest path accountId (mfaEnrollmentCodeValue submission)
-                    _ -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path Http.status422 (MfaEnrollmentForm Nothing [] (Just (localized actionRequest ChooseEnrollmentAction)) True) Nothing [])
+                    "start" -> startMfaAction actionRequest accountId
+                    "confirm" -> confirmMfaAction actionRequest accountId (mfaEnrollmentCodeValue submission)
+                    _ -> pure (mfaEnrollmentResponse (accountActionResponseContext actionRequest Http.status422 Nothing []) (MfaEnrollmentForm Nothing [] (Just (localized actionRequest ChooseEnrollmentAction)) True))
 
 invalidEnrollmentSessionResponse :: AccountActionRequest -> HarchWeb.ClientActionResponse
 invalidEnrollmentSessionResponse actionRequest =
-  let path = HarchWeb.clientActionContext actionRequest
-   in mfaEnrollmentResponse (actionLocale actionRequest) path Http.status403 (MfaEnrollmentForm Nothing [] (Just (localized actionRequest EnrollmentLinkInvalid)) True) Nothing []
+  mfaEnrollmentResponse
+    (accountActionResponseContext actionRequest Http.status403 Nothing [])
+    (MfaEnrollmentForm Nothing [] (Just (localized actionRequest EnrollmentLinkInvalid)) True)
 
 loadMfaEnrollmentSessionNow :: SessionId -> AppM publicFailure (UnixTimeNanoseconds, Either MfaEnrollmentSessionStoreError (Maybe (OpaqueSession Account.AccountId)))
 loadMfaEnrollmentSessionNow enrollmentSessionId = do
@@ -168,22 +168,22 @@ startMfaEnrollmentNow accountId = do
         }
       accountId
 
-startMfaAction :: AccountActionRequest -> AppRequestContext -> Account.AccountId -> AccountActionWorkflow
-startMfaAction actionRequest path accountId = do
+startMfaAction :: AccountActionRequest -> Account.AccountId -> AccountActionWorkflow
+startMfaAction actionRequest accountId = do
   started <- startMfaEnrollmentNow accountId
   case started of
-    Right (MfaEnrollmentStart secret) -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path Http.status200 (MfaEnrollmentForm (Just (Totp.renderTotpSecret secret)) [] (Just (localized actionRequest AddAuthenticatorSecret)) False) (Just "mfa-code") noHeaders)
-    Left errorValue -> interpretMfaFailure actionRequest path MfaEnrollmentStartFailure Nothing errorValue
+    Right (MfaEnrollmentStart secret) -> pure (mfaEnrollmentResponse (accountActionResponseContext actionRequest Http.status200 (Just "mfa-code") noHeaders) (MfaEnrollmentForm (Just (Totp.renderTotpSecret secret)) [] (Just (localized actionRequest AddAuthenticatorSecret)) False))
+    Left errorValue -> interpretMfaFailure actionRequest MfaEnrollmentStartFailure Nothing errorValue
 
-confirmMfaAction :: AccountActionRequest -> AppRequestContext -> Account.AccountId -> Text -> AccountActionWorkflow
-confirmMfaAction actionRequest path accountId codeValue =
+confirmMfaAction :: AccountActionRequest -> Account.AccountId -> Text -> AccountActionWorkflow
+confirmMfaAction actionRequest accountId codeValue =
   case Totp.mkTotpCode codeValue of
-    Nothing -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path Http.status422 (MfaEnrollmentForm Nothing [] (Just (localized actionRequest EnterAuthenticatorCode)) True) (Just "mfa-code") [])
+    Nothing -> pure (mfaEnrollmentResponse (accountActionResponseContext actionRequest Http.status422 (Just "mfa-code") []) (MfaEnrollmentForm Nothing [] (Just (localized actionRequest EnterAuthenticatorCode)) True))
     Just code -> do
       confirmed <- confirmMfaEnrollmentNow accountId code
       case confirmed of
-        Right (MfaEnrollmentConfirmation recoveryCodes) -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path Http.status200 (MfaEnrollmentForm Nothing (map RecoveryCode.recoveryCodeText (toList recoveryCodes)) (Just (localized actionRequest AuthenticatorEnrolled)) False) Nothing noHeaders)
-        Left errorValue -> interpretMfaFailure actionRequest path MfaEnrollmentConfirmFailure (Just "mfa-code") errorValue
+        Right (MfaEnrollmentConfirmation recoveryCodes) -> pure (mfaEnrollmentResponse (accountActionResponseContext actionRequest Http.status200 Nothing noHeaders) (MfaEnrollmentForm Nothing (map RecoveryCode.recoveryCodeText (toList recoveryCodes)) (Just (localized actionRequest AuthenticatorEnrolled)) False))
+        Left errorValue -> interpretMfaFailure actionRequest MfaEnrollmentConfirmFailure (Just "mfa-code") errorValue
 
 confirmMfaEnrollmentNow :: Account.AccountId -> Totp.TotpCode -> AppM publicFailure (Either MfaEnrollmentError MfaEnrollmentConfirmation)
 confirmMfaEnrollmentNow accountId code = do
@@ -204,13 +204,15 @@ confirmMfaEnrollmentNow accountId code = do
 
 interpretMfaFailure ::
   AccountActionRequest ->
-  AppRequestContext ->
   FailureCode ->
   Maybe Text ->
   MfaEnrollmentError ->
   AccountActionWorkflow
-interpretMfaFailure actionRequest path failureCodeValue focusId errorValue =
-  let response status = mfaEnrollmentResponse (actionLocale actionRequest) path status (MfaEnrollmentForm Nothing [] (Just (mfaErrorMessage actionRequest errorValue)) True) focusId []
+interpretMfaFailure actionRequest failureCodeValue focusId errorValue =
+  let response status =
+        mfaEnrollmentResponse
+          (accountActionResponseContext actionRequest status focusId [])
+          (MfaEnrollmentForm Nothing [] (Just (mfaErrorMessage actionRequest errorValue)) True)
    in case mfaEnrollmentFailureDiagnostics failureCodeValue errorValue of
         Nothing -> pure (response Http.status422)
         Just diagnostics -> throwAppFailure AppFailure {appFailurePublic = response Http.status503, appFailureDiagnostics = diagnostics}
@@ -272,16 +274,15 @@ parseLoginForm actionRequest submission =
   let emailValue = loginEmailValue submission
       usernameValue = loginUsernameValue submission
       passwordValue = loginPasswordValue submission
-      path = HarchWeb.clientActionContext actionRequest
       loginForm message = LoginForm emailValue (Just message)
       maybeIdentifier =
         (LoginEmailAddress <$> Email.mkEmailAddress emailValue)
           <|> (LoginUsername <$> Username.mkUsername emailValue)
           <|> (LoginUsername <$> Username.mkUsername usernameValue)
    in case (maybeIdentifier, validPassword passwordValue, loginProof submission) of
-        (Nothing, _, _) -> Left (loginResponse (actionLocale actionRequest) path Http.status422 (loginForm (localized actionRequest EnterValidEmailOrUsername) True) (Just "login-email") [])
-        (_, False, _) -> Left (loginResponse (actionLocale actionRequest) path Http.status422 (loginForm (localized actionRequest EnterPassword) True) (Just "login-password") [])
-        (_, _, Nothing) -> Left (loginResponse (actionLocale actionRequest) path Http.status422 (loginForm (localized actionRequest EnterAuthenticatorOrRecoveryCode) True) (Just "login-code") [])
+        (Nothing, _, _) -> Left (loginResponse (accountActionResponseContext actionRequest Http.status422 (Just "login-email") []) (loginForm (localized actionRequest EnterValidEmailOrUsername) True))
+        (_, False, _) -> Left (loginResponse (accountActionResponseContext actionRequest Http.status422 (Just "login-password") []) (loginForm (localized actionRequest EnterPassword) True))
+        (_, _, Nothing) -> Left (loginResponse (accountActionResponseContext actionRequest Http.status422 (Just "login-code") []) (loginForm (localized actionRequest EnterAuthenticatorOrRecoveryCode) True))
         (Just identifier, True, Just proof) -> Right (if Text.null emailValue then usernameValue else emailValue, passwordValue, identifier, proof)
 
 interpretLoginResult ::
@@ -291,9 +292,8 @@ interpretLoginResult ::
   PasswordMfaLoginResult ->
   AccountActionWorkflow
 interpretLoginResult actionRequest emailValue nowNanoseconds loginResult =
-  let path = HarchWeb.clientActionContext actionRequest
-      loginForm message = LoginForm emailValue (Just message)
-      response status message isError = loginResponse (actionLocale actionRequest) path status (loginForm message isError)
+  let loginForm message = LoginForm emailValue (Just message)
+      response status message isError focusId headers = loginResponse (accountActionResponseContext actionRequest status focusId headers) (loginForm message isError)
       unavailable focusId = response Http.status503 (localized actionRequest SignInUnavailable) True focusId []
    in case loginResult of
         PasswordMfaLoginAccepted accountId -> issueLoginSession actionRequest emailValue nowNanoseconds accountId
@@ -310,11 +310,10 @@ interpretLoginResult actionRequest emailValue nowNanoseconds loginResult =
 issueLoginSession :: AccountActionRequest -> Text -> UnixTimeNanoseconds -> Account.AccountId -> AccountActionWorkflow
 issueLoginSession actionRequest emailValue nowNanoseconds accountId = do
   issuedSession <- issueAccountSessionNow accountId nowNanoseconds
-  let path = HarchWeb.clientActionContext actionRequest
-      form message = LoginForm emailValue (Just message)
+  let form message = LoginForm emailValue (Just message)
   case issuedSession of
-    Left storeError -> throwClientActionFailure (loginResponse (actionLocale actionRequest) path Http.status503 (form (localized actionRequest SignInUnavailable) True) (Just "login-email") []) LoginSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
-    Right opaqueSession -> pure (loginResponse (actionLocale actionRequest) path Http.status200 (form (localized actionRequest SignedIn) False) Nothing [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie defaultSessionCookiePolicy (sessionId opaqueSession)))])
+    Left storeError -> throwClientActionFailure (loginResponse (accountActionResponseContext actionRequest Http.status503 (Just "login-email") []) (form (localized actionRequest SignInUnavailable) True)) LoginSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
+    Right opaqueSession -> pure (loginResponse (accountActionResponseContext actionRequest Http.status200 Nothing [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie defaultSessionCookiePolicy (sessionId opaqueSession)))]) (form (localized actionRequest SignedIn) False))
 
 issueAccountSessionNow :: Account.AccountId -> UnixTimeNanoseconds -> AppM publicFailure (Either AccountSessionStoreError (OpaqueSession Account.AccountId))
 issueAccountSessionNow accountId nowNanoseconds = do
@@ -329,9 +328,8 @@ issueAccountSessionNow accountId nowNanoseconds = do
 -- is deliberately not the same 'issueAccountSession' full login grants.
 issueLoginEnrollmentSession :: AccountActionRequest -> Text -> UnixTimeNanoseconds -> Account.AccountId -> AccountActionWorkflow
 issueLoginEnrollmentSession actionRequest emailValue nowNanoseconds accountId = do
-  let path = HarchWeb.clientActionContext actionRequest
-      form message = LoginForm emailValue (Just message)
-      response = loginResponse (actionLocale actionRequest) path Http.status403 (form (localized actionRequest EnrollAuthenticatorBeforeSignIn) True) Nothing
+  let form message = LoginForm emailValue (Just message)
+      response headers = loginResponse (accountActionResponseContext actionRequest Http.status403 Nothing headers) (form (localized actionRequest EnrollAuthenticatorBeforeSignIn) True)
   issued <- issueMfaEnrollmentSessionNow accountId nowNanoseconds
   case issued of
     Right opaqueSession -> pure (response [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie mfaEnrollmentSessionCookiePolicy (sessionId opaqueSession)))])
@@ -339,14 +337,13 @@ issueLoginEnrollmentSession actionRequest emailValue nowNanoseconds accountId = 
 
 handleLogout :: AccountActionRequest -> AccountActionWorkflow
 handleLogout actionRequest =
-  let path = HarchWeb.clientActionContext actionRequest
-   in case requestSessionId (HarchWeb.clientActionContext actionRequest) of
-        Nothing -> pure (logoutResponse (actionLocale actionRequest) path Http.status200 (Just (localized actionRequest SignedOut)) False [])
-        Just sessionToken -> do
-          invalidated <- invalidateAccountSessionNow sessionToken
-          case invalidated of
-            Left storeError -> throwClientActionFailure (logoutResponse (actionLocale actionRequest) path Http.status503 (Just (localized actionRequest SignOutUnavailable)) True []) LogoutSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
-            Right _ -> pure (logoutResponse (actionLocale actionRequest) path Http.status200 (Just (localized actionRequest SignedOut)) False [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie (defaultSessionCookiePolicy {sessionCookieMaxAgeSeconds = 0}) sessionToken))])
+  case requestSessionId (HarchWeb.clientActionContext actionRequest) of
+    Nothing -> pure (logoutResponse (accountActionResponseContext actionRequest Http.status200 Nothing []) (Just (localized actionRequest SignedOut, False)))
+    Just sessionToken -> do
+      invalidated <- invalidateAccountSessionNow sessionToken
+      case invalidated of
+        Left storeError -> throwClientActionFailure (logoutResponse (accountActionResponseContext actionRequest Http.status503 Nothing []) (Just (localized actionRequest SignOutUnavailable, True))) LogoutSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
+        Right _ -> pure (logoutResponse (accountActionResponseContext actionRequest Http.status200 Nothing [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie (defaultSessionCookiePolicy {sessionCookieMaxAgeSeconds = 0}) sessionToken))]) (Just (localized actionRequest SignedOut, False)))
 
 invalidateAccountSessionNow :: SessionId -> AppM publicFailure (Either AccountSessionStoreError Bool)
 invalidateAccountSessionNow sessionToken = do

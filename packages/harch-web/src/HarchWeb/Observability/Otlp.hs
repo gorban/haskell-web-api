@@ -9,11 +9,13 @@ module HarchWeb.Observability.Otlp
     newOtlpHttpManager,
     nextOtlpSpanIdentifiers,
     nextOtlpSpanId,
+    OtlpExportFailure (..),
+    renderOtlpExportFailure,
     sendOtlpTraceRequest,
   )
 where
 
-import Control.Monad (unless)
+import Control.Exception (try)
 import Crypto.Random.Entropy (getEntropy)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Base16 qualified as Base16
@@ -29,6 +31,30 @@ import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Client.TLS qualified as HttpClientTls
 import Network.HTTP.Types qualified as Http
 
+-- | A stable, payload-free OTLP export failure.
+--
+-- Decision (PR-SEC8, 2026-08-30): this is constructed at the existing OTLP
+-- transport boundary, rather than asking each application log reporter to
+-- redact @http-client@ exceptions. Those exceptions can render configured
+-- request headers and endpoint queries, so neither the raw request nor its
+-- exception text may cross this boundary. The closed categories retain the
+-- operator-useful distinction between invalid configuration, transport, and
+-- a rejecting collector without retaining a URL, header, TLS payload, or
+-- response body.
+data OtlpExportFailure
+  = OtlpInvalidEndpoint
+  | OtlpTransportFailure
+  | OtlpCollectorRejectedStatus Int
+
+-- | Renders the stable, payload-free OTLP failure category for a private
+-- operator diagnostic.
+renderOtlpExportFailure :: OtlpExportFailure -> Text.Text
+renderOtlpExportFailure = \case
+  OtlpInvalidEndpoint -> "OTLP endpoint is invalid"
+  OtlpTransportFailure -> "OTLP transport failed"
+  OtlpCollectorRejectedStatus statusCode ->
+    "OTLP collector rejected export with status " <> Text.pack (show statusCode)
+
 -- | Decision (BZ, 2026-08-21, per @docs/design-guidance.md@'s explicit-props
 -- rule): the connection-reusing HTTP manager is a caller-owned prop, not a
 -- process-global CAF — two applications (or two parallel test suites) in
@@ -40,11 +66,29 @@ import Network.HTTP.Types qualified as Http
 newOtlpHttpManager :: IO HttpClient.Manager
 newOtlpHttpManager = HttpClient.newManager HttpClientTls.tlsManagerSettings
 
-sendOtlpTraceRequest :: HttpClient.Manager -> OtlpExporter -> LazyByteString.ByteString -> IO ()
+-- | Posts one OTLP trace payload. A collector response is provider-controlled,
+-- so a rejecting status becomes a stable status-only result and its body is
+-- discarded before it can reach the application's log reporter. Request
+-- parsing and transport exceptions are similarly converted to
+-- 'OtlpExportFailure' before an application can log their secret-bearing
+-- @http-client@ request representation.
+sendOtlpTraceRequest :: HttpClient.Manager -> OtlpExporter -> LazyByteString.ByteString -> IO (Either OtlpExportFailure ())
 sendOtlpTraceRequest manager exporter requestBody = do
+  requestResult <-
+    try (postOtlpTraceRequest manager exporter requestBody) :: IO (Either HttpClient.HttpException Int)
+  case requestResult of
+    Left requestException -> pure (Left (otlpHttpExceptionFailure requestException))
+    Right statusCode ->
+      pure $
+        if statusCode >= 200 && statusCode < 300
+          then Right ()
+          else Left (OtlpCollectorRejectedStatus statusCode)
+
+postOtlpTraceRequest :: HttpClient.Manager -> OtlpExporter -> LazyByteString.ByteString -> IO Int
+postOtlpTraceRequest manager exporter requestBody = do
   baseRequest <- HttpClient.parseRequest (Text.unpack (otlpEndpoint exporter))
   response <-
-    HttpClient.httpLbs
+    HttpClient.httpNoBody
       baseRequest
         { HttpClient.method = "POST",
           HttpClient.requestHeaders =
@@ -53,13 +97,12 @@ sendOtlpTraceRequest manager exporter requestBody = do
           HttpClient.requestBody = HttpClient.RequestBodyLBS requestBody
         }
       manager
-  let statusCode = Http.statusCode (HttpClient.responseStatus response)
-  unless (statusCode >= 200 && statusCode < 300) $
-    ioError . userError $
-      "OTLP trace export failed with status "
-        <> show statusCode
-        <> ".\nbody:\n"
-        <> renderResponseBody response
+  pure (Http.statusCode (HttpClient.responseStatus response))
+
+otlpHttpExceptionFailure :: HttpClient.HttpException -> OtlpExportFailure
+otlpHttpExceptionFailure = \case
+  HttpClient.InvalidUrlException {} -> OtlpInvalidEndpoint
+  HttpClient.HttpExceptionRequest {} -> OtlpTransportFailure
 
 currentUnixTimeNSec :: IO Word64
 currentUnixTimeNSec =
@@ -81,10 +124,6 @@ nextOtlpSpanIdentifiers = do
 
 nextOtlpSpanId :: IO Text
 nextOtlpSpanId = snd <$> nextOtlpSpanIdentifiers
-
-renderResponseBody :: HttpClient.Response LazyByteString.ByteString -> String
-renderResponseBody =
-  Text.unpack . TextEncoding.decodeUtf8 . LazyByteString.toStrict . HttpClient.responseBody
 
 otlpHeader :: (Text, Text) -> Http.Header
 otlpHeader (headerName, headerValue) =

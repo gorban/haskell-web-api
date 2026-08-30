@@ -85,6 +85,7 @@ library
     WebApi.Api.Endpoints
     WebApi.App
     WebApi.App.Enhancements
+    WebApi.App.Observability
     WebApi.App.Shell
     WebApi.AppEffect
     WebApi.Config
@@ -110,7 +111,6 @@ library
     WebApi.AccountPages.Actions.Profile
     WebApi.AccountPages.Actions.Registration
     WebApi.App.AccountWorkflow
-    WebApi.App.Observability
     WebApi.Config.Defaults
     WebApi.Config.Internal
     WebApi.Config.Loading

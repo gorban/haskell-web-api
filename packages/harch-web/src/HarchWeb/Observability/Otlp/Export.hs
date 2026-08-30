@@ -22,7 +22,7 @@ exportRequestObservabilityToOtlp ::
   Text ->
   Observability.OtlpExporter ->
   Observability.RequestObservability ->
-  IO ()
+  IO (Either Otlp.OtlpExportFailure ())
 exportRequestObservabilityToOtlp manager serviceName exporter requestObservability = do
   (generatedTraceId, spanId) <- Otlp.nextOtlpSpanIdentifiers
   let childSpans =
@@ -66,7 +66,7 @@ exportConnectionObservabilityToOtlp ::
   Text ->
   Observability.OtlpExporter ->
   Observability.ConnectionObservability ->
-  IO ()
+  IO (Either Otlp.OtlpExportFailure ())
 exportConnectionObservabilityToOtlp manager serviceName exporter connectionObservability = do
   (traceId, spanId) <- Otlp.nextOtlpSpanIdentifiers
   endTimeUnixNano <- Otlp.currentUnixTimeNSec

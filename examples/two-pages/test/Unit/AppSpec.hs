@@ -36,11 +36,11 @@ spec =
         exerciseGeneratedPageRouteInstances
         expectAll
           ( (siteName twoPageSite `shouldBe` "two-pages-example")
-              :| [ siteNavigationRoutes twoPageSite
-                     `shouldBe` [Page HomePage, Page SecondPage, Page LiveDataPage],
+              :| [ map routeHref (siteNavigationRoutes twoPageSite)
+                     `shouldBe` ["/", "/second", "/live-data"],
                    allPageRoutes
                      `shouldBe` [HomePage, LiveDataPage, PageNotFound, SecondPage],
-                   map showViaDictionary allPageRoutes
+                   map show allPageRoutes
                      `shouldBe` ["HomePage", "LiveDataPage", "PageNotFound", "SecondPage"],
                    routeNavigationLabel (siteRouteDefinition twoPageSite (Page PageNotFound))
                      `shouldBe` Nothing,
@@ -106,45 +106,31 @@ spec =
       it "parses and renders the supported two-page routes" $ do
         let previewSlug =
               fromMaybe (error "expected valid test preview slug") (mkPreviewSlug "summer-release")
-        actionTargetReference <- newIORef ()
-        actionTarget <- readIORef actionTargetReference
         expectAll
-          ( (eqViaDictionary (Page HomePage) (Page HomePage) `shouldBe` True)
-              :| [ eqViaDictionary (Page HomePage) (Page SecondPage) `shouldBe` False,
-                   eqViaDictionary actionTarget () `shouldBe` True,
-                   eqViaDictionary (Page LiveDataPage) (Api LiveDataEvents) `shouldBe` False,
-                   neqViaDictionary (Page HomePage) (Page SecondPage) `shouldBe` True,
-                   showViaDictionary (Page HomePage) `shouldBe` "Page HomePage",
-                   showViaDictionary (Page SecondPage) `shouldBe` "Page SecondPage",
-                   showViaDictionary (Page LiveDataPage) `shouldBe` "Page LiveDataPage",
-                   showViaDictionary (Api LiveDataEvents) `shouldBe` "Api LiveDataEvents",
-                   eqViaDictionary LiveDataEvents LiveDataEvents `shouldBe` True,
-                   neqViaDictionary LiveDataEvents LiveDataEvents `shouldBe` False,
-                   showViaDictionary LiveDataEvents `shouldBe` "LiveDataEvents",
-                   showsPrecViaDictionary 11 LiveDataEvents "" `shouldSatisfy` not . null,
-                   showListViaDictionary [LiveDataEvents] "" `shouldSatisfy` not . null,
-                   eqViaDictionary previewSlug previewSlug `shouldBe` True,
-                   neqViaDictionary previewSlug previewSlug `shouldBe` False,
-                   showViaDictionary previewSlug `shouldBe` "PreviewSlug \"summer-release\"",
-                   showsPrecViaDictionary 11 previewSlug "" `shouldSatisfy` not . null,
-                   showListViaDictionary [previewSlug] "" `shouldSatisfy` not . null,
-                   eqViaDictionary (PreviewPage previewSlug) (PreviewPage previewSlug) `shouldBe` True,
-                   neqViaDictionary (PreviewPage previewSlug) (PreviewPage previewSlug)
-                     `shouldBe` False,
-                   showViaDictionary (PreviewPage previewSlug)
+          ( ((Page HomePage /= Page SecondPage) `shouldBe` True)
+              :| [ show (Page HomePage) `shouldBe` "Page HomePage",
+                   show (Page SecondPage) `shouldBe` "Page SecondPage",
+                   show (Page LiveDataPage) `shouldBe` "Page LiveDataPage",
+                   show (Api LiveDataEvents) `shouldBe` "Api LiveDataEvents",
+                   show LiveDataEvents `shouldBe` "LiveDataEvents",
+                   showsPrec 11 LiveDataEvents "" `shouldSatisfy` not . null,
+                   showList [LiveDataEvents] "" `shouldSatisfy` not . null,
+                   show previewSlug `shouldBe` "PreviewSlug \"summer-release\"",
+                   showsPrec 11 previewSlug "" `shouldSatisfy` not . null,
+                   showList [previewSlug] "" `shouldSatisfy` not . null,
+                   show (PreviewPage previewSlug)
                      `shouldBe` "PreviewPage (PreviewSlug \"summer-release\")",
-                   showsPrecViaDictionary 11 (PreviewPage previewSlug) ""
+                   showsPrec 11 (PreviewPage previewSlug) ""
                      `shouldSatisfy` not
                      . null,
-                   showListViaDictionary [PreviewPage previewSlug] ""
+                   showList [PreviewPage previewSlug] ""
                      `shouldSatisfy` not
                      . null,
-                   eqViaDictionary NativeSubscriptionFallback NativeSubscriptionFallback `shouldBe` True,
-                   showViaDictionary NativeSubscriptionFallback `shouldBe` "NativeSubscriptionFallback",
-                   showViaDictionary (Page PageNotFound) `shouldBe` "Page PageNotFound",
-                   showsPrecViaDictionary 0 (Page HomePage) "" `shouldBe` "Page HomePage",
-                   showListViaDictionary ([] :: [TwoPageRoute]) "" `shouldBe` "[]",
-                   showListViaDictionary [Page HomePage, Page SecondPage, Page LiveDataPage] "" `shouldBe` "[Page HomePage,Page SecondPage,Page LiveDataPage]",
+                   show NativeSubscriptionFallback `shouldBe` "NativeSubscriptionFallback",
+                   show (Page PageNotFound) `shouldBe` "Page PageNotFound",
+                   show (Page HomePage) `shouldBe` "Page HomePage",
+                   showList ([] :: [TwoPageRoute]) "" `shouldBe` "[]",
+                   showList [Page HomePage, Page SecondPage, Page LiveDataPage] "" `shouldBe` "[Page HomePage,Page SecondPage,Page LiveDataPage]",
                    parseRoute ExampleRoutes.routeCodec () "/" `shouldBe` Just RouteRequest {requestRoute = Page HomePage, requestContext = ()},
                    parseRoute ExampleRoutes.routeCodec () "/second" `shouldBe` Just RouteRequest {requestRoute = Page SecondPage, requestContext = ()},
                    parseRoute ExampleRoutes.routeCodec () "/second?utm=demo" `shouldBe` Just RouteRequest {requestRoute = Page SecondPage, requestContext = ()},
@@ -181,7 +167,7 @@ spec =
                    routeHref (Page PageNotFound) `shouldBe` "/404",
                    twoPageNavigationPath (NavigationPage HomePage) `shouldBe` "/",
                    twoPageNavigationPath (NavigationPreview previewSlug) `shouldBe` "/preview/summer-release",
-                   notFoundRequest ExampleRoutes.routeCodec () `shouldBe` RouteRequest {requestRoute = Page PageNotFound, requestContext = ()},
+                   renderRoute ExampleRoutes.routeCodec (notFoundRequest ExampleRoutes.routeCodec ()) `shouldBe` "/404",
                    map (parsePageRoute . pageRoutePath) allPageRoutes
                      `shouldBe` map Just allPageRoutes,
                    parseRoute ExampleRoutes.routeCodec () "/assets/navigation.js" `shouldBe` Nothing
@@ -518,6 +504,29 @@ spec =
                  ]
           )
 
+      it "preserves the middleware context through every native-fallback rejection" $ do
+        oversizedRequest <-
+          nativeFallbackRequestChunks
+            [ByteString.replicate 4096 97, ByteString.replicate 4097 97]
+            "harch-native-fallback-csrf=two-pages-native-fallback"
+        tooManyFieldsRequest <-
+          nativeFallbackRequest
+            (ByteString.intercalate "&" (replicate 33 "x"))
+            "harch-native-fallback-csrf=two-pages-native-fallback"
+        rejectedCsrfRequest <- nativeFallbackRequest "_harch_csrf=wrong-token" "harch-native-fallback-csrf=two-pages-native-fallback"
+        case HarchWeb.applicationRequestMiddleware buildApplication of
+          [HarchWeb.RequestMiddleware nativeFallbackMiddleware] -> do
+            oversizedResult <- nativeFallbackMiddleware oversizedRequest ()
+            tooManyFieldsResult <- nativeFallbackMiddleware tooManyFieldsRequest ()
+            rejectedCsrfResult <- nativeFallbackMiddleware rejectedCsrfRequest ()
+            expectAll
+              ( (haltedMiddlewareContext oversizedResult `shouldBe` Just ())
+                  :| [ haltedMiddlewareContext tooManyFieldsResult `shouldBe` Just (),
+                       haltedMiddlewareContext rejectedCsrfResult `shouldBe` Just ()
+                     ]
+              )
+          _ -> expectationFailure "expected the configured native-fallback middleware"
+
       it "rejects an address that does not contain an at sign" $ do
         invalidAction <-
           HarchWeb.handleClientAction
@@ -554,6 +563,12 @@ nativeFallbackRequestChunks requestBodyChunks csrfCookie = do
 
 nonEmptyCookie :: ByteString.ByteString -> Maybe ByteString.ByteString
 nonEmptyCookie cookie = if ByteString.null cookie then Nothing else Just cookie
+
+haltedMiddlewareContext :: HarchWeb.MiddlewareResult context -> Maybe context
+haltedMiddlewareContext result =
+  case result of
+    HarchWeb.HaltMiddleware requestContext _ -> Just requestContext
+    HarchWeb.ContinueMiddleware _ -> Nothing
 
 waiRequest :: [Text.Text] -> Wai.Request
 waiRequest segments =
@@ -612,85 +627,24 @@ decodeUtf8Response =
 hasPageRoute :: TwoPageRoute -> HarchWeb.Response TwoPageRoute () -> Bool
 hasPageRoute expectedRoute response =
   case response of
-    HarchWeb.PageResponse page -> HarchWeb.pageRoute page == expectedRoute
+    HarchWeb.PageResponse page -> routeHref (HarchWeb.pageRoute page) == routeHref expectedRoute
     _ -> False
 
 exerciseGeneratedPageRouteInstances :: Expectation
 exerciseGeneratedPageRouteInstances = do
   let routes = [HomePage, LiveDataPage, PageNotFound, SecondPage]
-  (minimumViaDictionary :: PageRoute) `shouldBe` HomePage
-  (maximumViaDictionary :: PageRoute) `shouldBe` SecondPage
-  successorViaDictionary HomePage `shouldBe` LiveDataPage
-  predecessorViaDictionary SecondPage `shouldBe` PageNotFound
-  (toEnumViaDictionary 0 :: PageRoute) `shouldBe` HomePage
-  fromEnumViaDictionary HomePage `shouldBe` 0
-  enumFromViaDictionary HomePage `shouldBe` routes
-  enumFromThenViaDictionary HomePage LiveDataPage `shouldBe` routes
-  enumFromToViaDictionary HomePage SecondPage `shouldBe` routes
-  enumFromThenToViaDictionary HomePage LiveDataPage SecondPage `shouldBe` routes
-  eqViaDictionary HomePage HomePage `shouldBe` True
-  neqViaDictionary HomePage SecondPage `shouldBe` True
-  showViaDictionary HomePage `shouldBe` "HomePage"
-  showsPrecViaDictionary 11 HomePage "" `shouldBe` "HomePage"
-  showListViaDictionary routes ""
+  (minBound :: PageRoute) `shouldBe` HomePage
+  (maxBound :: PageRoute) `shouldBe` SecondPage
+  succ HomePage `shouldBe` LiveDataPage
+  pred SecondPage `shouldBe` PageNotFound
+  (toEnum 0 :: PageRoute) `shouldBe` HomePage
+  fromEnum HomePage `shouldBe` 0
+  enumFrom HomePage `shouldBe` routes
+  enumFromThen HomePage LiveDataPage `shouldBe` routes
+  enumFromTo HomePage SecondPage `shouldBe` routes
+  enumFromThenTo HomePage LiveDataPage SecondPage `shouldBe` routes
+  (HomePage /= SecondPage) `shouldBe` True
+  show HomePage `shouldBe` "HomePage"
+  showsPrec 11 HomePage "" `shouldBe` "HomePage"
+  showList routes ""
     `shouldBe` "[HomePage,LiveDataPage,PageNotFound,SecondPage]"
-
-eqViaDictionary :: (Eq a) => a -> a -> Bool
-eqViaDictionary = (==)
-{-# NOINLINE eqViaDictionary #-}
-
-showViaDictionary :: (Show a) => a -> String
-showViaDictionary = show
-{-# NOINLINE showViaDictionary #-}
-
-neqViaDictionary :: (Eq a) => a -> a -> Bool
-neqViaDictionary = (/=)
-{-# NOINLINE neqViaDictionary #-}
-
-showsPrecViaDictionary :: (Show a) => Int -> a -> ShowS
-showsPrecViaDictionary = showsPrec
-{-# NOINLINE showsPrecViaDictionary #-}
-
-showListViaDictionary :: (Show a) => [a] -> ShowS
-showListViaDictionary = showList
-{-# NOINLINE showListViaDictionary #-}
-
-minimumViaDictionary :: (Bounded a) => a
-minimumViaDictionary = minBound
-{-# NOINLINE minimumViaDictionary #-}
-
-maximumViaDictionary :: (Bounded a) => a
-maximumViaDictionary = maxBound
-{-# NOINLINE maximumViaDictionary #-}
-
-successorViaDictionary :: (Enum a) => a -> a
-successorViaDictionary = succ
-{-# NOINLINE successorViaDictionary #-}
-
-predecessorViaDictionary :: (Enum a) => a -> a
-predecessorViaDictionary = pred
-{-# NOINLINE predecessorViaDictionary #-}
-
-toEnumViaDictionary :: (Enum a) => Int -> a
-toEnumViaDictionary = toEnum
-{-# NOINLINE toEnumViaDictionary #-}
-
-fromEnumViaDictionary :: (Enum a) => a -> Int
-fromEnumViaDictionary = fromEnum
-{-# NOINLINE fromEnumViaDictionary #-}
-
-enumFromViaDictionary :: (Enum a) => a -> [a]
-enumFromViaDictionary = enumFrom
-{-# NOINLINE enumFromViaDictionary #-}
-
-enumFromThenViaDictionary :: (Enum a) => a -> a -> [a]
-enumFromThenViaDictionary = enumFromThen
-{-# NOINLINE enumFromThenViaDictionary #-}
-
-enumFromToViaDictionary :: (Enum a) => a -> a -> [a]
-enumFromToViaDictionary = enumFromTo
-{-# NOINLINE enumFromToViaDictionary #-}
-
-enumFromThenToViaDictionary :: (Enum a) => a -> a -> a -> [a]
-enumFromThenToViaDictionary = enumFromThenTo
-{-# NOINLINE enumFromThenToViaDictionary #-}

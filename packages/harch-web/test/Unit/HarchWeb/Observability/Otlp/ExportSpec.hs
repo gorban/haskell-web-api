@@ -3,7 +3,7 @@
 {-# SPEC #-}
 
 import Control.Concurrent (readMVar)
-import Control.Exception (try)
+import Control.Exception ()
 import Control.Monad ()
 import Data.ByteString qualified as ByteString ()
 import Data.ByteString.Builder qualified as Builder ()
@@ -17,9 +17,9 @@ import Data.List ()
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe ()
 import Data.Text ()
-import Data.Text qualified as Text (all, count, isInfixOf, length)
+import Data.Text qualified as Text (all, count, isInfixOf, length, pack, unpack)
 import Data.Text.Encoding qualified as TextEncoding (decodeUtf8)
-import HarchWeb (OtlpExporter (OtlpExporter, otlpEndpoint, otlpHeaders), exportConnectionObservabilityToOtlp, exportRequestObservabilityToOtlp)
+import HarchWeb (OtlpExportFailure (OtlpInvalidEndpoint, OtlpTransportFailure), OtlpExporter (OtlpExporter, otlpEndpoint, otlpHeaders), exportConnectionObservabilityToOtlp, exportRequestObservabilityToOtlp, newOtlpHttpManager, renderOtlpExportFailure)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database (DatabaseOperation (DatabaseOperation))
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -44,123 +44,128 @@ import TestCore.CustomAssertions ()
 import TestCore.Wai ()
 import Text.Read ()
 import Unit.HarchWeb.Observability.Otlp.TestSupport (CapturedCollectorRequest (CapturedCollectorRequest, capturedCollectorBody, capturedCollectorHeaders, capturedCollectorMethod, capturedCollectorPath), expectPlausibleEpochNanoTimestamps, extractQuotedJsonField, extractQuotedJsonIntegerFields, withOtlpCollector)
+import Unit.HarchWeb.TestSupport (withUnusedLoopbackPort)
 
 spec = do
   describe "exportRequestObservabilityToOtlp" $ do
     it "posts OTLP trace payloads with request attributes, resource attributes, and custom headers" $
       withOtlpCollector Http.ok200 "{}" $ \manager collectorUrl capturedRequestReference -> do
-        exportRequestObservabilityToOtlp
-          manager
-          "sample-app"
-          OtlpExporter
-            { otlpEndpoint = collectorUrl,
-              otlpHeaders = [("authorization", "Bearer sample-token")]
-            }
-          ( Observability.withDatabaseOperations
-              [ Database.DatabaseOperation "postgresql" "load-second-page-summary" "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;" (Just 3000000) (Just 4250000),
-                Database.DatabaseOperation "postgresql" "load-home-page-summary" "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;" Nothing Nothing,
-                Database.DatabaseOperation "postgresql" "load-health-check" "SELECT 1;" Nothing Nothing
-              ]
-              ( Observability.buildRequestObservability
-                  Observability.RequestIdentity
-                    { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
-                      Observability.requestIdentityScheme = "https",
-                      Observability.requestIdentityPath = "/known",
-                      Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/known"
-                    }
-                  503
-                  Observability.PageResponseKind
-                  [ Observability.ObservabilityAttribute
-                      { Observability.attributeName = "exception.type",
-                        Observability.attributeValue = Observability.TextAttribute "ExampleFailure"
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.system",
-                        Observability.attributeValue = Observability.TextAttribute "postgresql"
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.operation.name",
-                        Observability.attributeValue = Observability.TextAttribute "load-second-page-summary"
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.query.template",
-                        Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.operation.start_monotonic_ns",
-                        Observability.attributeValue = Observability.IntAttribute 3000000
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.operation.duration_ns",
-                        Observability.attributeValue = Observability.IntAttribute 1250000
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.system",
-                        Observability.attributeValue = Observability.TextAttribute "postgresql"
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.operation.name",
-                        Observability.attributeValue = Observability.TextAttribute "load-home-page-summary"
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.query.template",
-                        Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.operation.start_monotonic_ns",
-                        Observability.attributeValue = Observability.IntAttribute (-1)
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.operation.duration_ns",
-                        Observability.attributeValue = Observability.IntAttribute (-1)
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.system",
-                        Observability.attributeValue = Observability.TextAttribute "postgresql"
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.operation.name",
-                        Observability.attributeValue = Observability.TextAttribute "load-health-check"
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.query.template",
-                        Observability.attributeValue = Observability.TextAttribute "SELECT 1;"
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "harch.request.start_monotonic_ns",
-                        Observability.attributeValue = Observability.IntAttribute 1000000
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "harch.request.duration_ns",
-                        Observability.attributeValue = Observability.IntAttribute 5000000
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "harch.phase.request-policy.start_offset_ns",
-                        Observability.attributeValue = Observability.IntAttribute 0
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "harch.phase.request-policy.duration_ns",
-                        Observability.attributeValue = Observability.IntAttribute 250000
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "harch.phase.route-match.start_offset_ns",
-                        Observability.attributeValue = Observability.IntAttribute 500000
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "harch.phase.route-match.duration_ns",
-                        Observability.attributeValue = Observability.IntAttribute 750000
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "harch.phase.render-response.start_offset_ns",
-                        Observability.attributeValue = Observability.IntAttribute 1500000
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "harch.phase.render-response.duration_ns",
-                        Observability.attributeValue = Observability.IntAttribute 3000000
+        exportResult <-
+          exportRequestObservabilityToOtlp
+            manager
+            "sample-app"
+            OtlpExporter
+              { otlpEndpoint = collectorUrl,
+                otlpHeaders = [("authorization", "Bearer sample-token")]
+              }
+            ( Observability.withDatabaseOperations
+                [ Database.DatabaseOperation "postgresql" "load-second-page-summary" "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;" (Just 3000000) (Just 4250000),
+                  Database.DatabaseOperation "postgresql" "load-home-page-summary" "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;" Nothing Nothing,
+                  Database.DatabaseOperation "postgresql" "load-health-check" "SELECT 1;" Nothing Nothing
+                ]
+                ( Observability.buildRequestObservability
+                    Observability.RequestIdentity
+                      { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                        Observability.requestIdentityScheme = "https",
+                        Observability.requestIdentityPath = "/known",
+                        Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/known"
                       }
-                  ]
-              )
-          )
+                    503
+                    Observability.PageResponseKind
+                    [ Observability.ObservabilityAttribute
+                        { Observability.attributeName = "exception.type",
+                          Observability.attributeValue = Observability.TextAttribute "ExampleFailure"
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "db.system",
+                          Observability.attributeValue = Observability.TextAttribute "postgresql"
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "db.operation.name",
+                          Observability.attributeValue = Observability.TextAttribute "load-second-page-summary"
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "db.query.template",
+                          Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "db.operation.start_monotonic_ns",
+                          Observability.attributeValue = Observability.IntAttribute 3000000
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "db.operation.duration_ns",
+                          Observability.attributeValue = Observability.IntAttribute 1250000
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "db.system",
+                          Observability.attributeValue = Observability.TextAttribute "postgresql"
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "db.operation.name",
+                          Observability.attributeValue = Observability.TextAttribute "load-home-page-summary"
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "db.query.template",
+                          Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "db.operation.start_monotonic_ns",
+                          Observability.attributeValue = Observability.IntAttribute (-1)
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "db.operation.duration_ns",
+                          Observability.attributeValue = Observability.IntAttribute (-1)
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "db.system",
+                          Observability.attributeValue = Observability.TextAttribute "postgresql"
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "db.operation.name",
+                          Observability.attributeValue = Observability.TextAttribute "load-health-check"
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "db.query.template",
+                          Observability.attributeValue = Observability.TextAttribute "SELECT 1;"
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "harch.request.start_monotonic_ns",
+                          Observability.attributeValue = Observability.IntAttribute 1000000
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "harch.request.duration_ns",
+                          Observability.attributeValue = Observability.IntAttribute 5000000
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "harch.phase.request-policy.start_offset_ns",
+                          Observability.attributeValue = Observability.IntAttribute 0
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "harch.phase.request-policy.duration_ns",
+                          Observability.attributeValue = Observability.IntAttribute 250000
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "harch.phase.route-match.start_offset_ns",
+                          Observability.attributeValue = Observability.IntAttribute 500000
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "harch.phase.route-match.duration_ns",
+                          Observability.attributeValue = Observability.IntAttribute 750000
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "harch.phase.render-response.start_offset_ns",
+                          Observability.attributeValue = Observability.IntAttribute 1500000
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "harch.phase.render-response.duration_ns",
+                          Observability.attributeValue = Observability.IntAttribute 3000000
+                        }
+                    ]
+                )
+            )
+        case exportResult of
+          Right () -> pure ()
+          Left failure -> expectationFailure ("expected OTLP export to succeed, got: " <> Text.unpack (renderOtlpExportFailure failure))
         CapturedCollectorRequest
           { capturedCollectorMethod = requestMethod,
             capturedCollectorPath = requestPath,
@@ -291,32 +296,36 @@ spec = do
 
     it "omits runtime phase child spans when request timing has only a measured root duration" $
       withOtlpCollector Http.ok200 "{}" $ \manager collectorUrl capturedRequestReference -> do
-        exportRequestObservabilityToOtlp
-          manager
-          "sample-app"
-          OtlpExporter
-            { otlpEndpoint = collectorUrl,
-              otlpHeaders = []
-            }
-          ( Observability.buildRequestObservability
-              Observability.RequestIdentity
-                { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
-                  Observability.requestIdentityScheme = "http",
-                  Observability.requestIdentityPath = "/assets/app.js",
-                  Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/assets/*"
-                }
-              200
-              Observability.BodyResponseKind
-              [ Observability.ObservabilityAttribute
-                  { Observability.attributeName = "harch.request.start_monotonic_ns",
-                    Observability.attributeValue = Observability.IntAttribute 1000000
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "harch.request.duration_ns",
-                    Observability.attributeValue = Observability.IntAttribute 5000000
+        exportResult <-
+          exportRequestObservabilityToOtlp
+            manager
+            "sample-app"
+            OtlpExporter
+              { otlpEndpoint = collectorUrl,
+                otlpHeaders = []
+              }
+            ( Observability.buildRequestObservability
+                Observability.RequestIdentity
+                  { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                    Observability.requestIdentityScheme = "http",
+                    Observability.requestIdentityPath = "/assets/app.js",
+                    Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/assets/*"
                   }
-              ]
-          )
+                200
+                Observability.BodyResponseKind
+                [ Observability.ObservabilityAttribute
+                    { Observability.attributeName = "harch.request.start_monotonic_ns",
+                      Observability.attributeValue = Observability.IntAttribute 1000000
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "harch.request.duration_ns",
+                      Observability.attributeValue = Observability.IntAttribute 5000000
+                    }
+                ]
+            )
+        case exportResult of
+          Right () -> pure ()
+          Left failure -> expectationFailure ("expected OTLP export to succeed, got: " <> Text.unpack (renderOtlpExportFailure failure))
         CapturedCollectorRequest {capturedCollectorBody = requestBody} <-
           readMVar capturedRequestReference
         let requestBodyText = TextEncoding.decodeUtf8 (LazyByteString.toStrict requestBody)
@@ -331,24 +340,28 @@ spec = do
 
     it "leaves OTLP span status unset for client-error responses" $
       withOtlpCollector Http.ok200 "{}" $ \manager collectorUrl capturedRequestReference -> do
-        exportRequestObservabilityToOtlp
-          manager
-          "sample-app"
-          OtlpExporter
-            { otlpEndpoint = collectorUrl,
-              otlpHeaders = []
-            }
-          ( Observability.buildRequestObservability
-              Observability.RequestIdentity
-                { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
-                  Observability.requestIdentityScheme = "https",
-                  Observability.requestIdentityPath = "/missing",
-                  Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/missing"
-                }
-              404
-              Observability.PageResponseKind
-              []
-          )
+        exportResult <-
+          exportRequestObservabilityToOtlp
+            manager
+            "sample-app"
+            OtlpExporter
+              { otlpEndpoint = collectorUrl,
+                otlpHeaders = []
+              }
+            ( Observability.buildRequestObservability
+                Observability.RequestIdentity
+                  { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                    Observability.requestIdentityScheme = "https",
+                    Observability.requestIdentityPath = "/missing",
+                    Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/missing"
+                  }
+                404
+                Observability.PageResponseKind
+                []
+            )
+        case exportResult of
+          Right () -> pure ()
+          Left failure -> expectationFailure ("expected OTLP export to succeed, got: " <> Text.unpack (renderOtlpExportFailure failure))
         CapturedCollectorRequest {capturedCollectorBody = requestBody} <- readMVar capturedRequestReference
         let requestBodyText = TextEncoding.decodeUtf8 (LazyByteString.toStrict requestBody)
         expectAll
@@ -360,39 +373,43 @@ spec = do
 
     it "reuses incoming W3C trace context for OTLP request exports" $
       withOtlpCollector Http.ok200 "{}" $ \manager collectorUrl capturedRequestReference -> do
-        exportRequestObservabilityToOtlp
-          manager
-          "sample-app"
-          OtlpExporter
-            { otlpEndpoint = collectorUrl,
-              otlpHeaders = []
-            }
-          ( Observability.withRequestTraceContext
-              Observability.RequestTraceContext
-                { Observability.traceContextTraceId = "4bf92f3577b34da6a3ce929d0e0e4736",
-                  Observability.traceContextParentSpanId = "00f067aa0ba902b7",
-                  Observability.traceContextState = Just "vendor=value"
-                }
-              ( Observability.buildRequestObservability
-                  Observability.RequestIdentity
-                    { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
-                      Observability.requestIdentityScheme = "http",
-                      Observability.requestIdentityPath = "/known",
-                      Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/known"
-                    }
-                  200
-                  Observability.BodyResponseKind
-                  [ Observability.ObservabilityAttribute
-                      { Observability.attributeName = "harch.request.start_monotonic_ns",
-                        Observability.attributeValue = Observability.IntAttribute 1000000
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "harch.request.duration_ns",
-                        Observability.attributeValue = Observability.IntAttribute 5000000
+        exportResult <-
+          exportRequestObservabilityToOtlp
+            manager
+            "sample-app"
+            OtlpExporter
+              { otlpEndpoint = collectorUrl,
+                otlpHeaders = []
+              }
+            ( Observability.withRequestTraceContext
+                Observability.RequestTraceContext
+                  { Observability.traceContextTraceId = "4bf92f3577b34da6a3ce929d0e0e4736",
+                    Observability.traceContextParentSpanId = "00f067aa0ba902b7",
+                    Observability.traceContextState = Just "vendor=value"
+                  }
+                ( Observability.buildRequestObservability
+                    Observability.RequestIdentity
+                      { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                        Observability.requestIdentityScheme = "http",
+                        Observability.requestIdentityPath = "/known",
+                        Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/known"
                       }
-                  ]
-              )
-          )
+                    200
+                    Observability.BodyResponseKind
+                    [ Observability.ObservabilityAttribute
+                        { Observability.attributeName = "harch.request.start_monotonic_ns",
+                          Observability.attributeValue = Observability.IntAttribute 1000000
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "harch.request.duration_ns",
+                          Observability.attributeValue = Observability.IntAttribute 5000000
+                        }
+                    ]
+                )
+            )
+        case exportResult of
+          Right () -> pure ()
+          Left failure -> expectationFailure ("expected OTLP export to succeed, got: " <> Text.unpack (renderOtlpExportFailure failure))
         CapturedCollectorRequest {capturedCollectorBody = requestBody} <-
           readMVar capturedRequestReference
         let requestBodyText = TextEncoding.decodeUtf8 (LazyByteString.toStrict requestBody)
@@ -404,27 +421,31 @@ spec = do
 
     it "uses an intentional fallback duration when direct request exports lack runtime timing metadata" $
       withOtlpCollector Http.ok200 "{}" $ \manager collectorUrl capturedRequestReference -> do
-        exportRequestObservabilityToOtlp
-          manager
-          "sample-app"
-          OtlpExporter
-            { otlpEndpoint = collectorUrl,
-              otlpHeaders = []
-            }
-          ( Observability.withDatabaseOperations
-              [Database.DatabaseOperation "postgresql" "ping-database" "SELECT 1;" Nothing Nothing]
-              ( Observability.buildRequestObservability
-                  Observability.RequestIdentity
-                    { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
-                      Observability.requestIdentityScheme = "http",
-                      Observability.requestIdentityPath = "/health",
-                      Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/health"
-                    }
-                  200
-                  Observability.BodyResponseKind
-                  []
-              )
-          )
+        exportResult <-
+          exportRequestObservabilityToOtlp
+            manager
+            "sample-app"
+            OtlpExporter
+              { otlpEndpoint = collectorUrl,
+                otlpHeaders = []
+              }
+            ( Observability.withDatabaseOperations
+                [Database.DatabaseOperation "postgresql" "ping-database" "SELECT 1;" Nothing Nothing]
+                ( Observability.buildRequestObservability
+                    Observability.RequestIdentity
+                      { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                        Observability.requestIdentityScheme = "http",
+                        Observability.requestIdentityPath = "/health",
+                        Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/health"
+                      }
+                    200
+                    Observability.BodyResponseKind
+                    []
+                )
+            )
+        case exportResult of
+          Right () -> pure ()
+          Left failure -> expectationFailure ("expected OTLP export to succeed, got: " <> Text.unpack (renderOtlpExportFailure failure))
         CapturedCollectorRequest {capturedCollectorBody = requestBody} <-
           readMVar capturedRequestReference
         let requestBodyText = TextEncoding.decodeUtf8 (LazyByteString.toStrict requestBody)
@@ -448,61 +469,96 @@ spec = do
     it "fails explicitly when the collector rejects the export request" $
       withOtlpCollector Http.serviceUnavailable503 "{\"error\":\"collector unavailable\"}" $ \manager collectorUrl capturedRequestReference -> do
         exportResult <-
-          try
-            ( exportRequestObservabilityToOtlp
-                manager
-                "sample-app"
-                OtlpExporter
-                  { otlpEndpoint = collectorUrl,
-                    otlpHeaders = []
+          exportRequestObservabilityToOtlp
+            manager
+            "sample-app"
+            OtlpExporter
+              { otlpEndpoint = collectorUrl,
+                otlpHeaders = []
+              }
+            ( Observability.buildRequestObservability
+                Observability.RequestIdentity
+                  { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                    Observability.requestIdentityScheme = "http",
+                    Observability.requestIdentityPath = "/",
+                    Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/"
                   }
-                ( Observability.buildRequestObservability
-                    Observability.RequestIdentity
-                      { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
-                        Observability.requestIdentityScheme = "http",
-                        Observability.requestIdentityPath = "/",
-                        Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/"
-                      }
-                    200
-                    Observability.BodyResponseKind
-                    [ Observability.ObservabilityAttribute
-                        { Observability.attributeName = "harch.request.duration_ns",
-                          Observability.attributeValue = Observability.IntAttribute (-1)
-                        }
-                    ]
-                )
-            ) ::
-            IO (Either IOError ())
+                200
+                Observability.BodyResponseKind
+                [ Observability.ObservabilityAttribute
+                    { Observability.attributeName = "harch.request.duration_ns",
+                      Observability.attributeValue = Observability.IntAttribute (-1)
+                    }
+                ]
+            )
         _ <- readMVar capturedRequestReference
         case exportResult of
           Left exportError -> do
-            show exportError `shouldContain` "OTLP trace export failed with status 503"
-            show exportError `shouldContain` "collector unavailable"
+            renderOtlpExportFailure exportError `shouldBe` "OTLP collector rejected export with status 503"
+            renderOtlpExportFailure exportError `shouldSatisfy` (not . Text.isInfixOf "collector unavailable")
           Right () ->
             expectationFailure "expected OTLP export to fail when the collector returns a non-2xx status"
 
-  describe "exportConnectionObservabilityToOtlp" $ do
-    it "posts OTLP trace payloads for connection-level observability" $
-      withOtlpCollector Http.ok200 "{}" $ \manager collectorUrl capturedRequestReference -> do
+    it "classifies malformed OTLP endpoints without retaining configured request details" $ do
+      manager <- newOtlpHttpManager
+      exportResult <-
         exportConnectionObservabilityToOtlp
           manager
           "sample-app"
           OtlpExporter
-            { otlpEndpoint = collectorUrl,
-              otlpHeaders = [("authorization", "Bearer sample-token")]
+            { otlpEndpoint = "http://[::1?api_key=otlp-query-secret-sentinel",
+              otlpHeaders = [("x-api-key", "otlp-header-secret-sentinel")]
             }
-          ( Observability.buildConnectionObservability
-              "CONNECTION insecure-connection-denied"
-              [ Observability.ObservabilityAttribute
-                  { Observability.attributeName = "network.peer.address",
-                    Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "exception.type",
-                    Observability.attributeValue = Observability.TextAttribute "InsecureConnectionDenied"
-                  }
-              ]
-          )
+          (Observability.buildConnectionObservability "CONNECTION malformed OTLP endpoint" [])
+      case exportResult of
+        Left failure@OtlpInvalidEndpoint -> do
+          renderOtlpExportFailure failure `shouldBe` "OTLP endpoint is invalid"
+        Left otherFailure -> expectationFailure ("expected invalid OTLP endpoint category, got: " <> Text.unpack (renderOtlpExportFailure otherFailure))
+        Right () -> expectationFailure "expected malformed OTLP endpoint to fail before transport"
+
+    it "classifies refused OTLP connections as a payload-free transport failure" $
+      withUnusedLoopbackPort $ \unusedPort -> do
+        manager <- newOtlpHttpManager
+        exportResult <-
+          exportConnectionObservabilityToOtlp
+            manager
+            "sample-app"
+            OtlpExporter
+              { otlpEndpoint = "http://127.0.0.1:" <> Text.pack (show unusedPort) <> "/v1/traces",
+                otlpHeaders = []
+              }
+            (Observability.buildConnectionObservability "CONNECTION refused OTLP endpoint" [])
+        case exportResult of
+          Left failure@OtlpTransportFailure -> renderOtlpExportFailure failure `shouldBe` "OTLP transport failed"
+          Left otherFailure -> expectationFailure ("expected OTLP transport category, got: " <> Text.unpack (renderOtlpExportFailure otherFailure))
+          Right () -> expectationFailure "expected unused OTLP endpoint to refuse the connection"
+
+  describe "exportConnectionObservabilityToOtlp" $ do
+    it "posts OTLP trace payloads for connection-level observability" $
+      withOtlpCollector Http.ok200 "{}" $ \manager collectorUrl capturedRequestReference -> do
+        exportResult <-
+          exportConnectionObservabilityToOtlp
+            manager
+            "sample-app"
+            OtlpExporter
+              { otlpEndpoint = collectorUrl,
+                otlpHeaders = [("authorization", "Bearer sample-token")]
+              }
+            ( Observability.buildConnectionObservability
+                "CONNECTION insecure-connection-denied"
+                [ Observability.ObservabilityAttribute
+                    { Observability.attributeName = "network.peer.address",
+                      Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "exception.type",
+                      Observability.attributeValue = Observability.TextAttribute "InsecureConnectionDenied"
+                    }
+                ]
+            )
+        case exportResult of
+          Right () -> pure ()
+          Left failure -> expectationFailure ("expected OTLP export to succeed, got: " <> Text.unpack (renderOtlpExportFailure failure))
         CapturedCollectorRequest
           { capturedCollectorMethod = requestMethod,
             capturedCollectorPath = requestPath,
@@ -533,29 +589,33 @@ spec = do
 
     it "posts OTLP trace payloads for prematurely closed connection observability" $
       withOtlpCollector Http.ok200 "{}" $ \manager collectorUrl capturedRequestReference -> do
-        exportConnectionObservabilityToOtlp
-          manager
-          "sample-app"
-          OtlpExporter
-            { otlpEndpoint = collectorUrl,
-              otlpHeaders = []
-            }
-          ( Observability.buildConnectionObservability
-              "CONNECTION client-closed-connection-prematurely"
-              [ Observability.ObservabilityAttribute
-                  { Observability.attributeName = "network.peer.address",
-                    Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "exception.type",
-                    Observability.attributeValue = Observability.TextAttribute "ClientClosedConnectionPrematurely"
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "harch.connection.event",
-                    Observability.attributeValue = Observability.TextAttribute "client-closed-connection-prematurely"
-                  }
-              ]
-          )
+        exportResult <-
+          exportConnectionObservabilityToOtlp
+            manager
+            "sample-app"
+            OtlpExporter
+              { otlpEndpoint = collectorUrl,
+                otlpHeaders = []
+              }
+            ( Observability.buildConnectionObservability
+                "CONNECTION client-closed-connection-prematurely"
+                [ Observability.ObservabilityAttribute
+                    { Observability.attributeName = "network.peer.address",
+                      Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "exception.type",
+                      Observability.attributeValue = Observability.TextAttribute "ClientClosedConnectionPrematurely"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "harch.connection.event",
+                      Observability.attributeValue = Observability.TextAttribute "client-closed-connection-prematurely"
+                    }
+                ]
+            )
+        case exportResult of
+          Right () -> pure ()
+          Left failure -> expectationFailure ("expected OTLP export to succeed, got: " <> Text.unpack (renderOtlpExportFailure failure))
         CapturedCollectorRequest
           { capturedCollectorMethod = requestMethod,
             capturedCollectorPath = requestPath,

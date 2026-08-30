@@ -24,7 +24,7 @@ import HarchWeb
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
-import HarchWeb.Observability qualified as Observability (ObservabilityAttribute (ObservabilityAttribute, attributeName, attributeValue), ObservabilityAttributeValue (TextAttribute), RequestIdentity (RequestIdentity, requestIdentityMethod, requestIdentityPath, requestIdentityRoutePath, requestIdentityScheme), ResponseKind (PageResponseKind), buildRequestObservability, mkSpanMethodLabel, mkSpanRoutePath)
+import HarchWeb.Observability qualified as Observability (ObservabilityAttribute (ObservabilityAttribute, attributeName, attributeValue), ObservabilityAttributeValue (TextAttribute), RequestIdentity (RequestIdentity, requestIdentityMethod, requestIdentityPath, requestIdentityRoutePath, requestIdentityScheme), RequestObservability (observabilityRequestSpan), RequestSpan (requestSpanDisplayName), ResponseKind (PageResponseKind), buildRequestObservability, mkSpanMethodLabel, mkSpanRoutePath)
 import HarchWeb.Password qualified as Password
 import HarchWeb.Secret qualified as Secret
 import HarchWeb.Security qualified as Security ()
@@ -32,13 +32,12 @@ import Network.HTTP.Client qualified as HttpClient ()
 import Network.HTTP.Types qualified as Http (status200, status202, status422, status500, status503)
 import Network.Socket qualified as Socket ()
 import Network.Socket.ByteString qualified as SocketByteString ()
-import Network.Wai qualified as Wai (Application, defaultRequest)
+import Network.Wai qualified as Wai (defaultRequest)
 import Network.Wai.Handler.Warp qualified as Warp ()
 import System.Directory ()
 import System.Environment ()
 import System.Exit ()
 import System.FilePath ()
-import System.IO (Handle)
 import System.IO.Error ()
 import System.IO.Temp ()
 import System.Posix.Signals ()
@@ -47,39 +46,6 @@ import TestCore.CustomAssertions ()
 import TestCore.Wai ()
 import Text.Read ()
 import Unit.HarchWeb.TestSupport (TestContext, TestRoute (DataRoute, KnownRoute, MissingRoute), defaultContext, emptyStaticAssets, renderDocument, sampleApplication, samplePage, spanishContext, testPathPrefix, testRegionPatch, trustedMarkup)
-
-existingSpec :: Spec
-existingSpec =
-  describe "HarchWeb facade" $
-    it "exposes supported framework authoring and extension entry points" $ do
-      defaultCaptureKernel `seq`
-        defaultNavigationRuntime `seq`
-          renderDocumentForTests `seq`
-            staticAssetHref `seq`
-              routeHref `seq`
-                facadeWaiApplication `seq`
-                  runRequestMiddlewarePipeline `seq`
-                    clientActionResponseBody `seq`
-                      planObservabilityStartup `seq`
-                        exportRequestObservabilityToOtlp `seq`
-                          exportConnectionObservabilityToOtlp `seq`
-                            facadeLocalTestServer `seq`
-                              facadeRuntimeServer `seq`
-                                loadReloadingTlsCredentials `seq`
-                                  reloadTlsCredentialsIfChanged `seq`
-                                    loadTlsCredentialSnapshotOrThrowWithLoader `seq`
-                                      startManualTlsRuntimeServerWithStarter `seq`
-                                        startWarpRuntimeServerOnSocket `seq`
-                                          (pure () :: IO ())
-
-facadeWaiApplication :: Application Bool () () -> IO Wai.Application
-facadeWaiApplication = toWaiApplication
-
-facadeLocalTestServer :: Application Bool () () -> (LocalTestServer -> IO ()) -> IO ()
-facadeLocalTestServer = withLocalTestServer
-
-facadeRuntimeServer :: Handle -> ServerConfig -> Application Bool () () -> IO ()
-facadeRuntimeServer = runServer
 
 movedSpec :: Spec
 movedSpec = do
@@ -105,17 +71,21 @@ movedSpec = do
         _ -> expectationFailure "expected test secret encryption to succeed"
       tlsCertificateFilePathValue (tlsCertificateFilePath "certificate.pem") `shouldBe` "certificate.pem"
       tlsPrivateKeyFilePathValue (tlsPrivateKeyFilePath "key.pem") `shouldBe` "key.pem"
-      Observability.buildRequestObservability
-        Observability.RequestIdentity
-          { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
-            Observability.requestIdentityScheme = "https",
-            Observability.requestIdentityPath = "/second",
-            Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/second"
-          }
-        200
-        Observability.PageResponseKind
-        []
-        `seq` pure ()
+      Observability.requestSpanDisplayName
+        ( Observability.observabilityRequestSpan
+            ( Observability.buildRequestObservability
+                Observability.RequestIdentity
+                  { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                    Observability.requestIdentityScheme = "https",
+                    Observability.requestIdentityPath = "/second",
+                    Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/second"
+                  }
+                200
+                Observability.PageResponseKind
+                []
+            )
+        )
+        `shouldBe` "GET /second"
 
   describe "public record coverage" $ do
     it "reads every exported selector from the public request, page, shell, and document records" $ do
@@ -476,5 +446,4 @@ movedSpec = do
       reportApplicationLog sampleApplication "ignored log entry"
 
 spec = do
-  existingSpec
   movedSpec

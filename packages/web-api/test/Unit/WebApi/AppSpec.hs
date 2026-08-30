@@ -3,7 +3,7 @@
 {-# SPEC #-}
 
 import Control.Concurrent (forkIO, killThread, readMVar, threadDelay)
-import Control.Exception (IOException, SomeException, bracket, displayException, try)
+import Control.Exception (IOException, SomeException, bracket, displayException, throwIO, try)
 import Control.Monad (forM_)
 import Data.ByteString qualified as ByteString
 import Data.IORef (newIORef, readIORef, writeIORef)
@@ -26,7 +26,8 @@ import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPost
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi (buildApp, run)
 import WebApi.Api.Endpoints (noApiRequestFields)
-import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeAppWithDatabaseBuilder, runWithConfig)
+import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeAppWithDatabaseBuilder, otlpExportFailureMessage, runWithConfig)
+import WebApi.App.Observability (runOtlpExportAction)
 import WebApi.AppEffect (AccountWorkflow (accountWorkflowEmailDelivery))
 import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), AppMode (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), TlsCertificateSource (..), TlsConfig (..), databasePoolCapacity, defaultAppConfig, defaultAppEnvironmentConfig, defaultTlsPolicy)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), PageRepository (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed, defaultPageRepository)
@@ -702,6 +703,60 @@ spec = do
           readMVar capturedRequestReference
         requestMethod `shouldBe` "POST"
         requestPath `shouldBe` "/v1/traces"
+
+    it "redacts configured OTLP headers and endpoint queries from transport-failure log messages" $
+      withUnusedTcpEndpoint $ \unusedEndpoint -> do
+        manager <- HarchWeb.newOtlpHttpManager
+        let headerSecret = "otlp-header-secret-sentinel"
+            querySecret = "otlp-query-secret-sentinel"
+            exporter =
+              OtlpExporter
+                { otlpEndpoint =
+                    "http://"
+                      <> tcpEndpointHost unusedEndpoint
+                      <> ":"
+                      <> Text.pack (show (tcpEndpointPort unusedEndpoint))
+                      <> "/v1/traces?api_key="
+                      <> querySecret,
+                  otlpHeaders = [("x-api-key", headerSecret)]
+                }
+            connectionObservability =
+              Observability.buildConnectionObservability
+                "CONNECTION OTLP transport sentinel"
+                []
+        exportResult <-
+          HarchWeb.exportConnectionObservabilityToOtlp
+            manager
+            "web-api"
+            exporter
+            connectionObservability
+        case exportResult of
+          Left exportFailure -> do
+            let logMessage = otlpExportFailureMessage "connection observability" exportFailure
+            expectAll
+              ( (logMessage `shouldBe` "Failed to export connection observability to OTLP: OTLP transport failed")
+                  :| [ logMessage `shouldSatisfy` (not . Text.isInfixOf headerSecret),
+                       logMessage `shouldSatisfy` (not . Text.isInfixOf querySecret)
+                     ]
+              )
+          Right () ->
+            expectationFailure "expected the unused OTLP endpoint to fail its transport request"
+
+    it "redacts arbitrary unexpected OTLP exporter exceptions at the worker boundary" $ do
+      reportedMessagesReference <- newIORef []
+      let exceptionSecret = "otlp-unexpected-exception-secret-sentinel"
+          reportLog message =
+            writeIORef reportedMessagesReference [message]
+          unexpectedExportAction :: IO (Either HarchWeb.OtlpExportFailure ())
+          unexpectedExportAction =
+            throwIO (userError (Text.unpack exceptionSecret))
+      runOtlpExportAction reportLog "connection observability" unexpectedExportAction
+      reportedMessages <- readIORef reportedMessagesReference
+      expectAll
+        ( (reportedMessages `shouldBe` ["Failed to export connection observability to OTLP: unexpected exporter failure"])
+            :| [ reportedMessages `shouldSatisfy` (not . any (Text.isInfixOf exceptionSecret))
+               ]
+        )
 
     it "enqueues OTLP exports without blocking the caller, dropping and counting once the bounded queue is full" $
       withSlowOtlpCaptureServer 3000000 Http.ok200 "{}" $ \collectorUrl -> do

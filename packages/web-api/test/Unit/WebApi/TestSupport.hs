@@ -78,7 +78,7 @@ module Unit.WebApi.TestSupport
     assertEmailVerificationResult,
     assertRegistrationResult,
     actionHasStatusAndFocus,
-    forceShowValue,
+    actionResponseHasValidClientActionTransport,
     awaitDevSmtpEmail,
     metadataFields,
     migrationPostgresTestConfig,
@@ -338,7 +338,6 @@ assertSameProfilePageModel actual expected =
   if ProfilePage actual == ProfilePage expected
     then pure ()
     else expectationFailure "expected equal profile page models"
-{-# NOINLINE assertSameProfilePageModel #-}
 
 explicitEnglishRequestContext :: AppRequestContext
 explicitEnglishRequestContext = defaultRequestContext {requestLocaleIsExplicit = True}
@@ -658,7 +657,7 @@ assertRegistrationResult action matchesResult = do
 actionHasStatusAndFocus :: Int -> Maybe Text -> Text -> Maybe HarchWeb.ClientActionResponse -> Bool
 actionHasStatusAndFocus expectedStatus expectedFocus expectedMessage = \case
   Just actionResponse ->
-    forceShowValue actionResponse
+    actionResponseHasValidClientActionTransport actionResponse
       && Http.statusCode (HarchWeb.clientActionStatus actionResponse) == expectedStatus
       && HarchWeb.clientActionFocusId actionResponse == expectedFocus
       && case HarchWeb.clientActionPatches actionResponse of
@@ -668,8 +667,28 @@ actionHasStatusAndFocus expectedStatus expectedFocus expectedMessage = \case
         _ -> False
   Nothing -> False
 
-forceShowValue :: (Show value) => value -> Bool
-forceShowValue = foldr seq True . show
+-- | Check the observable HTTP action contract rather than forcing its derived
+-- 'Show' instance.  An action response must render as the public JSON payload,
+-- carry only well-formed headers, and expose well-formed structured diagnostics.
+actionResponseHasValidClientActionTransport :: HarchWeb.ClientActionResponse -> Bool
+actionResponseHasValidClientActionTransport actionResponse =
+  HarchWeb.responseStatus transportResponse == HarchWeb.clientActionStatus actionResponse
+    && HarchWeb.responseContentType transportResponse == "application/json; charset=utf-8"
+    && "\"patches\":" `Text.isInfixOf` HarchWeb.responseBody transportResponse
+    && "\"focusId\":" `Text.isInfixOf` HarchWeb.responseBody transportResponse
+    && all wellFormedHeader (HarchWeb.clientActionHeaders actionResponse)
+    && all wellFormedAttribute (HarchWeb.responseObservabilityAttributes transportResponse)
+    && not (any Text.null (HarchWeb.responseLogEntries transportResponse))
+  where
+    transportResponse = HarchWeb.clientActionResponseBody actionResponse
+
+    wellFormedHeader (_, value) = not (ByteString.null value)
+
+    wellFormedAttribute attribute =
+      not (Text.null (Observability.attributeName attribute))
+        && case Observability.attributeValue attribute of
+          Observability.TextAttribute value -> not (Text.null value)
+          Observability.IntAttribute _ -> True
 
 awaitDevSmtpEmail :: DevSmtp.DevSmtpServer -> Text -> IO (Maybe DevSmtp.DevSmtpEmail)
 awaitDevSmtpEmail server recipient = go (100 :: Int)

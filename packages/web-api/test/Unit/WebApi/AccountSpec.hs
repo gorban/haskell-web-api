@@ -303,7 +303,7 @@ spec = do
         _ -> expectationFailure "expected a rotated verification and one email"
       resend unavailableStore delivery pendingProfile 100 200 >>= (`shouldSatisfy` \case Left (ResendVerificationStoreError storeError) -> isUnavailable "database unavailable" storeError; _ -> False)
       resend noLongerPendingStore delivery pendingProfile 100 200 >>= (`shouldSatisfy` \case Left ResendVerificationNoLongerPending -> True; _ -> False)
-      resend successfulStore failingDelivery pendingProfile 100 200 >>= (`shouldSatisfy` \case Left (ResendVerificationDeliveryFailed detail) -> "SMTP unavailable" `Text.isInfixOf` detail; _ -> False)
+      resend successfulStore failingDelivery pendingProfile 100 200 >>= (`shouldSatisfy` \case Left (ResendVerificationDeliveryFailed detail) -> detail == "email delivery transport failed"; _ -> False)
       resendEmailVerificationAt
         EmailVerificationEnvironment
           { verificationStore = successfulStore,
@@ -335,10 +335,16 @@ spec = do
               }
           failingDelivery = Email.EmailDelivery (\_ -> ioError (userError "SMTP unavailable"))
           emailAddress = requiredEmailAddress "person@example.test"
-      registerAccount (registrationEnvironmentAt Password.hashPassword accountStore failingDelivery 100 200) (registrationRequestOf emailAddress) >>= \case
-        Left (RegistrationDeliveryFailed (VerificationDeliveryTransportFailed message)) -> do
-          "SMTP unavailable" `Text.isInfixOf` message `shouldBe` True
-        _ -> expectationFailure "expected the SMTP transport failure to remain distinct"
+      -- The adapter's arbitrary exception text must not cross the typed
+      -- delivery boundary; page-action diagnostics use this constructor's
+      -- stable classification instead.
+      result <-
+        registerAccount
+          (registrationEnvironmentAt Password.hashPassword accountStore failingDelivery 100 200)
+          (registrationRequestOf emailAddress)
+      case result of
+        Left (RegistrationDeliveryFailed VerificationDeliveryTransportFailed) -> pure ()
+        _ -> expectationFailure "expected a generic registration delivery transport failure"
       length <$> readIORef pendingAccountsReference `shouldReturn` 1
       let releaseFailureStore = accountStore {releasePendingRegistrationDelivery = \_ -> pure (Left (AccountStoreUnavailable "release unavailable"))}
           completionFailureStore = accountStore {completePendingRegistrationDelivery = \_ -> pure (Left (AccountStoreUnavailable "completion unavailable"))}
@@ -411,7 +417,7 @@ spec = do
       deliveredBodies <- readIORef deliveredBodiesReference
       deliveredBodies `shouldSatisfy` all (Text.isInfixOf "?token=")
       registerAccount (retryEnvironment failingDelivery) (registrationRequestOf emailAddress) >>= \case
-        Left (RegistrationDeliveryFailed (VerificationDeliveryTransportFailed detail)) | "SMTP unavailable" `Text.isInfixOf` detail -> pure ()
+        Left (RegistrationDeliveryFailed VerificationDeliveryTransportFailed) -> pure ()
         _ -> expectationFailure "expected failed delivery to release its claim"
       let timedOutEnvironment = retryEnvironment timedOutDelivery
       registerAccount (timedOutEnvironment {registrationVerificationEnvironment = (registrationVerificationEnvironment timedOutEnvironment) {verificationDeliveryEnvironment = (verificationDeliveryEnvironment (registrationVerificationEnvironment timedOutEnvironment)) {verificationDeliveryTimeout = shortTimeout}}}) (registrationRequestOf emailAddress) >>= \case

@@ -348,17 +348,19 @@ spec = do
     it "keeps login outcomes and credential-store errors comparable" $ do
       let totpProof = TotpLoginProof (required "TOTP code" (mkTotpCode "123456"))
           recoveryProof = RecoveryCodeLoginProof (required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123"))
+          reservation = LoginAttemptReservation "reservation"
+          sameReservation = LoginAttemptReservation (Text.concat ["reser", "vation"])
       expectAll
         ( (AccountCredentialStoreUnavailable "unavailable" /= AccountCredentialStoreUnavailable "other" `shouldBe` True)
             :| [ AccountCredentialStoreUnavailable "unavailable" /= AccountCredentialStoreCorruptData "unavailable" `shouldBe` True,
                  PasswordLoginRejected /= PasswordLoginMfaRequired accountId `shouldBe` True,
                  PasswordLoginEmailVerificationRequired accountId /= PasswordLoginMfaEnrollmentRequired accountId `shouldBe` True,
                  PasswordLoginCredentialStoreError (AccountCredentialStoreUnavailable "unavailable") /= PasswordLoginMfaStoreError (MfaStoreUnavailable "unavailable") `shouldBe` True,
-                 LoginAttemptReservation "reservation" == LoginAttemptReservation "reservation" `shouldBe` True,
+                 reservation == sameReservation `shouldBe` True,
                  LoginAttemptReservation "reservation" /= LoginAttemptReservation "other" `shouldBe` True,
-                 LoginAttemptReserved (LoginAttemptReservation "reservation") == LoginAttemptReserved (LoginAttemptReservation "reservation") `shouldBe` True,
+                 LoginAttemptReserved reservation == LoginAttemptReserved sameReservation `shouldBe` True,
                  LoginAttemptReserved (LoginAttemptReservation "reservation") /= LoginAttemptThrottled 500 `shouldBe` True,
-                 LoginAttemptThrottled 500 == LoginAttemptThrottled 500 `shouldBe` True,
+                 LoginAttemptThrottled 500 == LoginAttemptThrottled (250 + 250) `shouldBe` True,
                  totpProof /= recoveryProof `shouldBe` True,
                  PasswordMfaLoginRejected /= PasswordMfaLoginEmailVerificationRequired accountId `shouldBe` True,
                  PasswordMfaLoginEnrollmentRequired accountId /= PasswordMfaLoginAccepted accountId `shouldBe` True,
@@ -557,17 +559,16 @@ spec = do
         `shouldReturnEqual` PasswordLoginAttemptStoreError (LoginAttemptStoreUnavailable "cleanup failed")
       (map showReservation <$> readIORef failedCancellationReference) `shouldReturn` ["password-work-reservation"]
 
-    it "cancels a reserved password attempt when cancellation is requested immediately after admission" $ do
+    it "cancels a reserved password attempt when cancellation is requested after reservation ownership transfers to work" $ do
       cancelledReservationsReference <- newIORef []
-      reservationAdmitted <- newEmptyMVar
+      workEntered <- newEmptyMVar
       blockedCredentialWork <- newEmptyMVar
       workerResult <- newEmptyMVar
       let cancellationThrottle =
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \key _ _ -> do
-                        putMVar reservationAdmitted ()
+                    { reserveLoginAttempt = \key _ _ ->
                         pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
                       settleLoginAttempt = \_ _ -> error "unexpected settlement after asynchronous cancellation",
                       cancelLoginAttempt = \reservation -> modifyIORef' cancelledReservationsReference (showReservation reservation :) >> pure (Right ())
@@ -577,12 +578,16 @@ spec = do
               }
           blockedMfaStore =
             confirmedMfaStore
-              { loadTotpEnrollment = \_ -> takeMVar blockedCredentialWork
+              { loadTotpEnrollment = \_ -> putMVar workEntered () >> takeMVar blockedCredentialWork
               }
       worker <- forkIO $ do
         result <- (try (beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) blockedMfaStore cancellationThrottle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")) :: IO (Either SomeException PasswordLoginResult))
         putMVar workerResult result
-      takeMVar reservationAdmitted
+      -- This signal is inside @work@, reached only after
+      -- 'runAdmittedLoginAttempt' has received the reservation and installed
+      -- its cleanup handler. Unlike a signal inside the store adapter, it
+      -- cannot race the reservation-return handoff the assertion is proving.
+      takeMVar workEntered
       throwTo worker ThreadKilled
       cancellationResult <- takeMVar workerResult
       case cancellationResult of
