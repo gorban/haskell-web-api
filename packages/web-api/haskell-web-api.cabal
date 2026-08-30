@@ -109,6 +109,7 @@ library
   other-modules:
     WebApi.AccountPages.Actions.Profile
     WebApi.AccountPages.Actions.Registration
+    WebApi.App.AccountWorkflow
     WebApi.App.Observability
     WebApi.Config.Defaults
     WebApi.Config.Internal

@@ -1448,6 +1448,18 @@ middleware, route method selection, concurrency admission, monotonic timing, WAI
 and observability. The public WAI adapter therefore has the same execution order while its module
 health falls below the review threshold.
 
+### Decision record — FQ12: account-workflow composition extraction (2026-08-30)
+
+**Decision: extract the private account-workflow construction capability from `WebApi.App`, while
+retaining `WebApi.App` as the explicit application/site composition root.** Runtime workflow creation
+and the deliberately unavailable fallback both assemble the same stable account-effect record and
+must share the one process-wide password-work gate; they belong in `WebApi.App.AccountWorkflow`.
+The extracted collaborator receives its database pool and environment explicitly, builds the same
+PostgreSQL stores, SMTP policy, clock, verification URL, and fallback stores, and returns the
+ordinary `AccountWorkflow` value. `WebApi.App` continues to own site construction, routes, request
+policy, page repository, reporters, listener startup, and pool lifetime. This is a cohesive
+composition boundary, not an alternate application service or ambient dependency layer.
+
 ### Follow-up decision — AY: add `connect_timeout` now, defer a hard TLS default until a deployment decision (2026-08-21)
 
 **Decision: implement `DATABASE_CONNECT_TIMEOUT_SECONDS`/`connect_timeout` unconditionally, but do

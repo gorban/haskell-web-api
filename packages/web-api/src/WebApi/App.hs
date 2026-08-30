@@ -6,6 +6,10 @@
 -- FQ9 groups the three reporters runtime setup always supplies together in
 -- 'RuntimeApplicationReporters'; page, account, policy, and route values
 -- remain explicit because they vary per application composition.
+-- FQ12 moves account-workflow construction into its own private collaborator:
+-- runtime and unavailable workflows must share one process-wide password-work
+-- gate, while this module remains the explicit application/site composition
+-- boundary.
 module WebApi.App
   ( buildAppWithDatabase,
     buildAppWithDatabaseAndAccountWorkflow,
@@ -27,19 +31,14 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.IO qualified as TextIO
 import HarchWeb qualified
-import HarchWeb.Account qualified as HarchAccount
 import HarchWeb.Action (decodeAction)
-import HarchWeb.Email qualified as Email
 import HarchWeb.Observability qualified as Observability
-import HarchWeb.Password qualified as Password
 import HarchWeb.Site qualified as Site
-import HarchWeb.Time qualified as HarchWebTime
 import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush)
-import System.IO.Unsafe (unsafePerformIO)
-import WebApi.Account (AccountProfileStore (..), AccountStore (..), AccountStoreError (..), defaultRegistrationDeliveryTimeout)
 import WebApi.AccountPages (AccountAction, accountActions, authorizeAccountActionCsrf, handleAccountAction, pageCsrfTokenForAccountPage)
 import WebApi.Api.Endpoints (secondApiRouteDefinition, statusApiRouteDefinition)
+import WebApi.App.AccountWorkflow (buildRuntimeAccountWorkflow, unavailableAccountWorkflow)
 import WebApi.App.Observability
   ( runtimeApplicationLogReporter,
     runtimeConnectionObservabilityReporter,
@@ -50,41 +49,25 @@ import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config
   ( AppConfig (..),
     AppEnvironmentConfig (..),
-    AppMode (..),
     AppStartupConfig (..),
     AppStartupConfigLoadError,
     DatabaseConfig,
     ListenerConfig (..),
     ListenerScheme (..),
-    SmtpDeliveryConfig (..),
     databasePoolCapacity,
-    defaultAppEnvironmentConfig,
     loadAppStartupConfig,
   )
 import WebApi.Database (PageRepository, defaultPageRepository)
-import WebApi.Login (AccountCredentialStore (..), AccountCredentialStoreError (..), LoginAttemptStore (..), LoginAttemptStoreError (..))
-import WebApi.Mfa (MfaStore (..), MfaStoreError (..))
-import WebApi.Postgres.AccountRepository
-  ( buildRuntimePostgresAccountCredentialStore,
-    buildRuntimePostgresAccountProfileStore,
-    buildRuntimePostgresAccountStore,
-  )
-import WebApi.Postgres.LoginAttemptRepository (buildRuntimePostgresLoginAttemptStore)
-import WebApi.Postgres.MfaEnrollmentSessionRepository (buildRuntimePostgresMfaEnrollmentSessionStore)
-import WebApi.Postgres.MfaRepository (buildRuntimePostgresMfaStore)
 import WebApi.Postgres.Pool (PostgresPool, closePostgresPool, newPostgresPool)
 import WebApi.Postgres.Runtime (buildRuntimePostgresPageRepository)
-import WebApi.Postgres.SessionRepository (buildRuntimePostgresAccountSessionStore)
 import WebApi.Response (selectResponseWithDatabaseAndAccountWorkflow)
 import WebApi.Route
   ( AppRequestContext (..),
     AppRoute (..),
     defaultRequestContext,
-    renderRoutePath,
     requestContextFromWaiRequest,
     routeCodec,
   )
-import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..), MfaEnrollmentSessionStore (..), MfaEnrollmentSessionStoreError (..))
 
 buildAppWithDatabase ::
   AppConfig ->
@@ -247,86 +230,6 @@ runtimeApplicationReporters environmentConfig config =
       runtimeApplicationReporterLog = runtimeApplicationLogReporter
     }
 
-buildRuntimeAccountWorkflow :: PostgresPool -> AppEnvironmentConfig -> AccountWorkflow
-buildRuntimeAccountWorkflow pool !environmentConfig =
-  AccountWorkflow
-    { accountWorkflowStore = buildRuntimePostgresAccountStore pool,
-      accountWorkflowEmailDelivery = runtimeEmailDelivery (appMode environmentConfig) (smtpDeliveryConfig environmentConfig),
-      accountWorkflowPasswordHasher = Password.hashPassword,
-      accountWorkflowPasswordWorkGate = runtimePasswordWorkGate,
-      accountWorkflowRegistrationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
-      accountWorkflowClock = HarchWebTime.currentUnixTimeNanoseconds,
-      accountWorkflowMfaStore = buildRuntimePostgresMfaStore pool,
-      accountWorkflowCredentialStore = buildRuntimePostgresAccountCredentialStore pool,
-      accountWorkflowLoginAttemptStore = buildRuntimePostgresLoginAttemptStore pool,
-      accountWorkflowSessionStore = buildRuntimePostgresAccountSessionStore pool,
-      accountWorkflowMfaEnrollmentSessionStore = buildRuntimePostgresMfaEnrollmentSessionStore pool,
-      accountWorkflowProfileStore = buildRuntimePostgresAccountProfileStore pool,
-      accountWorkflowTotpEncryptionKey = totpEncryptionKey environmentConfig,
-      accountWorkflowTotpClock = HarchWebTime.unixTimeSecondsFromNanoseconds,
-      accountWorkflowVerificationUrl = runtimeVerificationUrl (publicBaseUrl environmentConfig)
-    }
-
-runtimeEmailDelivery :: AppMode -> SmtpDeliveryConfig -> Email.EmailDelivery
-runtimeEmailDelivery mode smtpConfig =
-  case Email.mkEmailAddress (smtpDeliverySender smtpConfig) of
-    Just sender ->
-      case Email.mkSmtpConfig
-        Email.SmtpConfigInput
-          { Email.smtpInputHost = Email.smtpServerHost (smtpDeliveryHost smtpConfig),
-            Email.smtpInputPort = fromIntegral (smtpDeliveryPort smtpConfig),
-            Email.smtpInputHeloName = Email.smtpServerHeloName (smtpDeliveryHeloName smtpConfig),
-            Email.smtpInputEnvelopeSender = sender,
-            Email.smtpInputAuthentication =
-              Just
-                ( smtpAuthenticationForMode
-                    mode
-                    (Email.smtpLoginUsername (smtpDeliveryUsername smtpConfig))
-                    (Email.smtpLoginPassword (smtpDeliveryPassword smtpConfig))
-                )
-          } of
-        Just configuredSmtp -> Email.EmailDelivery (Email.deliverSmtpEmail configuredSmtp)
-        Nothing -> unavailableEmailDelivery
-    Nothing -> unavailableEmailDelivery
-  where
-    unavailableEmailDelivery = Email.EmailDelivery (\_ -> ioError (userError "SMTP delivery configuration is invalid"))
-
--- | Only production delivery may use the ordinary credential constructor,
--- which requires STARTTLS and fresh system-store certificate validation.  The
--- development/test SMTP sink is a deliberately named cleartext-only fixture,
--- never an accidental production fallback.
-smtpAuthenticationForMode :: AppMode -> Email.SmtpUsername -> Email.SmtpPassword -> Email.SmtpAuthentication
-smtpAuthenticationForMode mode =
-  case mode of
-    Production -> Email.smtpAuthentication
-    Development -> Email.smtpAuthenticationForLocalDevelopment
-    Test -> Email.smtpAuthenticationForLocalDevelopment
-
-runtimeVerificationUrl :: Text.Text -> AppRequestContext -> HarchAccount.EmailVerificationToken -> Text.Text
-runtimeVerificationUrl baseUrl requestContext verificationToken =
-  trimTrailingSlash baseUrl
-    <> renderRoutePath (HarchWeb.RouteRequest EmailVerificationRoute requestContext)
-    <> "?token="
-    <> HarchAccount.emailVerificationTokenText verificationToken
-
--- | EJ (2026-08-24): the reference application owns one process-wide
--- 512-MiB Argon2 work budget.  It is deliberately shared by every runtime
--- account workflow, so test or helper construction cannot accidentally make
--- a second competing application budget in the same process.  Individual
--- work is admitted by its validated Argon2 KiB cost and the framework's
--- eight-operation CPU-concurrency ceiling in 'HarchWeb.Password'.
-runtimePasswordWorkGate :: Password.PasswordWorkGate
-runtimePasswordWorkGate =
-  unsafePerformIO $
-    Password.newPasswordWorkGate Password.defaultPasswordWorkBudget
-{-# NOINLINE runtimePasswordWorkGate #-}
-
-trimTrailingSlash :: Text.Text -> Text.Text
-trimTrailingSlash value =
-  case Text.unsnoc value of
-    Just (prefix, '/') -> prefix
-    _ -> value
-
 -- | The HTTPS-upgrade redirect must never echo a client-supplied @Host@
 -- header into its target (see 'HarchWeb.httpsRedirectAuthority'). Every
 -- web-api deployment already declares a canonical @PUBLIC_BASE_URL@ (used
@@ -419,106 +322,3 @@ listenerUrlPrefix listenerScheme =
   case listenerScheme of
     Http -> "http://"
     Https -> "https://"
-
-unavailableAccountWorkflow :: AccountWorkflow
-unavailableAccountWorkflow =
-  AccountWorkflow
-    { accountWorkflowStore = unavailableAccountStore,
-      accountWorkflowEmailDelivery = Email.EmailDelivery (\_ -> ioError (userError "email delivery is not configured")),
-      accountWorkflowPasswordHasher = Password.hashPassword,
-      accountWorkflowPasswordWorkGate = runtimePasswordWorkGate,
-      accountWorkflowRegistrationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
-      accountWorkflowClock = pure (HarchWebTime.unixTimeNanoseconds 0),
-      accountWorkflowMfaStore = unavailableMfaStore,
-      accountWorkflowCredentialStore = unavailableAccountCredentialStore,
-      accountWorkflowLoginAttemptStore = unavailableLoginAttemptStore,
-      accountWorkflowSessionStore = unavailableAccountSessionStore,
-      accountWorkflowMfaEnrollmentSessionStore = unavailableMfaEnrollmentSessionStore,
-      accountWorkflowProfileStore = unavailableAccountProfileStore,
-      accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
-      accountWorkflowTotpClock = const 0,
-      accountWorkflowVerificationUrl = \_ _ -> "https://invalid.example.test/verify"
-    }
-
-unavailableAccountStore :: AccountStore
-unavailableAccountStore =
-  AccountStore
-    { createPendingAccount = \_ _ -> unavailableResult accountPersistenceUnavailable,
-      completePendingRegistrationDelivery = const (unavailableResult accountPersistenceUnavailable),
-      releasePendingRegistrationDelivery = const (unavailableResult accountPersistenceUnavailable),
-      replaceEmailVerification = const (unavailableResult accountPersistenceUnavailable),
-      findEmailVerification = const (unavailableResult accountPersistenceUnavailable),
-      consumeEmailVerification = \_ _ -> unavailableResult accountPersistenceUnavailable
-    }
-
-unavailableMfaStore :: MfaStore
-unavailableMfaStore =
-  MfaStore
-    { saveUnconfirmedTotpEnrollment = \_ _ _ -> unavailableResult mfaPersistenceUnavailable,
-      loadTotpEnrollment = const (unavailableResult mfaPersistenceUnavailable),
-      confirmTotpEnrollment = \_ _ _ -> unavailableResult mfaPersistenceUnavailable,
-      loadUnusedRecoveryCodeHashes = const (unavailableResult mfaPersistenceUnavailable),
-      consumeRecoveryCodeHash = \_ _ _ -> unavailableResult mfaPersistenceUnavailable,
-      markTotpCodeUsed = \_ _ -> unavailableResult mfaPersistenceUnavailable
-    }
-
-unavailableAccountCredentialStore :: AccountCredentialStore
-unavailableAccountCredentialStore =
-  AccountCredentialStore
-    { findAccountCredentialByEmail = const (unavailableResult accountCredentialsUnavailable),
-      findAccountCredentialByUsername = const (unavailableResult accountCredentialsUnavailable),
-      replacePasswordHashIfCurrent = \_ _ _ -> unavailableResult accountCredentialsUnavailable
-    }
-
-unavailableLoginAttemptStore :: LoginAttemptStore
-unavailableLoginAttemptStore =
-  LoginAttemptStore
-    { reserveLoginAttempt = \_ _ _ -> unavailableResult loginAttemptsUnavailable,
-      settleLoginAttempt = \_ _ -> unavailableResult loginAttemptsUnavailable,
-      cancelLoginAttempt = \_ -> unavailableResult loginAttemptsUnavailable
-    }
-
-unavailableAccountSessionStore :: AccountSessionStore
-unavailableAccountSessionStore =
-  AccountSessionStore
-    { saveAccountSession = const (unavailableResult AccountSessionStoreUnavailable),
-      loadAccountSession = const (unavailableResult AccountSessionStoreUnavailable),
-      invalidateAccountSession = const (const (unavailableResult AccountSessionStoreUnavailable))
-    }
-
-unavailableMfaEnrollmentSessionStore :: MfaEnrollmentSessionStore
-unavailableMfaEnrollmentSessionStore =
-  MfaEnrollmentSessionStore
-    { saveMfaEnrollmentSession = const (unavailableResult MfaEnrollmentSessionStoreUnavailable),
-      loadMfaEnrollmentSession = const (unavailableResult MfaEnrollmentSessionStoreUnavailable),
-      invalidateMfaEnrollmentSession = const (const (unavailableResult MfaEnrollmentSessionStoreUnavailable))
-    }
-
-unavailableAccountProfileStore :: AccountProfileStore
-unavailableAccountProfileStore =
-  AccountProfileStore
-    { findAccountProfile = const (unavailableResult accountProfilesUnavailable)
-    }
-
-accountPersistenceUnavailable :: AccountStoreError
-accountPersistenceUnavailable =
-  AccountStoreUnavailable "account persistence is not configured"
-
-mfaPersistenceUnavailable :: MfaStoreError
-mfaPersistenceUnavailable =
-  MfaStoreUnavailable "MFA persistence is not configured"
-
-accountCredentialsUnavailable :: AccountCredentialStoreError
-accountCredentialsUnavailable =
-  AccountCredentialStoreUnavailable "account credentials are not configured"
-
-loginAttemptsUnavailable :: LoginAttemptStoreError
-loginAttemptsUnavailable =
-  LoginAttemptStoreUnavailable "login-attempt persistence is not configured"
-
-accountProfilesUnavailable :: AccountStoreError
-accountProfilesUnavailable =
-  AccountStoreUnavailable "account profiles are not configured"
-
-unavailableResult :: error -> IO (Either error value)
-unavailableResult = pure . Left
