@@ -3,7 +3,7 @@
 {-# SPEC #-}
 
 import Data.Text qualified as Text
-import WebApi.AccountPages (AccountActionTarget (..), LoginForm (..), MfaEnrollmentForm (..), VerificationForm (..), emptyRegistrationForm)
+import WebApi.AccountPages (AccountActionTarget (..), MfaEnrollmentForm (..), VerificationForm (..), emptyLoginForm, emptyRegistrationForm)
 import WebApi.Config (AcmeConfig (..), AppConfig (..), CertbotConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), SharedTlsCertificateFiles (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), defaultAppConfig, defaultStaticAssetContentTypes, defaultTlsPolicy)
 import WebApi.Page (AppPageModel (..), CallToAction (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), SpacesPageModel (..), UnavailableProfilePageDetails (..))
 import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), RouteSelectionError (..), defaultRequestContext)
@@ -492,8 +492,8 @@ spec = do
       SpacesPage spacesPageModel `shouldNotBe` SecondPage secondPageModel
       RegistrationPage RegisterAccountTarget emptyRegistrationForm `shouldNotBe` SecondPage secondPageModel
       EmailVerificationPage VerifyEmailTarget (VerificationForm Text.empty Nothing False) `shouldNotBe` SecondPage secondPageModel
-      MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Nothing [] Nothing False) `shouldNotBe` SecondPage secondPageModel
-      LoginPage LoginAccountTarget (LoginForm Text.empty Nothing False) `shouldNotBe` SecondPage secondPageModel
+      MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Nothing [] False Nothing False) `shouldNotBe` SecondPage secondPageModel
+      LoginPage LoginAccountTarget emptyLoginForm `shouldNotBe` SecondPage secondPageModel
       LogoutPage LogoutAccountTarget `shouldNotBe` SecondPage secondPageModel
       ProfilePage (UnavailableProfilePage (UnavailableProfilePageDetails "Profile" "Unavailable" callToAction)) `shouldNotBe` SecondPage secondPageModel
       NotFoundPage notFoundPageModel `shouldNotBe` SecondPage secondPageModel

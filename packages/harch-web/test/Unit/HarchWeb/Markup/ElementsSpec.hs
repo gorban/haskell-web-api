@@ -153,7 +153,7 @@ spec =
                             Markup.element
                               Markup.selectTag
                               []
-                              [Markup.element Markup.optionTag [Markup.value "en"] [Markup.text "English"]],
+                              [Markup.element Markup.optionTag [Markup.value "en", Markup.selected] [Markup.text "English"]],
                             Markup.element
                               Markup.listTag
                               []
@@ -171,5 +171,5 @@ spec =
           renderedVoidTags `shouldBe` "<br><hr><img><meta>"
           Markup.renderHtml quotedVoidTags `shouldBe` renderedVoidTags
           renderedHtml
-            `shouldBe` "<form id=\"form\" action=\"/register\" method=\"post\" enctype=\"multipart/form-data\" data-harch-action=\"true\" data-busy aria-label=\"Registration\" aria-live=\"polite\" role=\"form\"><h1>Register</h1><h2>Details</h2><label for=\"email\">Email</label><input id=\"email\" class=\"harch-account-field\" type=\"email\" inputmode=\"email\" autocomplete=\"email\" name=\"email\" value=\"ada@example.test\" minlength=\"3\" maxlength=\"255\" required><select><option value=\"en\">English</option></select><ul><li><code>code</code></li></ul><p>Paragraph</p><section>Section</section><a href=\"/next\">Next</a><button>Submit</button></form>"
+            `shouldBe` "<form id=\"form\" action=\"/register\" method=\"post\" enctype=\"multipart/form-data\" data-harch-action=\"true\" data-busy aria-label=\"Registration\" aria-live=\"polite\" role=\"form\"><h1>Register</h1><h2>Details</h2><label for=\"email\">Email</label><input id=\"email\" class=\"harch-account-field\" type=\"email\" inputmode=\"email\" autocomplete=\"email\" name=\"email\" value=\"ada@example.test\" minlength=\"3\" maxlength=\"255\" required><select><option value=\"en\" selected>English</option></select><ul><li><code>code</code></li></ul><p>Paragraph</p><section>Section</section><a href=\"/next\">Next</a><button>Submit</button></form>"
         _ -> expectationFailure "expected literal element IDs to be valid"

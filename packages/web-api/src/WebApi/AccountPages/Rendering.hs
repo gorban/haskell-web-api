@@ -44,6 +44,11 @@ import WebApi.Components.PageFrame
 import WebApi.Localization (AppMessage (..), localizedMessage)
 import WebApi.Route (AppLocale (..), AppRequestContext)
 
+-- | Decision record (AHI-9, 2026-08-31): authentication forms own their
+-- autocomplete purpose tokens as application policy. HarchWeb intentionally
+-- keeps the platform vocabulary open. These forms pair the tokens with
+-- explicit labels, hints, validation relationships, and separate TOTP and
+-- recovery-code inputs; response patches never preserve submitted secrets.
 data AccountPageCopy = AccountPageCopy
   { accountRegistrationHeading :: Text,
     accountUsernameLabel :: Text,
@@ -55,17 +60,21 @@ data AccountPageCopy = AccountPageCopy
     accountCreateAccountLabel :: Text,
     accountVerificationHeading :: Text,
     accountVerificationTokenLabel :: Text,
+    accountVerificationTokenHint :: Text,
     accountVerifyEmailLabel :: Text,
     accountMfaEnrollmentHeading :: Text,
     accountStartMfaEnrollmentLabel :: Text,
     accountConfirmMfaEnrollmentLabel :: Text,
+    accountMfaCodeHint :: Text,
     accountLoginHeading :: Text,
     accountLoginIdentifierLabel :: Text,
     accountLoginPasswordLabel :: Text,
+    accountLoginErrorHeading :: Text,
     accountVerificationMethodLabel :: Text,
     accountAuthenticatorCodeLabel :: Text,
+    accountAuthenticatorCodeHint :: Text,
     accountRecoveryCodeLabel :: Text,
-    accountVerificationCodeLabel :: Text,
+    accountRecoveryCodeHint :: Text,
     accountSignInLabel :: Text,
     accountLogoutHeading :: Text,
     accountSignOutLabel :: Text,
@@ -88,17 +97,21 @@ accountPageCopy locale =
           accountCreateAccountLabel = "Create account",
           accountVerificationHeading = "Verify your email address",
           accountVerificationTokenLabel = "Verification token",
+          accountVerificationTokenHint = "This value comes from the verification link in your email. It is cleared after every attempt.",
           accountVerifyEmailLabel = "Verify email",
           accountMfaEnrollmentHeading = "Set up your authenticator",
           accountStartMfaEnrollmentLabel = "Start authenticator enrollment",
           accountConfirmMfaEnrollmentLabel = "Confirm authenticator",
+          accountMfaCodeHint = "Enter or paste the six-digit code from your authenticator.",
           accountLoginHeading = "Sign in",
           accountLoginIdentifierLabel = "Email address or username",
           accountLoginPasswordLabel = "Password",
+          accountLoginErrorHeading = "Fix the following sign-in problems",
           accountVerificationMethodLabel = "Verification method",
           accountAuthenticatorCodeLabel = "Authenticator code",
+          accountAuthenticatorCodeHint = "Choose Authenticator code above, then enter or paste its six-digit code.",
           accountRecoveryCodeLabel = "Recovery code",
-          accountVerificationCodeLabel = "Verification code",
+          accountRecoveryCodeHint = "Choose Recovery code above, then enter or paste one saved recovery code.",
           accountSignInLabel = "Sign in",
           accountLogoutHeading = "Sign out",
           accountSignOutLabel = "Sign out",
@@ -117,17 +130,21 @@ accountPageCopy locale =
           accountCreateAccountLabel = "Crear cuenta",
           accountVerificationHeading = "Verifica tu direccion de correo",
           accountVerificationTokenLabel = "Token de verificacion",
+          accountVerificationTokenHint = "Este valor proviene del enlace de verificacion de tu correo. Se borra despues de cada intento.",
           accountVerifyEmailLabel = "Verificar correo",
           accountMfaEnrollmentHeading = "Configura tu autenticador",
           accountStartMfaEnrollmentLabel = "Iniciar registro del autenticador",
           accountConfirmMfaEnrollmentLabel = "Confirmar autenticador",
+          accountMfaCodeHint = "Introduce o pega el codigo de seis digitos de tu autenticador.",
           accountLoginHeading = "Iniciar sesion",
           accountLoginIdentifierLabel = "Direccion de correo o nombre de usuario",
           accountLoginPasswordLabel = "Contrasena",
+          accountLoginErrorHeading = "Corrige los siguientes problemas de inicio de sesion",
           accountVerificationMethodLabel = "Metodo de verificacion",
           accountAuthenticatorCodeLabel = "Codigo del autenticador",
+          accountAuthenticatorCodeHint = "Elige Codigo del autenticador arriba e introduce o pega su codigo de seis digitos.",
           accountRecoveryCodeLabel = "Codigo de recuperacion",
-          accountVerificationCodeLabel = "Codigo de verificacion",
+          accountRecoveryCodeHint = "Elige Codigo de recuperacion arriba e introduce o pega uno de tus codigos guardados.",
           accountSignInLabel = "Iniciar sesion",
           accountLogoutHeading = "Cerrar sesion",
           accountSignOutLabel = "Cerrar sesion",
@@ -152,7 +169,7 @@ mfaEnrollmentRegion context locale form =
   let copy = accountPageCopy locale
    in accountRegion
         "mfa-enrollment-region"
-        [ renderMessage (mfaEnrollmentFormMessage form) (mfaEnrollmentFormIsError form),
+        [ renderMfaMessage form,
           renderEnrollmentSecret (mfaEnrollmentFormSecret form),
           renderRecoveryCodes copy (mfaEnrollmentFormRecoveryCodes form),
           actionForm
@@ -179,16 +196,35 @@ renderLoginRegionHtml context locale form = HarchWeb.regionHtml (loginRegion con
 loginRegion :: AppRequestContext -> AppLocale -> LoginForm -> HarchWeb.Region
 loginRegion context locale form =
   let copy = accountPageCopy locale
+      errors = loginErrors form
    in accountRegion
         "login-region"
-        [ renderMessage (loginFormMessage form) (loginFormIsError form),
+        [ renderLoginFeedback locale copy (loginFormFeedback form),
           actionForm
             context
             LoginAccountTarget
-            [ accessibleInput loginEmailId (accountLoginIdentifierLabel copy) Nothing Controls.FieldValid [HarchWeb.name "email", HarchWeb.inputType "text", HarchWeb.autocomplete "username", HarchWeb.required, HarchWeb.value (loginFormEmail form)],
-              accessibleInput loginPasswordId (accountLoginPasswordLabel copy) Nothing Controls.FieldValid [HarchWeb.name "password", HarchWeb.inputType "password", HarchWeb.autocomplete "current-password", HarchWeb.required],
-              accessibleSelect loginProofId (accountVerificationMethodLabel copy) Controls.FieldValid [HarchWeb.name "proof"] [HarchWeb.element HarchWeb.optionTag [HarchWeb.value "totp"] [HarchWeb.text (accountAuthenticatorCodeLabel copy)], HarchWeb.element HarchWeb.optionTag [HarchWeb.value "recovery"] [HarchWeb.text (accountRecoveryCodeLabel copy)]],
-              accessibleInput loginCodeId (accountVerificationCodeLabel copy) Nothing Controls.FieldValid [HarchWeb.name "code", HarchWeb.autocomplete "one-time-code", HarchWeb.required],
+            [ accessibleInput loginIdentifierId (accountLoginIdentifierLabel copy) Nothing (loginValidity locale loginIdentifierId errors) [HarchWeb.name "identifier", HarchWeb.inputType "text", HarchWeb.autocomplete autocompleteUsername, HarchWeb.required, HarchWeb.value (loginFormIdentifier form)],
+              accessibleInput loginPasswordId (accountLoginPasswordLabel copy) Nothing (loginValidity locale loginPasswordId errors) [HarchWeb.name "password", HarchWeb.inputType "password", HarchWeb.autocomplete autocompleteCurrentPassword, HarchWeb.required],
+              accessibleSelect
+                loginProofId
+                (accountVerificationMethodLabel copy)
+                (loginValidity locale loginProofId errors)
+                [HarchWeb.name "proof", HarchWeb.required]
+                [ HarchWeb.element HarchWeb.optionTag (proofOptionAttributes LoginAuthenticatorProof "totp" form) [HarchWeb.text (accountAuthenticatorCodeLabel copy)],
+                  HarchWeb.element HarchWeb.optionTag (proofOptionAttributes LoginRecoveryProof "recovery" form) [HarchWeb.text (accountRecoveryCodeLabel copy)]
+                ],
+              accessibleInput
+                loginAuthenticatorCodeId
+                (accountAuthenticatorCodeLabel copy)
+                (Just (Controls.DescribedContent loginAuthenticatorCodeHintId (HarchWeb.text (accountAuthenticatorCodeHint copy))))
+                (loginValidity locale loginAuthenticatorCodeId errors)
+                [HarchWeb.name "totpCode", HarchWeb.inputType "text", HarchWeb.inputMode "numeric", HarchWeb.autocomplete autocompleteOneTimeCode, HarchWeb.maxLength "6"],
+              accessibleInput
+                loginRecoveryCodeId
+                (accountRecoveryCodeLabel copy)
+                (Just (Controls.DescribedContent loginRecoveryCodeHintId (HarchWeb.text (accountRecoveryCodeHint copy))))
+                (loginValidity locale loginRecoveryCodeId errors)
+                [HarchWeb.name "recoveryCode", HarchWeb.inputType "text"],
               submitButton (accountSignInLabel copy)
             ]
         ]
@@ -256,10 +292,10 @@ registrationRegion context locale form =
           actionForm
             context
             RegisterAccountTarget
-            [ accessibleInput registrationUsernameId (accountUsernameLabel copy) Nothing (registrationValidity locale registrationUsernameId errors) [HarchWeb.name "username", HarchWeb.autocomplete "username", HarchWeb.minLength "3", HarchWeb.maxLength "20", HarchWeb.required, HarchWeb.value (registrationFormUsername form)],
-              accessibleInput registrationEmailId (accountEmailLabel copy) Nothing (registrationValidity locale registrationEmailId errors) [HarchWeb.name "email", HarchWeb.inputType "email", HarchWeb.autocomplete "email", HarchWeb.required, HarchWeb.value (registrationFormEmail form)],
-              accessibleInput registrationDisplayNameId (accountDisplayNameLabel copy) Nothing Controls.FieldValid [HarchWeb.name "displayName", HarchWeb.autocomplete "name", HarchWeb.value (registrationFormDisplayName form)],
-              accessibleInput registrationPasswordId (accountRegistrationPasswordLabel copy) (Just (Controls.DescribedContent registrationPasswordHintId (HarchWeb.text (accountRegistrationPasswordHint copy)))) (registrationValidity locale registrationPasswordId errors) [HarchWeb.name "password", HarchWeb.inputType "password", HarchWeb.autocomplete "new-password", HarchWeb.minLength "12", HarchWeb.required],
+            [ accessibleInput registrationUsernameId (accountUsernameLabel copy) Nothing (registrationValidity locale registrationUsernameId errors) [HarchWeb.name "username", HarchWeb.autocomplete autocompleteUsername, HarchWeb.minLength "3", HarchWeb.maxLength "20", HarchWeb.required, HarchWeb.value (registrationFormUsername form)],
+              accessibleInput registrationEmailId (accountEmailLabel copy) Nothing (registrationValidity locale registrationEmailId errors) [HarchWeb.name "email", HarchWeb.inputType "email", HarchWeb.autocomplete autocompleteEmail, HarchWeb.required, HarchWeb.value (registrationFormEmail form)],
+              accessibleInput registrationDisplayNameId (accountDisplayNameLabel copy) Nothing Controls.FieldValid [HarchWeb.name "displayName", HarchWeb.autocomplete autocompleteName, HarchWeb.value (registrationFormDisplayName form)],
+              accessibleInput registrationPasswordId (accountRegistrationPasswordLabel copy) (Just (Controls.DescribedContent registrationPasswordHintId (HarchWeb.text (accountRegistrationPasswordHint copy)))) (registrationValidity locale registrationPasswordId errors) [HarchWeb.name "password", HarchWeb.inputType "password", HarchWeb.autocomplete autocompleteNewPassword, HarchWeb.minLength "12", HarchWeb.required],
               submitButton (accountCreateAccountLabel copy)
             ]
         ]
@@ -281,8 +317,18 @@ verificationRegion context locale form =
   let copy = accountPageCopy locale
    in accountRegion
         "verification-region"
-        [ renderMessage (verificationFormMessage form) (verificationFormIsError form),
-          actionForm context VerifyEmailTarget [accessibleInput verificationTokenId (accountVerificationTokenLabel copy) Nothing Controls.FieldValid [HarchWeb.name "token", HarchWeb.autocomplete "one-time-code", HarchWeb.required, HarchWeb.value (verificationFormToken form)], submitButton (accountVerifyEmailLabel copy)]
+        [ if verificationFormIsError form then HarchWeb.fragment [] else renderMessage (verificationFormMessage form) False,
+          actionForm
+            context
+            VerifyEmailTarget
+            [ accessibleInput
+                verificationTokenId
+                (accountVerificationTokenLabel copy)
+                (Just (Controls.DescribedContent verificationTokenHintId (HarchWeb.text (accountVerificationTokenHint copy))))
+                (verificationValidity form)
+                [HarchWeb.name "token", HarchWeb.autocomplete autocompleteOneTimeCode, HarchWeb.required, HarchWeb.value (verificationFormToken form)],
+              submitButton (accountVerifyEmailLabel copy)
+            ]
         ]
 
 pageSection :: PageKind -> Text -> HarchWeb.Html -> HarchWeb.Html
@@ -310,6 +356,51 @@ registrationErrors form =
     FormRejected errors -> NonEmpty.toList errors
     FormReady -> []
     FormStatusMessage _ -> []
+
+loginErrors :: LoginForm -> [LoginValidationError]
+loginErrors form =
+  case loginFormFeedback form of
+    FormRejected errors -> NonEmpty.toList errors
+    FormReady -> []
+    FormStatusMessage _ -> []
+
+renderLoginFeedback :: AppLocale -> AccountPageCopy -> FormFeedback LoginValidationError -> HarchWeb.Html
+renderLoginFeedback locale copy feedback =
+  case feedback of
+    FormReady -> HarchWeb.fragment []
+    FormStatusMessage status -> renderFormStatus status
+    FormRejected errors ->
+      Controls.errorSummary
+        Controls.ErrorSummary
+          { Controls.errorSummaryId = loginSummaryId,
+            Controls.errorSummaryHeading = HarchWeb.text (accountLoginErrorHeading copy),
+            Controls.errorSummaryItems = fmap (loginErrorLink locale) errors
+          }
+
+loginErrorLink :: AppLocale -> LoginValidationError -> Controls.FieldErrorLink
+loginErrorLink locale validationError =
+  let (controlId, _, message) = loginErrorDetails locale validationError
+   in Controls.FieldErrorLink controlId (HarchWeb.text message)
+
+loginValidity :: AppLocale -> HarchWeb.ElementId -> [LoginValidationError] -> Controls.FieldValidity
+loginValidity locale controlId validationErrors =
+  case [details | validationError <- validationErrors, let details@(targetId, _, _) = loginErrorDetails locale validationError, targetId == controlId] of
+    [] -> Controls.FieldValid
+    (_, errorId, message) : _ -> Controls.FieldInvalid (Controls.DescribedContent errorId (HarchWeb.text message))
+
+loginErrorDetails :: AppLocale -> LoginValidationError -> (HarchWeb.ElementId, HarchWeb.ElementId, Text)
+loginErrorDetails locale validationError =
+  case validationError of
+    LoginIdentifierInvalid -> (loginIdentifierId, loginIdentifierErrorId, localizedMessage locale EnterValidEmailOrUsername)
+    LoginPasswordMissing -> (loginPasswordId, loginPasswordErrorId, localizedMessage locale EnterPassword)
+    LoginProofMissing -> (loginProofId, loginProofErrorId, localizedMessage locale EnterAuthenticatorOrRecoveryCode)
+    LoginAuthenticatorCodeInvalid -> (loginAuthenticatorCodeId, loginAuthenticatorCodeErrorId, localizedMessage locale EnterAuthenticatorCode)
+    LoginRecoveryCodeInvalid -> (loginRecoveryCodeId, loginRecoveryCodeErrorId, localizedMessage locale EnterAuthenticatorOrRecoveryCode)
+
+proofOptionAttributes :: LoginProofChoice -> Text -> LoginForm -> [HarchWeb.Attribute]
+proofOptionAttributes proofChoice optionValue form =
+  HarchWeb.value optionValue
+    : [HarchWeb.selected | loginFormProofChoice form == Just proofChoice]
 
 renderRegistrationFeedback :: AppLocale -> AccountPageCopy -> FormFeedback RegistrationValidationError -> HarchWeb.Html
 renderRegistrationFeedback locale copy feedback =
@@ -368,12 +459,6 @@ accessibleSelect controlId label validity controlAttributes children =
 hiddenInput :: Text -> Text -> HarchWeb.Html
 hiddenInput name value = HarchWeb.voidElement HarchWeb.inputTag [HarchWeb.name name, HarchWeb.inputType "hidden", HarchWeb.value value]
 
-inputWithId :: Text -> [HarchWeb.Attribute] -> HarchWeb.Html
-inputWithId identifier attributes = HarchWeb.voidElement HarchWeb.inputTag (HarchWeb.elementId (HarchWeb.literalElementId identifier) : attributes)
-
-labelWithFor :: Text -> Text -> HarchWeb.Html
-labelWithFor identifier label = HarchWeb.element HarchWeb.labelTag [HarchWeb.labelFor (HarchWeb.literalElementId identifier)] [HarchWeb.text label]
-
 submitButton :: Text -> HarchWeb.Html
 submitButton label = HarchWeb.element HarchWeb.buttonTag [HarchWeb.inputType "submit"] [HarchWeb.text label]
 
@@ -413,4 +498,46 @@ renderRecoveryCodes copy = \case
       ]
 
 renderConfirmationForm :: AppRequestContext -> AppLocale -> MfaEnrollmentForm -> HarchWeb.Html
-renderConfirmationForm context locale form = maybe (HarchWeb.fragment []) (const (actionForm context EnrollMfaTarget [hiddenInput "intent" "confirm", labelWithFor "mfa-code" (accountAuthenticatorCodeLabel (accountPageCopy locale)), inputWithId "mfa-code" [HarchWeb.inputMode "numeric", HarchWeb.autocomplete "one-time-code", HarchWeb.name "code", HarchWeb.required], submitButton (accountConfirmMfaEnrollmentLabel (accountPageCopy locale))])) (mfaEnrollmentFormSecret form)
+renderConfirmationForm context locale form =
+  if mfaEnrollmentFormConfirmationAvailable form
+    then
+      let copy = accountPageCopy locale
+       in actionForm
+            context
+            EnrollMfaTarget
+            [ hiddenInput "intent" "confirm",
+              accessibleInput
+                mfaCodeId
+                (accountAuthenticatorCodeLabel copy)
+                (Just (Controls.DescribedContent mfaCodeHintId (HarchWeb.text (accountMfaCodeHint copy))))
+                (mfaCodeValidity form)
+                [HarchWeb.inputType "text", HarchWeb.inputMode "numeric", HarchWeb.autocomplete autocompleteOneTimeCode, HarchWeb.name "code", HarchWeb.maxLength "6", HarchWeb.required],
+              submitButton (accountConfirmMfaEnrollmentLabel copy)
+            ]
+    else HarchWeb.fragment []
+
+renderMfaMessage :: MfaEnrollmentForm -> HarchWeb.Html
+renderMfaMessage form =
+  if mfaEnrollmentFormConfirmationAvailable form && mfaEnrollmentFormIsError form
+    then HarchWeb.fragment []
+    else renderMessage (mfaEnrollmentFormMessage form) (mfaEnrollmentFormIsError form)
+
+mfaCodeValidity :: MfaEnrollmentForm -> Controls.FieldValidity
+mfaCodeValidity form =
+  case (mfaEnrollmentFormIsError form, mfaEnrollmentFormMessage form) of
+    (True, Just message) -> Controls.FieldInvalid (Controls.DescribedContent mfaCodeErrorId (HarchWeb.text message))
+    _ -> Controls.FieldValid
+
+verificationValidity :: VerificationForm -> Controls.FieldValidity
+verificationValidity form =
+  case (verificationFormIsError form, verificationFormMessage form) of
+    (True, Just message) -> Controls.FieldInvalid (Controls.DescribedContent verificationTokenErrorId (HarchWeb.text message))
+    _ -> Controls.FieldValid
+
+autocompleteCurrentPassword, autocompleteEmail, autocompleteName, autocompleteNewPassword, autocompleteOneTimeCode, autocompleteUsername :: Text
+autocompleteCurrentPassword = "current-password"
+autocompleteEmail = "email"
+autocompleteName = "name"
+autocompleteNewPassword = "new-password"
+autocompleteOneTimeCode = "one-time-code"
+autocompleteUsername = "username"

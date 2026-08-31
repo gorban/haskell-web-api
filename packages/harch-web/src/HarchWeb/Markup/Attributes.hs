@@ -36,6 +36,7 @@ module HarchWeb.Markup.Attributes
     requiredSafeUrlOrDie,
     role,
     safeUrlText,
+    selected,
     tabIndex,
     value,
   )

@@ -34,8 +34,9 @@ import Network.HTTP.Types qualified as Http
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress, opaqueSession, sessionIdValue, testSessionId)
 import Unit.WebApi.TestSupport qualified as TestSupport (databaseConfig)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), defaultPendingRegistrationStoragePolicy, mkRegistrationDeliveryTimeout, pendingRegistrationClaimLeaseNanoseconds, pendingRegistrationMaximumAccounts)
-import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), FormFeedback (..), FormStatus (..), FormStatusKind (..), LoginForm (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), RegistrationValidationError (..), VerificationForm (..), accountActions, authorizeAccountActionCsrf, emptyRegistrationForm, handleAccountAction, initialPendingProfileForm, mfaEnrollmentFailureDiagnostics, pageCsrfTokenForAccountPage, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderPendingProfileRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
+import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), FormFeedback (..), FormStatus (..), FormStatusKind (..), LoginForm (..), LoginProofChoice (..), LoginValidationError (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), RegistrationValidationError (..), VerificationForm (..), accountActions, authorizeAccountActionCsrf, emptyLoginForm, emptyRegistrationForm, handleAccountAction, initialPendingProfileForm, mfaEnrollmentFailureDiagnostics, pageCsrfTokenForAccountPage, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderPendingProfileRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buildActionCodecOrDie)
+import WebApi.AccountPages.Validation (Validation, invalid, valid, validate3, validate4, validationResult)
 import WebApi.App (buildRuntimeAppWithDatabaseBuilder, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.AppEffect qualified as AppEffect
@@ -53,6 +54,22 @@ import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..), 
 existingSpec :: SpecWith ()
 existingSpec = do
   describe "WebApi.AccountPages" $ do
+    it "accumulates application-form validation without changing to a fail-fast monad" $ do
+      validationResult (fmap (+ 1) (valid 1 :: Validation Text.Text Int)) `shouldBe` Right 2
+      validationResult (fmap (+ 1) (invalid "left" :: Validation Text.Text Int)) `shouldBe` Left ("left" :| [])
+      validationResult ((,) <$> (invalid "left" :: Validation Text.Text Int) <*> (invalid "right" :: Validation Text.Text Int)) `shouldBe` Left ("left" :| ["right"])
+      validationResult ((,) <$> (invalid "left" :: Validation Text.Text Int) <*> (valid 2 :: Validation Text.Text Int)) `shouldBe` Left ("left" :| [])
+      validationResult ((,) <$> (valid 1 :: Validation Text.Text Int) <*> (invalid "right" :: Validation Text.Text Int)) `shouldBe` Left ("right" :| [])
+      validationResult (validate3 (,,) (valid 1 :: Validation Text.Text Int) (valid 2 :: Validation Text.Text Int) (valid 3 :: Validation Text.Text Int)) `shouldBe` Right (1, 2, 3)
+      validationResult (validate4 (,,,) (valid 1 :: Validation Text.Text Int) (valid 2 :: Validation Text.Text Int) (valid 3 :: Validation Text.Text Int) (valid 4 :: Validation Text.Text Int)) `shouldBe` Right (1, 2, 3, 4)
+      validationResult (validate4 (,,,) (invalid "first" :: Validation Text.Text Int) (valid 2 :: Validation Text.Text Int) (invalid "third" :: Validation Text.Text Int) (invalid "fourth" :: Validation Text.Text Int)) `shouldBe` Left ("first" :| ["third", "fourth"])
+      validationResult (sequenceA [valid 1, valid 2] :: Validation Text.Text [Int]) `shouldBe` Right [1, 2]
+      validationResult (sequenceA [invalid "first", invalid "second"] :: Validation Text.Text [Int]) `shouldBe` Left ("first" :| ["second"])
+      validationResult (liftA2 (,) (valid "left" :: Validation Text.Text Text.Text) (valid "right" :: Validation Text.Text Text.Text)) `shouldBe` Right ("left" :: Text.Text, "right" :: Text.Text)
+      validationResult ((valid "left" :: Validation Text.Text Text.Text) *> (valid "right" :: Validation Text.Text Text.Text)) `shouldBe` Right ("right" :: Text.Text)
+      validationResult ((valid "left" :: Validation Text.Text Text.Text) <* (valid "right" :: Validation Text.Text Text.Text)) `shouldBe` Right ("left" :: Text.Text)
+      validationResult (("replacement" :: Text.Text) <$ (valid "value" :: Validation Text.Text Text.Text)) `shouldBe` Right ("replacement" :: Text.Text)
+
     it "binds protected actions to the matching live account or MFA session token" $ do
       let activeWorkflow =
             unavailableAccountWorkflow
@@ -340,11 +357,11 @@ spec = do
       buildPageModelFromRouteData (HarchWeb.RouteRequest EmailVerificationRoute defaultRequestContext) EmailVerificationRouteDataResult
         `shouldBe` EmailVerificationPage VerifyEmailTarget (VerificationForm Text.empty Nothing False)
       buildPageModelFromRouteData mfaRequest MfaEnrollmentRouteDataResult
-        `shouldBe` MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Nothing [] Nothing False)
+        `shouldBe` MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Nothing [] False Nothing False)
       buildPageModelFromRouteData (HarchWeb.RouteRequest MfaEnrollmentRoute defaultRequestContext) MfaEnrollmentRouteDataResult
-        `shouldBe` MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Nothing [] Nothing False)
+        `shouldBe` MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Nothing [] False Nothing False)
       buildPageModelFromRouteData loginRequest LoginRouteDataResult
-        `shouldBe` LoginPage LoginAccountTarget (LoginForm Text.empty Nothing False)
+        `shouldBe` LoginPage LoginAccountTarget emptyLoginForm
       buildPageModelFromRouteData logoutRequest LogoutRouteDataResult
         `shouldBe` LogoutPage LogoutAccountTarget
       buildPageModelFromRouteData profileRequestValue ProfileRouteDataResult
@@ -457,50 +474,59 @@ spec = do
         `shouldBe` "[FormRejected (RegistrationUsernameInvalid :| [])]"
       RegistrationEmailInvalid `shouldNotBe` RegistrationPasswordTooShort
       show RegistrationUsernameUnavailable `shouldBe` "RegistrationUsernameUnavailable"
+      LoginAuthenticatorProof `shouldNotBe` LoginRecoveryProof
+      show LoginAuthenticatorProof `shouldBe` "LoginAuthenticatorProof"
+      show [LoginRecoveryProof] `shouldBe` "[LoginRecoveryProof]"
+      LoginIdentifierInvalid `shouldNotBe` LoginPasswordMissing
+      show LoginProofMissing `shouldBe` "LoginProofMissing"
+      show [LoginAuthenticatorCodeInvalid, LoginRecoveryCodeInvalid]
+        `shouldBe` "[LoginAuthenticatorCodeInvalid,LoginRecoveryCodeInvalid]"
       if VerificationForm "token" Nothing False /= VerificationForm "token" (Just "error") True then pure () else expectationFailure "verification forms must compare their state"
-      if MfaEnrollmentForm Nothing [] Nothing False /= MfaEnrollmentForm Nothing [] (Just "error") True then pure () else expectationFailure "MFA forms must compare their state"
-      if LoginForm "person@example.test" Nothing False /= LoginForm "other@example.test" Nothing False then pure () else expectationFailure "login forms must compare their email values"
+      if MfaEnrollmentForm Nothing [] False Nothing False /= MfaEnrollmentForm Nothing [] False (Just "error") True then pure () else expectationFailure "MFA forms must compare their state"
+      if LoginForm "person@example.test" (Just LoginAuthenticatorProof) FormReady /= LoginForm "other@example.test" (Just LoginAuthenticatorProof) FormReady then pure () else expectationFailure "login forms must compare their identifier values"
       let registrationForm = RegistrationForm "person_01" "person@example.test" "Person Example" FormReady
           verificationForm = VerificationForm "token" (Just "ready") False
           pendingProfileForm = PendingProfileForm "person@example.test" (Just "ready") False "Resend verification email"
-          mfaEnrollmentForm = MfaEnrollmentForm (Just "SECRET&VALUE") ["RECOVERY-CODE"] (Just "Ready") False
-          loginForm = LoginForm "person@example.test" Nothing False
+          mfaEnrollmentForm = MfaEnrollmentForm (Just "SECRET&VALUE") ["RECOVERY-CODE"] True (Just "Ready") False
+          loginForm = LoginForm "person@example.test" (Just LoginAuthenticatorProof) FormReady
       show registrationForm
         `shouldBe` "RegistrationForm {registrationFormUsername = \"person_01\", registrationFormEmail = \"person@example.test\", registrationFormDisplayName = \"Person Example\", registrationFormFeedback = FormReady}"
       show [registrationForm]
         `shouldBe` "[RegistrationForm {registrationFormUsername = \"person_01\", registrationFormEmail = \"person@example.test\", registrationFormDisplayName = \"Person Example\", registrationFormFeedback = FormReady}]"
       show verificationForm
-        `shouldBe` "VerificationForm {verificationFormToken = \"token\", verificationFormMessage = Just \"ready\", verificationFormIsError = False}"
+        `shouldBe` "VerificationForm {verificationFormToken = <redacted>, verificationFormMessage = Just \"ready\", verificationFormIsError = False}"
       show [verificationForm]
-        `shouldBe` "[VerificationForm {verificationFormToken = \"token\", verificationFormMessage = Just \"ready\", verificationFormIsError = False}]"
+        `shouldBe` "[VerificationForm {verificationFormToken = <redacted>, verificationFormMessage = Just \"ready\", verificationFormIsError = False}]"
+      showsPrec 11 verificationForm ""
+        `shouldBe` "(VerificationForm {verificationFormToken = <redacted>, verificationFormMessage = Just \"ready\", verificationFormIsError = False})"
       show pendingProfileForm
         `shouldBe` "PendingProfileForm {pendingProfileFormEmail = \"person@example.test\", pendingProfileFormMessage = Just \"ready\", pendingProfileFormIsError = False, pendingProfileFormResendLabel = \"Resend verification email\"}"
       show [pendingProfileForm]
         `shouldBe` "[PendingProfileForm {pendingProfileFormEmail = \"person@example.test\", pendingProfileFormMessage = Just \"ready\", pendingProfileFormIsError = False, pendingProfileFormResendLabel = \"Resend verification email\"}]"
       let printedMfaEnrollment = Text.pack (show mfaEnrollmentForm)
       printedMfaEnrollment
-        `shouldBe` "MfaEnrollmentForm {mfaEnrollmentFormSecret = <redacted>, mfaEnrollmentFormRecoveryCodes = <redacted>, mfaEnrollmentFormMessage = Just \"Ready\", mfaEnrollmentFormIsError = False}"
+        `shouldBe` "MfaEnrollmentForm {mfaEnrollmentFormSecret = <redacted>, mfaEnrollmentFormRecoveryCodes = <redacted>, mfaEnrollmentFormConfirmationAvailable = True, mfaEnrollmentFormMessage = Just \"Ready\", mfaEnrollmentFormIsError = False}"
       showsPrec 11 mfaEnrollmentForm ""
-        `shouldBe` "(MfaEnrollmentForm {mfaEnrollmentFormSecret = <redacted>, mfaEnrollmentFormRecoveryCodes = <redacted>, mfaEnrollmentFormMessage = Just \"Ready\", mfaEnrollmentFormIsError = False})"
+        `shouldBe` "(MfaEnrollmentForm {mfaEnrollmentFormSecret = <redacted>, mfaEnrollmentFormRecoveryCodes = <redacted>, mfaEnrollmentFormConfirmationAvailable = True, mfaEnrollmentFormMessage = Just \"Ready\", mfaEnrollmentFormIsError = False})"
       show [mfaEnrollmentForm]
-        `shouldBe` "[MfaEnrollmentForm {mfaEnrollmentFormSecret = <redacted>, mfaEnrollmentFormRecoveryCodes = <redacted>, mfaEnrollmentFormMessage = Just \"Ready\", mfaEnrollmentFormIsError = False}]"
+        `shouldBe` "[MfaEnrollmentForm {mfaEnrollmentFormSecret = <redacted>, mfaEnrollmentFormRecoveryCodes = <redacted>, mfaEnrollmentFormConfirmationAvailable = True, mfaEnrollmentFormMessage = Just \"Ready\", mfaEnrollmentFormIsError = False}]"
       show loginForm
-        `shouldBe` "LoginForm {loginFormEmail = \"person@example.test\", loginFormMessage = Nothing, loginFormIsError = False}"
+        `shouldBe` "LoginForm {loginFormIdentifier = \"person@example.test\", loginFormProofChoice = Just LoginAuthenticatorProof, loginFormFeedback = FormReady}"
       show [loginForm]
-        `shouldBe` "[LoginForm {loginFormEmail = \"person@example.test\", loginFormMessage = Nothing, loginFormIsError = False}]"
+        `shouldBe` "[LoginForm {loginFormIdentifier = \"person@example.test\", loginFormProofChoice = Just LoginAuthenticatorProof, loginFormFeedback = FormReady}]"
       show (RegistrationPage RegisterAccountTarget registrationForm)
         `shouldBe` "RegistrationPage RegisterAccountTarget (RegistrationForm {registrationFormUsername = \"person_01\", registrationFormEmail = \"person@example.test\", registrationFormDisplayName = \"Person Example\", registrationFormFeedback = FormReady})"
       show (EmailVerificationPage VerifyEmailTarget verificationForm)
-        `shouldBe` "EmailVerificationPage VerifyEmailTarget (VerificationForm {verificationFormToken = \"token\", verificationFormMessage = Just \"ready\", verificationFormIsError = False})"
+        `shouldBe` "EmailVerificationPage VerifyEmailTarget (VerificationForm {verificationFormToken = <redacted>, verificationFormMessage = Just \"ready\", verificationFormIsError = False})"
       let printedMfaEnrollmentPage = Text.pack (show (MfaEnrollmentPage EnrollMfaTarget mfaEnrollmentForm))
       printedMfaEnrollmentPage
-        `shouldBe` "MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm {mfaEnrollmentFormSecret = <redacted>, mfaEnrollmentFormRecoveryCodes = <redacted>, mfaEnrollmentFormMessage = Just \"Ready\", mfaEnrollmentFormIsError = False})"
+        `shouldBe` "MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm {mfaEnrollmentFormSecret = <redacted>, mfaEnrollmentFormRecoveryCodes = <redacted>, mfaEnrollmentFormConfirmationAvailable = True, mfaEnrollmentFormMessage = Just \"Ready\", mfaEnrollmentFormIsError = False})"
       printedMfaEnrollment `shouldSatisfy` (not . Text.isInfixOf "SECRET&VALUE")
       printedMfaEnrollment `shouldSatisfy` (not . Text.isInfixOf "RECOVERY-CODE")
       printedMfaEnrollmentPage `shouldSatisfy` (not . Text.isInfixOf "SECRET&VALUE")
       printedMfaEnrollmentPage `shouldSatisfy` (not . Text.isInfixOf "RECOVERY-CODE")
       show (LoginPage LoginAccountTarget loginForm)
-        `shouldBe` "LoginPage LoginAccountTarget (LoginForm {loginFormEmail = \"person@example.test\", loginFormMessage = Nothing, loginFormIsError = False})"
+        `shouldBe` "LoginPage LoginAccountTarget (LoginForm {loginFormIdentifier = \"person@example.test\", loginFormProofChoice = Just LoginAuthenticatorProof, loginFormFeedback = FormReady})"
       show (LogoutPage LogoutAccountTarget) `shouldBe` "LogoutPage LogoutAccountTarget"
       renderRegistrationPage (defaultRequestContext {requestLocale = Spanish}) Spanish (RegistrationForm "person_01\" onclick=\"bad" "person@example.test\" onclick=\"bad" "Person & Example" (FormStatusMessage (FormStatus "Ready <now>" FormStatusSuccess)))
         `shouldSatisfy` \html ->
@@ -522,7 +548,7 @@ spec = do
         `shouldSatisfy` (not . Text.isInfixOf "data-account-message")
       renderRegistrationRegion defaultRequestContext English (RegistrationForm "'>&" "'>&" "'>&" FormReady)
         `shouldSatisfy` \html -> "&#39;&gt;&amp;" `Text.isInfixOf` html
-      let spanishMfaPage = renderMfaEnrollmentPage (defaultRequestContext {requestLocale = Spanish}) Spanish (MfaEnrollmentForm (Just "SECRET&VALUE") ["CODE-ONE"] (Just "Ready <now>") False)
+      let spanishMfaPage = renderMfaEnrollmentPage (defaultRequestContext {requestLocale = Spanish}) Spanish (MfaEnrollmentForm (Just "SECRET&VALUE") ["CODE-ONE"] True (Just "Ready <now>") False)
       spanishMfaPage
         `shouldSatisfy` \html -> "data-harch-control" `Text.isInfixOf` html && "SECRET&amp;VALUE" `Text.isInfixOf` html && "Ready &lt;now&gt;" `Text.isInfixOf` html && "action=\"/es/mfa\"" `Text.isInfixOf` html
       mapM_
@@ -534,9 +560,9 @@ spec = do
           "Codigos de recuperacion",
           "Guarda estos codigos. No se mostraran de nuevo."
         ]
-      renderMfaEnrollmentRegion defaultRequestContext English (MfaEnrollmentForm Nothing ["CODE-ONE"] Nothing False)
+      renderMfaEnrollmentRegion defaultRequestContext English (MfaEnrollmentForm Nothing ["CODE-ONE"] False Nothing False)
         `shouldSatisfy` Text.isInfixOf "data-recovery-codes=\"true\""
-      let spanishLoginPage = renderLoginPage (defaultRequestContext {requestLocale = Spanish}) Spanish (LoginForm "person@example.test\" onclick=\"bad" (Just "Ready <now>") False)
+      let spanishLoginPage = renderLoginPage (defaultRequestContext {requestLocale = Spanish}) Spanish (LoginForm "person@example.test\" onclick=\"bad" (Just LoginRecoveryProof) (FormStatusMessage (FormStatus "Ready <now>" FormStatusSuccess)))
       spanishLoginPage
         `shouldSatisfy` \html -> "data-page=\"login\"" `Text.isInfixOf` html && "action=\"/es/login\"" `Text.isInfixOf` html && "autocomplete=\"username\"" `Text.isInfixOf` html && "person@example.test&quot; onclick=&quot;bad" `Text.isInfixOf` html && "Ready &lt;now&gt;" `Text.isInfixOf` html
       mapM_
@@ -546,11 +572,30 @@ spec = do
           "Contrasena",
           "Metodo de verificacion",
           "Codigo del autenticador",
-          "Codigo de recuperacion",
-          "Codigo de verificacion"
+          "Codigo de recuperacion"
         ]
-      renderLoginRegion defaultRequestContext English (LoginForm Text.empty Nothing False)
+      renderLoginRegion defaultRequestContext English emptyLoginForm
         `shouldSatisfy` (not . Text.isInfixOf "data-account-message")
+      let registrationInventory = renderRegistrationRegion defaultRequestContext English emptyRegistrationForm
+          loginInventory = renderLoginRegion defaultRequestContext English emptyLoginForm
+          recoveryInventory = renderLoginRegion defaultRequestContext English (LoginForm Text.empty (Just LoginRecoveryProof) FormReady)
+          verificationInventory = renderVerificationRegion defaultRequestContext English (VerificationForm Text.empty Nothing False)
+          mfaInventory = renderMfaEnrollmentRegion defaultRequestContext English (MfaEnrollmentForm Nothing [] True Nothing False)
+      expectAll
+        ( (registrationInventory `shouldSatisfy` Text.isInfixOf "name=\"username\" autocomplete=\"username\"")
+            :| [ registrationInventory `shouldSatisfy` Text.isInfixOf "name=\"email\" type=\"email\" autocomplete=\"email\"",
+                 registrationInventory `shouldSatisfy` Text.isInfixOf "name=\"displayName\" autocomplete=\"name\"",
+                 registrationInventory `shouldSatisfy` Text.isInfixOf "type=\"password\" autocomplete=\"new-password\"",
+                 loginInventory `shouldSatisfy` Text.isInfixOf "name=\"identifier\" type=\"text\" autocomplete=\"username\"",
+                 loginInventory `shouldSatisfy` Text.isInfixOf "name=\"password\" type=\"password\" autocomplete=\"current-password\"",
+                 loginInventory `shouldSatisfy` Text.isInfixOf "value=\"totp\" selected",
+                 recoveryInventory `shouldSatisfy` Text.isInfixOf "value=\"recovery\" selected",
+                 loginInventory `shouldSatisfy` Text.isInfixOf "name=\"totpCode\" type=\"text\" inputmode=\"numeric\" autocomplete=\"one-time-code\"",
+                 loginInventory `shouldSatisfy` Text.isInfixOf "name=\"recoveryCode\" type=\"text\"",
+                 verificationInventory `shouldSatisfy` Text.isInfixOf "name=\"token\" autocomplete=\"one-time-code\"",
+                 mfaInventory `shouldSatisfy` Text.isInfixOf "inputmode=\"numeric\" autocomplete=\"one-time-code\" name=\"code\""
+               ]
+        )
       renderLogoutPage defaultRequestContext English `shouldSatisfy` Text.isInfixOf "data-harch-control"
       Text.length (renderLogoutPage defaultRequestContext English) `shouldSatisfy` (> 0)
       let spanishLogoutPage = renderLogoutPage (defaultRequestContext {requestLocale = Spanish}) Spanish
@@ -641,15 +686,15 @@ spec = do
                  assertDuplicateField "/verify" "token",
                  assertDuplicateField "/mfa" "intent",
                  assertDuplicateField "/mfa" "code",
-                 assertDuplicateField "/login" "email",
-                 assertDuplicateField "/login" "username",
+                 assertDuplicateField "/login" "identifier",
                  assertDuplicateField "/login" "password",
                  assertDuplicateField "/login" "proof",
-                 assertDuplicateField "/login" "code",
+                 assertDuplicateField "/login" "totpCode",
+                 assertDuplicateField "/login" "recoveryCode",
                  assertDuplicateField "/profile" "intent"
                ]
         )
-      case Action.decodeAction accountActions (rawAction "POST" "/login" [("email", "first@example.test"), ("email", "second@example.test")]) of
+      case Action.decodeAction accountActions (rawAction "POST" "/login" [("identifier", "first@example.test"), ("identifier", "second@example.test")]) of
         HarchWeb.MalformedClientAction _ -> pure ()
         _ -> expectationFailure "expected duplicate action fields to be malformed"
       case Action.decodeAction accountActions (rawAction "POST" "/register" [("username", "person_01"), ("email", "person@example.test"), ("displayName", "Person Example"), ("password", "correct horse battery staple")]) of
@@ -658,7 +703,7 @@ spec = do
       case Action.decodeAction accountActions (rawAction "POST" "/mfa" [("intent", "confirm"), ("code", "123456")]) of
         HarchWeb.DecodedClientAction _ -> pure ()
         _ -> expectationFailure "expected a fully populated MFA enrollment submission to decode"
-      case Action.decodeAction accountActions (rawAction "POST" "/login" [("email", "person@example.test"), ("username", "person_01"), ("password", "correct horse battery staple"), ("proof", "123456"), ("code", "recovery-code")]) of
+      case Action.decodeAction accountActions (rawAction "POST" "/login" [("identifier", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "recovery"), ("totpCode", "123456"), ("recoveryCode", "recovery-code")]) of
         HarchWeb.DecodedClientAction _ -> pure ()
         _ -> expectationFailure "expected a fully populated login submission to decode"
       let assertSingleFieldDecodes path fieldName fieldValue =
@@ -670,10 +715,11 @@ spec = do
             :| [ assertSingleFieldDecodes "/register" "email" "person@example.test",
                  assertSingleFieldDecodes "/register" "password" "correct horse battery staple",
                  assertSingleFieldDecodes "/mfa" "intent" "confirm",
-                 assertSingleFieldDecodes "/login" "email" "person@example.test",
+                 assertSingleFieldDecodes "/login" "identifier" "person@example.test",
                  assertSingleFieldDecodes "/login" "password" "correct horse battery staple",
-                 assertSingleFieldDecodes "/login" "proof" "123456",
-                 assertSingleFieldDecodes "/login" "code" "recovery-code"
+                 assertSingleFieldDecodes "/login" "proof" "totp",
+                 assertSingleFieldDecodes "/login" "totpCode" "123456",
+                 assertSingleFieldDecodes "/login" "recoveryCode" "0123456789ABCDEF0123"
                ]
         )
       invalidMfaResult <- handleAccountAction workflow (request "POST" "/mfa" [("intent", "start")] English)
@@ -1110,9 +1156,9 @@ spec = do
                 accountWorkflowTotpClock = unixTimeSecondsFromNanoseconds
               }
           loginRequest fields = typedAccountActionRequest "POST" "/login" fields defaultRequestContext
-          loginFields = [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", Totp.totpCodeText (Totp.totpCode 123456 totpSecret))]
-      invalidEmail <- handleAccountAction workflow (loginRequest [("email", "not an identifier!")])
-      invalidEmail `shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-email") "valid email address"
+          loginFields = [("identifier", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("totpCode", Totp.totpCodeText (Totp.totpCode 123456 totpSecret))]
+      invalidEmail <- handleAccountAction workflow (loginRequest [("identifier", "not an identifier!")])
+      invalidEmail `shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-error-summary") "valid email address"
       loginResult <- handleAccountAction workflow (loginRequest loginFields)
       case loginResult of
         Nothing -> expectationFailure "expected login action response"
@@ -1188,10 +1234,10 @@ spec = do
               }
           validCode = Totp.totpCodeText (Totp.totpCode 123456 totpSecret)
           invalidCode = Text.take 5 validCode <> if Text.drop 5 validCode == "0" then "1" else "0"
-          validFields = [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", validCode)]
-          usernameFields = [("email", ""), ("username", "person_01"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", validCode)]
-          uppercaseUsernameFields = [("email", ""), ("username", "Person_01"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", validCode)]
-          emailUsernameFields = [("email", "person_01"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", validCode)]
+          validFields = [("identifier", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("totpCode", validCode)]
+          usernameFields = [("identifier", "person_01"), ("password", "correct horse battery staple"), ("proof", "totp"), ("totpCode", validCode)]
+          uppercaseUsernameFields = [("identifier", "Person_01"), ("password", "correct horse battery staple"), ("proof", "totp"), ("totpCode", validCode)]
+          emailUsernameFields = [("identifier", "person_01"), ("password", "correct horse battery staple"), ("proof", "totp"), ("totpCode", validCode)]
           validWorkflow = workflowFor (Right (Just confirmedCredential)) (Right (Just confirmedEnrollment)) (Right True) (Right True)
           recoveryCode = fromMaybe (error "expected a valid recovery code") (RecoveryCode.mkRecoveryCode "0123456789ABCDEF0123")
           recoveryHash = fromMaybe (error "expected a recovery-code hash") (RecoveryCode.hashRecoveryCodeWithSalt testPasswordHashingPolicy "0123456789abcdef" recoveryCode)
@@ -1207,7 +1253,7 @@ spec = do
                   pure (Right True)
               }
           recoveryWorkflow = validWorkflow {accountWorkflowMfaStore = recoveryMfaStore}
-          recoveryFields = [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "recovery"), ("code", RecoveryCode.recoveryCodeText recoveryCode)]
+          recoveryFields = [("identifier", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "recovery"), ("recoveryCode", RecoveryCode.recoveryCodeText recoveryCode)]
           unavailableSession = workflowFor (Right (Just confirmedCredential)) (Right (Just confirmedEnrollment)) (Left AccountSessionStoreUnavailable) (Right True)
           mfaAttemptKey = "mfa:" <> Account.accountIdText accountId
           exhaustedMfaThrottleStore =
@@ -1261,18 +1307,24 @@ spec = do
       handleAccountAction policyCapturingWorkflow (loginRequest defaultRequestContext validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
       readIORef admissionContextReference `shouldReturn` Just (LoginProtection.defaultLoginProtectionPolicy, 500)
-      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "not an identifier!")])
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-email") "valid email address")
-      handleAccountAction validWorkflow (spanishLoginRequest [("email", "not an identifier!")])
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-email") "nombre de usuario valido")
-      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "person@example.test"), ("password", "short"), ("proof", "totp"), ("code", validCode)])
+      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("identifier", "not an identifier!")])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-error-summary") "valid email address")
+      handleAccountAction validWorkflow (spanishLoginRequest [("identifier", "not an identifier!")])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-error-summary") "nombre de usuario valido")
+      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("identifier", "not an identifier!"), ("password", "correct horse battery staple"), ("proof", "totp"), ("totpCode", validCode)])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-identifier") "valid email address")
+      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("identifier", "person@example.test"), ("password", "short"), ("proof", "totp"), ("totpCode", validCode)])
         >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-password") "Enter your password")
-      handleAccountAction validWorkflow (spanishLoginRequest [("email", "person@example.test"), ("password", "short"), ("proof", "totp"), ("code", validCode)])
+      handleAccountAction validWorkflow (spanishLoginRequest [("identifier", "person@example.test"), ("password", "short"), ("proof", "totp"), ("totpCode", validCode)])
         >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-password") "Introduce tu contrasena")
-      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "unknown"), ("code", validCode)])
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-code") "Enter a valid authenticator")
-      handleAccountAction validWorkflow (spanishLoginRequest [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "unknown"), ("code", validCode)])
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-code") "Introduce un codigo")
+      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("identifier", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "unknown"), ("totpCode", validCode)])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-proof") "Enter a valid authenticator")
+      handleAccountAction validWorkflow (spanishLoginRequest [("identifier", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "unknown"), ("totpCode", validCode)])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-proof") "Introduce un codigo")
+      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("identifier", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("totpCode", "1")])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-authenticator-code") "six-digit authenticator code")
+      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("identifier", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "recovery"), ("recoveryCode", "pasted-recovery")])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-recovery-code") "valid authenticator or recovery code")
       handleAccountAction (workflowFor (Right (Just unverifiedCredential)) (Right Nothing) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 403 Nothing "Verify your email address")
       handleAccountAction (workflowFor (Right (Just unverifiedCredential)) (Right Nothing) (Right True) (Right True)) (spanishLoginRequest validFields)
@@ -1304,12 +1356,12 @@ spec = do
       case savedLoginEnrollmentSession of
         Just session -> Session.sessionPrincipal session `shouldBe` accountId
         Nothing -> expectationFailure "expected an MFA-enrollment session to be saved after a password-only login"
-      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", invalidCode)])
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-code") "Sign-in was rejected")
-      handleAccountAction validWorkflow (spanishLoginRequest [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", invalidCode)])
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-code") "inicio de sesion fue rechazado")
-      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "recovery"), ("code", "0123456789ABCDEF0123")])
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-code") "Sign-in was rejected")
+      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("identifier", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("totpCode", invalidCode)])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-authenticator-code") "Sign-in was rejected")
+      handleAccountAction validWorkflow (spanishLoginRequest [("identifier", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("totpCode", invalidCode)])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-authenticator-code") "inicio de sesion fue rechazado")
+      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("identifier", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "recovery"), ("recoveryCode", "0123456789ABCDEF0123")])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-recovery-code") "Sign-in was rejected")
       handleAccountAction recoveryWorkflow (loginRequest defaultRequestContext recoveryFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
       handleAccountAction canonicalUsernameWorkflow (loginRequest defaultRequestContext usernameFields)
@@ -1321,9 +1373,9 @@ spec = do
       handleAccountAction validWorkflow (loginRequest defaultRequestContext emailUsernameFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
       handleAccountAction exhaustedTotpWorkflow (loginRequest defaultRequestContext validFields)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 429 (Just "login-email") "Too many sign-in attempts")
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 429 (Just "login-identifier") "Too many sign-in attempts")
       handleAccountAction postCheckWriteFailureWorkflow (loginRequest defaultRequestContext validFields)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
       usernameLoginResult <-
         beginPasswordLoginWithIdentifier
           PasswordLoginEnvironment
@@ -1339,9 +1391,9 @@ spec = do
         PasswordLoginMfaRequired receivedAccountId -> receivedAccountId `shouldBe` accountId
         _ -> expectationFailure "expected MFA to be required for a valid username login"
       handleAccountAction (workflowFor (Left (AccountCredentialStoreUnavailable "down")) (Right Nothing) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
       handleAccountAction (workflowFor (Left (AccountCredentialStoreCorruptData "bad credential")) (Right Nothing) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
       let redactedCredentialStore =
             buildRuntimePostgresAccountCredentialStoreWithRunner
               (\_ _ _ -> pure (Right [["password-hash-sentinel"]]))
@@ -1352,11 +1404,11 @@ spec = do
           False
           (not . any (Text.isInfixOf "password-hash-sentinel") . HarchWeb.clientActionLogEntries)
       handleAccountAction (workflowFor (Left (AccountCredentialStoreUnavailable "down")) (Right Nothing) (Right True) (Right True)) (spanishLoginRequest validFields)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "no esta disponible")
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "no esta disponible")
       handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Left (MfaStoreUnavailable "down")) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-code") "temporarily unavailable")
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-authenticator-code") "temporarily unavailable")
       handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Right (Just (StoredTotpEnrollment "not-encrypted" (Just 1) Nothing))) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-code") "temporarily unavailable")
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-authenticator-code") "temporarily unavailable")
       let failingLoginAttemptStore =
             LoginAttemptStore
               { reserveLoginAttempt = \_ _ _ -> pure (Left (LoginAttemptStoreUnavailable "attempt store down")),
@@ -1376,26 +1428,26 @@ spec = do
                 cancelLoginAttempt = \_ -> error "unexpected throttle cancellation while already throttled"
               }
       handleAccountAction validWorkflow {accountWorkflowLoginAttemptStore = failingLoginAttemptStore} (loginRequest defaultRequestContext validFields)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
       handleAccountAction validWorkflow {accountWorkflowLoginAttemptStore = corruptLoginAttemptStore} (loginRequest defaultRequestContext validFields)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
       handleAccountAction validWorkflow {accountWorkflowLoginAttemptStore = throttledLoginAttemptStore} (loginRequest defaultRequestContext validFields)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 429 (Just "login-email") "Too many sign-in attempts")
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 429 (Just "login-identifier") "Too many sign-in attempts")
       handleAccountAction validWorkflow {accountWorkflowLoginAttemptStore = throttledLoginAttemptStore} (spanishLoginRequest validFields)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 429 (Just "login-email") "Demasiados intentos")
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 429 (Just "login-identifier") "Demasiados intentos")
       handleAccountAction unavailableSession (loginRequest defaultRequestContext validFields)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
       handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Right (Just confirmedEnrollment)) (Left AccountSessionStoreCorruptData) (Right True)) (loginRequest defaultRequestContext validFields)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
       handleAccountAction unavailableSession (spanishLoginRequest validFields)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "no esta disponible")
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "no esta disponible")
       handleAccountAction validWorkflow (spanishLoginRequest validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "Has iniciado sesion")
       exhaustedLoginBudget <- Password.newPasswordWorkGate (fromMaybe (error "expected a positive password-work budget") (Password.mkPasswordWorkBudget 8))
       handleAccountAction validWorkflow {accountWorkflowPasswordWorkGate = exhaustedLoginBudget} (loginRequest defaultRequestContext validFields)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
       handleAccountAction validWorkflow {accountWorkflowPasswordWorkGate = exhaustedLoginBudget} (spanishLoginRequest validFields)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "no esta disponible")
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "no esta disponible")
       handleAccountAction validWorkflow (logoutRequest defaultRequestContext)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed out")
       handleAccountAction validWorkflow (typedAccountActionRequest "POST" "/es/logout" [] spanishRequestContext)

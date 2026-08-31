@@ -74,6 +74,7 @@ module HarchWeb.Markup.Implementation
     role,
     safeUrlText,
     sectionTag,
+    selected,
     selectTag,
     tabIndex,
     text,
@@ -315,6 +316,14 @@ name = attribute (AttributeName "name")
 
 required :: Attribute
 required = booleanAttribute (AttributeName "required")
+
+-- | Mark the selected option in a native @select@. Decision (AHI-9,
+-- 2026-08-31): preserving a non-secret, closed authentication-method choice
+-- after a validation patch is standard HTML state owned by the existing
+-- markup AST. Extend that closed vocabulary instead of reordering options or
+-- emitting unchecked application HTML.
+selected :: Attribute
+selected = booleanAttribute (AttributeName "selected")
 
 value :: Text -> Attribute
 value = attribute (AttributeName "value")

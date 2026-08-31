@@ -21,12 +21,14 @@ module TestCore.Browser.Scenario
     fill,
     historyBack,
     historyForward,
+    paste,
     press,
     releaseRequestsMatching,
     reload,
     runBrowserScenario,
     setCookie,
     setInputFiles,
+    setViewportSize,
     submit,
     visit,
     visitWithoutScripts,
@@ -105,6 +107,12 @@ setCookie :: Text -> Text -> Text -> BrowserScenario ()
 setCookie url name value =
   simpleCommand "setCookie" ["url" .= url, "name" .= name, "value" .= value]
 
+-- | Resize the real browser viewport for responsive and focus-visibility
+-- checks. Dimensions must be positive; the runner validates them again at
+-- the protocol boundary.
+setViewportSize :: Int -> Int -> BrowserScenario ()
+setViewportSize width height = simpleCommand "setViewportSize" ["width" .= width, "height" .= height]
+
 reload :: BrowserScenario ()
 reload = simpleCommand "reload" []
 
@@ -116,6 +124,13 @@ click locator = simpleCommand "click" ["locator" .= locator]
 -- input with page-script event simulation.
 press :: Locator -> Text -> BrowserScenario ()
 press locator key = simpleCommand "press" ["locator" .= locator, "key" .= key]
+
+-- | Paste through the browser clipboard and a real platform keyboard shortcut.
+-- This deliberately lives beside 'press' so acceptance tests can prove that
+-- application event capture accepts clipboard input rather than simulating an
+-- @input@ event with page script.
+paste :: Locator -> Text -> BrowserScenario ()
+paste locator value = simpleCommand "paste" ["locator" .= locator, "value" .= value]
 
 -- | Evaluate a test-owned expression in the current page. This is deliberately
 -- limited to E2E fixtures that need to control browser-only failure modes which

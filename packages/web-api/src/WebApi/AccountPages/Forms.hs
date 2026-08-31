@@ -1,5 +1,7 @@
 module WebApi.AccountPages.Forms
   ( LoginForm (..),
+    LoginProofChoice (..),
+    LoginValidationError (..),
     FormFeedback (..),
     FormStatus (..),
     FormStatusKind (..),
@@ -8,6 +10,7 @@ module WebApi.AccountPages.Forms
     RegistrationForm (..),
     RegistrationValidationError (..),
     VerificationForm (..),
+    emptyLoginForm,
     emptyRegistrationForm,
     initialPendingProfileForm,
   )
@@ -56,7 +59,22 @@ data VerificationForm = VerificationForm
     verificationFormMessage :: Maybe Text,
     verificationFormIsError :: Bool
   }
-  deriving (Eq, Show)
+  deriving (Eq)
+
+-- | Verification links may prefill the one-time bearer value on the initial
+-- document, but diagnostics must never render it. Action responses clear the
+-- value before producing any patch; this redacted instance closes the other
+-- ordinary diagnostic path.
+instance Show VerificationForm where
+  showsPrec precedence VerificationForm {verificationFormMessage, verificationFormIsError} =
+    showParen
+      (precedence > 10)
+      ( showString "VerificationForm {verificationFormToken = <redacted>, verificationFormMessage = "
+          . shows verificationFormMessage
+          . showString ", verificationFormIsError = "
+          . shows verificationFormIsError
+          . showChar '}'
+      )
 
 data PendingProfileForm = PendingProfileForm
   { pendingProfileFormEmail :: Text,
@@ -69,6 +87,7 @@ data PendingProfileForm = PendingProfileForm
 data MfaEnrollmentForm = MfaEnrollmentForm
   { mfaEnrollmentFormSecret :: Maybe Text,
     mfaEnrollmentFormRecoveryCodes :: [Text],
+    mfaEnrollmentFormConfirmationAvailable :: Bool,
     mfaEnrollmentFormMessage :: Maybe Text,
     mfaEnrollmentFormIsError :: Bool
   }
@@ -78,25 +97,43 @@ data MfaEnrollmentForm = MfaEnrollmentForm
 -- enter diagnostics through a derived 'Show' instance.  Keep the public form
 -- state inspectable while redacting the secret and one-time recovery codes.
 instance Show MfaEnrollmentForm where
-  showsPrec precedence MfaEnrollmentForm {mfaEnrollmentFormMessage, mfaEnrollmentFormIsError} =
+  showsPrec precedence MfaEnrollmentForm {mfaEnrollmentFormConfirmationAvailable, mfaEnrollmentFormMessage, mfaEnrollmentFormIsError} =
     showParen
       (precedence > 10)
-      ( showString "MfaEnrollmentForm {mfaEnrollmentFormSecret = <redacted>, mfaEnrollmentFormRecoveryCodes = <redacted>, mfaEnrollmentFormMessage = "
+      ( showString "MfaEnrollmentForm {mfaEnrollmentFormSecret = <redacted>, mfaEnrollmentFormRecoveryCodes = <redacted>, mfaEnrollmentFormConfirmationAvailable = "
+          . shows mfaEnrollmentFormConfirmationAvailable
+          . showString ", mfaEnrollmentFormMessage = "
           . shows mfaEnrollmentFormMessage
           . showString ", mfaEnrollmentFormIsError = "
           . shows mfaEnrollmentFormIsError
           . showChar '}'
       )
 
+data LoginProofChoice
+  = LoginAuthenticatorProof
+  | LoginRecoveryProof
+  deriving (Eq, Show)
+
+data LoginValidationError
+  = LoginIdentifierInvalid
+  | LoginPasswordMissing
+  | LoginProofMissing
+  | LoginAuthenticatorCodeInvalid
+  | LoginRecoveryCodeInvalid
+  deriving (Eq, Show)
+
 data LoginForm = LoginForm
-  { loginFormEmail :: Text,
-    loginFormMessage :: Maybe Text,
-    loginFormIsError :: Bool
+  { loginFormIdentifier :: Text,
+    loginFormProofChoice :: Maybe LoginProofChoice,
+    loginFormFeedback :: FormFeedback LoginValidationError
   }
   deriving (Eq, Show)
 
 emptyRegistrationForm :: RegistrationForm
 emptyRegistrationForm = RegistrationForm Text.empty Text.empty Text.empty FormReady
+
+emptyLoginForm :: LoginForm
+emptyLoginForm = LoginForm Text.empty (Just LoginAuthenticatorProof) FormReady
 
 -- | The server-rendered pending-profile page has no action outcome yet.  This
 -- constructor keeps that valid initial state named and reusable rather than

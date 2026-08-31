@@ -82,6 +82,7 @@ library
     WebApi.AccountPages.Actions.Workflows
     WebApi.AccountPages.Forms
     WebApi.AccountPages.Rendering
+    WebApi.AccountPages.Validation
     WebApi.Api.Endpoints
     WebApi.App
     WebApi.App.Enhancements

@@ -24,10 +24,12 @@ import HarchWeb.Action
     action,
     actionCodec,
     formField,
+    parseField,
     postAt,
     singleOrDefault,
     textValue,
   )
+import WebApi.AccountPages.Forms (LoginProofChoice (..))
 import WebApi.Route (AppRequestContext, AppRoute (..), renderRoutePath)
 
 data AccountActionTarget
@@ -62,11 +64,11 @@ data MfaEnrollmentSubmission = MfaEnrollmentSubmission
   }
 
 data LoginSubmission = LoginSubmission
-  { loginEmailValue :: Text,
-    loginUsernameValue :: Text,
+  { loginIdentifierValue :: Text,
     loginPasswordValue :: Text,
-    loginProofValue :: Text,
-    loginCodeValue :: Text
+    loginProofChoiceValue :: Maybe LoginProofChoice,
+    loginTotpCodeValue :: Text,
+    loginRecoveryCodeValue :: Text
   }
 
 newtype ProfileSubmission = ProfileSubmission {profileIntentValue :: Text}
@@ -133,11 +135,18 @@ mfaEnrollmentSubmission =
 loginSubmission :: ActionDecoder LoginSubmission
 loginSubmission =
   LoginSubmission
-    <$> textFormField "email" textValue
-    <*> textFormField "username" textValue
+    <$> textFormField "identifier" textValue
     <*> textFormField "password" textValue
-    <*> textFormField "proof" textValue
-    <*> textFormField "code" textValue
+    <*> singleOrDefault Nothing (formField "proof" (parseField (Just . loginProofChoice)))
+    <*> textFormField "totpCode" textValue
+    <*> textFormField "recoveryCode" textValue
+
+loginProofChoice :: Text -> Maybe LoginProofChoice
+loginProofChoice proofValue =
+  case proofValue of
+    "totp" -> Just LoginAuthenticatorProof
+    "recovery" -> Just LoginRecoveryProof
+    _ -> Nothing
 
 accountActionPath :: AppRequestContext -> AppRoute -> Text
 accountActionPath requestContext route =

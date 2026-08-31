@@ -53,8 +53,10 @@ spec = do
           ( do
               visit "http://localhost/"
               setCookie "http://localhost/" "session" "opaque-session"
+              setViewportSize 320 480
               click (byRole Link `named` "Continue")
               press emailField "Enter"
+              paste emailField "pasted@example.com"
               scriptResult <- runPageScript "true"
               fill emailField "person@example.com"
               setInputFiles (byLabel "Attachment") "test-fixtures/attachment.txt"

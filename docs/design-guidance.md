@@ -2352,6 +2352,34 @@ the current shell and ignores a `popstate` whose origin, path, and query still i
 Otherwise activating a plain `#field-id` link can fetch and replace the page, discard the patched
 invalid values, and defeat the focus target the accessible control deliberately supplied.
 
+### Follow-up decision — AHI-9: application-owned authentication semantics (2026-08-31)
+
+**Decision: keep autocomplete vocabulary and authentication form models in the
+application, while adding only the missing general native `selected` attribute
+and real-browser test operations.** The existing open `autocomplete :: Text`
+boundary already represents the evolving HTML token grammar. A framework enum
+covering only account fields would create false completeness, so `web-api`
+owns named token constants and an audited control table instead.
+
+Login now has a closed `LoginProofChoice` and separate TOTP and recovery-code
+fields. Independent identifier, password, and selected-proof syntax uses a
+shared application-local applicative `Validation`; this is intentionally not
+a monad because fail-fast bind cannot accumulate independent errors. A valid
+request then enters the existing `AppM` effect rail once. Identifiers and the
+non-secret choice survive a patch, while password, TOTP, recovery, verification,
+enrollment-secret, and generated-code values are excluded from response models
+and diagnostic `Show` output.
+
+Preserving a native select choice across SSR patches demonstrated one small
+closed-markup gap, so `HarchWeb.Markup.selected` extends the existing boolean
+attribute vocabulary and the quasiquoter lowers it directly. Paste and narrow
+viewport operations extend only the test adapter: application scenarios still
+own assertions and control flow. Real-browser proof covers clipboard input,
+autofill-compatible replacement events, delayed runtime capture, keyboard
+order, focus at narrow/zoomed layout, secret clearing, and the explicit
+scripts-disabled `method=dialog` policy. The complete inventory and limits of
+that proof are recorded in `docs/accessibility.md`.
+
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
 the full designed scope shipped; a partial slice must say so and name its follow-up.
 

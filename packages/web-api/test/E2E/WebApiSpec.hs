@@ -19,7 +19,8 @@ import WebApi.App (buildApp, buildAppWithDatabaseAndAccountWorkflow, unavailable
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
 import WebApi.Database (defaultPageRepository)
-import WebApi.Session (AccountSessionStore (..))
+import WebApi.Mfa (MfaStore (..))
+import WebApi.Session (AccountSessionStore (..), MfaEnrollmentSessionStore (..), mfaEnrollmentSessionCookiePolicy)
 
 spec =
   describe "stacked application real-browser smoke coverage" $ do
@@ -148,8 +149,10 @@ spec =
                 visit registrationUrl
                 assertText (byRole Heading) (`shouldBe` "Crea tu cuenta")
                 fill usernameField "person_01"
-                fill emailField "person@example.test"
-                fill passwordField "correct horse battery staple"
+                _ <-
+                  runPageScript
+                    "const field = document.querySelector('#registration-email'); field.value = 'person@example.test'; field.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'person@example.test' })); true"
+                paste passwordField "correct horse battery staple"
                 click (byRole Button `named` "Crear cuenta")
                 assertAll
                   ( (,,,,)
@@ -171,11 +174,124 @@ spec =
                   )
                 releaseRequestsMatching "**/assets/navigation.js"
                 assertAll
-                  ((,) <$> browserMetrics <*> textContent (byText "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion."))
-                  ( \(metrics, message) ->
+                  ((,,) <$> browserMetrics <*> textContent (byText "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") <*> inputValue passwordField)
+                  ( \(metrics, message, password) ->
                       ($([|metrics|] `shouldMatch` [p|BrowserMetrics {mutationRequestCount = 1}|]))
-                        :| [message `shouldBe` "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion."]
+                        :| [ message `shouldBe` "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.",
+                             password `shouldBe` ""
+                           ]
                   )
+            )
+            `shouldReturn` Right ()
+
+    it "accepts pasted and autofill-compatible login values, clears secrets, and keeps focus visible when narrow and zoomed" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let loginUrl = HarchWeb.localServerBaseUrl server <> "/login"
+              identifierField = byLabel "Email address or username"
+              passwordField = byLabel "Password"
+              proofField = byLabel "Verification method"
+              authenticatorField = byLabel "Authenticator code"
+              recoveryField = byLabel "Recovery code"
+          runBrowserScenario
+            browser
+            ( do
+                setViewportSize 320 480
+                visit loginUrl
+                _ <-
+                  runPageScript
+                    "const field = document.querySelector('#login-identifier'); field.value = 'not an identifier!'; field.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'not an identifier!' })); true"
+                paste passwordField "short"
+                paste authenticatorField "1"
+                press identifierField "Tab"
+                assertFocused passwordField (`shouldBe` True)
+                press passwordField "Tab"
+                assertFocused proofField (`shouldBe` True)
+                press proofField "Tab"
+                assertFocused authenticatorField (`shouldBe` True)
+                click (byRole Button `named` "Sign in")
+                assertFocused (css "#login-error-summary") (`shouldBe` True)
+                assertAll
+                  ((,,,) <$> inputValue identifierField <*> inputValue passwordField <*> inputValue authenticatorField <*> browserMetrics)
+                  ( \(identifier, password, authenticator, metrics) ->
+                      (identifier `shouldBe` "not an identifier!")
+                        :| [ password `shouldBe` "",
+                             authenticator `shouldBe` "",
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                           ]
+                  )
+                _ <-
+                  runPageScript
+                    "const proof = document.querySelector('#login-proof'); proof.value = 'recovery'; proof.dispatchEvent(new Event('change', { bubbles: true })); const identifier = document.querySelector('#login-identifier'); identifier.value = 'person@example.test'; identifier.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'person@example.test' })); document.documentElement.style.zoom = '2'; true"
+                paste passwordField "correct horse battery staple"
+                paste recoveryField "pasted-recovery"
+                _ <-
+                  runPageScript
+                    "const field = document.querySelector('#login-recovery-code'); field.focus(); field.scrollIntoView({ block: 'nearest' }); const box = field.getBoundingClientRect(); field.dataset.testFocusVisible = String(field === document.activeElement && box.top >= 0 && box.bottom <= window.innerHeight); field.dataset.testFocusVisible"
+                assertAttribute recoveryField "data-test-focus-visible" (`shouldBe` Just "true")
+                click (byRole Button `named` "Sign in")
+                assertAll
+                  ((,,,) <$> inputValue identifierField <*> inputValue passwordField <*> inputValue authenticatorField <*> inputValue recoveryField)
+                  ( \(identifier, password, authenticator, recovery) ->
+                      (identifier `shouldBe` "person@example.test")
+                        :| [password `shouldBe` "", authenticator `shouldBe` "", recovery `shouldBe` ""]
+                  )
+            )
+            `shouldReturn` Right ()
+
+    it "keeps client-only authentication forms semantically complete without scripts" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let baseUrl = HarchWeb.localServerBaseUrl server
+          runBrowserScenario
+            browser
+            ( do
+                visitWithoutScripts (baseUrl <> "/register")
+                assertAttribute (css "#registration-region form") "method" (`shouldBe` Just "dialog")
+                assertValue (byLabel "Password") (`shouldBe` "")
+                press (byLabel "Username") "Tab"
+                assertFocused (byLabel "Email address") (`shouldBe` True)
+                press (byLabel "Email address") "Tab"
+                assertFocused (byLabel "Display name (optional)") (`shouldBe` True)
+                press (byLabel "Display name (optional)") "Tab"
+                assertFocused (byLabel "Password") (`shouldBe` True)
+                visitWithoutScripts (baseUrl <> "/login")
+                assertAttribute (css "#login-region form") "method" (`shouldBe` Just "dialog")
+                assertText (byText "Choose Authenticator code above, then enter or paste its six-digit code.") (`shouldBe` "Choose Authenticator code above, then enter or paste its six-digit code.")
+                visitWithoutScripts (baseUrl <> "/verify?token=delivered-token")
+                assertAttribute (css "#verification-region form") "method" (`shouldBe` Just "dialog")
+                assertValue (byLabel "Verification token") (`shouldBe` "delivered-token")
+                press (byLabel "Verification token") "Tab"
+                assertFocused (byRole Button `named` "Verify email") (`shouldBe` True)
+                visitWithoutScripts (baseUrl <> "/mfa")
+                assertAttribute (css "#mfa-enrollment-region form") "method" (`shouldBe` Just "dialog")
+                assertText (byRole Button `named` "Start authenticator enrollment") (`shouldBe` "Start authenticator enrollment")
+            )
+            `shouldReturn` Right ()
+
+    it "keeps MFA confirmation keyboard- and paste-usable after its server patch" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultPageRepository mfaEnrollmentBrowserWorkflow) $ \server -> do
+          let mfaUrl = HarchWeb.localServerBaseUrl server <> "/mfa"
+              codeField = byLabel "Authenticator code"
+          runBrowserScenario
+            browser
+            ( do
+                setCookie mfaUrl mfaEnrollmentCookieName sessionToken
+                visit mfaUrl
+                click (byRole Button `named` "Start authenticator enrollment")
+                assertFocused codeField (`shouldBe` True)
+                press codeField "Tab"
+                assertFocused (byRole Button `named` "Confirm authenticator") (`shouldBe` True)
+                paste codeField "123"
+                click (byRole Button `named` "Confirm authenticator")
+                assertAll
+                  ((,) <$> inputValue codeField <*> browserMetrics)
+                  ( \(code, metrics) ->
+                      (code `shouldBe` "")
+                        :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])]
+                  )
+                assertFocused codeField (`shouldBe` True)
             )
             `shouldReturn` Right ()
 
@@ -303,6 +419,37 @@ localizedRegistrationWorkflow =
       accountWorkflowPasswordHasher = \_ _ -> pure (Just (Password.PasswordHash "test-password-hash"))
     }
 
+mfaEnrollmentBrowserWorkflow :: AccountWorkflow
+mfaEnrollmentBrowserWorkflow =
+  unavailableAccountWorkflow
+    { accountWorkflowClock = pure 100,
+      accountWorkflowMfaEnrollmentSessionStore =
+        MfaEnrollmentSessionStore
+          { saveMfaEnrollmentSession = \_ -> error "unexpected MFA-enrollment session save",
+            loadMfaEnrollmentSession = \receivedSessionId -> pure (Right (if receivedSessionId == pendingProfileSessionId then Just mfaEnrollmentBrowserSession else Nothing)),
+            invalidateMfaEnrollmentSession = \_ _ -> error "unexpected MFA-enrollment session invalidation"
+          },
+      accountWorkflowMfaStore =
+        MfaStore
+          { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (Right True),
+            loadTotpEnrollment = \_ -> error "invalid browser code must not load the enrollment",
+            confirmTotpEnrollment = \_ _ _ -> error "invalid browser code must not confirm the enrollment",
+            loadUnusedRecoveryCodeHashes = \_ -> error "unexpected recovery-code load",
+            consumeRecoveryCodeHash = \_ _ _ -> error "unexpected recovery-code consumption",
+            markTotpCodeUsed = \_ _ -> error "unexpected TOTP replay write"
+          }
+    }
+
+mfaEnrollmentBrowserSession :: Session.OpaqueSession Account.AccountId
+mfaEnrollmentBrowserSession =
+  Session.OpaqueSession
+    { Session.sessionId = pendingProfileSessionId,
+      Session.sessionPrincipal = pendingProfileAccountId,
+      Session.sessionCsrfToken = requiredCsrfToken "abcdefghijklmnopqrstuvwxyz0123456789-_",
+      Session.sessionIssuedAtNanoseconds = 0,
+      Session.sessionExpiresAtNanoseconds = 1000
+    }
+
 pendingProfile :: AccountProfile
 pendingProfile = AccountProfile pendingProfileAccountId pendingProfileEmail Nothing Nothing False
 
@@ -327,6 +474,9 @@ pendingProfileSessionId = requiredSessionId sessionToken
 
 sessionCookieName :: Text
 sessionCookieName = Session.sessionCookieNameText (Session.sessionCookieName Session.defaultSessionCookiePolicy)
+
+mfaEnrollmentCookieName :: Text
+mfaEnrollmentCookieName = Session.sessionCookieNameText (Session.sessionCookieName mfaEnrollmentSessionCookiePolicy)
 
 sessionToken :: Text
 sessionToken = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"

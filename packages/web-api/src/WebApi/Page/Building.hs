@@ -19,9 +19,9 @@ import HarchWeb.Username qualified as Username
 import WebApi.Account (AccountProfile (..))
 import WebApi.AccountPages.Actions.Contract (AccountActionTarget (..))
 import WebApi.AccountPages.Forms
-  ( LoginForm (..),
-    MfaEnrollmentForm (..),
+  ( MfaEnrollmentForm (..),
     VerificationForm (..),
+    emptyLoginForm,
     emptyRegistrationForm,
   )
 import WebApi.Database (PageRepository, defaultPageRepository)
@@ -75,11 +75,11 @@ buildPageModelFromRouteData routeRequest routeData =
     MfaEnrollmentRouteDataResult ->
       MfaEnrollmentPage
         EnrollMfaTarget
-        (MfaEnrollmentForm Nothing [] Nothing False)
+        (MfaEnrollmentForm Nothing [] False Nothing False)
     LoginRouteDataResult ->
       LoginPage
         LoginAccountTarget
-        (LoginForm Text.empty Nothing False)
+        emptyLoginForm
     LogoutRouteDataResult ->
       LogoutPage
         LogoutAccountTarget

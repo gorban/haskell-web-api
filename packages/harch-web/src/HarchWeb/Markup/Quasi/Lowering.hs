@@ -356,6 +356,7 @@ lowerFlagAttribute :: Position -> String -> Q Exp
 lowerFlagAttribute position attributeName =
   case attributeName of
     "required" -> pure (VarE 'Impl.required)
+    "selected" -> pure (VarE 'Impl.selected)
     _
       | Just suffix <- dataAttributeSuffix attributeName -> applyNamed 'Impl.dataFlag [fromStringLiteral suffix]
       | otherwise -> failAt position ("unsupported boolean attribute " <> attributeName)

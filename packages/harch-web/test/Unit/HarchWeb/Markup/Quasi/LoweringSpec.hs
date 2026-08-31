@@ -88,6 +88,7 @@ spec =
                 <h1>Home</h1>
                 <label for={emailId}>Email address</label>
                 <input id={emailId} name="email" type="email" autocomplete="email" required />
+                <select><option value="email" selected>Email</option></select>
               </section>
             |]
           direct =
@@ -96,7 +97,8 @@ spec =
               [dataAttribute "page" "home", className (ScopedCssClass (cssScope "home") "root")]
               [ element headingOneTag [] [text "Home"],
                 element labelTag [labelFor emailId] [text "Email address"],
-                voidElement inputTag [elementId emailId, name "email", inputType "email", autocomplete "email", required]
+                voidElement inputTag [elementId emailId, name "email", inputType "email", autocomplete "email", required],
+                element selectTag [] [element optionTag [value "email", selected] [text "Email"]]
               ]
       renderHtml quoted `shouldBe` renderHtml direct
 

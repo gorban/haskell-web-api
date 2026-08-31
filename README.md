@@ -335,6 +335,8 @@ renderer and map it over a collection without framework-specific template regist
 - [Setup](SETUP.md): compiler, services, browser tooling, local runtime, and container workflows.
 - [Design guidance](docs/design-guidance.md): read before starting Large/foundational/security-critical
   work — the pre-build decision framework, current conventions, and intentionally future-facing design.
+- [Accessibility](docs/accessibility.md): semantic composition, authentication-control inventory,
+  validation/focus behavior, scripts-disabled policy, and browser proof.
 - [Changelog](CHANGELOG.md): release history.
 
 The main packages are:

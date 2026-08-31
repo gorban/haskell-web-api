@@ -63,9 +63,11 @@ async function execute(request) {
     case 'visit': return visit(request.url, true);
     case 'visitWithoutScripts': return visit(request.url, false);
     case 'setCookie': return setCookie(request.url, request.name, request.value);
+    case 'setViewportSize': return requirePage().setViewportSize({ width: positiveInteger(request.width, 'viewport width'), height: positiveInteger(request.height, 'viewport height') });
     case 'reload': return requirePage().reload({ waitUntil: 'commit', timeout: timeout() });
     case 'click': return resolveLocator(request.locator).click({ timeout: timeout() });
     case 'press': return resolveLocator(request.locator).press(requireString(request.key, 'keyboard key'), { timeout: timeout() });
+    case 'paste': return paste(resolveLocator(request.locator), requireString(request.value, 'paste value'));
     case 'runPageScript': return runPageScript(requireString(request.source, 'page script'));
     case 'fill': return resolveLocator(request.locator).fill(requireString(request.value, 'fill value'), { timeout: timeout() });
     case 'setInputFiles': return resolveLocator(request.locator).setInputFiles(requireString(request.filePath, 'file path'), { timeout: timeout() });
@@ -135,6 +137,16 @@ async function runPageScript(source) {
   const page = requirePage();
   await page.waitForFunction(() => document.readyState !== 'loading', null, { timeout: timeout() });
   return page.evaluate(source);
+}
+
+async function paste(locator, value) {
+  const page = requirePage();
+  const origin = new URL(page.url()).origin;
+  await state.context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+  await page.evaluate((clipboardValue) => navigator.clipboard.writeText(clipboardValue), value);
+  await locator.focus({ timeout: timeout() });
+  await locator.press('Control+V', { timeout: timeout() });
+  return null;
 }
 
 async function visit(url, scriptsEnabled) {
