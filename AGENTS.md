@@ -40,6 +40,13 @@ and the follow-up task that closes it, in both places.
 - Treat complexity metrics as review signals. Exhaustive folds over closed ADTs and encoding tables may remain branch-heavy when they are total, direct, and tested; error forwarding, mixed responsibilities, and deep nesting should be refactored.
 - Before an implementation commit, run `tools/haskell-quality-report.sh` and create a follow-up task when a non-facade production module exceeds 500 lines plus 20 imports or 10 local dependencies, a non-facade public API has more than 40 exports, there is an import cycle, a cohesive function has 6 or more positional inputs, or an Argon hotspot also has a module-health signal. Do not split declarative test `spec`s, re-export facades, or direct total ADT folds solely to lower a metric. Do not add strictness annotations (`$!`, `seq`, `deepseq`), no-op/fake computation, or HLint-ignore pragmas solely to make Argon or HPC coverage tick a branch or expression that is already correct and already exercised by a test — extend or fix the test to exercise real behavior, or restructure the code, instead. This is the general case of `docs/design-guidance.md`'s [never-mask-a-gate-finding rule](docs/design-guidance.md#never-mask-a-gate-finding-with-an-ignore-pragma): an ignore pragma or `-Wno-...` flag for any build warning, HLint finding, or coverage gap is a last resort, not the standard fix, and must say in a comment what restructuring was tried first.
 - In tests, keep dependent actions fail-fast. For independent, consecutive checks, use `expectAll` to report every ordinary assertion failure, or browser `assertAll` to retry one composed `BrowserObservation` and then aggregate its checks.
+- At a third-party boundary, test the configuration, invocation, adaptation, failure interpretation,
+  and security properties this repository relies on; do not reproduce the dependency's upstream test
+  suite. For example, prove that a scheduler job is installed with the exact owned command and
+  permissions, then call the repository-owned operation directly instead of waiting for the scheduler's
+  clock. When security or protocol correctness depends on third-party behavior, add a focused
+  integration/regression test for that relied-upon behavior, and preserve coverage for any dependency
+  defect or unsafe hook discovered here, as with the WarpTLS pre-handshake peer hook.
 
 # CI-equivalent checks
 
