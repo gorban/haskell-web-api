@@ -122,7 +122,7 @@ buildAppWithDatabaseAndOptionalReporters config pageRepository !accountWorkflow 
                 { Site.simpleSiteName = "web-api",
                   Site.simpleSiteDefaultRequestContext = defaultRequestContext,
                   Site.simpleSiteRouteCodec = routeCodec,
-                  Site.simpleSitePageShell = const (buildAppPageShellConfig config),
+                  Site.simpleSitePageShell = buildAppPageShellConfig config . HarchWeb.pageContext,
                   Site.simpleSiteNavigationRoutes = appNavigationRoutes,
                   Site.simpleSiteRouteDefinition = buildAppRouteDefinition config pageRepository accountWorkflow
                 }

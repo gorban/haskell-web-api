@@ -366,13 +366,13 @@ spec = do
       Wai.responseStatus secondResponse `shouldBe` Http.status200
       lookup Http.hContentType (Wai.responseHeaders secondResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
       renderedSecondResponse <- readResponseBody secondResponse
-      Text.isInfixOf "<h1 data-page-title=\"true\">Segunda</h1>" renderedSecondResponse `shouldBe` True
+      Text.isInfixOf "<h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Segunda</h1>" renderedSecondResponse `shouldBe` True
       Text.isInfixOf "<script nonce=\"" renderedSecondResponse `shouldBe` True
 
       spacesResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["spaces"])
       Wai.responseStatus spacesResponse `shouldBe` Http.status200
       renderedSpacesResponse <- readResponseBody spacesResponse
-      Text.isInfixOf "<h1 data-page-title=\"true\">Site under construction</h1>" renderedSpacesResponse `shouldBe` True
+      Text.isInfixOf "<h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Site under construction</h1>" renderedSpacesResponse `shouldBe` True
 
       apiStatusResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["api", "status"])
       Wai.responseStatus apiStatusResponse `shouldBe` Http.status200
@@ -390,7 +390,7 @@ spec = do
       Wai.responseStatus missingResponse `shouldBe` Http.status404
       lookup Http.hContentType (Wai.responseHeaders missingResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
       renderedMissingResponse <- readResponseBody missingResponse
-      Text.isInfixOf "<h1 data-page-title=\"true\">Not Found</h1>" renderedMissingResponse `shouldBe` True
+      Text.isInfixOf "<h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Not Found</h1>" renderedMissingResponse `shouldBe` True
 
       apiMissingResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["api", "missing"])
       Wai.responseStatus apiMissingResponse `shouldBe` Http.status404
@@ -408,7 +408,7 @@ spec = do
       secondResponse <- performWaiRequest (HarchWeb.toWaiApplication observingApplication) (waiRequest ["second"])
       Wai.responseStatus secondResponse `shouldBe` Http.status200
       responseBody <- readResponseBody secondResponse
-      Text.isInfixOf "<h1 data-page-title=\"true\">Second</h1>" responseBody `shouldBe` True
+      Text.isInfixOf "<h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Second</h1>" responseBody `shouldBe` True
       Text.isInfixOf "<script nonce=\"" responseBody `shouldBe` True
       maybeRequestObservability <- readIORef requestObservabilityReference
       case maybeRequestObservability of

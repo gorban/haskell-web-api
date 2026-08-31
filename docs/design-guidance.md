@@ -315,6 +315,13 @@ Prefer:
 Scoped class names are available through `cssScope` and `ScopedCssClass`. App styles remain ordinary
 static assets today; a typed CSS or JavaScript asset EDSL has not landed.
 
+The web-api reference application records the AHI-1 ownership decision: repeated page and profile
+markup lives in private `WebApi.Components.*` modules as pure typed functions with explicit prop
+records, while its theme and responsive layout remain in `public/styles/app.css`. Its app shell
+declares that stylesheet through `Stylesheet` and applies the request context's already-validated
+`PathPrefix`. This extends the existing shell/static-asset boundary; it is not evidence for a Harch
+design system, a CSS EDSL, or another forwarded-prefix parser.
+
 ### Route families encode capabilities
 
 Apps compose generated pages with explicit APIs and custom paths using a sum such as:

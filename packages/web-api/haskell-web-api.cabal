@@ -111,6 +111,9 @@ library
     WebApi.AccountPages.Actions.Profile
     WebApi.AccountPages.Actions.Registration
     WebApi.App.AccountWorkflow
+    WebApi.Components.PageFrame
+    WebApi.Components.Profile
+    WebApi.Components.Shell
     WebApi.Config.Defaults
     WebApi.Config.Internal
     WebApi.Config.Loading

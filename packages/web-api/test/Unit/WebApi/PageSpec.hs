@@ -116,7 +116,7 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Second",
             HarchWeb.pageRoute = SecondRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"),
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"second\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Second</h1><p class=\"harch-page-frame-summary\">Second page content with stubbed data ready for future loaders.</p><div class=\"harch-page-frame-content\"><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></div></section>"),
             HarchWeb.pageBootstrapHooks = ["second-page"]
           }
 
@@ -126,7 +126,7 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Spaces",
             HarchWeb.pageRoute = SpacesRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"spaces\"><h1 data-page-title=\"true\">Site under construction</h1><p>Follow this space.</p></section>"),
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"spaces\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Site under construction</h1><p class=\"harch-page-frame-summary\">Follow this space.</p><div class=\"harch-page-frame-content\"></div></section>"),
             HarchWeb.pageBootstrapHooks = []
           }
 
@@ -136,7 +136,7 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Not Found",
             HarchWeb.pageRoute = NotFoundRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"),
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"not-found\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Not Found</h1><p class=\"harch-page-frame-summary\">The requested page could not be found.</p><div class=\"harch-page-frame-content\"><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></div></section>"),
             HarchWeb.pageBootstrapHooks = []
           }
 
@@ -146,7 +146,7 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Not Found",
             HarchWeb.pageRoute = NotFoundRoute,
             HarchWeb.pageContext = spanishRequestContext,
-            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"not-found\"><h1 data-page-title=\"true\">No encontrado</h1><p>No se pudo encontrar la pagina solicitada.</p><p><a href=\"/es\" data-page-link=\"true\">Volver al inicio</a></p></section>"),
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"not-found\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">No encontrado</h1><p class=\"harch-page-frame-summary\">No se pudo encontrar la pagina solicitada.</p><div class=\"harch-page-frame-content\"><p><a href=\"/es\" data-page-link=\"true\">Volver al inicio</a></p></div></section>"),
             HarchWeb.pageBootstrapHooks = []
           }
 
@@ -166,7 +166,7 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Second",
             HarchWeb.pageRoute = SecondRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Shared domain summary.</p><ul><li>Shared loader</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"),
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"second\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Second</h1><p class=\"harch-page-frame-summary\">Shared domain summary.</p><div class=\"harch-page-frame-content\"><ul><li>Shared loader</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></div></section>"),
             HarchWeb.pageBootstrapHooks = ["second-page"]
           }
 
@@ -200,5 +200,5 @@ spec = do
         `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
       show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}"
       show (renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []}))))
-        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\", pageBootstrapHooks = [\"second-page\"]}"
+        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}, pageBody = \"<section data-page=\\\"second\\\" class=\\\"harch-page-frame-root\\\"><h1 data-page-title=\\\"true\\\" class=\\\"harch-page-frame-title\\\">Second</h1><p class=\\\"harch-page-frame-summary\\\">Second page content with stubbed data ready for future loaders.</p><div class=\\\"harch-page-frame-content\\\"><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></div></section>\", pageBootstrapHooks = [\"second-page\"]}"
       renderPage config secondRequest `shouldReturn` renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []})))

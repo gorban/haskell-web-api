@@ -1,8 +1,95 @@
-body {
-  font-family: system-ui, sans-serif;
+:root {
+  color-scheme: light dark;
+  --app-color-background: #f7f8fb;
+  --app-color-surface: #ffffff;
+  --app-color-text: #172033;
+  --app-color-muted: #586174;
+  --app-color-accent: #2855c5;
+  --app-color-focus: #d97706;
+  --app-color-border: #c8ceda;
+  --app-space-1: 0.5rem;
+  --app-space-2: 1rem;
+  --app-space-3: 1.5rem;
+  --app-radius: 0.5rem;
+  --app-content-width: 48rem;
 }
 
-nav[data-navigation-region="primary"] {
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--app-color-background);
+  color: var(--app-color-text);
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+a {
+  color: var(--app-color-accent);
+}
+
+:where(a, button, input, select):focus-visible {
+  outline: 0.2rem solid var(--app-color-focus);
+  outline-offset: 0.2rem;
+}
+
+.harch-app-shell-navigation {
   display: flex;
-  gap: 1rem;
+  flex-wrap: wrap;
+  gap: var(--app-space-1) var(--app-space-2);
+  padding: var(--app-space-2);
+  border-block-end: 1px solid var(--app-color-border);
+  background: var(--app-color-surface);
+}
+
+.harch-app-shell-main {
+  width: min(100% - 2rem, var(--app-content-width));
+  margin-inline: auto;
+  padding-block: clamp(2rem, 8vw, 4rem);
+}
+
+.harch-page-frame-root {
+  padding: clamp(1rem, 4vw, 2rem);
+  border: 1px solid var(--app-color-border);
+  border-radius: var(--app-radius);
+  background: var(--app-color-surface);
+}
+
+.harch-page-frame-title {
+  margin-block: 0;
+  line-height: 1.2;
+}
+
+.harch-page-frame-summary {
+  max-width: 65ch;
+  color: var(--app-color-muted);
+}
+
+.harch-page-frame-content {
+  display: grid;
+  gap: var(--app-space-2);
+  margin-block-start: var(--app-space-2);
+}
+
+.harch-page-frame-content > :first-child {
+  margin-block-start: 0;
+}
+
+.harch-page-frame-content > :last-child,
+.harch-profile-identity-value {
+  margin-block-end: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --app-color-background: #101522;
+    --app-color-surface: #171e2d;
+    --app-color-text: #edf1f8;
+    --app-color-muted: #bbc4d6;
+    --app-color-accent: #9eb8ff;
+    --app-color-focus: #fbbf24;
+    --app-color-border: #39445b;
+  }
 }

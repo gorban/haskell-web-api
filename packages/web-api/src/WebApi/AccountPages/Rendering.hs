@@ -34,6 +34,11 @@ import HarchWeb qualified
 import HarchWeb.Controls qualified as Controls
 import WebApi.AccountPages.Actions.Contract (AccountActionTarget (..), accountActions)
 import WebApi.AccountPages.Forms
+import WebApi.Components.PageFrame
+  ( PageFrameProps (..),
+    PageKind (..),
+    pageFrame,
+  )
 import WebApi.Route (AppLocale (..), AppRequestContext)
 
 data AccountPageCopy = AccountPageCopy
@@ -125,7 +130,7 @@ renderMfaEnrollmentPage :: AppRequestContext -> AppLocale -> MfaEnrollmentForm -
 renderMfaEnrollmentPage context locale form = HarchWeb.renderHtml (renderMfaEnrollmentPageHtml context locale form)
 
 renderMfaEnrollmentPageHtml :: AppRequestContext -> AppLocale -> MfaEnrollmentForm -> HarchWeb.Html
-renderMfaEnrollmentPageHtml context locale form = pageSection "mfa-enrollment" (accountMfaEnrollmentHeading (accountPageCopy locale)) (renderMfaEnrollmentRegionHtml context locale form)
+renderMfaEnrollmentPageHtml context locale form = pageSection MfaEnrollmentPageFrame (accountMfaEnrollmentHeading (accountPageCopy locale)) (renderMfaEnrollmentRegionHtml context locale form)
 
 renderMfaEnrollmentRegion :: AppRequestContext -> AppLocale -> MfaEnrollmentForm -> Text
 renderMfaEnrollmentRegion context locale form = HarchWeb.renderHtml (renderMfaEnrollmentRegionHtml context locale form)
@@ -154,7 +159,7 @@ renderLoginPage :: AppRequestContext -> AppLocale -> LoginForm -> Text
 renderLoginPage context locale form = HarchWeb.renderHtml (renderLoginPageHtml context locale form)
 
 renderLoginPageHtml :: AppRequestContext -> AppLocale -> LoginForm -> HarchWeb.Html
-renderLoginPageHtml context locale form = pageSection "login" (accountLoginHeading (accountPageCopy locale)) (renderLoginRegionHtml context locale form)
+renderLoginPageHtml context locale form = pageSection LoginPageFrame (accountLoginHeading (accountPageCopy locale)) (renderLoginRegionHtml context locale form)
 
 renderLoginRegion :: AppRequestContext -> AppLocale -> LoginForm -> Text
 renderLoginRegion context locale form = HarchWeb.renderHtml (renderLoginRegionHtml context locale form)
@@ -213,7 +218,7 @@ renderLogoutPage :: AppRequestContext -> AppLocale -> Text
 renderLogoutPage context locale = HarchWeb.renderHtml (renderLogoutPageHtml context locale)
 
 renderLogoutPageHtml :: AppRequestContext -> AppLocale -> HarchWeb.Html
-renderLogoutPageHtml context locale = pageSection "logout" (accountLogoutHeading (accountPageCopy locale)) (renderLogoutRegionWithMessage context locale Nothing)
+renderLogoutPageHtml context locale = pageSection LogoutPageFrame (accountLogoutHeading (accountPageCopy locale)) (renderLogoutRegionWithMessage context locale Nothing)
 
 renderLogoutRegion :: AppRequestContext -> AppLocale -> Maybe Text -> Bool -> Text
 renderLogoutRegion context locale message isError = HarchWeb.renderHtml (renderLogoutRegionWithMessage context locale ((,isError) <$> message))
@@ -228,7 +233,7 @@ renderRegistrationPage :: AppRequestContext -> AppLocale -> RegistrationForm -> 
 renderRegistrationPage context locale form = HarchWeb.renderHtml (renderRegistrationPageHtml context locale form)
 
 renderRegistrationPageHtml :: AppRequestContext -> AppLocale -> RegistrationForm -> HarchWeb.Html
-renderRegistrationPageHtml context locale form = pageSection "registration" (accountRegistrationHeading (accountPageCopy locale)) (renderRegistrationRegionHtml context locale form)
+renderRegistrationPageHtml context locale form = pageSection RegistrationPageFrame (accountRegistrationHeading (accountPageCopy locale)) (renderRegistrationRegionHtml context locale form)
 
 renderRegistrationRegion :: AppRequestContext -> AppLocale -> RegistrationForm -> Text
 renderRegistrationRegion context locale form = HarchWeb.renderHtml (renderRegistrationRegionHtml context locale form)
@@ -261,7 +266,7 @@ renderVerificationPage :: AppRequestContext -> AppLocale -> VerificationForm -> 
 renderVerificationPage context locale form = HarchWeb.renderHtml (renderVerificationPageHtml context locale form)
 
 renderVerificationPageHtml :: AppRequestContext -> AppLocale -> VerificationForm -> HarchWeb.Html
-renderVerificationPageHtml context locale form = pageSection "email-verification" (accountVerificationHeading (accountPageCopy locale)) (renderVerificationRegionHtml context locale form)
+renderVerificationPageHtml context locale form = pageSection EmailVerificationPageFrame (accountVerificationHeading (accountPageCopy locale)) (renderVerificationRegionHtml context locale form)
 
 renderVerificationRegion :: AppRequestContext -> AppLocale -> VerificationForm -> Text
 renderVerificationRegion context locale form = HarchWeb.renderHtml (renderVerificationRegionHtml context locale form)
@@ -278,8 +283,15 @@ verificationRegion context locale form =
           actionForm context VerifyEmailTarget [labelWithFor "verification-token" (accountVerificationTokenLabel copy), inputWithId "verification-token" [HarchWeb.name "token", HarchWeb.autocomplete "one-time-code", HarchWeb.required, HarchWeb.value (verificationFormToken form)], submitButton (accountVerifyEmailLabel copy)]
         ]
 
-pageSection :: Text -> Text -> HarchWeb.Html -> HarchWeb.Html
-pageSection page heading content = HarchWeb.element HarchWeb.sectionTag [HarchWeb.dataAttribute "page" page] [HarchWeb.element HarchWeb.headingOneTag [HarchWeb.dataAttribute "page-title" "true"] [HarchWeb.text heading], content]
+pageSection :: PageKind -> Text -> HarchWeb.Html -> HarchWeb.Html
+pageSection pageKind heading content =
+  pageFrame
+    PageFrameProps
+      { pageFrameKind = pageKind,
+        pageFrameHeading = heading,
+        pageFrameSummary = Nothing,
+        pageFrameContent = [content]
+      }
 
 actionForm :: AppRequestContext -> AccountActionTarget -> [HarchWeb.Html] -> HarchWeb.Html
 actionForm context target = Controls.renderActionForm . Controls.actionForm accountActions context target Controls.defaultActionFormAttributes

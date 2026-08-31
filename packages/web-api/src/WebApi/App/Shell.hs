@@ -7,16 +7,20 @@ module WebApi.App.Shell
 where
 
 import HarchWeb qualified
+import WebApi.Components.Shell (AppShellProps (..), appPageShell)
 import WebApi.Config (AppConfig (..))
 import WebApi.Route
-  ( AppRequestContext,
+  ( AppRequestContext (..),
     AppRoute (..),
     routeCodec,
   )
 
 buildAppPageShell :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> HarchWeb.Document AppRoute
-buildAppPageShell config =
-  HarchWeb.buildPageShell routeCodec (standalonePageShell (buildAppPageShellConfig config))
+buildAppPageShell config page =
+  HarchWeb.buildPageShell
+    routeCodec
+    (standalonePageShell (buildAppPageShellConfig config (HarchWeb.pageContext page)))
+    page
 
 -- | The compatibility renderer is a complete standalone document builder, so
 -- it supplies the same declared navigation that 'HarchWeb.Site' supplies for
@@ -37,34 +41,19 @@ appNavigationItems =
     HarchWeb.NavigationItem "Profile" ProfileRoute
   ]
 
--- | Application shell configuration is independent of the rendered page.
--- 'WebApi.App' adapts this value with 'const' for 'HarchWeb.Site.simpleSite'.
-buildAppPageShellConfig :: AppConfig -> HarchWeb.PageShell AppRoute AppRequestContext
-buildAppPageShellConfig config =
-  HarchWeb.PageShell
-    { HarchWeb.shellBodyAttributes =
-        [ HarchWeb.HtmlAttribute
-            { HarchWeb.attributeName = "data-app",
-              HarchWeb.attributeValue = appTitlePrefix config
-            }
-        ],
-      HarchWeb.shellNavigationAttributes =
-        [ HarchWeb.HtmlAttribute
-            { HarchWeb.attributeName = "data-navigation-region",
-              HarchWeb.attributeValue = "primary"
-            }
-        ],
-      HarchWeb.shellNavigationItems = noAppShellNavigationItems,
-      HarchWeb.shellMainId = "app-main",
-      HarchWeb.shellMainAttributes =
-        [ HarchWeb.HtmlAttribute
-            { HarchWeb.attributeName = "data-navigation-content",
-              HarchWeb.attributeValue = "true"
-            }
-        ],
-      HarchWeb.shellStylesheets = [],
-      HarchWeb.shellRuntimeDescriptors = []
-    }
+-- | AHI-1 keeps application styling and shell composition in app-owned typed
+-- functions.  The shell consumes the context's already-validated path prefix
+-- so the declared stylesheet follows the same mount point as routes and
+-- runtime assets, without introducing another proxy-header parser.
+buildAppPageShellConfig :: AppConfig -> AppRequestContext -> HarchWeb.PageShell AppRoute AppRequestContext
+buildAppPageShellConfig config context =
+  appPageShell
+    AppShellProps
+      { appShellTitlePrefix = appTitlePrefix config,
+        appShellPathPrefix = requestPathPrefix context,
+        appShellStylesheet = HarchWeb.stylesheet (HarchWeb.AssetPath "/assets/styles/app.css"),
+        appShellNavigationItems = noAppShellNavigationItems
+      }
 
 -- | Route navigation belongs to 'HarchWeb.Site' through the application's
 -- declared navigation routes.  The app shell deliberately contributes no

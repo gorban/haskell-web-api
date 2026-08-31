@@ -17,6 +17,15 @@ import WebApi.AccountPages.Rendering
     renderRegistrationPageHtml,
     renderVerificationPageHtml,
   )
+import WebApi.Components.PageFrame
+  ( PageFrameProps (..),
+    PageKind (..),
+    pageFrame,
+  )
+import WebApi.Components.Profile
+  ( ProfileIdentityProps (..),
+    profileIdentity,
+  )
 import WebApi.Page.Model
 import WebApi.Route (AppLocale (..), AppRequestContext, defaultRequestContext)
 
@@ -27,22 +36,25 @@ renderPageBodyForLocale :: AppRequestContext -> AppLocale -> AppPageModel -> Har
 renderPageBodyForLocale context locale pageModel =
   case pageModel of
     SecondPage secondPage ->
-      HarchWeb.element
-        HarchWeb.sectionTag
-        [HarchWeb.dataAttribute "page" "second"]
-        [ HarchWeb.element HarchWeb.headingOneTag [HarchWeb.dataAttribute "page-title" "true"] [HarchWeb.text (secondHeading secondPage)],
-          renderPageError (secondErrorMessage secondPage),
-          HarchWeb.element HarchWeb.paragraphTag [] [HarchWeb.text (secondSummary secondPage)],
-          renderSecondPageHighlights secondPage,
-          renderCallToAction (secondPrimaryAction secondPage)
-        ]
+      pageFrame
+        PageFrameProps
+          { pageFrameKind = SecondPageFrame,
+            pageFrameHeading = secondHeading secondPage,
+            pageFrameSummary = Just (secondSummary secondPage),
+            pageFrameContent =
+              [ renderPageError (secondErrorMessage secondPage),
+                renderSecondPageHighlights secondPage,
+                renderCallToAction (secondPrimaryAction secondPage)
+              ]
+          }
     SpacesPage spacesPage ->
-      HarchWeb.element
-        HarchWeb.sectionTag
-        [HarchWeb.dataAttribute "page" "spaces"]
-        [ HarchWeb.element HarchWeb.headingOneTag [HarchWeb.dataAttribute "page-title" "true"] [HarchWeb.text (spacesHeading spacesPage)],
-          HarchWeb.element HarchWeb.paragraphTag [] [HarchWeb.text (spacesSummary spacesPage)]
-        ]
+      pageFrame
+        PageFrameProps
+          { pageFrameKind = SpacesPageFrame,
+            pageFrameHeading = spacesHeading spacesPage,
+            pageFrameSummary = Just (spacesSummary spacesPage),
+            pageFrameContent = []
+          }
     RegistrationPage _ registrationForm ->
       renderRegistrationPageHtml context locale registrationForm
     EmailVerificationPage _ verificationForm ->
@@ -56,13 +68,13 @@ renderPageBodyForLocale context locale pageModel =
     ProfilePage profilePage ->
       renderProfilePageBody context profilePage
     NotFoundPage notFoundPage ->
-      HarchWeb.element
-        HarchWeb.sectionTag
-        [HarchWeb.dataAttribute "page" "not-found"]
-        [ HarchWeb.element HarchWeb.headingOneTag [HarchWeb.dataAttribute "page-title" "true"] [HarchWeb.text (notFoundHeading notFoundPage)],
-          HarchWeb.element HarchWeb.paragraphTag [] [HarchWeb.text (notFoundSummary notFoundPage)],
-          renderCallToAction (notFoundPrimaryAction notFoundPage)
-        ]
+      pageFrame
+        PageFrameProps
+          { pageFrameKind = NotFoundPageFrame,
+            pageFrameHeading = notFoundHeading notFoundPage,
+            pageFrameSummary = Just (notFoundSummary notFoundPage),
+            pageFrameContent = [renderCallToAction (notFoundPrimaryAction notFoundPage)]
+          }
 
 renderProfilePageBody :: AppRequestContext -> ProfilePageModel -> HarchWeb.Html
 renderProfilePageBody context profilePage =
@@ -70,32 +82,21 @@ renderProfilePageBody context profilePage =
     SignedOutProfilePage SignedOutProfilePageDetails {signedOutProfileHeading, signedOutProfileSummary, signedOutProfileSignInAction, signedOutProfileRegistrationAction} ->
       profilePageSection signedOutProfileHeading signedOutProfileSummary [renderCallToAction signedOutProfileSignInAction, renderCallToAction signedOutProfileRegistrationAction]
     PendingProfilePage PendingProfilePageDetails {pendingProfileHeading, pendingProfileSummary, pendingProfileEmail, pendingProfileUsername, pendingProfileDisplayName, pendingProfileResendPath, pendingProfileResendLabel, pendingProfileSignOutAction} ->
-      profilePageSection pendingProfileHeading pendingProfileSummary [renderProfileIdentity pendingProfileUsername pendingProfileDisplayName, renderPendingProfileRegionHtml context pendingProfileResendPath (initialPendingProfileForm pendingProfileEmail pendingProfileResendLabel), renderCallToAction pendingProfileSignOutAction]
+      profilePageSection pendingProfileHeading pendingProfileSummary [profileIdentity (ProfileIdentityProps pendingProfileUsername pendingProfileDisplayName Nothing), renderPendingProfileRegionHtml context pendingProfileResendPath (initialPendingProfileForm pendingProfileEmail pendingProfileResendLabel), renderCallToAction pendingProfileSignOutAction]
     AuthenticatedProfilePage AuthenticatedProfilePageDetails {authenticatedProfileHeading, authenticatedProfileSummary, authenticatedProfileEmail, authenticatedProfileUsername, authenticatedProfileDisplayName, authenticatedProfileSignOutAction} ->
-      profilePageSection authenticatedProfileHeading authenticatedProfileSummary [renderProfileIdentity authenticatedProfileUsername authenticatedProfileDisplayName, renderProfileEmail authenticatedProfileEmail, renderCallToAction authenticatedProfileSignOutAction]
+      profilePageSection authenticatedProfileHeading authenticatedProfileSummary [profileIdentity (ProfileIdentityProps authenticatedProfileUsername authenticatedProfileDisplayName (Just authenticatedProfileEmail)), renderCallToAction authenticatedProfileSignOutAction]
     UnavailableProfilePage UnavailableProfilePageDetails {unavailableProfileHeading, unavailableProfileSummary, unavailableProfileSignInAction} ->
       profilePageSection unavailableProfileHeading unavailableProfileSummary [renderCallToAction unavailableProfileSignInAction]
 
 profilePageSection :: Text -> Text -> [HarchWeb.Html] -> HarchWeb.Html
 profilePageSection heading summary content =
-  HarchWeb.element
-    HarchWeb.sectionTag
-    [HarchWeb.dataAttribute "page" "profile"]
-    [ HarchWeb.element HarchWeb.headingOneTag [HarchWeb.dataAttribute "page-title" "true"] [HarchWeb.text heading],
-      HarchWeb.element HarchWeb.paragraphTag [] [HarchWeb.text summary],
-      HarchWeb.fragment content
-    ]
-
-renderProfileEmail :: Text -> HarchWeb.Html
-renderProfileEmail emailAddress =
-  HarchWeb.element HarchWeb.paragraphTag [HarchWeb.dataAttribute "profile-email" "true"] [HarchWeb.text emailAddress]
-
-renderProfileIdentity :: Maybe Text -> Maybe Text -> HarchWeb.Html
-renderProfileIdentity maybeUsername maybeDisplayName =
-  HarchWeb.fragment
-    [ maybe (HarchWeb.fragment []) (\username -> HarchWeb.element HarchWeb.paragraphTag [HarchWeb.dataAttribute "profile-username" "true"] [HarchWeb.text username]) maybeUsername,
-      maybe (HarchWeb.fragment []) (\displayName -> HarchWeb.element HarchWeb.paragraphTag [HarchWeb.dataAttribute "profile-display-name" "true"] [HarchWeb.text displayName]) maybeDisplayName
-    ]
+  pageFrame
+    PageFrameProps
+      { pageFrameKind = ProfilePageFrame,
+        pageFrameHeading = heading,
+        pageFrameSummary = Just summary,
+        pageFrameContent = content
+      }
 
 renderHighlights :: [Text] -> HarchWeb.Html
 renderHighlights highlights =

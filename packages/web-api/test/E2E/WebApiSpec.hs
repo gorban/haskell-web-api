@@ -10,6 +10,8 @@ import HarchWeb.Account qualified as Account
 import HarchWeb.Email qualified as Email
 import HarchWeb.Password qualified as Password
 import HarchWeb.Session qualified as Session
+import System.Directory (copyFile, createDirectory)
+import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..))
 import WebApi.App (buildApp, buildAppWithDatabaseAndAccountWorkflow, unavailableAccountWorkflow)
@@ -106,6 +108,10 @@ spec =
             browser
             ( do
                 visit secondUrl
+                _ <-
+                  runPageScript
+                    "const link = document.querySelector('nav a'); link.focus(); const style = getComputedStyle(link); link.dataset.testFocusVisibleStyle = String(link.matches(':focus-visible') && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0); true"
+                assertAttribute (byRole Link `named` "Home") "data-test-focus-visible-style" (`shouldBe` Just "true")
                 click (byRole Link `named` "Profile")
                 assertAll
                   ((,,,) <$> currentUrl <*> textContent (byRole Heading) <*> textContent (byText "Sign in to view and manage your profile.") <*> browserMetrics)
@@ -202,21 +208,25 @@ withBrowserApp action = do
       Left loadError -> expectationFailure loadError >> fail "unreachable"
       Right config -> pure config
   withSystemTempDirectory "web-api-e2e-assets" $ \assetDirectory ->
-    action
-      browser
-      defaultAppConfig
-        { staticAssets =
-            StaticAssetsConfig
-              { staticAssetRoots =
-                  [ StaticAssetRoot
-                      { staticUrlPrefix = "/assets",
-                        staticDirectory = assetDirectory
-                      }
-                  ],
-                staticAssetContentTypes = defaultStaticAssetContentTypes,
-                staticCacheControlSeconds = Nothing
-              }
-        }
+    do
+      let stylesDirectory = assetDirectory </> "styles"
+      createDirectory stylesDirectory
+      copyFile "public/styles/app.css" (stylesDirectory </> "app.css")
+      action
+        browser
+        defaultAppConfig
+          { staticAssets =
+              StaticAssetsConfig
+                { staticAssetRoots =
+                    [ StaticAssetRoot
+                        { staticUrlPrefix = "/assets",
+                          staticDirectory = assetDirectory
+                        }
+                    ],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes,
+                  staticCacheControlSeconds = Nothing
+                }
+          }
 
 pendingProfileWorkflow :: AccountWorkflow
 pendingProfileWorkflow =

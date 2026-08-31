@@ -500,7 +500,7 @@ spec = do
         `shouldSatisfy` Text.isInfixOf "data-error-state=\"true\""
       renderVerificationPage defaultRequestContext English (VerificationForm "token&value" Nothing False)
         `shouldSatisfy` \html ->
-          "<section data-page=\"email-verification\">" `Text.isPrefixOf` html
+          "<section data-page=\"email-verification\" class=\"harch-page-frame-root\">" `Text.isPrefixOf` html
             && "value=\"token&amp;value\"" `Text.isInfixOf` html
       renderVerificationPage (defaultRequestContext {requestLocale = Spanish}) Spanish (VerificationForm Text.empty Nothing False)
         `shouldSatisfy` Text.isInfixOf "Verifica tu direccion de correo"

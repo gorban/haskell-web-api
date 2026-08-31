@@ -14,7 +14,7 @@ import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
 import WebApi.Config (AppConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
 import WebApi.Page (renderPage)
 import WebApi.PageShell qualified as LegacyPageShell
-import WebApi.Route (AppRoute (..), routeMetadata)
+import WebApi.Route (AppRoute (..), defaultRequestContext, routeMetadata)
 
 spec = do
   describe "page shell integration" $ do
@@ -67,15 +67,16 @@ spec = do
       Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" homeShellWithoutAssets `shouldBe` True
       Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" homeShell `shouldBe` True
       Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" rootMountedShell `shouldBe` True
-      Text.isInfixOf "<nav data-navigation-region=\"primary\">" homeShell `shouldBe` True
-      Text.isInfixOf "<main id=\"app-main\" data-navigation-content=\"true\">" homeShell `shouldBe` True
+      Text.isInfixOf "<nav data-navigation-region=\"primary\" class=\"harch-app-shell-navigation\">" homeShell `shouldBe` True
+      Text.isInfixOf "<main id=\"app-main\" data-navigation-content=\"true\" class=\"harch-app-shell-main\">" homeShell `shouldBe` True
       Text.isInfixOf "data-bootstrap-hooks" homeShell `shouldBe` False
-      Text.isInfixOf "<main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
+      Text.isInfixOf "<main id=\"app-main\" data-navigation-content=\"true\" class=\"harch-app-shell-main\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
 
     it "renders navigation and script hrefs under the forwarded request path prefix" $ do
       prefixedShell <- renderedShellForRequest navigationAppConfig prefixedSecondRequest
       Text.isInfixOf "<a href=\"/app\" data-page-link=\"true\">Home</a><a href=\"/app/second\" data-page-link=\"true\" aria-current=\"page\">Second</a>" prefixedShell `shouldBe` True
       Text.isInfixOf "<script type=\"module\" src=\"/app/assets/navigation.js\" defer></script>" prefixedShell `shouldBe` True
+      Text.isInfixOf "<link rel=\"stylesheet\" href=\"/app/assets/styles/app.css\">" prefixedShell `shouldBe` True
 
     it "serves the bundled navigation asset through configured static roots" $ do
       response <- performWaiRequest (HarchWeb.toWaiApplication (buildApp navigationAppConfig)) (waiRequest ["assets", "navigation.js"])
@@ -91,6 +92,8 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders stylesheetResponse) `shouldBe` Just "text/css; charset=utf-8"
       stylesheetBody <- readResponseBody stylesheetResponse
       Text.isInfixOf "font-family: system-ui, sans-serif;" stylesheetBody `shouldBe` True
+      Text.isInfixOf ":where(a, button, input, select):focus-visible" stylesheetBody `shouldBe` True
+      Text.isInfixOf ".harch-page-frame-root" stylesheetBody `shouldBe` True
 
       fontStylesheetResponse <- performWaiRequest (HarchWeb.toWaiApplication (buildApp navigationAppConfig)) (waiRequest ["assets", "fonts", "font-faces.css"])
       Wai.responseStatus fontStylesheetResponse `shouldBe` Http.status200
@@ -118,7 +121,7 @@ spec = do
         `shouldBe` HarchWeb.renderDocumentForTests (buildAppPageShell navigationAppConfig navigationRenderedPage)
 
     it "keeps the shell configuration seam aligned with the rendered shell entry point" $ do
-      let shellConfig = buildAppPageShellConfig navigationAppConfig
+      let shellConfig = buildAppPageShellConfig navigationAppConfig defaultRequestContext
       HarchWeb.shellNavigationItems shellConfig `shouldBe` []
       HarchWeb.shellRuntimeDescriptors shellConfig `shouldBe` []
 
