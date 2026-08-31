@@ -2415,6 +2415,45 @@ app-owned focus/visually-hidden CSS; real-browser tests cover redirect,
 history, overlap, narrow 200% zoom, delayed runtime, scripts-disabled skip
 navigation, and every fallback class.
 
+### Follow-up decision — AHI-6: replaceable dialog runtime; app-owned floating Help link (2026-08-31)
+
+**Decision: extend the existing shell/early-response seam with ordered generic
+`RuntimeAsset` values and add only a typed native-dialog control; do not add a
+dialog-specific server configuration or a general floating-action API.** The
+language experiment exposed a framework capability gap: `PageShell` could
+declare deferred modules, but request execution could serve only the
+navigation runtime. `Site.siteRuntimeAssets` and
+`Application.applicationRuntimeAssets` now carry the same application-selected
+module values used to build shell descriptors. The existing early response
+boundary serves the first declared asset that owns a path. An application can
+choose `defaultDialogRuntime`, substitute another module with the same capture
+contract, or omit dialog enhancement while retaining the complete SSR
+language route.
+
+The framework surface is semantic rather than product-specific.
+`DialogControlProps route` renders a named, always-dismissible native
+`<dialog>` and retains the trigger's typed route until
+`dialogControl :: (route -> SafeUrl) -> ...` receives the application's route
+renderer. This matches `pageLink`: Harch owns the route-aware control contract
+without selecting an application's route algebra, URL policy, locale context,
+or path syntax. The resulting native-link fallback is available before or
+without the adapter. The capture kernel owns a bounded early-activation
+recovery; the default adapter owns `showModal`, initial and contained focus,
+Escape/visible close, connected-invoker restoration, and navigation cleanup.
+It does not own the application's languages, placement, or visual design. A
+speculative button trigger and required-decision dialog were omitted because
+this reference case could not prove their fallback and dismissal invariants.
+
+The Help reference case found no corresponding framework gap. Existing typed
+native anchor composition plus the new non-empty `AccessibleName` used by the
+dialog expresses its destination, name, decorative icon, and localized visible
+label without an additional wrapper. `web-api` therefore owns the floating
+placement, safe-area spacing, target size, responsive label, and destination
+suppression. This completes the approved link use case only. A future
+command-style FAB must be a native button attached to a demonstrated client
+action whose immediate capture path already exists; it is not a hidden variant
+of this navigation component.
+
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
 the full designed scope shipped; a partial slice must say so and name its follow-up.
 

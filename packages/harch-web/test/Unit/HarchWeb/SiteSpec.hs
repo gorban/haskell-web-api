@@ -60,6 +60,7 @@ spec = do
                  HarchWeb.staticAssetRoots (siteStaticAssets sampleSite) `shouldBe` [],
                  HarchWeb.staticAssetContentTypes (siteStaticAssets sampleSite) `shouldBe` HarchWeb.defaultStaticAssetContentTypes,
                  HarchWeb.staticCacheControlSeconds (siteStaticAssets sampleSite) `shouldBe` Nothing,
+                 siteRuntimeAssets sampleSite `shouldBe` [],
                  fmap HarchWeb.navigationRuntimePath (siteNavigationRuntime sampleSite) `shouldBe` Just "/assets/navigation.js",
                  siteNavigationRuntimePathPrefix sampleSite (SampleContext "/app") `shouldBe` HarchWeb.emptyPathPrefix,
                  HarchWeb.httpsRedirectPort (siteRequestPolicy sampleSite) `shouldBe` Nothing,
@@ -330,6 +331,21 @@ spec = do
       PageResponse page <- HarchWeb.renderResponse siteApplication request
       HarchWeb.documentRuntimeDescriptors (HarchWeb.pageShell siteApplication page)
         `shouldBe` [HarchWeb.defaultCaptureKernel, HarchWeb.DeferredModule "harch-navigation" "/app/assets/navigation.js"]
+
+    it "serves application-selected runtime adapters through the generic early boundary" $ do
+      let firstAsset = HarchWeb.RuntimeAsset "custom-dialog" "/assets/custom-dialog.js" "window.customDialog = 'first';"
+          shadowedAsset = HarchWeb.RuntimeAsset "shadowed-dialog" "/assets/custom-dialog.js" "window.customDialog = 'second';"
+          runtimeSite = sampleSite {siteRuntimeAssets = [firstAsset, shadowedAsset]}
+          siteApplication = buildSiteApplication runtimeSite
+      siteRuntimeAssets runtimeSite `shouldBe` [firstAsset, shadowedAsset]
+      HarchWeb.applicationRuntimeAssets siteApplication `shouldBe` [firstAsset, shadowedAsset]
+      response <- performWaiRequest (toWaiApplication siteApplication) (waiRequest ["assets", "custom-dialog.js"])
+      expectAll
+        ( (Wai.responseStatus response `shouldBe` Http.status200)
+            :| [ lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/javascript; charset=utf-8",
+                 readResponseBody response `shouldReturn` "window.customDialog = 'first';"
+               ]
+        )
 
 sampleSite :: Site SampleRoute () SampleContext
 sampleSite =

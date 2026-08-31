@@ -1,38 +1,38 @@
 {-# LANGUAGE TemplateHaskellQuotes #-}
 
+-- | Lowers parsed nodes and typed component properties. Native-attribute
+-- interpretation lives in 'HarchWeb.Markup.Quasi.AttributeLowering'.
 module HarchWeb.Markup.Quasi.Lowering
   ( lowerNodes,
   )
 where
 
-import Control.Exception (ErrorCall (..), evaluate, try)
 import Data.Functor ((<&>))
 import Data.List (find, intercalate)
-import Data.List.NonEmpty (NonEmpty (..))
-import Data.String (fromString)
-import Data.Text qualified as Text
 import HarchWeb.Markup.Implementation qualified as Impl
+import HarchWeb.Markup.Quasi.AttributeLowering (lowerAttribute)
+import HarchWeb.Markup.Quasi.LoweringSupport
+  ( failAt,
+    parseExpression,
+    textLiteral,
+  )
 import HarchWeb.Markup.Quasi.Parser
   ( MarkupAttribute (..),
     MarkupNode (..),
-    Position (..),
+    Position,
   )
-import Language.Haskell.Meta.Parse qualified as Meta
 import Language.Haskell.TH
   ( Con (..),
     Dec (..),
     Exp (..),
     Info (..),
-    Lit (..),
     Name,
     Q,
     Type (..),
     lookupValueName,
     mkName,
     nameBase,
-    pprint,
     reify,
-    runIO,
   )
 
 lowerNodes :: [MarkupNode] -> Q Exp
@@ -57,8 +57,7 @@ lowerNativeNode position tagConstructor isVoid attributes children = do
   attributeExpressions <- traverse lowerAttribute attributes
   childExpressions <- traverse lowerNode children
   if isVoid
-    then
-      pure (AppE (AppE (VarE 'Impl.voidElement) tagExpression) (ListE attributeExpressions))
+    then pure (AppE (AppE (VarE 'Impl.voidElement) tagExpression) (ListE attributeExpressions))
     else
       pure
         ( AppE
@@ -214,10 +213,8 @@ typeConstructorName typeValue =
 componentPropsFromDeclaration :: Position -> String -> Dec -> Q ComponentProps
 componentPropsFromDeclaration componentPosition propsName declaration =
   case declaration of
-    DataD _ _ _ _ constructors _ ->
-      componentPropsFromConstructors componentPosition propsName constructors
-    NewtypeD _ _ _ _ constructor _ ->
-      componentPropsFromConstructors componentPosition propsName [constructor]
+    DataD _ _ _ _ constructors _ -> componentPropsFromConstructors componentPosition propsName constructors
+    NewtypeD _ _ _ _ constructor _ -> componentPropsFromConstructors componentPosition propsName [constructor]
     _ -> failAt componentPosition ("expected " <> propsName <> " to be a props datatype")
 
 componentPropsFromConstructors :: Position -> String -> [Con] -> Q ComponentProps
@@ -225,11 +222,7 @@ componentPropsFromConstructors componentPosition propsName constructors =
   case find ((== unqualifiedPropsName) . nameBase . componentConstructorName) constructors of
     Just (NormalC propsConstructorName []) -> pure (NullaryComponentProps propsConstructorName)
     Just (RecC propsConstructorName fields) ->
-      pure
-        ( RecordComponentProps
-            propsConstructorName
-            [(nameBase fieldName, fieldName) | (fieldName, _, _) <- fields]
-        )
+      pure (RecordComponentProps propsConstructorName [(nameBase fieldName, fieldName) | (fieldName, _, _) <- fields])
     Just _ -> failAt componentPosition (propsName <> " must use a nullary or record constructor")
     Nothing -> failAt componentPosition ("expected a " <> propsName <> " constructor")
   where
@@ -285,137 +278,9 @@ markupAttributePosition attribute =
     ExpressionAttribute position _ _ -> position
     FlagAttribute position _ -> position
 
-lowerAttribute :: MarkupAttribute -> Q Exp
-lowerAttribute markupAttribute =
-  case markupAttribute of
-    LiteralAttribute position attributeName literal ->
-      lowerLiteralAttribute position attributeName literal
-    ExpressionAttribute position attributeName expressionSource ->
-      lowerExpressionAttribute position attributeName expressionSource
-    FlagAttribute position attributeName -> lowerFlagAttribute position attributeName
-
-lowerLiteralAttribute :: Position -> String -> String -> Q Exp
-lowerLiteralAttribute position attributeName literal =
-  case attributeName of
-    "id" -> applyNamed 'Impl.elementId [applyNamedPure 'Impl.literalElementId [textLiteral literal]]
-    "for" -> applyNamed 'Impl.labelFor [applyNamedPure 'Impl.literalElementId [textLiteral literal]]
-    "aria-describedby" -> lowerLiteralIdReferences position literal
-    "aria-errormessage" -> applyNamed 'Impl.ariaErrorMessage [applyNamedPure 'Impl.literalElementId [textLiteral literal]]
-    "aria-invalid" -> lowerLiteralAriaInvalid position literal
-    "tabindex" -> lowerLiteralTabIndex position literal
-    "class" -> failAt position "class requires an interpolated CssClass expression"
-    -- 'href' takes a 'SafeUrl', not 'Text': a quoted literal in markup
-    -- source is the template author's own text, validated once at compile
-    -- time through 'SafeUrl'\'s 'IsString' instance (the same trust level
-    -- 'fromStringLiteral' already gives a literal Haskell string), not
-    -- through the plain-'Text' 'textLiteral' every other text attribute uses.
-    "href" -> lowerTextAttribute position attributeName (fromStringLiteral literal)
-    _ -> lowerTextAttribute position attributeName (textLiteral literal)
-
-lowerExpressionAttribute :: Position -> String -> String -> Q Exp
-lowerExpressionAttribute position attributeName expressionSource = do
-  expression <- parseExpression position expressionSource
-  case attributeName of
-    "id" -> applyNamed 'Impl.elementId [expression]
-    "for" -> applyNamed 'Impl.labelFor [expression]
-    "aria-describedby" -> applyNamed 'Impl.ariaDescribedBy [expression]
-    "aria-errormessage" -> applyNamed 'Impl.ariaErrorMessage [expression]
-    "aria-invalid" -> applyNamed 'Impl.ariaInvalid [expression]
-    "class" -> applyNamed 'Impl.className [expression]
-    "tabindex" -> applyNamed 'Impl.tabIndex [expression]
-    _ -> lowerTextAttribute position attributeName expression
-
-lowerLiteralIdReferences :: Position -> String -> Q Exp
-lowerLiteralIdReferences position literal =
-  case words literal of
-    [] -> failAt position "aria-describedby requires at least one element ID"
-    firstIdentifier : remainingIdentifiers ->
-      applyNamed
-        'Impl.ariaDescribedBy
-        [ AppE
-            (AppE (ConE '(:|)) (elementIdentifier firstIdentifier))
-            (ListE (map elementIdentifier remainingIdentifiers))
-        ]
-  where
-    elementIdentifier = applyNamedPure 'Impl.literalElementId . pure . textLiteral
-
-lowerLiteralAriaInvalid :: Position -> String -> Q Exp
-lowerLiteralAriaInvalid position literal =
-  case literal of
-    "true" -> applyNamed 'Impl.ariaInvalid [ConE 'True]
-    "false" -> applyNamed 'Impl.ariaInvalid [ConE 'False]
-    _ -> failAt position "aria-invalid must be true or false"
-
-lowerLiteralTabIndex :: Position -> String -> Q Exp
-lowerLiteralTabIndex position literal =
-  case reads literal of
-    [(tabOrder, "")] -> applyNamed 'Impl.tabIndex [LitE (IntegerL tabOrder)]
-    _ -> failAt position "tabindex must be an integer"
-
-lowerFlagAttribute :: Position -> String -> Q Exp
-lowerFlagAttribute position attributeName =
-  case attributeName of
-    "required" -> pure (VarE 'Impl.required)
-    "selected" -> pure (VarE 'Impl.selected)
-    _
-      | Just suffix <- dataAttributeSuffix attributeName -> applyNamed 'Impl.dataFlag [fromStringLiteral suffix]
-      | otherwise -> failAt position ("unsupported boolean attribute " <> attributeName)
-
-lowerTextAttribute :: Position -> String -> Exp -> Q Exp
-lowerTextAttribute position attributeName valueExpression =
-  case lookup attributeName textAttributeConstructors of
-    Just constructorName -> applyNamed constructorName [valueExpression]
-    Nothing
-      | Just suffix <- dataAttributeSuffix attributeName ->
-          -- The suffix always comes from the static attribute name parsed
-          -- from markup source (never from an interpolated expression), so
-          -- it goes through 'DataAttributeSuffix'\'s 'IsString' instance
-          -- via 'fromStringLiteral' regardless of whether the *value* half
-          -- was a literal or an interpolated expression.
-          applyNamed 'Impl.dataAttribute [fromStringLiteral suffix, valueExpression]
-      | otherwise -> failAt position ("unsupported attribute " <> attributeName)
-
--- | Decision (BS, 2026-08-21, per @docs/design-guidance.md@'s
--- extend-vs-new-abstraction rule and missing-framework-capability protocol):
--- see @docs/design-guidance.md@'s \"Follow-up decision — BS\" for the full
--- record, including the module-cycle restructuring this required.
---
--- Every framework identifier below is resolved through a quoted 'Name'
--- ('Impl.foo'), not 'mkName', so a splice site's own local bindings can
--- never shadow it: 'mkName' produces a dynamically bound, unqualified name
--- resolved against whatever is in scope where @[harch| ... |]@ appears, so
--- a component with a parameter named @value@, @name@, or @method@ would
--- otherwise silently rebind the framework's own constructor at every splice
--- site that parameter is visible — usually an inscrutable type error, and in
--- the worst case (a module defining its own non-escaping @text :: Text ->
--- Html@) an escaping bypass with no diagnostic. A component's own name
--- ('lowerComponentNode', 'reifyComponentProps') is deliberately NOT resolved
--- this way: it is the intended open extension point, meant to resolve
--- against whatever the splice site itself has in scope.
-textAttributeConstructors :: [(String, Name)]
-textAttributeConstructors =
-  [ ("action", 'Impl.formAction),
-    ("aria-label", 'Impl.ariaLabel),
-    ("aria-live", 'Impl.ariaLive),
-    ("autocomplete", 'Impl.autocomplete),
-    ("href", 'Impl.href),
-    ("inputmode", 'Impl.inputMode),
-    ("lang", 'Impl.lang),
-    ("maxlength", 'Impl.maxLength),
-    ("method", 'Impl.method),
-    ("minlength", 'Impl.minLength),
-    ("name", 'Impl.name),
-    ("role", 'Impl.role),
-    ("type", 'Impl.inputType),
-    ("value", 'Impl.value)
-  ]
-
--- | Mirrors 'HarchWeb.Markup.Quasi.Parser.nativeTagConstructors'\' set of
--- constructor-name strings; the parser only ever produces a
--- 'HarchWeb.Markup.Quasi.Parser.MarkupNode' native-tag constructor string
--- that is a key here; 'resolveNativeTag'\'s 'Nothing' case exists as a
--- defensive fallback if the two tables were ever to drift, not because a
--- real parse can reach it today.
+-- | Mirrors 'HarchWeb.Markup.Quasi.Parser.nativeTagConstructors' set. The
+-- parser only produces a native tag constructor string that is a key here;
+-- the 'Nothing' case is defensive drift detection.
 nativeTagNames :: [(String, Name)]
 nativeTagNames =
   [ ("anchorTag", 'Impl.anchorTag),
@@ -423,6 +288,7 @@ nativeTagNames =
     ("buttonTag", 'Impl.buttonTag),
     ("codeTag", 'Impl.codeTag),
     ("divTag", 'Impl.divTag),
+    ("dialogTag", 'Impl.dialogTag),
     ("formTag", 'Impl.formTag),
     ("headingOneTag", 'Impl.headingOneTag),
     ("headingTwoTag", 'Impl.headingTwoTag),
@@ -437,7 +303,8 @@ nativeTagNames =
     ("optionTag", 'Impl.optionTag),
     ("paragraphTag", 'Impl.paragraphTag),
     ("sectionTag", 'Impl.sectionTag),
-    ("selectTag", 'Impl.selectTag)
+    ("selectTag", 'Impl.selectTag),
+    ("spanTag", 'Impl.spanTag)
   ]
 
 resolveNativeTag :: Position -> String -> Q Exp
@@ -445,58 +312,3 @@ resolveNativeTag position tagConstructor =
   case lookup tagConstructor nativeTagNames of
     Just name -> pure (VarE name)
     Nothing -> failAt position ("unsupported native element " <> tagConstructor)
-
-dataAttributeSuffix :: String -> Maybe String
-dataAttributeSuffix attributeName =
-  case splitAt 5 attributeName of
-    ("data-", suffix)
-      | not (null suffix) -> Just suffix
-    _ -> Nothing
-
-applyNamed :: Name -> [Exp] -> Q Exp
-applyNamed name arguments = pure (applyNamedPure name arguments)
-
-applyNamedPure :: Name -> [Exp] -> Exp
-applyNamedPure name = foldl AppE (VarE name)
-
--- | Decision (BV, 2026-08-21, per @docs/design-guidance.md@'s
--- missing-framework-capability protocol): see @docs/design-guidance.md@'s
--- \"Follow-up decision — BV\" for the full record of why this catches the
--- crash rather than implementing TH-quote support.
---
--- 'Meta.parseExp' does not return a 'Left' for every unsupported
--- expression: a bare Template Haskell name quote (@'Just@) parses, then
--- throws an uncaught 'ErrorCall' from deep inside @haskell-src-meta@'s own
--- AST translation the moment the result is forced (@toExp: not implemented:
--- VarQuote ...@) — confirmed directly against @haskell-src-meta-0.8.16@,
--- not assumed. Left uncaught, that crash would surface as a confusing
--- GHC-internal panic at the *calling* module's compile time, far from
--- where the actual mistake is. Fully consuming 'pprint' inside 'Q' (which
--- runs in 'IO') traverses the complete parsed 'Exp', including nested
--- children, without adding a second parser or treating TH name quotes as
--- supported syntax. That converts the dependency's crash into the same
--- clean, positioned parse failure an ordinary syntax error already gets.
-parseExpression :: Position -> String -> Q Exp
-parseExpression position expressionSource =
-  case Meta.parseExp expressionSource of
-    Left message -> failAt position ("invalid Haskell expression: " <> message)
-    Right expression -> do
-      forcedExpression <- runIO (try (evaluate (length (pprint expression))))
-      case forcedExpression of
-        Left (ErrorCall message) ->
-          failAt position ("unsupported Haskell expression syntax: " <> message)
-        Right _ -> pure expression
-
-textLiteral :: String -> Exp
-textLiteral literal = AppE (VarE 'Text.pack) (LitE (StringL literal))
-
--- | Like 'textLiteral', but for a validated newtype ('DataAttributeSuffix',
--- 'SafeUrl') reached through its 'IsString' instance instead of building a
--- plain 'Text' value: the generated code reads the same as a template
--- author writing the string literal directly with 'OverloadedStrings'.
-fromStringLiteral :: String -> Exp
-fromStringLiteral literal = AppE (VarE 'fromString) (LitE (StringL literal))
-
-failAt :: Position -> String -> Q a
-failAt (Position line column) message =
-  fail ("harch:" <> show line <> ":" <> show column <> ": " <> message)

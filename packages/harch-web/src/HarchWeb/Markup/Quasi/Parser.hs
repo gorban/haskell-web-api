@@ -130,6 +130,7 @@ nativeTagConstructors =
     ("br", "breakTag"),
     ("code", "codeTag"),
     ("div", "divTag"),
+    ("dialog", "dialogTag"),
     ("form", "formTag"),
     ("h1", "headingOneTag"),
     ("h2", "headingTwoTag"),
@@ -144,6 +145,7 @@ nativeTagConstructors =
     ("p", "paragraphTag"),
     ("section", "sectionTag"),
     ("select", "selectTag"),
+    ("span", "spanTag"),
     ("ul", "listTag")
   ]
 

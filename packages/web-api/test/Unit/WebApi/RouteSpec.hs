@@ -5,7 +5,7 @@
 import Control.Monad (forM_)
 import HarchWeb qualified
 import Unit.WebApi.TestSupport hiding (databaseConfig)
-import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), PageRoute, RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, selectRoute)
+import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), PageRoute, RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, renderRouteUrl, selectRoute)
 import WebApi.Route qualified
 
 spec = do
@@ -23,13 +23,15 @@ spec = do
                      WebApi.Route.LoginPage,
                      WebApi.Route.LogoutPage,
                      WebApi.Route.ProfilePage,
+                     WebApi.Route.LanguagePage,
+                     WebApi.Route.HelpPage,
                      WebApi.Route.PageNotFound
                    ]
       apiRoutes `shouldBe` [StatusApi, SecondApi, ApiNotFound]
       minBound `shouldBe` WebApi.Route.HomePage
       maxBound `shouldBe` WebApi.Route.PageNotFound
       succ WebApi.Route.HomePage `shouldBe` WebApi.Route.SecondPage
-      pred WebApi.Route.PageNotFound `shouldBe` WebApi.Route.ProfilePage
+      pred WebApi.Route.PageNotFound `shouldBe` WebApi.Route.HelpPage
       WebApi.Route.HomePage `shouldNotBe` WebApi.Route.SecondPage
       enumFrom WebApi.Route.HomePage `shouldBe` pageRoutes
       enumFromThen WebApi.Route.HomePage WebApi.Route.SecondPage `shouldBe` pageRoutes
@@ -44,10 +46,12 @@ spec = do
                      "LoginPage",
                      "LogoutPage",
                      "ProfilePage",
+                     "LanguagePage",
+                     "HelpPage",
                      "PageNotFound"
                    ]
       showList pageRoutes ""
-        `shouldBe` "[HomePage,SecondPage,SpacesPage,RegistrationPage,EmailVerificationPage,MfaEnrollmentPage,LoginPage,LogoutPage,ProfilePage,PageNotFound]"
+        `shouldBe` "[HomePage,SecondPage,SpacesPage,RegistrationPage,EmailVerificationPage,MfaEnrollmentPage,LoginPage,LogoutPage,ProfilePage,LanguagePage,HelpPage,PageNotFound]"
       minBound `shouldBe` StatusApi
       maxBound `shouldBe` ApiNotFound
       succ StatusApi `shouldBe` SecondApi
@@ -60,6 +64,8 @@ spec = do
       showList apiRoutes "" `shouldBe` "[StatusApi,SecondApi,ApiNotFound]"
       show SecondApiRoute `shouldBe` "SecondApiRoute"
       show ApiNotFoundRoute `shouldBe` "ApiNotFoundRoute"
+      show LanguageRoute `shouldBe` "LanguageRoute"
+      show HelpRoute `shouldBe` "HelpRoute"
       Page WebApi.Route.HomePage `shouldNotBe` Api ApiNotFound
 
   describe "parseRoute" $ do
@@ -186,6 +192,7 @@ spec = do
       renderRoutePath apiSecondRequest `shouldBe` "/api/second"
       renderRoutePath apiNotFoundRequest `shouldBe` "/api/404"
       renderRoutePath notFoundRequest `shouldBe` "/404"
+      HarchWeb.safeUrlText (renderRouteUrl spanishSpacesRequest) `shouldBe` "/es/spaces"
 
     it "prepends the forwarded request path prefix to page and API routes" $ do
       renderRoutePath prefixedHomeRequest `shouldBe` "/app"

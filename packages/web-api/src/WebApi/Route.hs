@@ -16,6 +16,8 @@ module WebApi.Route
         LoginRoute,
         LogoutRoute,
         ProfileRoute,
+        LanguageRoute,
+        HelpRoute,
         StatusApiRoute,
         SecondApiRoute,
         NotFoundRoute,
@@ -29,6 +31,8 @@ module WebApi.Route
     matchRoute,
     parseRoute,
     renderRoutePath,
+    renderRouteUrl,
+    requiredRouteUrl,
     requestContextFromWaiRequest,
     routeMetadata,
     selectRoute,
@@ -85,6 +89,8 @@ data PageRoute
   | LoginPage
   | LogoutPage
   | ProfilePage
+  | LanguagePage
+  | HelpPage
   | PageNotFound
   deriving (Bounded, Enum, Eq, Show)
 
@@ -126,6 +132,12 @@ pattern LogoutRoute = Page LogoutPage
 pattern ProfileRoute :: AppRoute
 pattern ProfileRoute = Page ProfilePage
 
+pattern LanguageRoute :: AppRoute
+pattern LanguageRoute = Page LanguagePage
+
+pattern HelpRoute :: AppRoute
+pattern HelpRoute = Page HelpPage
+
 pattern StatusApiRoute :: AppRoute
 pattern StatusApiRoute = Api StatusApi
 
@@ -148,6 +160,8 @@ pattern ApiNotFoundRoute = Api ApiNotFound
   LoginRoute,
   LogoutRoute,
   ProfileRoute,
+  LanguageRoute,
+  HelpRoute,
   NotFoundRoute,
   StatusApiRoute,
   SecondApiRoute,
@@ -166,6 +180,8 @@ instance Show AppRoute where
       LoginRoute -> "LoginRoute"
       LogoutRoute -> "LogoutRoute"
       ProfileRoute -> "ProfileRoute"
+      LanguageRoute -> "LanguageRoute"
+      HelpRoute -> "HelpRoute"
       StatusApiRoute -> "StatusApiRoute"
       SecondApiRoute -> "SecondApiRoute"
       NotFoundRoute -> "NotFoundRoute"
@@ -253,6 +269,18 @@ renderRoutePath routeRequest =
     )
   where
     requestContext = HarchWeb.requestContext routeRequest
+
+-- | Turn the closed application's typed route rendering into a safe link
+-- target. A rejection is an application route-table defect, not a request
+-- outcome; 'requiredRouteUrl' keeps that invariant directly testable.
+renderRouteUrl :: HarchWeb.RouteRequest AppRoute AppRequestContext -> HarchWeb.SafeUrl
+renderRouteUrl = requiredRouteUrl . renderRoutePath
+
+requiredRouteUrl :: Text -> HarchWeb.SafeUrl
+requiredRouteUrl renderedPath =
+  HarchWeb.requiredSafeUrlOrDie
+    ("WebApi.Route rendered an unsafe URL: " <> renderedPath)
+    (HarchWeb.mkSafeUrl renderedPath)
 
 matchRoute :: AppRequestContext -> Text -> HarchWeb.RouteRequest AppRoute AppRequestContext
 matchRoute = HarchWeb.matchRoute routeCodec
@@ -399,6 +427,8 @@ pageRouteMetadata pageRoute =
     LoginPage -> RouteMetadata (Just "login") "/login" "Sign in" []
     LogoutPage -> RouteMetadata (Just "logout") "/logout" "Sign out" []
     ProfilePage -> RouteMetadata (Just "profile") "/profile" "Profile" []
+    LanguagePage -> RouteMetadata (Just "language") "/language" "Language" []
+    HelpPage -> RouteMetadata (Just "help") "/help" "Help and support" []
     PageNotFound -> RouteMetadata (Just "404") "/404" "Not Found" []
 
 renderApiRoutePath :: ApiRoute -> Text

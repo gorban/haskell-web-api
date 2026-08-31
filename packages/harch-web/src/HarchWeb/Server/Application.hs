@@ -23,7 +23,7 @@ module HarchWeb.Server.Application
 where
 
 import Data.Text (Text)
-import HarchWeb.Document (Document, NavigationRuntime, Page)
+import HarchWeb.Document (Document, NavigationRuntime, Page, RuntimeAsset)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Routing (RouteCodec, RouteRequest)
 import HarchWeb.Security (RequestConcurrencyLimit, RequestPolicyConfig)
@@ -61,6 +61,11 @@ data Application route action context = Application
     defaultRequestContext :: context,
     requestContextFromRequest :: Wai.Request -> context -> context,
     applicationNavigationRuntime :: Maybe NavigationRuntime,
+    -- | Ordered, application-selected behavior adapters served by the
+    -- framework's early response boundary. The first asset owning a request
+    -- path wins, so applications can replace a default by declaration rather
+    -- than changing the request executor.
+    applicationRuntimeAssets :: [RuntimeAsset],
     applicationStaticAssets :: StaticAssetsConfig,
     applicationRequestPolicy :: RequestPolicyConfig,
     applicationRequestMiddleware :: [RequestMiddleware context],

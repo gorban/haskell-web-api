@@ -135,6 +135,117 @@ spec =
             )
             `shouldReturn` Right ()
 
+    it "opens the language picker accessibly and navigates its typed choices" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let baseUrl = HarchWeb.localServerBaseUrl server
+              secondUrl = baseUrl <> "/second"
+              spanishLanguageUrl = baseUrl <> "/es/language"
+              languageTrigger = byRole Link `named` "Language"
+              englishChoice = byRole Link `named` "English"
+              spanishChoice = byRole Link `named` "Spanish"
+              closeControl = byRole Button `named` "Close language picker"
+          runBrowserScenario
+            browser
+            ( do
+                visit secondUrl
+                click languageTrigger
+                assertAttribute (css "#language-dialog") "open" (`shouldBe` Just "")
+                assertFocused englishChoice (`shouldBe` True)
+                _ <-
+                  runPageScript
+                    "const dialog = document.querySelector('#language-dialog'); document.querySelector('nav a').focus(); dialog.dataset.testBackgroundContained = String(dialog.contains(document.activeElement)); true"
+                assertAttribute (css "#language-dialog") "data-test-background-contained" (`shouldBe` Just "true")
+                press englishChoice "Tab"
+                assertFocused spanishChoice (`shouldBe` True)
+                press spanishChoice "Tab"
+                assertFocused closeControl (`shouldBe` True)
+                press closeControl "Tab"
+                assertFocused englishChoice (`shouldBe` True)
+                press (css "#language-dialog") "Escape"
+                assertFocused languageTrigger (`shouldBe` True)
+                click languageTrigger
+                click spanishChoice
+                assertAll
+                  ((,,,) <$> currentUrl <*> textContent (byRole Heading `named` "Elige un idioma") <*> textContent (byRole Status) <*> browserMetrics)
+                  ( \(url, heading, announcement, metrics) ->
+                      (url `shouldBe` spanishLanguageUrl)
+                        :| [ heading `shouldBe` "Elige un idioma",
+                             announcement `shouldBe` "web-api: Language",
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                           ]
+                  )
+                assertAttribute (css "#language-dialog") "open" (`shouldBe` Nothing)
+            )
+            `shouldReturn` Right ()
+
+    it "keeps language selection and dialog startup failure complete without enhanced behavior" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let baseUrl = HarchWeb.localServerBaseUrl server
+              secondUrl = baseUrl <> "/second"
+              languageUrl = baseUrl <> "/language"
+              spanishLanguageUrl = baseUrl <> "/es/language"
+          runBrowserScenario
+            browser
+            ( do
+                blockRequestsMatching "**/assets/dialog.js"
+                visit secondUrl
+                click (byRole Link `named` "Language")
+                failBlockedRequestsMatching "**/assets/dialog.js"
+                assertAll
+                  ((,) <$> currentUrl <*> browserMetrics)
+                  ( \(url, metrics) ->
+                      (url `shouldBe` languageUrl)
+                        :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 1}|])]
+                  )
+                visitWithoutScripts secondUrl
+                press (byRole Link `named` "Language") "Enter"
+                assertAll
+                  ((,) <$> currentUrl <*> textContent (byRole Heading))
+                  (\(url, heading) -> (url `shouldBe` languageUrl) :| [heading `shouldBe` "Choose a language"])
+                press (byRole Link `named` "Spanish") "Enter"
+                assertAll
+                  ((,) <$> currentUrl <*> textContent (byRole Heading))
+                  (\(url, heading) -> (url `shouldBe` spanishLanguageUrl) :| [heading `shouldBe` "Elige un idioma"])
+            )
+            `shouldReturn` Right ()
+
+    it "keeps the Help FAB usable, unobstructive, and absent at its destination" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let baseUrl = HarchWeb.localServerBaseUrl server
+              secondUrl = baseUrl <> "/second"
+              helpUrl = baseUrl <> "/help"
+              helpFab = byRole Link `named` "Help and support"
+          runBrowserScenario
+            browser
+            ( do
+                setViewportSize 320 480
+                visit secondUrl
+                _ <-
+                  runPageScript
+                    "document.documentElement.style.zoom = '2'; const fab = document.querySelector('[data-help-fab]'); fab.focus(); const box = fab.getBoundingClientRect(); const overlaps = [...document.querySelectorAll('#app-main a, #app-main button, #app-main input, #app-main select')].filter((control) => control !== fab && !control.closest('dialog')).some((control) => { const other = control.getBoundingClientRect(); return box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top; }); fab.dataset.testGeometry = String(box.width >= 44 && box.height >= 44 && box.right <= window.innerWidth && box.bottom <= window.innerHeight && !overlaps && getComputedStyle(fab).outlineStyle !== 'none'); true"
+                assertAttribute helpFab "data-test-geometry" (`shouldBe` Just "true")
+                press helpFab "Enter"
+                assertAll
+                  ((,,) <$> currentUrl <*> textContent (byRole Heading `named` "Help and support") <*> browserMetrics)
+                  ( \(url, heading, metrics) ->
+                      (url `shouldBe` helpUrl)
+                        :| [ heading `shouldBe` "Help and support",
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                           ]
+                  )
+                _ <- runPageScript "document.body.dataset.testNoHelpFab = String(!document.querySelector('[data-help-fab]')); true"
+                assertAttribute (css "body") "data-test-no-help-fab" (`shouldBe` Just "true")
+                visitWithoutScripts secondUrl
+                press helpFab "Enter"
+                assertAll
+                  ((,) <$> currentUrl <*> textContent (byRole Heading))
+                  (\(url, heading) -> (url `shouldBe` helpUrl) :| [heading `shouldBe` "Help and support"])
+            )
+            `shouldReturn` Right ()
+
     it "focuses and announces one lifecycle for keyboard navigation, history, and final redirected URLs" $
       withBrowserApp $ \browser appConfig ->
         HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do

@@ -46,7 +46,7 @@ import WebApi.App.Observability
     runtimeConnectionObservabilityReporter,
     runtimeRequestObservabilityReporter,
   )
-import WebApi.App.Shell (buildAppPageShellConfig)
+import WebApi.App.Shell (appRuntimeAssets, buildAppPageShellConfig)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config
   ( AppConfig (..),
@@ -130,6 +130,7 @@ buildAppWithDatabaseAndOptionalReporters config pageRepository !accountWorkflow 
             { Site.siteRequestContextFromRequest =
                 requestContextFromWaiRequest (requestPolicy config),
               Site.siteStaticAssets = staticAssets config,
+              Site.siteRuntimeAssets = appRuntimeAssets,
               Site.siteNavigationRuntimePathPrefix = requestPathPrefix,
               Site.siteRequestPolicy = requestPolicy config,
               Site.siteDecodeClientAction = decodeAction accountActions,

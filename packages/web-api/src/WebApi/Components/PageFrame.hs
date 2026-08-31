@@ -28,6 +28,8 @@ data PageKind
   | LoginPageFrame
   | LogoutPageFrame
   | ProfilePageFrame
+  | LanguagePageFrame
+  | HelpPageFrame
   | NotFoundPageFrame
 
 -- | Cohesive, explicit inputs for the repeated page-level structure.
@@ -80,4 +82,6 @@ pageKindText pageKind =
     LoginPageFrame -> "login"
     LogoutPageFrame -> "logout"
     ProfilePageFrame -> "profile"
+    LanguagePageFrame -> "language"
+    HelpPageFrame -> "help"
     NotFoundPageFrame -> "not-found"

@@ -6,7 +6,6 @@ import Data.IORef (newIORef, readIORef)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text qualified as Text
 import HarchWeb qualified
-import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi.AccountPages (AccountActionTarget (..), emptyRegistrationForm)
 import WebApi.Config (defaultAppConfig)
@@ -154,20 +153,24 @@ spec = do
         )
         `shouldBe` "<section data-page=\"second\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Second</h1><p class=\"harch-page-frame-summary\">Second page content with stubbed data ready for future loaders.</p><div class=\"harch-page-frame-content\"><ul><li>Fast SSR</li><li>Stable routes</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></div></section>"
 
-    it "renders an explicit error state when the second-page load fails" $
-      renderPageWithDatabase
-        defaultAppConfig
-        ( buildSeededPageRepository
-            DatabaseSeed
-              { englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
-                spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
-              }
+    it "renders an explicit error state when the second-page load fails" $ do
+      renderedPage <-
+        renderPageWithDatabase
+          defaultAppConfig
+          ( buildSeededPageRepository
+              DatabaseSeed
+                { englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
+                  spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
+                }
+          )
+          secondRequest
+      let renderedBody = HarchWeb.renderHtml (HarchWeb.pageBody renderedPage)
+      expectAll
+        ( (HarchWeb.pageTitle renderedPage `shouldBe` "web-api: Second")
+            :| [ HarchWeb.pageRoute renderedPage `shouldBe` SecondRoute,
+                 HarchWeb.pageContext renderedPage `shouldBe` defaultRequestContext,
+                 HarchWeb.pageBootstrapHooks renderedPage `shouldBe` ["second-page"],
+                 Text.isInfixOf "<p data-error-state=\"true\">Could not load second page data.</p>" renderedBody `shouldBe` True,
+                 Text.isInfixOf "data-harch-dialog-control" renderedBody `shouldBe` True
+               ]
         )
-        secondRequest
-        `shouldReturn` HarchWeb.Page
-          { HarchWeb.pageTitle = "web-api: Second",
-            HarchWeb.pageRoute = SecondRoute,
-            HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"second\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Second</h1><p class=\"harch-page-frame-summary\">Second page content is temporarily unavailable.</p><div class=\"harch-page-frame-content\"><p data-error-state=\"true\">Could not load second page data.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></div></section>"),
-            HarchWeb.pageBootstrapHooks = ["second-page"]
-          }

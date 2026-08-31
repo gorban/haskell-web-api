@@ -15,6 +15,7 @@
 module HarchWeb.Server.RequestExecution
   ( concurrencyLimitedMiddleware,
     navigationRuntimeResponse,
+    runtimeAssetResponse,
     reportEarlyRequestObservability,
     runEarlyRequestStages,
     toWaiApplication,
@@ -26,12 +27,13 @@ import Control.Monad.IO.Class (liftIO)
 import Data.ByteString qualified as ByteString
 import Data.Foldable (for_)
 import Data.List.NonEmpty (NonEmpty)
+import Data.Maybe (listToMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
-import HarchWeb.Document (NavigationRuntime)
+import HarchWeb.Document (NavigationRuntime, RuntimeAsset)
 import HarchWeb.Document qualified as Document
 import HarchWeb.Routing
   ( RouteDispatch (..),
@@ -95,6 +97,25 @@ navigationRuntimeResponse runtime requestPath =
           }
     else Nothing
 
+-- | Interpret one application-selected runtime asset at the existing early
+-- response boundary. The caller preserves declaration order and serves only
+-- the first path match; this is adapter selection, not a second static-file
+-- or dialog-specific request pipeline.
+runtimeAssetResponse :: RuntimeAsset -> Text -> Maybe ResponseBody
+runtimeAssetResponse runtimeAsset requestPath =
+  if requestPath == Document.runtimeAssetPath runtimeAsset
+    then
+      Just
+        ResponseBody
+          { responseStatus = Http.status200,
+            responseContentType = "application/javascript; charset=utf-8",
+            responseBody = Document.runtimeAssetScript runtimeAsset,
+            responseObservabilityAttributes = [],
+            responseLogEntries = [],
+            responseDatabaseOperations = []
+          }
+    else Nothing
+
 -- | Handle framework-owned responses before routing or application middleware.
 -- Each response receives the request policy headers exactly once.
 runEarlyRequestStages ::
@@ -112,6 +133,11 @@ runEarlyRequestStages webApplication request requestPath policyResponseHeaders =
     earlyResponse (externalRequestPath requestPolicyConfig request) (httpsRedirectResponse redirectLocation)
   for_ (applicationNavigationRuntime webApplication >>= (`navigationRuntimeResponse` requestPath)) $
     earlyResponse requestPath . toWaiBodyResponse []
+  for_
+    ( listToMaybe
+        (mapMaybe (`runtimeAssetResponse` requestPath) (applicationRuntimeAssets webApplication))
+    )
+    $ earlyResponse requestPath . toWaiBodyResponse []
   maybeStaticResponse <- liftIO (serveStaticAssetResponse (applicationStaticAssets webApplication) request requestPath)
   for_ maybeStaticResponse $ \(staticRoutePath, staticResponse) ->
     earlyResponse

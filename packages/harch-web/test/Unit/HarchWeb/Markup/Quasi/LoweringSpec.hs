@@ -67,6 +67,18 @@ nestedThNameQuoteRejected :: Bool
 nestedThNameQuoteRejected =
   $(rejectedMarkup "{f 'Just}")
 
+invalidAriaCurrentRejected :: Bool
+invalidAriaCurrentRejected = $(rejectedMarkup "<a aria-current=\"step\">Invalid</a>")
+
+invalidAriaExpandedRejected :: Bool
+invalidAriaExpandedRejected = $(rejectedMarkup "<a aria-expanded=\"maybe\">Invalid</a>")
+
+invalidAriaHiddenRejected :: Bool
+invalidAriaHiddenRejected = $(rejectedMarkup "<span aria-hidden=\"maybe\">Invalid</span>")
+
+invalidAriaHasPopupRejected :: Bool
+invalidAriaHasPopupRejected = $(rejectedMarkup "<a aria-haspopup=\"menu\">Invalid</a>")
+
 newtype ControlRoute = ControlRoute Text.Text
 
 controlRouteHref :: ControlRoute -> SafeUrl
@@ -132,6 +144,23 @@ spec =
         `shouldBe` renderHtml (voidElement inputTag [ariaDescribedBy describedIds, ariaErrorMessage errorId, ariaInvalid True, tabIndex (-1)])
       renderHtml literalQuoted
         `shouldBe` renderHtml (voidElement inputTag [ariaDescribedBy describedIds, ariaErrorMessage errorId, ariaInvalid False, tabIndex 0])
+
+    it "lowers the closed native-dialog vocabulary from literals and expressions" $ do
+      let dialogId = literalElementId "language-dialog"
+          headingId = literalElementId "language-heading"
+          literalQuoted = [harch|<a aria-controls="language-dialog" aria-current="page" aria-expanded="false" aria-haspopup="dialog">Language</a><dialog id="language-dialog" aria-labelledby="language-heading" open><span aria-hidden="true">?</span></dialog>|]
+          expressionQuoted = [harch|<a aria-controls={dialogId} aria-expanded={True} aria-hidden={False}></a><dialog aria-labelledby={headingId}></dialog>|]
+      renderHtml literalQuoted
+        `shouldBe` "<a aria-controls=\"language-dialog\" aria-current=\"page\" aria-expanded=\"false\" aria-haspopup=\"dialog\">Language</a><dialog id=\"language-dialog\" aria-labelledby=\"language-heading\" open><span aria-hidden=\"true\">?</span></dialog>"
+      renderHtml expressionQuoted
+        `shouldBe` renderHtml (fragment [element anchorTag [ariaControls dialogId, ariaExpanded True, ariaHidden False] [], element dialogTag [ariaLabelledBy headingId] []])
+      expectAll
+        ( (invalidAriaCurrentRejected `shouldBe` True)
+            :| [ invalidAriaExpandedRejected `shouldBe` True,
+                 invalidAriaHiddenRejected `shouldBe` True,
+                 invalidAriaHasPopupRejected `shouldBe` True
+               ]
+        )
 
     it "composes a list of Html children in a root-level markup fragment" $ do
       let children = [element codeTag [] [text "safe"], element paragraphTag [] [text "after"]]

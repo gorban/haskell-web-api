@@ -5,18 +5,19 @@
 
 import Control.Exception (ErrorCall (..), evaluate)
 import Data.List (isInfixOf)
+import HarchWeb qualified
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi.Database (DatabaseError (..), DatabaseSeed (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed)
-import WebApi.Page (AppPageModel (..), CallToAction (..), SecondPageModel (..), SpacesPageModel (..), buildCallToActionHref, buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase)
-import WebApi.Route (AppRoute (..))
+import WebApi.Page (AppPageModel (..), CallToAction (..), HelpPageModel (..), LanguagePageModel (..), SecondPageModel (..), SpacesPageModel (..), buildCallToActionHref, buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase)
+import WebApi.Route (AppRoute (..), defaultRequestContext)
 import WebApi.RouteData (RouteDataResult (..), SecondRouteData (..))
 
 spec = do
   describe "buildCallToActionHref" $ do
-    it "raises the unsafe-URL diagnostic when a rendered path is not a safe URL" $
+    it "preserves the route renderer's unsafe-URL diagnostic" $
       evaluate (buildCallToActionHref "javascript:alert(1)" `seq` ())
         `shouldThrow` \case
-          ErrorCall message -> "buildCallToAction: rendered an unsafe URL: javascript:alert(1)" `isInfixOf` message
+          ErrorCall message -> "WebApi.Route rendered an unsafe URL: javascript:alert(1)" `isInfixOf` message
 
   describe "buildPageModel" $ do
     it "localizes Spanish second-page return actions" $
@@ -41,6 +42,24 @@ spec = do
           SpacesPageModel
             { spacesHeading = "Site under construction",
               spacesSummary = "Follow this space."
+            }
+
+    it "builds localized language and Help reference pages from static route data" $ do
+      let languageRequest = HarchWeb.RouteRequest LanguageRoute defaultRequestContext
+          spanishLanguageRequest = HarchWeb.RouteRequest LanguageRoute spanishRequestContext
+          helpRequest = HarchWeb.RouteRequest HelpRoute defaultRequestContext
+      buildPageModel languageRequest
+        `shouldReturn` LanguagePage (LanguagePageModel "Choose a language" "Choose the language used for this page.")
+      buildPageModel spanishLanguageRequest
+        `shouldReturn` LanguagePage (LanguagePageModel "Elige un idioma" "Elige el idioma utilizado para esta pagina.")
+      buildPageModel helpRequest
+        `shouldReturn` HelpPage
+          HelpPageModel
+            { helpHeading = "Help and support",
+              helpSummary = "Get help with account access and verification.",
+              helpAccountGuidance = "Sign in to review your account, or create an account if you do not have one.",
+              helpSignInAction = CallToAction "Sign in" LoginRoute "/login",
+              helpRegistrationAction = CallToAction "Create account" RegistrationRoute "/register"
             }
       buildPageModel spanishSpacesRequest
         `shouldReturn` SpacesPage

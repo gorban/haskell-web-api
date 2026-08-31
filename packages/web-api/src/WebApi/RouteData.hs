@@ -44,6 +44,8 @@ data RouteDataResult
   | LoginRouteDataResult
   | LogoutRouteDataResult
   | ProfileRouteDataResult
+  | LanguageRouteDataResult
+  | HelpRouteDataResult
   | NotFoundRouteDataResult
   deriving (Eq, Show)
 
@@ -98,6 +100,8 @@ routeDataPlan route =
         LoginPage -> UseStaticRouteData LoginRouteDataResult
         LogoutPage -> UseStaticRouteData LogoutRouteDataResult
         ProfilePage -> UseStaticRouteData ProfileRouteDataResult
+        LanguagePage -> UseStaticRouteData LanguageRouteDataResult
+        HelpPage -> UseStaticRouteData HelpRouteDataResult
         PageNotFound -> UseStaticRouteData NotFoundRouteDataResult
     Api _ -> UseStaticRouteData NotFoundRouteDataResult
 

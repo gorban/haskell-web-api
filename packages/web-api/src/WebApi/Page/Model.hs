@@ -3,6 +3,8 @@ module WebApi.Page.Model
     AuthenticatedProfilePageDetails (..),
     CallToAction (..),
     NotFoundPageModel (..),
+    LanguagePageModel (..),
+    HelpPageModel (..),
     PendingProfilePageDetails (..),
     ProfilePageModel (..),
     SecondPageModel (..),
@@ -49,6 +51,21 @@ data NotFoundPageModel = NotFoundPageModel
   { notFoundHeading :: Text,
     notFoundSummary :: Text,
     notFoundPrimaryAction :: CallToAction
+  }
+  deriving (Eq, Show)
+
+data LanguagePageModel = LanguagePageModel
+  { languageHeading :: Text,
+    languageSummary :: Text
+  }
+  deriving (Eq, Show)
+
+data HelpPageModel = HelpPageModel
+  { helpHeading :: Text,
+    helpSummary :: Text,
+    helpAccountGuidance :: Text,
+    helpSignInAction :: CallToAction,
+    helpRegistrationAction :: CallToAction
   }
   deriving (Eq, Show)
 
@@ -112,5 +129,7 @@ data AppPageModel
   | LoginPage AccountActionTarget LoginForm
   | LogoutPage AccountActionTarget
   | ProfilePage ProfilePageModel
+  | LanguagePage LanguagePageModel
+  | HelpPage HelpPageModel
   | NotFoundPage NotFoundPageModel
   deriving (Eq, Show)

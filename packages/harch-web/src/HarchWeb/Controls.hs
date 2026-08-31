@@ -11,8 +11,11 @@ module HarchWeb.Controls
     ActionFormRendering,
     ActionIdempotency,
     ActionRecoveryCopy (..),
+    AccessibleName,
     AccessibleFieldProps (..),
     DescribedContent (..),
+    DialogControlProps (..),
+    DialogLinkTrigger (..),
     ErrorSummary (..),
     FieldControlAttributes (..),
     FieldErrorLink (..),
@@ -25,7 +28,11 @@ module HarchWeb.Controls
     defaultActionFormAttributes,
     defaultActionRecoveryCopy,
     accessibleField,
+    accessibleNameText,
+    dialogControl,
     errorSummary,
+    mkAccessibleName,
+    requiredAccessibleNameOrDie,
     pageLink,
     renderActionForm,
     staticActionForm,
@@ -34,7 +41,7 @@ where
 
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
-import Data.Maybe (listToMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb.Action
@@ -46,6 +53,125 @@ import HarchWeb.Action
     staticActionPath,
   )
 import HarchWeb.Markup
+import HarchWeb.StaticAssets (CssClass)
+
+-- | A non-empty name that a framework control exposes to assistive
+-- technology. Whitespace-only names are rejected because they are empty for
+-- users even though their source text is not.
+newtype AccessibleName = AccessibleName Text
+  deriving (Eq, Show)
+
+accessibleNameText :: AccessibleName -> Text
+accessibleNameText (AccessibleName nameText) = nameText
+
+mkAccessibleName :: Text -> Maybe AccessibleName
+mkAccessibleName nameText
+  | Text.null (Text.strip nameText) = Nothing
+  | otherwise = Just (AccessibleName nameText)
+
+-- | Require text authored by a closed route or localization table to remain
+-- a usable accessible name. Dynamic input must use 'mkAccessibleName' and
+-- handle rejection instead.
+requiredAccessibleNameOrDie :: Text -> Maybe AccessibleName -> AccessibleName
+requiredAccessibleNameOrDie context =
+  fromMaybe (error ("HarchWeb.Controls: " <> Text.unpack context))
+
+-- | A native link trigger whose typed route remains usable as a complete SSR
+-- destination before the deferred dialog runtime loads and when scripts are
+-- disabled. The route stays abstract until 'dialogControl' receives the
+-- application's renderer, matching 'pageLink' rather than duplicating a
+-- path. The explicit name cannot be displaced by decorative trigger content.
+data DialogLinkTrigger route = DialogLinkTrigger
+  { dialogTriggerRoute :: route,
+    dialogTriggerName :: AccessibleName,
+    dialogTriggerContent :: Html,
+    dialogTriggerClass :: Maybe CssClass
+  }
+  deriving (Eq, Show)
+
+-- | Cohesive inputs for one always-dismissible native dialog.
+--
+-- Decision (AHI-6, 2026-08-31): extend the existing typed control and capture
+-- boundaries with a link-fallback dialog adapter. Harch owns naming,
+-- modality hooks, early-activation capture, dismissal, and focus restoration;
+-- applications own the heading/body and optional typed styling classes. The
+-- first shipped surface deliberately omits a speculative button trigger and
+-- required-decision mode. A replaceable deferred runtime remains an ordinary
+-- shell runtime asset rather than application JavaScript embedded in props.
+data DialogControlProps route = DialogControlProps
+  { dialogControlId :: ElementId,
+    dialogHeadingId :: ElementId,
+    dialogHeading :: Html,
+    dialogInitialFocus :: ElementId,
+    dialogTrigger :: DialogLinkTrigger route,
+    dialogBody :: [Html],
+    dialogCloseName :: AccessibleName,
+    dialogClass :: Maybe CssClass,
+    dialogCloseClass :: Maybe CssClass
+  }
+  deriving (Eq, Show)
+
+-- | Render the typed fallback link and native dialog together. The renderer
+-- is application-supplied, so Harch's dialog contract does not choose a route
+-- algebra or URL policy. Framework-owned attributes are not caller-
+-- overridable, so the trigger, target, accessible name, labelled-by
+-- relationship, initial focus, and close control cannot drift apart.
+dialogControl :: (route -> SafeUrl) -> DialogControlProps route -> Html
+dialogControl renderRouteTarget props =
+  element
+    divTag
+    [dataFlag "harch-dialog-control"]
+    [ renderDialogTrigger renderRouteTarget props,
+      element
+        dialogTag
+        ( [ elementId (dialogControlId props),
+            ariaLabelledBy (dialogHeadingId props),
+            dataFlag "harch-dialog-root",
+            dataAttribute "harch-dialog-initial-focus-id" (elementIdText (dialogInitialFocus props))
+          ]
+            <> optionalClass (dialogClass props)
+        )
+        ( [ element headingTwoTag [elementId (dialogHeadingId props)] [dialogHeading props]
+          ]
+            <> dialogBody props
+            <> [renderDialogClose props]
+        )
+    ]
+
+renderDialogTrigger :: (route -> SafeUrl) -> DialogControlProps route -> Html
+renderDialogTrigger renderRouteTarget props =
+  element
+    anchorTag
+    ( [ href fallback,
+        ariaLabel (accessibleNameText (dialogTriggerName trigger)),
+        ariaHasPopupDialog,
+        ariaControls (dialogControlId props),
+        ariaExpanded False,
+        dataAttribute "harch-dialog-trigger" "true",
+        dataAttribute "harch-dialog-id" (elementIdText (dialogControlId props)),
+        dataAttribute "harch-dialog-fallback" (safeUrlText fallback)
+      ]
+        <> optionalClass (dialogTriggerClass trigger)
+    )
+    [dialogTriggerContent trigger]
+  where
+    trigger = dialogTrigger props
+    fallback = renderRouteTarget (dialogTriggerRoute trigger)
+
+renderDialogClose :: DialogControlProps route -> Html
+renderDialogClose props =
+  element
+    buttonTag
+    ( [ inputType "button",
+        ariaLabel (accessibleNameText (dialogCloseName props)),
+        dataFlag "harch-dialog-close"
+      ]
+        <> optionalClass (dialogCloseClass props)
+    )
+    [text (accessibleNameText (dialogCloseName props))]
+
+optionalClass :: Maybe CssClass -> [Attribute]
+optionalClass = maybe [] (pure . className)
 
 -- | Stable described content used as either a hint or a field-local error.
 -- Its ID and body travel together so a caller cannot render one while

@@ -22,6 +22,7 @@ import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrati
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), defaultPendingRegistrationStoragePolicy, mkPendingRegistrationStoragePolicy)
 import WebApi.App (buildAppWithDatabase)
+import WebApi.Components.AppControls (appControls)
 import WebApi.Config (DatabaseConfig (..), DatabaseSslMode (..), DatabaseTransportSecurity (..), defaultAppConfig)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), SecondPageData (..))
 import WebApi.Mfa (MfaStore (..), StoredTotpEnrollment (..))
@@ -1118,7 +1119,11 @@ spec = do
                 { HarchWeb.pageTitle = "web-api: Second",
                   HarchWeb.pageRoute = SecondRoute,
                   HarchWeb.pageContext = defaultRequestContext,
-                  HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"second\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Second</h1><p class=\"harch-page-frame-summary\">Second page content with stubbed data ready for future loaders.</p><div class=\"harch-page-frame-content\"><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></div></section>"),
+                  HarchWeb.pageBody =
+                    HarchWeb.fragment
+                      [ HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"second\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Second</h1><p class=\"harch-page-frame-summary\">Second page content with stubbed data ready for future loaders.</p><div class=\"harch-page-frame-content\"><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></div></section>"),
+                        appControls defaultRequestContext SecondRoute
+                      ],
                   HarchWeb.pageBootstrapHooks = ["second-page"]
                 }
             )

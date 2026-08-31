@@ -3,6 +3,7 @@
 module WebApi.App.Shell
   ( buildAppPageShell,
     buildAppPageShellConfig,
+    appRuntimeAssets,
   )
 where
 
@@ -54,8 +55,12 @@ buildAppPageShellConfig config context =
         appShellPathPrefix = requestPathPrefix context,
         appShellStylesheet = HarchWeb.stylesheet (HarchWeb.AssetPath "/assets/styles/app.css"),
         appShellNavigationItems = noAppShellNavigationItems,
-        appShellNavigationLifecycle = Just (appNavigationLifecycle context)
+        appShellNavigationLifecycle = Just (appNavigationLifecycle context),
+        appShellRuntimeAssets = appRuntimeAssets
       }
+
+appRuntimeAssets :: [HarchWeb.RuntimeAsset]
+appRuntimeAssets = [HarchWeb.defaultDialogRuntime]
 
 -- | The application localizes and styles the declarative lifecycle adapter;
 -- Harch owns its stable main target, polite semantics, and runtime ordering.

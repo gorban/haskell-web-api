@@ -5,6 +5,8 @@ module WebApi.Page
     AuthenticatedProfilePageDetails (..),
     CallToAction (..),
     NotFoundPageModel (..),
+    LanguagePageModel (..),
+    HelpPageModel (..),
     PendingProfilePageDetails (..),
     ProfilePageModel (..),
     SecondPageModel (..),
@@ -27,6 +29,7 @@ where
 import Data.Text qualified as Text
 import HarchWeb qualified
 import WebApi.App.Enhancements (pageEnhancementHooks)
+import WebApi.Components.AppControls (appControls)
 import WebApi.Config (AppConfig (..))
 import WebApi.Database (PageRepository, defaultPageRepository)
 import WebApi.Page.Building
@@ -76,7 +79,11 @@ renderPageModel config routeRequest pageModel =
     { HarchWeb.pageTitle = Text.concat [appTitlePrefix config, ": ", routeTitle (HarchWeb.requestRoute routeRequest)],
       HarchWeb.pageRoute = HarchWeb.requestRoute routeRequest,
       HarchWeb.pageContext = HarchWeb.requestContext routeRequest,
-      HarchWeb.pageBody = renderPageBodyForLocale (HarchWeb.requestContext routeRequest) (requestLocale (HarchWeb.requestContext routeRequest)) pageModel,
+      HarchWeb.pageBody =
+        HarchWeb.fragment
+          [ renderPageBodyForLocale (HarchWeb.requestContext routeRequest) (requestLocale (HarchWeb.requestContext routeRequest)) pageModel,
+            appControls (HarchWeb.requestContext routeRequest) (HarchWeb.requestRoute routeRequest)
+          ],
       HarchWeb.pageBootstrapHooks = pageEnhancementHooks (HarchWeb.requestRoute routeRequest)
     }
 

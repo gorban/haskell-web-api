@@ -97,6 +97,7 @@ movedSpec = do
           page = Page {pageTitle = "Known", pageRoute = KnownRoute, pageContext = defaultContext, pageBody = trustedMarkup "<h1>Known</h1>", pageBootstrapHooks = ["known-page"]}
           navigationItem = NavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute}
           navigationRuntime = NavigationRuntime {navigationRuntimePath = "/assets/navigation.js", navigationRuntimeScript = "console.log('nav');"}
+          dialogRuntime = RuntimeAsset {runtimeAssetName = "custom-dialog", runtimeAssetPath = "/assets/custom-dialog.js", runtimeAssetScript = "console.log('dialog');"}
           stylesheetPath = AssetPath "/assets/sample.css"
           stylesheetValue = stylesheet stylesheetPath
           scopedCssScope = cssScope "sample"
@@ -158,12 +159,34 @@ movedSpec = do
               responseDatabaseOperations = []
             }
       navigationRuntimeResponse navigationRuntime "/assets/missing.js" `shouldBe` Nothing
+      runtimeAssetName dialogRuntime `shouldBe` "custom-dialog"
+      runtimeAssetPath dialogRuntime `shouldBe` "/assets/custom-dialog.js"
+      runtimeAssetScript dialogRuntime `shouldBe` "console.log('dialog');"
+      runtimeAssetScriptSource (testPathPrefix "/app") dialogRuntime `shouldBe` "/app/assets/custom-dialog.js"
+      runtimeAssetResponse dialogRuntime "/assets/custom-dialog.js"
+        `shouldBe` Just
+          ResponseBody
+            { responseStatus = Http.status200,
+              responseContentType = "application/javascript; charset=utf-8",
+              responseBody = "console.log('dialog');",
+              responseObservabilityAttributes = [],
+              responseLogEntries = [],
+              responseDatabaseOperations = []
+            }
+      runtimeAssetResponse dialogRuntime "/assets/missing.js" `shouldBe` Nothing
       navigationRuntimePath defaultNavigationRuntime `shouldBe` "/assets/navigation.js"
       navigationRuntimeScript defaultNavigationRuntime `shouldBe` defaultNavigationRuntimeScript
       Text.isInfixOf "function navigateTo" defaultNavigationRuntimeScript `shouldBe` True
       expectAll
-        ( (Text.isInfixOf "const CapturedEvent = Object.freeze({ Submit: 'submit' });" defaultCaptureKernelScript `shouldBe` True)
+        ( (Text.isInfixOf "const CapturedEvent = Object.freeze({ Submit: 'submit', DialogTrigger: 'dialog-trigger' });" defaultCaptureKernelScript `shouldBe` True)
             :| [ Text.isInfixOf "captureKernel.register(captureKernel.eventTypes.Submit" defaultNavigationRuntimeScript `shouldBe` True,
+                 runtimeAssetPath defaultDialogRuntime `shouldBe` "/assets/dialog.js",
+                 runtimeAssetName defaultDialogRuntime `shouldBe` "harch-dialog",
+                 runtimeAssetScript defaultDialogRuntime `shouldBe` defaultDialogRuntimeScript,
+                 dialogRuntime `shouldNotBe` defaultDialogRuntime,
+                 length (show dialogRuntime) + length (showList [dialogRuntime] "") `shouldSatisfy` (> 0),
+                 Text.isInfixOf "dialog.showModal();" defaultDialogRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "harch:navigation-before-replace" defaultDialogRuntimeScript `shouldBe` True,
                  Text.isInfixOf "settlement.completed();" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "if (isRenderedDocument(window.location.href))" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "finalUrl = new URL(response.url);" defaultNavigationRuntimeScript `shouldBe` True,

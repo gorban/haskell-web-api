@@ -2,6 +2,7 @@
 
 {-# SPEC #-}
 
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import HarchWeb qualified
 import Network.HTTP.Types qualified as Http
@@ -19,7 +20,7 @@ import WebApi.Route (AppRoute (..), defaultRequestContext, routeMetadata)
 spec = do
   describe "page shell integration" $ do
     it "keeps every page route's path, title, and enhancements in one metadata table" $
-      map (metadataFields . routeMetadata) [HomeRoute, SecondRoute, SpacesRoute, RegistrationRoute, EmailVerificationRoute, MfaEnrollmentRoute, LoginRoute, LogoutRoute, ProfileRoute, NotFoundRoute, StatusApiRoute]
+      map (metadataFields . routeMetadata) [HomeRoute, SecondRoute, SpacesRoute, RegistrationRoute, EmailVerificationRoute, MfaEnrollmentRoute, LoginRoute, LogoutRoute, ProfileRoute, LanguageRoute, HelpRoute, NotFoundRoute, StatusApiRoute]
         `shouldBe` [ (Nothing, "", "Home", []),
                      (Just "second", "/second", "Second", ["second-page"]),
                      (Just "spaces", "/spaces", "Spaces", []),
@@ -29,6 +30,8 @@ spec = do
                      (Just "login", "/login", "Sign in", []),
                      (Just "logout", "/logout", "Sign out", []),
                      (Just "profile", "/profile", "Profile", []),
+                     (Just "language", "/language", "Language", []),
+                     (Just "help", "/help", "Help and support", []),
                      (Just "404", "/404", "Not Found", []),
                      (Nothing, "/api/404", "Not Found", [])
                    ]
@@ -48,7 +51,7 @@ spec = do
       Text.isInfixOf "<a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a><a href=\"/spaces\" data-page-link=\"true\">Spaces</a>" homeShell `shouldBe` True
       Text.isInfixOf "<a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\" aria-current=\"page\">Second</a><a href=\"/spaces\" data-page-link=\"true\">Spaces</a>" secondShell `shouldBe` True
       Text.isInfixOf "<a href=\"/spaces\" data-page-link=\"true\" aria-current=\"page\">Spaces</a>" spacesShell `shouldBe` True
-      Text.isInfixOf "aria-current=\"page\"" notFoundShell `shouldBe` False
+      Text.isInfixOf "<a href=\"/profile\" data-page-link=\"true\">Profile</a></nav>" notFoundShell `shouldBe` True
 
     it "emits deterministic navigation hooks and script references when assets are configured" $ do
       let rootMountedConfig =
@@ -66,6 +69,7 @@ spec = do
       spanishSecondShell <- renderedShellForRequest navigationAppConfig spanishSecondRequest
       rootMountedShell <- renderedShell rootMountedConfig HomeRoute
       Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" homeShellWithoutAssets `shouldBe` True
+      Text.isInfixOf "<script type=\"module\" src=\"/assets/dialog.js\" defer></script>" homeShellWithoutAssets `shouldBe` True
       Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" homeShell `shouldBe` True
       Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" rootMountedShell `shouldBe` True
       Text.isInfixOf "<nav data-navigation-region=\"primary\" class=\"harch-app-shell-navigation\">" homeShell `shouldBe` True
@@ -89,6 +93,12 @@ spec = do
       responseBody <- readResponseBody response
       Text.isInfixOf "data-page-link" responseBody `shouldBe` True
       Text.isInfixOf "popstate" responseBody `shouldBe` True
+      dialogResponse <- performWaiRequest (HarchWeb.toWaiApplication (buildApp navigationAppConfig)) (waiRequest ["assets", "dialog.js"])
+      Wai.responseStatus dialogResponse `shouldBe` Http.status200
+      lookup Http.hContentType (Wai.responseHeaders dialogResponse) `shouldBe` Just "application/javascript; charset=utf-8"
+      dialogBody <- readResponseBody dialogResponse
+      Text.isInfixOf "dialog.showModal();" dialogBody `shouldBe` True
+      Text.isInfixOf "harch:navigation-before-replace" dialogBody `shouldBe` True
 
     it "serves bundled style, font, and resource assets through configured static roots" $ do
       stylesheetResponse <- performWaiRequest (HarchWeb.toWaiApplication (buildApp navigationAppConfig)) (waiRequest ["assets", "styles", "app.css"])
@@ -101,6 +111,9 @@ spec = do
       Text.isInfixOf ".harch-app-shell-skip-link:focus" stylesheetBody `shouldBe` True
       Text.isInfixOf ".harch-app-shell-main:focus" stylesheetBody `shouldBe` True
       Text.isInfixOf "scroll-margin-block-start" stylesheetBody `shouldBe` True
+      Text.isInfixOf ".harch-app-controls-language-dialog::backdrop" stylesheetBody `shouldBe` True
+      Text.isInfixOf ".harch-app-controls-help-fab" stylesheetBody `shouldBe` True
+      Text.isInfixOf "env(safe-area-inset-bottom" stylesheetBody `shouldBe` True
 
       fontStylesheetResponse <- performWaiRequest (HarchWeb.toWaiApplication (buildApp navigationAppConfig)) (waiRequest ["assets", "fonts", "font-faces.css"])
       Wai.responseStatus fontStylesheetResponse `shouldBe` Http.status200
@@ -130,7 +143,8 @@ spec = do
     it "keeps the shell configuration seam aligned with the rendered shell entry point" $ do
       let shellConfig = buildAppPageShellConfig navigationAppConfig defaultRequestContext
       HarchWeb.shellNavigationItems shellConfig `shouldBe` []
-      HarchWeb.shellRuntimeDescriptors shellConfig `shouldBe` []
+      HarchWeb.shellRuntimeDescriptors shellConfig
+        `shouldBe` [HarchWeb.DeferredModule "harch-dialog" "/assets/dialog.js"]
       HarchWeb.shellNavigationLifecycle shellConfig
         `shouldBe` Just
           ( (HarchWeb.mainNavigationLifecycle "Skip to main content")
@@ -144,3 +158,22 @@ spec = do
       notFoundShell <- renderedShell defaultAppConfig NotFoundRoute
       Text.isInfixOf "<title>web-api: Not Found</title>" notFoundShell `shouldBe` True
       Text.isInfixOf "data-page=\"not-found\"" notFoundShell `shouldBe` True
+
+    it "renders complete localized language and Help routes from the app-owned composition" $ do
+      languageShell <- renderedShell defaultAppConfig LanguageRoute
+      spanishLanguageShell <-
+        renderedShellForRequest
+          defaultAppConfig
+          (HarchWeb.RouteRequest {HarchWeb.requestRoute = LanguageRoute, HarchWeb.requestContext = spanishRequestContext})
+      helpShell <- renderedShell defaultAppConfig HelpRoute
+      expectAll
+        ( (Text.isInfixOf "<h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Choose a language</h1>" languageShell `shouldBe` True)
+            :| [ Text.isInfixOf "href=\"/en/language\" data-page-link=\"true\" aria-current=\"page\">English</a>" languageShell `shouldBe` True,
+                 Text.isInfixOf "aria-haspopup=\"dialog\" aria-controls=\"language-dialog\" aria-expanded=\"false\"" languageShell `shouldBe` True,
+                 Text.isInfixOf "<h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Elige un idioma</h1>" spanishLanguageShell `shouldBe` True,
+                 Text.isInfixOf "href=\"/es/language\" data-page-link=\"true\" aria-current=\"page\">Espanol</a>" spanishLanguageShell `shouldBe` True,
+                 Text.isInfixOf "data-page=\"help\"" helpShell `shouldBe` True,
+                 Text.isInfixOf "Get help with account access and verification." helpShell `shouldBe` True,
+                 Text.isInfixOf "data-help-fab" helpShell `shouldBe` False
+               ]
+        )

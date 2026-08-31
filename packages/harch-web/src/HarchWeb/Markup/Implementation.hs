@@ -15,10 +15,16 @@ module HarchWeb.Markup.Implementation
     TrustedHtml,
     VoidTag,
     anchorTag,
+    ariaControls,
+    ariaCurrentPage,
     ariaDescribedBy,
     ariaErrorMessage,
+    ariaExpanded,
+    ariaHasPopupDialog,
+    ariaHidden,
     ariaInvalid,
     ariaLabel,
+    ariaLabelledBy,
     ariaLive,
     autocomplete,
     buttonTag,
@@ -28,6 +34,8 @@ module HarchWeb.Markup.Implementation
     dataAttribute,
     dataAttributeSuffixText,
     dataFlag,
+    dialogOpen,
+    dialogTag,
     divTag,
     element,
     elementId,
@@ -76,6 +84,7 @@ module HarchWeb.Markup.Implementation
     sectionTag,
     selected,
     selectTag,
+    spanTag,
     tabIndex,
     text,
     trustedHtml,
@@ -186,6 +195,28 @@ formAction = attribute (AttributeName "action")
 
 ariaLabel :: Text -> Attribute
 ariaLabel = attribute (AttributeName "aria-label")
+
+ariaControls :: ElementId -> Attribute
+ariaControls = attribute (AttributeName "aria-controls") . Internal.elementIdText
+
+ariaCurrentPage :: Attribute
+ariaCurrentPage = attribute (AttributeName "aria-current") "page"
+
+ariaExpanded :: Bool -> Attribute
+ariaExpanded expanded = attribute (AttributeName "aria-expanded") (if expanded then "true" else "false")
+
+-- | The closed popup kind used by 'HarchWeb.Controls.dialogControl'. A
+-- dialog trigger cannot accidentally claim menu, listbox, or boolean popup
+-- semantics through an arbitrary text value.
+ariaHasPopupDialog :: Attribute
+ariaHasPopupDialog = attribute (AttributeName "aria-haspopup") "dialog"
+
+ariaHidden :: Bool -> Attribute
+ariaHidden hiddenFromAccessibilityTree =
+  attribute (AttributeName "aria-hidden") (if hiddenFromAccessibilityTree then "true" else "false")
+
+ariaLabelledBy :: ElementId -> Attribute
+ariaLabelledBy = attribute (AttributeName "aria-labelledby") . Internal.elementIdText
 
 ariaDescribedBy :: NonEmpty ElementId -> Attribute
 ariaDescribedBy =
@@ -325,6 +356,9 @@ required = booleanAttribute (AttributeName "required")
 selected :: Attribute
 selected = booleanAttribute (AttributeName "selected")
 
+dialogOpen :: Attribute
+dialogOpen = booleanAttribute (AttributeName "open")
+
 value :: Text -> Attribute
 value = attribute (AttributeName "value")
 
@@ -353,6 +387,15 @@ mkRegionId = Internal.RegionId
 
 divTag :: NormalTag
 divTag = NormalTag "div"
+
+-- | Native top-layer dialog markup. Decision (AHI-6, 2026-08-31): dialog
+-- semantics belong to the existing closed HTML AST; extend that vocabulary
+-- instead of adding an application raw-HTML escape hatch or a portal AST.
+dialogTag :: NormalTag
+dialogTag = NormalTag "dialog"
+
+spanTag :: NormalTag
+spanTag = NormalTag "span"
 
 anchorTag :: NormalTag
 anchorTag = NormalTag "a"

@@ -39,6 +39,7 @@ import HarchWeb
     RouteCodec,
     RouteExecutionPolicy,
     RouteRequest,
+    RuntimeAsset,
     RuntimeDescriptor (..),
     StaticAssetRoot,
     StaticAssetsConfig (..),
@@ -80,6 +81,9 @@ data Site route action context = Site
     siteRequestContextFromRequest :: Wai.Request -> context -> context,
     siteStaticAssets :: StaticAssetsConfig,
     siteNavigationRuntime :: Maybe NavigationRuntime,
+    -- | Replaceable behavior modules paired with the shell descriptors that
+    -- load them. Declaration order is ownership order for duplicate paths.
+    siteRuntimeAssets :: [RuntimeAsset],
     siteNavigationRuntimePathPrefix :: context -> PathPrefix,
     siteRequestPolicy :: RequestPolicyConfig,
     siteRequestMiddleware :: [RequestMiddleware context],
@@ -120,6 +124,7 @@ simpleSite configuration =
       siteRequestContextFromRequest = \_ requestContext -> requestContext,
       siteStaticAssets = emptyStaticAssetsConfig,
       siteNavigationRuntime = Just defaultNavigationRuntime,
+      siteRuntimeAssets = [],
       siteNavigationRuntimePathPrefix = const emptyPathPrefix,
       siteRequestPolicy = defaultSiteRequestPolicy,
       siteRequestMiddleware = [],
@@ -195,6 +200,7 @@ buildSiteApplication site =
         defaultRequestContext = siteDefaultRequestContext site,
         requestContextFromRequest = siteRequestContextFromRequest site,
         applicationNavigationRuntime = siteNavigationRuntime site,
+        applicationRuntimeAssets = siteRuntimeAssets site,
         applicationStaticAssets = siteStaticAssets site,
         applicationRequestPolicy = siteRequestPolicy site,
         applicationRequestMiddleware = siteRequestMiddleware site,

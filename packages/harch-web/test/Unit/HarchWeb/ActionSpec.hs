@@ -3,7 +3,7 @@
 {-# SPEC #-}
 
 import Control.Concurrent ()
-import Control.Exception ()
+import Control.Exception (ErrorCall (..), evaluate)
 import Control.Monad ()
 import Data.ByteString qualified as ByteString (length)
 import Data.ByteString.Builder qualified as Builder ()
@@ -17,7 +17,7 @@ import Data.List ()
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
-import Data.Text qualified as Text (isInfixOf, null)
+import Data.Text qualified as Text (isInfixOf, null, pack)
 import Data.Text.Encoding qualified as TextEncoding (encodeUtf8)
 import HarchWeb (ActionCapability (ConditionalLeaveConfirmation, HandlerSafeRetry, IdempotentMutationRetry, NativeFallback), ActionFormAttributes (actionFormCapabilities), ActionIdempotency (actionIdempotencyKey), ActionRecoveryCopy (actionCancelCopy, actionCancelledCopy, actionDelayedCopy, actionPendingCopy, actionReadyCopy, actionRecoverableCopy, actionRetryCopy), FormMethod (FormGet, FormPost), NativeActionFallback (NativeActionFallback, nativeActionFallbackCsrfToken, nativeActionFallbackMethod, nativeActionFallbackPath), actionForm, actionIdempotency, defaultActionFormAttributes, defaultActionRecoveryCopy, defaultCaptureKernelByteBudget, defaultCaptureKernelScript, renderActionForm, renderHtml, staticActionForm, text)
 import HarchWeb qualified as Web
@@ -209,6 +209,58 @@ spec = do
     it "keeps the first-fold capture kernel within its rendered source budget" $
       ByteString.length (TextEncoding.encodeUtf8 defaultCaptureKernelScript)
         `shouldSatisfy` (<= defaultCaptureKernelByteBudget)
+
+    it "renders a named native dialog with one complete link fallback" $ do
+      let triggerName = fromMaybe (error "expected trigger name") (Web.mkAccessibleName "Language")
+          otherName = fromMaybe (error "expected other name") (Web.mkAccessibleName "Other language")
+          closeName = fromMaybe (error "expected close name") (Web.mkAccessibleName "Close language picker")
+          trigger = Web.DialogLinkTrigger "language" triggerName (Web.text "Language") (Just (Web.GlobalCssClass "language-trigger"))
+          renderDialogRoute :: Text -> Web.SafeUrl
+          renderDialogRoute route =
+            Web.requiredSafeUrlOrDie
+              "test dialog route must be safe"
+              (Web.mkSafeUrl ("/" <> route))
+          props =
+            Web.DialogControlProps
+              (Web.literalElementId "language-dialog")
+              (Web.literalElementId "language-heading")
+              (Web.text "Choose a language")
+              (Web.literalElementId "language-en")
+              trigger
+              [Web.element Web.anchorTag [Web.elementId (Web.literalElementId "language-en"), Web.href "/en/language"] [Web.text "English"]]
+              closeName
+              (Just (Web.GlobalCssClass "language-dialog"))
+              (Just (Web.GlobalCssClass "language-close"))
+          rendered = Web.renderHtml (Web.dialogControl renderDialogRoute props)
+          unstyledRendered =
+            Web.renderHtml
+              ( Web.dialogControl
+                  renderDialogRoute
+                  props
+                    { Web.dialogTrigger = trigger {Web.dialogTriggerClass = Nothing},
+                      Web.dialogClass = Nothing,
+                      Web.dialogCloseClass = Nothing
+                    }
+              )
+      expectAll
+        ( (rendered `shouldSatisfy` Text.isInfixOf "<a href=\"/language\" aria-label=\"Language\" aria-haspopup=\"dialog\" aria-controls=\"language-dialog\" aria-expanded=\"false\"")
+            :| [ rendered `shouldSatisfy` Text.isInfixOf "<dialog id=\"language-dialog\" aria-labelledby=\"language-heading\" data-harch-dialog-root data-harch-dialog-initial-focus-id=\"language-en\"",
+                 rendered `shouldSatisfy` Text.isInfixOf "<button type=\"button\" aria-label=\"Close language picker\" data-harch-dialog-close",
+                 Web.accessibleNameText triggerName `shouldBe` "Language",
+                 Web.mkAccessibleName "   " `shouldBe` Nothing,
+                 triggerName `shouldNotBe` otherName,
+                 length (show triggerName) + length (showList [triggerName] "") `shouldSatisfy` (> 0),
+                 trigger `shouldBe` Web.DialogLinkTrigger "language" triggerName (Web.text "Language") (Just (Web.GlobalCssClass "language-trigger")),
+                 trigger `shouldNotBe` trigger {Web.dialogTriggerRoute = "other-language"},
+                 props `shouldNotBe` props {Web.dialogClass = Nothing},
+                 length (show trigger) + length (showList [trigger] "") `shouldSatisfy` (> 0),
+                 length (show props) + length (showList [props] "") `shouldSatisfy` (> 0),
+                 unstyledRendered `shouldSatisfy` (not . Text.isInfixOf "class=")
+               ]
+        )
+      evaluate (Web.requiredAccessibleNameOrDie "test name" Nothing `seq` ())
+        `shouldThrow` \case
+          ErrorCall message -> "test name" `Text.isInfixOf` Text.pack message
 
     it "covers every method helper, empty codec, and public action result values" $ do
       let methodCodec :: Action.ActionCodec Text TestContext Text

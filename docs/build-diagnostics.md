@@ -26,10 +26,12 @@ local developers. Its hermetic fixture covers successful output, ordinary failur
 
 The coverage gate requires 100% expressions, alternatives, and top-level declarations from every
 package's executable runtime code. Its only exclusions are the exact internal Template Haskell
-modules `HarchWeb.Markup.Quasi`, `HarchWeb.Markup.Quasi.Lowering`, and
-`HarchWeb.Markup.Quasi.Parser`. GHC runs those while compiling a quasiquote, before the test process
-and its `.tix` file exist; standard HPC therefore cannot attribute that compiler-process execution to
-the test run. The quasiquoter remains covered by compile-time acceptance and rejection specs.
+modules `HarchWeb.Markup.Quasi`, `HarchWeb.Markup.Quasi.AttributeLowering`,
+`HarchWeb.Markup.Quasi.Lowering`, `HarchWeb.Markup.Quasi.LoweringSupport`,
+and `HarchWeb.Markup.Quasi.Parser`. GHC runs those while compiling a quasiquote, before the test
+process and its `.tix` file exist; standard HPC therefore cannot attribute that compiler-process
+execution to the test run. The quasiquoter remains covered by compile-time acceptance and rejection
+specs.
 
 This is not a general generated-code exemption: ordinary generated instances, application code,
 runtime error paths, and all other production modules remain in the gate. Add no module to this list

@@ -21,11 +21,12 @@ data AppShellProps = AppShellProps
     appShellPathPrefix :: HarchWeb.PathPrefix,
     appShellStylesheet :: HarchWeb.Stylesheet,
     appShellNavigationItems :: [HarchWeb.NavigationItem AppRoute],
-    appShellNavigationLifecycle :: Maybe HarchWeb.NavigationLifecycle
+    appShellNavigationLifecycle :: Maybe HarchWeb.NavigationLifecycle,
+    appShellRuntimeAssets :: [HarchWeb.RuntimeAsset]
   }
 
 appPageShell :: AppShellProps -> HarchWeb.PageShell AppRoute AppRequestContext
-appPageShell AppShellProps {appShellTitlePrefix, appShellPathPrefix, appShellStylesheet, appShellNavigationItems, appShellNavigationLifecycle} =
+appPageShell AppShellProps {appShellTitlePrefix, appShellPathPrefix, appShellStylesheet, appShellNavigationItems, appShellNavigationLifecycle, appShellRuntimeAssets} =
   HarchWeb.PageShell
     { HarchWeb.shellBodyAttributes =
         [ HarchWeb.HtmlAttribute "data-app" appShellTitlePrefix,
@@ -43,7 +44,14 @@ appPageShell AppShellProps {appShellTitlePrefix, appShellPathPrefix, appShellSty
         ],
       HarchWeb.shellNavigationLifecycle = appShellNavigationLifecycle,
       HarchWeb.shellStylesheets = [stylesheetWithPrefix appShellPathPrefix appShellStylesheet],
-      HarchWeb.shellRuntimeDescriptors = []
+      HarchWeb.shellRuntimeDescriptors = map (runtimeAssetDescriptor appShellPathPrefix) appShellRuntimeAssets
+    }
+
+runtimeAssetDescriptor :: HarchWeb.PathPrefix -> HarchWeb.RuntimeAsset -> HarchWeb.RuntimeDescriptor
+runtimeAssetDescriptor pathPrefix runtimeAsset =
+  HarchWeb.DeferredModule
+    { HarchWeb.runtimeDescriptorName = HarchWeb.runtimeAssetName runtimeAsset,
+      HarchWeb.runtimeDescriptorSource = HarchWeb.runtimeAssetScriptSource pathPrefix runtimeAsset
     }
 
 stylesheetWithPrefix :: HarchWeb.PathPrefix -> HarchWeb.Stylesheet -> HarchWeb.Stylesheet

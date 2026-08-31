@@ -32,6 +32,7 @@ import WebApi.Route
   ( AppRequestContext (..),
     AppRoute (..),
     renderRoutePath,
+    requiredRouteUrl,
   )
 import WebApi.RouteData
   ( RouteDataResult (..),
@@ -85,6 +86,21 @@ buildPageModelFromRouteData routeRequest routeData =
         LogoutAccountTarget
     ProfileRouteDataResult ->
       ProfilePage (buildProfilePageModel routeRequest ProfileUnauthenticated)
+    LanguageRouteDataResult ->
+      LanguagePage
+        LanguagePageModel
+          { languageHeading = localizedText routeRequest ChooseLanguage,
+            languageSummary = localizedText routeRequest ChooseLanguageSummary
+          }
+    HelpRouteDataResult ->
+      HelpPage
+        HelpPageModel
+          { helpHeading = localizedText routeRequest HelpAndSupport,
+            helpSummary = localizedText routeRequest HelpSummary,
+            helpAccountGuidance = localizedText routeRequest HelpAccountGuidance,
+            helpSignInAction = buildCallToAction routeRequest LoginRoute (localizedText routeRequest SignIn),
+            helpRegistrationAction = buildCallToAction routeRequest RegistrationRoute (localizedText routeRequest CreateAccount)
+          }
     _ ->
       NotFoundPage
         NotFoundPageModel
@@ -189,10 +205,7 @@ buildCallToAction routeRequest route label =
 -- so its failure diagnostic can be forced directly by a test — see
 -- 'Unit.WebApiSpec' for the unsafe-path case.
 buildCallToActionHref :: Text -> HarchWeb.SafeUrl
-buildCallToActionHref renderedPath =
-  HarchWeb.requiredSafeUrlOrDie
-    ("buildCallToAction: rendered an unsafe URL: " <> renderedPath)
-    (HarchWeb.mkSafeUrl renderedPath)
+buildCallToActionHref = requiredRouteUrl
 
 localizedText :: HarchWeb.RouteRequest AppRoute AppRequestContext -> AppMessage -> Text
 localizedText routeRequest = localizedMessage (requestLocale (HarchWeb.requestContext routeRequest))

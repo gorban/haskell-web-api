@@ -85,7 +85,8 @@ a {
 .harch-app-shell-main {
   width: min(100% - 2rem, var(--app-content-width));
   margin-inline: auto;
-  padding-block: clamp(2rem, 8vw, 4rem);
+  padding-block-start: clamp(2rem, 8vw, 4rem);
+  padding-block-end: calc(clamp(6rem, 12vw, 8rem) + env(safe-area-inset-bottom, 0px));
   scroll-margin-block-start: var(--app-space-3);
 }
 
@@ -149,6 +150,96 @@ a {
 .harch-page-frame-content > :last-child,
 .harch-profile-identity-value {
   margin-block-end: 0;
+}
+
+.harch-app-controls-language-trigger {
+  display: inline-flex;
+  min-block-size: 2.75rem;
+  align-items: center;
+  margin-block-start: var(--app-space-2);
+  padding-inline: var(--app-space-2);
+  border: 1px solid var(--app-color-border);
+  border-radius: 999px;
+  background: var(--app-color-surface);
+}
+
+.harch-app-controls-language-dialog {
+  width: min(100% - 2rem, 28rem);
+  max-block-size: min(80dvb, 38rem);
+  padding: var(--app-space-3);
+  overflow: auto;
+  border: 1px solid var(--app-color-border);
+  border-radius: var(--app-radius);
+  background: var(--app-color-surface);
+  color: var(--app-color-text);
+}
+
+.harch-app-controls-language-dialog::backdrop {
+  background: rgb(10 16 30 / 65%);
+}
+
+.harch-app-controls-language-list {
+  display: grid;
+  gap: var(--app-space-1);
+  padding-inline-start: var(--app-space-3);
+}
+
+.harch-app-controls-language-list a,
+.harch-app-controls-language-close {
+  min-block-size: 2.75rem;
+}
+
+.harch-app-controls-language-list a {
+  display: inline-flex;
+  align-items: center;
+}
+
+.harch-app-controls-language-close {
+  padding-inline: var(--app-space-2);
+  border: 1px solid var(--app-color-border);
+  border-radius: var(--app-radius);
+  font: inherit;
+}
+
+.harch-app-controls-help-fab {
+  position: fixed;
+  z-index: 5;
+  inset-inline-end: calc(env(safe-area-inset-right, 0px) + var(--app-space-2));
+  inset-block-end: calc(env(safe-area-inset-bottom, 0px) + var(--app-space-2));
+  display: inline-flex;
+  min-inline-size: 3.5rem;
+  min-block-size: 3.5rem;
+  align-items: center;
+  justify-content: center;
+  gap: var(--app-space-1);
+  padding-inline: var(--app-space-2);
+  border: 2px solid var(--app-color-surface);
+  border-radius: 999px;
+  box-shadow: 0 0.25rem 1rem rgb(10 16 30 / 25%);
+  background: var(--app-color-accent);
+  color: var(--app-color-surface);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.harch-app-controls-help-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+@media (max-width: 24rem) {
+  .harch-app-controls-help-label {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .harch-app-controls-help-fab {
+    padding-inline: 0;
+  }
 }
 
 @media (prefers-color-scheme: dark) {

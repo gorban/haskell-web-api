@@ -81,9 +81,11 @@ report_coverage_is_complete() {
 
 # GHC executes these implementation modules only while compiling quasiquotes.
 # Their counters belong to the compiler process, not a test executable's TIX,
-# so an ordinary runtime HPC run cannot observe them. Keep this exact list
-# deliberately small: every ordinary runtime module, including generated
-# instances and error paths, remains in the 100% gate.
+# so an ordinary runtime HPC run cannot observe them. 'AttributeLowering' and
+# 'LoweringSupport' are private collaborators reachable only from that same
+# compile-time lowering path. Keep this exact list deliberately small: every
+# ordinary runtime module, including generated instances and error paths,
+# remains in the 100% gate.
 runtime_coverage_filter_args() {
   local package_version_dir="$1"
   local package_name="$2"
@@ -93,7 +95,9 @@ runtime_coverage_filter_args() {
     harch-web)
       runtime_coverage_args+=(
         "--exclude=${package_version_dir}-inplace:HarchWeb.Markup.Quasi"
+        "--exclude=${package_version_dir}-inplace:HarchWeb.Markup.Quasi.AttributeLowering"
         "--exclude=${package_version_dir}-inplace:HarchWeb.Markup.Quasi.Lowering"
+        "--exclude=${package_version_dir}-inplace:HarchWeb.Markup.Quasi.LoweringSupport"
         "--exclude=${package_version_dir}-inplace:HarchWeb.Markup.Quasi.Parser"
       )
       ;;

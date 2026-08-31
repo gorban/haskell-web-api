@@ -75,6 +75,15 @@ data AppMessage
   | Second
   | SecondPageUnavailable
   | SecondPageLoadFailed
+  | ChooseLanguage
+  | ChooseLanguageSummary
+  | Language
+  | EnglishLanguage
+  | SpanishLanguage
+  | CloseLanguagePicker
+  | HelpAndSupport
+  | HelpSummary
+  | HelpAccountGuidance
   deriving (Bounded, Enum, Eq, Show)
 
 localizedMessage :: AppLocale -> AppMessage -> Text
@@ -223,3 +232,21 @@ messageTemplateFor messageKey appLocale =
     (SecondPageUnavailable, Spanish) -> [message|El contenido de la segunda pagina no esta disponible temporalmente.|]
     (SecondPageLoadFailed, English) -> [message|Could not load second page data.|]
     (SecondPageLoadFailed, Spanish) -> [message|No se pudieron cargar los datos de la segunda pagina.|]
+    (ChooseLanguage, English) -> [message|Choose a language|]
+    (ChooseLanguage, Spanish) -> [message|Elige un idioma|]
+    (ChooseLanguageSummary, English) -> [message|Choose the language used for this page.|]
+    (ChooseLanguageSummary, Spanish) -> [message|Elige el idioma utilizado para esta pagina.|]
+    (Language, English) -> [message|Language|]
+    (Language, Spanish) -> [message|Idioma|]
+    (EnglishLanguage, English) -> [message|English|]
+    (EnglishLanguage, Spanish) -> [message|Ingles|]
+    (SpanishLanguage, English) -> [message|Spanish|]
+    (SpanishLanguage, Spanish) -> [message|Espanol|]
+    (CloseLanguagePicker, English) -> [message|Close language picker|]
+    (CloseLanguagePicker, Spanish) -> [message|Cerrar selector de idioma|]
+    (HelpAndSupport, English) -> [message|Help and support|]
+    (HelpAndSupport, Spanish) -> [message|Ayuda y soporte|]
+    (HelpSummary, English) -> [message|Get help with account access and verification.|]
+    (HelpSummary, Spanish) -> [message|Obtenga ayuda con el acceso y la verificacion de la cuenta.|]
+    (HelpAccountGuidance, English) -> [message|Sign in to review your account, or create an account if you do not have one.|]
+    (HelpAccountGuidance, Spanish) -> [message|Inicia sesion para revisar tu cuenta o crea una cuenta si no tienes una.|]

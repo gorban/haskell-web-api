@@ -1,7 +1,9 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {-# SPEC #-}
 
+import Control.Exception (ErrorCall (..), evaluate)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -9,9 +11,10 @@ import HarchWeb qualified
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi.AccountPages (AccountActionTarget (..))
+import WebApi.Components.AppControls (appControls, requiredAppAccessibleName)
 import WebApi.Config (AppConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
-import WebApi.Page (AppPageModel (..), AuthenticatedProfilePageDetails (..), CallToAction (..), PendingProfilePageDetails (..), ProfilePageModel (..), SignedOutProfilePageDetails (..), UnavailableProfilePageDetails (..), renderPage, renderPageFromRouteData)
-import WebApi.Route (AppRoute (..), defaultRequestContext)
+import WebApi.Page (AppPageModel (..), AuthenticatedProfilePageDetails (..), CallToAction (..), HelpPageModel (..), LanguagePageModel (..), PendingProfilePageDetails (..), ProfilePageModel (..), SignedOutProfilePageDetails (..), UnavailableProfilePageDetails (..), renderPage, renderPageFromRouteData)
+import WebApi.Route (AppRequestContext, AppRoute (..), defaultRequestContext)
 import WebApi.RouteData (RouteDataResult (..), SecondRouteData (..))
 
 existingSpec :: SpecWith ()
@@ -109,6 +112,29 @@ assertProfilePageModelShow (profilePageModel, expectedPrefix) =
 
 spec = do
   existingSpec
+  describe "AHI-6 application control models" $ do
+    it "keeps language and Help models comparable and printable" $ do
+      let languageModel = LanguagePageModel "Language" "Choose a language."
+          otherLanguageModel = LanguagePageModel "Other" "Choose a language."
+          helpModel = HelpPageModel "Help" "Summary" "Guidance" (CallToAction "Sign in" LoginRoute "/login") (CallToAction "Register" RegistrationRoute "/register")
+          otherHelpModel = helpModel {helpHeading = "Other"}
+      expectAll
+        ( (languageModel `shouldBe` LanguagePageModel "Language" "Choose a language.")
+            :| [ languageModel `shouldNotBe` otherLanguageModel,
+                 show languageModel `shouldContain` "languageHeading = \"Language\"",
+                 showList [languageModel] "" `shouldContain` "LanguagePageModel",
+                 helpModel `shouldBe` HelpPageModel "Help" "Summary" "Guidance" (CallToAction "Sign in" LoginRoute "/login") (CallToAction "Register" RegistrationRoute "/register"),
+                 helpModel `shouldNotBe` otherHelpModel,
+                 show helpModel `shouldContain` "helpHeading = \"Help\"",
+                 showList [helpModel] "" `shouldContain` "HelpPageModel"
+               ]
+        )
+
+    it "rejects an empty application accessible-name catalog value" $
+      evaluate (requiredAppAccessibleName "   " `seq` ())
+        `shouldThrow` \case
+          ErrorCall message -> "empty accessible-name catalog entry" `Text.isInfixOf` Text.pack message
+
   describe "renderPage" $ do
     it "selects a distinct second page model" $
       renderPage defaultAppConfig secondRequest
@@ -116,7 +142,7 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Second",
             HarchWeb.pageRoute = SecondRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"second\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Second</h1><p class=\"harch-page-frame-summary\">Second page content with stubbed data ready for future loaders.</p><div class=\"harch-page-frame-content\"><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></div></section>"),
+            HarchWeb.pageBody = appPageBody defaultRequestContext SecondRoute "<section data-page=\"second\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Second</h1><p class=\"harch-page-frame-summary\">Second page content with stubbed data ready for future loaders.</p><div class=\"harch-page-frame-content\"><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></div></section>",
             HarchWeb.pageBootstrapHooks = ["second-page"]
           }
 
@@ -126,7 +152,7 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Spaces",
             HarchWeb.pageRoute = SpacesRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"spaces\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Site under construction</h1><p class=\"harch-page-frame-summary\">Follow this space.</p><div class=\"harch-page-frame-content\"></div></section>"),
+            HarchWeb.pageBody = appPageBody defaultRequestContext SpacesRoute "<section data-page=\"spaces\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Site under construction</h1><p class=\"harch-page-frame-summary\">Follow this space.</p><div class=\"harch-page-frame-content\"></div></section>",
             HarchWeb.pageBootstrapHooks = []
           }
 
@@ -136,7 +162,7 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Not Found",
             HarchWeb.pageRoute = NotFoundRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"not-found\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Not Found</h1><p class=\"harch-page-frame-summary\">The requested page could not be found.</p><div class=\"harch-page-frame-content\"><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></div></section>"),
+            HarchWeb.pageBody = appPageBody defaultRequestContext NotFoundRoute "<section data-page=\"not-found\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Not Found</h1><p class=\"harch-page-frame-summary\">The requested page could not be found.</p><div class=\"harch-page-frame-content\"><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></div></section>",
             HarchWeb.pageBootstrapHooks = []
           }
 
@@ -146,7 +172,7 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Not Found",
             HarchWeb.pageRoute = NotFoundRoute,
             HarchWeb.pageContext = spanishRequestContext,
-            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"not-found\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">No encontrado</h1><p class=\"harch-page-frame-summary\">No se pudo encontrar la pagina solicitada.</p><div class=\"harch-page-frame-content\"><p><a href=\"/es\" data-page-link=\"true\">Volver al inicio</a></p></div></section>"),
+            HarchWeb.pageBody = appPageBody spanishRequestContext NotFoundRoute "<section data-page=\"not-found\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">No encontrado</h1><p class=\"harch-page-frame-summary\">No se pudo encontrar la pagina solicitada.</p><div class=\"harch-page-frame-content\"><p><a href=\"/es\" data-page-link=\"true\">Volver al inicio</a></p></div></section>",
             HarchWeb.pageBootstrapHooks = []
           }
 
@@ -166,7 +192,7 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Second",
             HarchWeb.pageRoute = SecondRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"second\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Second</h1><p class=\"harch-page-frame-summary\">Shared domain summary.</p><div class=\"harch-page-frame-content\"><ul><li>Shared loader</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></div></section>"),
+            HarchWeb.pageBody = appPageBody defaultRequestContext SecondRoute "<section data-page=\"second\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Second</h1><p class=\"harch-page-frame-summary\">Shared domain summary.</p><div class=\"harch-page-frame-content\"><ul><li>Shared loader</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></div></section>",
             HarchWeb.pageBootstrapHooks = ["second-page"]
           }
 
@@ -199,6 +225,14 @@ spec = do
       show config
         `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
       show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}"
-      show (renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []}))))
-        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}, pageBody = \"<section data-page=\\\"second\\\" class=\\\"harch-page-frame-root\\\"><h1 data-page-title=\\\"true\\\" class=\\\"harch-page-frame-title\\\">Second</h1><p class=\\\"harch-page-frame-summary\\\">Second page content with stubbed data ready for future loaders.</p><div class=\\\"harch-page-frame-content\\\"><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></div></section>\", pageBootstrapHooks = [\"second-page\"]}"
+      let renderedPage = renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []})))
+      show renderedPage `shouldContain` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute"
+      show renderedPage `shouldContain` "data-harch-dialog-control"
       renderPage config secondRequest `shouldReturn` renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []})))
+
+appPageBody :: AppRequestContext -> AppRoute -> Text -> HarchWeb.Html
+appPageBody requestContext route body =
+  HarchWeb.fragment
+    [ HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml body),
+      appControls requestContext route
+    ]

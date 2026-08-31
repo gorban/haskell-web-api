@@ -32,6 +32,35 @@ source inside the replaced regions, or replace the existing
 `NavigationRuntime` for a genuinely different algorithm. Harch keeps status
 semantics fixed and does not accept arbitrary selectors or script callbacks.
 
+## Dialog and floating Help reference controls
+
+The language picker is authored twice from the same typed localized route-link
+renderer: a complete language page for native fallback and a native `<dialog>`
+for enhanced interaction. Its trigger is a named anchor to the complete page,
+with typed `aria-haspopup`, `aria-controls`, and closed `aria-expanded`
+semantics. The inline capture kernel claims an early activation only while a
+bounded fallback still owns navigation to that anchor's authored destination.
+The application may use Harch's `defaultDialogRuntime`, replace it with another
+declared `RuntimeAsset`, or omit enhancement; no choice can remove the complete
+SSR route.
+
+The default adapter opens the dialog with `showModal()`, focuses the current
+language, contains Tab and Shift-Tab, supports the visible close control and
+Escape, and restores the exact connected invoker. A compatible enhanced
+navigation closes the old dialog before replacing regions and suppresses focus
+restoration into detached markup. Real-browser coverage proves the open,
+focus, containment, close, restoration, delayed/failing-module fallback, and
+scripts-disabled paths.
+
+The Help and support floating action is deliberately a native page link, not a
+button with a navigation role. Its visible icon is decorative, its localized
+name is independent of that glyph, and the complete Help route is available
+without script. Application CSS owns branding and placement: logical safe-area
+offsets, at least a 44 by 44 CSS-pixel target, visible focus, responsive label,
+and page-end space that prevents obstruction at a narrow viewport and 200%
+layout zoom. It is absent on its destination. No command-style FAB or general
+Harch FAB API is implied by this link-specific example.
+
 ## Authentication control inventory
 
 This table is the review contract for the `web-api` reference application.

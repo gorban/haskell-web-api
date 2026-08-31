@@ -17,6 +17,7 @@ import WebApi.AccountPages.Rendering
     renderRegistrationPageHtml,
     renderVerificationPageHtml,
   )
+import WebApi.Components.AppControls (languageSelectionLinks)
 import WebApi.Components.PageFrame
   ( PageFrameProps (..),
     PageKind (..),
@@ -67,6 +68,26 @@ renderPageBodyForLocale context locale pageModel =
       renderLogoutPageHtml context locale
     ProfilePage profilePage ->
       renderProfilePageBody context profilePage
+    LanguagePage languagePage ->
+      pageFrame
+        PageFrameProps
+          { pageFrameKind = LanguagePageFrame,
+            pageFrameHeading = languageHeading languagePage,
+            pageFrameSummary = Just (languageSummary languagePage),
+            pageFrameContent = [languageSelectionLinks context]
+          }
+    HelpPage helpPage ->
+      pageFrame
+        PageFrameProps
+          { pageFrameKind = HelpPageFrame,
+            pageFrameHeading = helpHeading helpPage,
+            pageFrameSummary = Just (helpSummary helpPage),
+            pageFrameContent =
+              [ HarchWeb.element HarchWeb.paragraphTag [] [HarchWeb.text (helpAccountGuidance helpPage)],
+                renderCallToAction (helpSignInAction helpPage),
+                renderCallToAction (helpRegistrationAction helpPage)
+              ]
+          }
     NotFoundPage notFoundPage ->
       pageFrame
         PageFrameProps

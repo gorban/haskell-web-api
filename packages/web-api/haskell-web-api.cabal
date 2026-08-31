@@ -89,6 +89,7 @@ library
     WebApi.App.Observability
     WebApi.App.Shell
     WebApi.AppEffect
+    WebApi.Components.AppControls
     WebApi.Config
     WebApi.Database
     WebApi.DatabaseSetup

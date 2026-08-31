@@ -51,6 +51,7 @@ module HarchWeb.Server
     runRequestMiddlewarePipeline,
     serverSentEventSourceFromList,
     navigationRuntimeResponse,
+    runtimeAssetResponse,
     loadReloadingTlsCredentials,
     loadTlsCredentialSnapshotOrThrowWithLoader,
     reloadTlsCredentialsIfChanged,

@@ -116,7 +116,9 @@ library
     HarchWeb.Markup.Implementation
     HarchWeb.Markup.Internal
     HarchWeb.Markup.Quasi
+    HarchWeb.Markup.Quasi.AttributeLowering
     HarchWeb.Markup.Quasi.Lowering
+    HarchWeb.Markup.Quasi.LoweringSupport
     HarchWeb.Markup.Quasi.Parser
     HarchWeb.Markup.Regions
     HarchWeb.Markup.Syntax
