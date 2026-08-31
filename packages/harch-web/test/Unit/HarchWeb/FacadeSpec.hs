@@ -159,6 +159,7 @@ movedSpec = do
         ( (Text.isInfixOf "const CapturedEvent = Object.freeze({ Submit: 'submit' });" defaultCaptureKernelScript `shouldBe` True)
             :| [ Text.isInfixOf "captureKernel.register(captureKernel.eventTypes.Submit" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "settlement.completed();" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "if (isRenderedDocument(window.location.href))" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "['click', 'input', 'change', 'keydown', 'submit']" defaultCaptureKernelScript `shouldBe` False
                ]
         )
@@ -296,7 +297,7 @@ movedSpec = do
               }
           regionPatch = testRegionPatch "status-region" "Ready"
           otherRegionPatch = testRegionPatch "other-region" "Other"
-          clientActionResponse = ClientActionResponse {clientActionStatus = Http.status200, clientActionPatches = [regionPatch], clientActionFocusId = Just "email", clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
+          clientActionResponse = ClientActionResponse {clientActionStatus = Http.status200, clientActionPatches = [regionPatch], clientActionFocusId = Just (literalElementId "email"), clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
           otherClientActionResponse = ClientActionResponse {clientActionStatus = Http.status422, clientActionPatches = [otherRegionPatch], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
       runtimeNonce <- generateRuntimeNonce
       otherRuntimeNonce <- generateRuntimeNonce

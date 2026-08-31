@@ -34,7 +34,7 @@ import Network.HTTP.Types qualified as Http
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress, opaqueSession, sessionIdValue, testSessionId)
 import Unit.WebApi.TestSupport qualified as TestSupport (databaseConfig)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), defaultPendingRegistrationStoragePolicy, mkRegistrationDeliveryTimeout, pendingRegistrationClaimLeaseNanoseconds, pendingRegistrationMaximumAccounts)
-import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), VerificationForm (..), accountActions, authorizeAccountActionCsrf, emptyRegistrationForm, handleAccountAction, initialPendingProfileForm, mfaEnrollmentFailureDiagnostics, pageCsrfTokenForAccountPage, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderPendingProfileRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
+import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), FormFeedback (..), FormStatus (..), FormStatusKind (..), LoginForm (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), RegistrationValidationError (..), VerificationForm (..), accountActions, authorizeAccountActionCsrf, emptyRegistrationForm, handleAccountAction, initialPendingProfileForm, mfaEnrollmentFailureDiagnostics, pageCsrfTokenForAccountPage, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderPendingProfileRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buildActionCodecOrDie)
 import WebApi.App (buildRuntimeAppWithDatabaseBuilder, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
@@ -441,20 +441,34 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable")
 
     it "renders complete SSR registration and verification forms with escaped values" $ do
-      if emptyRegistrationForm == RegistrationForm Text.empty Text.empty Text.empty Nothing False then pure () else expectationFailure "expected empty registration form"
-      if RegistrationForm "person_01" "person@example.test" "Person Example" Nothing False /= RegistrationForm "other_01" "other@example.test" "Other Example" Nothing False then pure () else expectationFailure "registration forms must compare identity values"
+      if emptyRegistrationForm == RegistrationForm Text.empty Text.empty Text.empty FormReady then pure () else expectationFailure "expected empty registration form"
+      if RegistrationForm "person_01" "person@example.test" "Person Example" FormReady /= RegistrationForm "other_01" "other@example.test" "Other Example" FormReady then pure () else expectationFailure "registration forms must compare identity values"
+      FormStatusSuccess `shouldNotBe` FormStatusFailure
+      show FormStatusSuccess `shouldBe` "FormStatusSuccess"
+      show [FormStatusSuccess] `shouldBe` "[FormStatusSuccess]"
+      FormStatus "Ready" FormStatusSuccess `shouldNotBe` FormStatus "No" FormStatusFailure
+      show (FormStatus "Ready" FormStatusSuccess) `shouldBe` "FormStatus {formStatusMessage = \"Ready\", formStatusKind = FormStatusSuccess}"
+      show [FormStatus "Ready" FormStatusSuccess] `shouldBe` "[FormStatus {formStatusMessage = \"Ready\", formStatusKind = FormStatusSuccess}]"
+      (FormRejected (RegistrationUsernameInvalid :| []) :: FormFeedback RegistrationValidationError)
+        `shouldNotBe` FormStatusMessage (FormStatus "No" FormStatusFailure)
+      show (FormRejected (RegistrationUsernameInvalid :| []) :: FormFeedback RegistrationValidationError)
+        `shouldBe` "FormRejected (RegistrationUsernameInvalid :| [])"
+      show [FormRejected (RegistrationUsernameInvalid :| []) :: FormFeedback RegistrationValidationError]
+        `shouldBe` "[FormRejected (RegistrationUsernameInvalid :| [])]"
+      RegistrationEmailInvalid `shouldNotBe` RegistrationPasswordTooShort
+      show RegistrationUsernameUnavailable `shouldBe` "RegistrationUsernameUnavailable"
       if VerificationForm "token" Nothing False /= VerificationForm "token" (Just "error") True then pure () else expectationFailure "verification forms must compare their state"
       if MfaEnrollmentForm Nothing [] Nothing False /= MfaEnrollmentForm Nothing [] (Just "error") True then pure () else expectationFailure "MFA forms must compare their state"
       if LoginForm "person@example.test" Nothing False /= LoginForm "other@example.test" Nothing False then pure () else expectationFailure "login forms must compare their email values"
-      let registrationForm = RegistrationForm "person_01" "person@example.test" "Person Example" Nothing False
+      let registrationForm = RegistrationForm "person_01" "person@example.test" "Person Example" FormReady
           verificationForm = VerificationForm "token" (Just "ready") False
           pendingProfileForm = PendingProfileForm "person@example.test" (Just "ready") False "Resend verification email"
           mfaEnrollmentForm = MfaEnrollmentForm (Just "SECRET&VALUE") ["RECOVERY-CODE"] (Just "Ready") False
           loginForm = LoginForm "person@example.test" Nothing False
       show registrationForm
-        `shouldBe` "RegistrationForm {registrationFormUsername = \"person_01\", registrationFormEmail = \"person@example.test\", registrationFormDisplayName = \"Person Example\", registrationFormMessage = Nothing, registrationFormIsError = False}"
+        `shouldBe` "RegistrationForm {registrationFormUsername = \"person_01\", registrationFormEmail = \"person@example.test\", registrationFormDisplayName = \"Person Example\", registrationFormFeedback = FormReady}"
       show [registrationForm]
-        `shouldBe` "[RegistrationForm {registrationFormUsername = \"person_01\", registrationFormEmail = \"person@example.test\", registrationFormDisplayName = \"Person Example\", registrationFormMessage = Nothing, registrationFormIsError = False}]"
+        `shouldBe` "[RegistrationForm {registrationFormUsername = \"person_01\", registrationFormEmail = \"person@example.test\", registrationFormDisplayName = \"Person Example\", registrationFormFeedback = FormReady}]"
       show verificationForm
         `shouldBe` "VerificationForm {verificationFormToken = \"token\", verificationFormMessage = Just \"ready\", verificationFormIsError = False}"
       show [verificationForm]
@@ -475,7 +489,7 @@ spec = do
       show [loginForm]
         `shouldBe` "[LoginForm {loginFormEmail = \"person@example.test\", loginFormMessage = Nothing, loginFormIsError = False}]"
       show (RegistrationPage RegisterAccountTarget registrationForm)
-        `shouldBe` "RegistrationPage RegisterAccountTarget (RegistrationForm {registrationFormUsername = \"person_01\", registrationFormEmail = \"person@example.test\", registrationFormDisplayName = \"Person Example\", registrationFormMessage = Nothing, registrationFormIsError = False})"
+        `shouldBe` "RegistrationPage RegisterAccountTarget (RegistrationForm {registrationFormUsername = \"person_01\", registrationFormEmail = \"person@example.test\", registrationFormDisplayName = \"Person Example\", registrationFormFeedback = FormReady})"
       show (EmailVerificationPage VerifyEmailTarget verificationForm)
         `shouldBe` "EmailVerificationPage VerifyEmailTarget (VerificationForm {verificationFormToken = \"token\", verificationFormMessage = Just \"ready\", verificationFormIsError = False})"
       let printedMfaEnrollmentPage = Text.pack (show (MfaEnrollmentPage EnrollMfaTarget mfaEnrollmentForm))
@@ -488,7 +502,7 @@ spec = do
       show (LoginPage LoginAccountTarget loginForm)
         `shouldBe` "LoginPage LoginAccountTarget (LoginForm {loginFormEmail = \"person@example.test\", loginFormMessage = Nothing, loginFormIsError = False})"
       show (LogoutPage LogoutAccountTarget) `shouldBe` "LogoutPage LogoutAccountTarget"
-      renderRegistrationPage (defaultRequestContext {requestLocale = Spanish}) Spanish (RegistrationForm "person_01\" onclick=\"bad" "person@example.test\" onclick=\"bad" "Person & Example" (Just "Ready <now>") False)
+      renderRegistrationPage (defaultRequestContext {requestLocale = Spanish}) Spanish (RegistrationForm "person_01\" onclick=\"bad" "person@example.test\" onclick=\"bad" "Person & Example" (FormStatusMessage (FormStatus "Ready <now>" FormStatusSuccess)))
         `shouldSatisfy` \html ->
           "Nombre de usuario" `Text.isInfixOf` html
             && "Nombre para mostrar (opcional)" `Text.isInfixOf` html
@@ -496,7 +510,7 @@ spec = do
             && "person@example.test&quot; onclick=&quot;bad" `Text.isInfixOf` html
             && "Person &amp; Example" `Text.isInfixOf` html
             && "Ready &lt;now&gt;" `Text.isInfixOf` html
-      renderRegistrationRegion defaultRequestContext English (RegistrationForm Text.empty Text.empty Text.empty (Just "No") True)
+      renderRegistrationRegion defaultRequestContext English (RegistrationForm Text.empty Text.empty Text.empty (FormStatusMessage (FormStatus "No" FormStatusFailure)))
         `shouldSatisfy` Text.isInfixOf "data-error-state=\"true\""
       renderVerificationPage defaultRequestContext English (VerificationForm "token&value" Nothing False)
         `shouldSatisfy` \html ->
@@ -506,7 +520,7 @@ spec = do
         `shouldSatisfy` Text.isInfixOf "Verifica tu direccion de correo"
       renderVerificationRegion defaultRequestContext English (VerificationForm Text.empty Nothing False)
         `shouldSatisfy` (not . Text.isInfixOf "data-account-message")
-      renderRegistrationRegion defaultRequestContext English (RegistrationForm "'>&" "'>&" "'>&" Nothing False)
+      renderRegistrationRegion defaultRequestContext English (RegistrationForm "'>&" "'>&" "'>&" FormReady)
         `shouldSatisfy` \html -> "&#39;&gt;&amp;" `Text.isInfixOf` html
       let spanishMfaPage = renderMfaEnrollmentPage (defaultRequestContext {requestLocale = Spanish}) Spanish (MfaEnrollmentForm (Just "SECRET&VALUE") ["CODE-ONE"] (Just "Ready <now>") False)
       spanishMfaPage
@@ -680,6 +694,21 @@ spec = do
       invalidPasswordResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-password") "Use a password with at least 12 characters."
       spanishInvalidPasswordResult <- handleAccountAction workflow (request "POST" "/es/register" [("username", "person_01"), ("email", "person@example.test"), ("password", "short")] Spanish)
       spanishInvalidPasswordResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-password") "Usa una contrasena"
+      multipleInvalidResult <- handleAccountAction workflow (request "POST" "/register" [("username", "no!"), ("email", "not-an-email"), ("password", "secret-11")] English)
+      multipleInvalidResult `shouldSatisfy` \case
+        Just response ->
+          HarchWeb.clientActionFocusId response == Just (HarchWeb.literalElementId "registration-error-summary")
+            && case HarchWeb.clientActionPatches response of
+              [patch] ->
+                let html = HarchWeb.regionPatchHtml patch
+                 in "tabindex=\"-1\" data-error-summary" `Text.isInfixOf` html
+                      && "href=\"#registration-username\"" `Text.isInfixOf` html
+                      && "href=\"#registration-email\"" `Text.isInfixOf` html
+                      && "href=\"#registration-password\"" `Text.isInfixOf` html
+                      && "aria-describedby=\"registration-password-hint registration-password-error\"" `Text.isInfixOf` html
+                      && not ("secret-11" `Text.isInfixOf` html)
+              _ -> False
+        Nothing -> False
       emptyDisplayNameResult <- handleAccountAction workflow (request "POST" "/register" [("username", "person_01"), ("email", "person@example.test"), ("displayName", ""), ("password", "correct horse battery staple")] English)
       emptyDisplayNameResult `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "If that address can register, check its inbox"
       createdResult <- handleAccountAction workflow (request "POST" "/es/register" [("username", "person_01"), ("email", "person@example.test"), ("displayName", "Person Example"), ("password", "correct horse battery staple")] Spanish)
@@ -1424,7 +1453,7 @@ spec = do
           request path actionContext fields = typedAccountActionRequest "POST" path fields (actionContext {requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue})
       started <- handleAccountAction workflow (request "/mfa" defaultRequestContext [("intent", "start")])
       started `shouldSatisfy` \case
-        Just response -> Http.statusCode (HarchWeb.clientActionStatus response) == 200 && HarchWeb.clientActionFocusId response == Just "mfa-code"
+        Just response -> Http.statusCode (HarchWeb.clientActionStatus response) == 200 && HarchWeb.clientActionFocusId response == Just (HarchWeb.literalElementId "mfa-code")
         Nothing -> False
       started `shouldSatisfy` maybe False actionResponseHasValidClientActionTransport
       secret <-
@@ -1448,7 +1477,7 @@ spec = do
       length confirmationHashes `shouldBe` 8
       spanishStarted <- handleAccountAction workflow (request "/es/mfa" (defaultRequestContext {requestLocale = Spanish}) [("intent", "start")])
       spanishStarted `shouldSatisfy` \case
-        Just response -> Http.statusCode (HarchWeb.clientActionStatus response) == 200 && HarchWeb.clientActionFocusId response == Just "mfa-code" && any (Text.isInfixOf "Agrega este secreto" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
+        Just response -> Http.statusCode (HarchWeb.clientActionStatus response) == 200 && HarchWeb.clientActionFocusId response == Just (HarchWeb.literalElementId "mfa-code") && any (Text.isInfixOf "Agrega este secreto" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
         Nothing -> False
       spanishSecret <-
         case spanishStarted of

@@ -97,7 +97,12 @@ data NavigationRuntime = NavigationRuntime
   deriving (Eq, Show)
 
 -- | The default progressive-navigation asset. It is document-facing authoring
--- data: servers only decide how to deliver the declared path.
+-- data: servers only decide how to deliver the declared path. The runtime
+-- tracks the last document it rendered and leaves same-document history
+-- changes to the browser. This is required for fragment links such as an
+-- accessible error-summary target: a fragment @popstate@ must preserve the
+-- current region patch and use native focus/scroll behavior rather than fetch
+-- and replace the document.
 defaultNavigationRuntime :: NavigationRuntime
 defaultNavigationRuntime =
   NavigationRuntime
@@ -117,6 +122,7 @@ defaultNavigationRuntimeScript =
       "  const navigationRegionSelector = 'nav[data-navigation-region=\"primary\"]';",
       "  const navigationContentSelector = 'main[data-navigation-content=\"true\"]';",
       "  let navigationInFlight = false;",
+      "  let renderedDocumentUrl = new URL(window.location.href);",
       "",
       "  function applyActionResponse(actionResponse) {",
       "    (actionResponse.patches || []).forEach((patch) => {",
@@ -187,6 +193,13 @@ defaultNavigationRuntimeScript =
       "    return new URL(targetUrl, window.location.href);",
       "  }",
       "",
+      "  function isRenderedDocument(targetUrl) {",
+      "    const absoluteUrl = toAbsoluteUrl(targetUrl);",
+      "    return absoluteUrl.origin === renderedDocumentUrl.origin",
+      "      && absoluteUrl.pathname === renderedDocumentUrl.pathname",
+      "      && absoluteUrl.search === renderedDocumentUrl.search;",
+      "  }",
+      "",
       "  function isSameOriginNavigationLink(anchor) {",
       "    if (!anchor || anchor.target || anchor.hasAttribute('download')) {",
       "      return false;",
@@ -227,6 +240,7 @@ defaultNavigationRuntimeScript =
       "    currentNavigationRegion.replaceWith(nextNavigationRegion);",
       "    currentNavigationContent.replaceWith(nextNavigationContent);",
       "    syncBodyAttributes(parsedDocument.body);",
+      "    renderedDocumentUrl = toAbsoluteUrl(targetUrl);",
       "",
       "    if (shouldPushState) {",
       "      window.history.pushState({ path: targetUrl }, '', targetUrl);",
@@ -281,6 +295,10 @@ defaultNavigationRuntimeScript =
       "  }",
       "",
       "  function handlePopState() {",
+      "    if (isRenderedDocument(window.location.href)) {",
+      "      return;",
+      "    }",
+      "",
       "    void navigateTo(window.location.href, false);",
       "  }",
       "",

@@ -5,6 +5,7 @@
 
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
+import Data.Text qualified as Text
 import HarchWeb qualified
 import HarchWeb.Account qualified as Account
 import HarchWeb.Email qualified as Email
@@ -175,6 +176,39 @@ spec =
                       ($([|metrics|] `shouldMatch` [p|BrowserMetrics {mutationRequestCount = 1}|]))
                         :| [message `shouldBe` "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion."]
                   )
+            )
+            `shouldReturn` Right ()
+
+    it "focuses a multi-error registration summary and follows its field link by keyboard" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultPageRepository localizedRegistrationWorkflow) $ \server -> do
+          let registrationUrl = HarchWeb.localServerBaseUrl server <> "/register"
+              oversizedEmail = Text.replicate 245 "a" <> "@example.test"
+              usernameField = byLabel "Username"
+              emailField = byLabel "Email address"
+              passwordField = byLabel "Password"
+              usernameErrorLink = byRole Link `named` "Use a username with 3 to 20 letters, numbers, underscores, or hyphens."
+          runBrowserScenario
+            browser
+            ( do
+                visit registrationUrl
+                fill usernameField "no!"
+                fill emailField oversizedEmail
+                fill passwordField "correct horse battery staple"
+                click (byRole Button `named` "Create account")
+                assertFocused (css "#registration-error-summary") (`shouldBe` True)
+                assertText (byRole Heading `named` "Fix the following problems") (`shouldBe` "Fix the following problems")
+                assertAll
+                  ((,,,) <$> inputValue usernameField <*> inputValue emailField <*> inputValue passwordField <*> attributeValue passwordField "aria-describedby")
+                  ( \(username, email, password, describedBy) ->
+                      (username `shouldBe` "no!")
+                        :| [ email `shouldBe` oversizedEmail,
+                             password `shouldBe` "",
+                             describedBy `shouldBe` Just "registration-password-hint"
+                           ]
+                  )
+                press usernameErrorLink "Enter"
+                assertFocused usernameField (`shouldBe` True)
             )
             `shouldReturn` Right ()
 

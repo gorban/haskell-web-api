@@ -18,6 +18,7 @@ module WebApi.AccountPages.Actions.Registration
 where
 
 import Control.Monad.IO.Class (liftIO)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -51,6 +52,13 @@ import WebApi.AccountPages.Actions.Contract
   ( RegistrationSubmission (..),
     VerificationSubmission (..),
   )
+import WebApi.AccountPages.FieldIds
+  ( registrationEmailId,
+    registrationPasswordId,
+    registrationSummaryId,
+    registrationUsernameId,
+    verificationTokenId,
+  )
 import WebApi.AccountPages.Forms
 import WebApi.AppEffect
   ( AccountWorkflow (..),
@@ -76,6 +84,32 @@ data VerificationWorkflowInput = VerificationWorkflowInput
   }
 
 type ParsedRegistration = (Text, Text, Text, Text, Username.Username, Email.EmailAddress)
+
+data RegistrationValidation value
+  = RegistrationValidationFailure (NonEmpty RegistrationValidationError)
+  | RegistrationValidationSuccess value
+
+-- Registration has one local independent-input validation workflow rather
+-- than a stable general-purpose capability stack.  These named pure
+-- combinators retain applicative accumulation semantics while keeping that
+-- narrow ownership visible: every rejected field is collected, and effects
+-- begin only after all inputs have succeeded.
+mapRegistrationValidation :: (input -> output) -> RegistrationValidation input -> RegistrationValidation output
+mapRegistrationValidation transform validation =
+  case validation of
+    RegistrationValidationFailure validationErrors -> RegistrationValidationFailure validationErrors
+    RegistrationValidationSuccess value -> RegistrationValidationSuccess (transform value)
+
+applyRegistrationValidation :: RegistrationValidation (input -> output) -> RegistrationValidation input -> RegistrationValidation output
+applyRegistrationValidation functionValidation valueValidation =
+  case (functionValidation, valueValidation) of
+    (RegistrationValidationSuccess transform, RegistrationValidationSuccess value) -> RegistrationValidationSuccess (transform value)
+    (RegistrationValidationFailure leftErrors, RegistrationValidationFailure rightErrors) -> RegistrationValidationFailure (leftErrors <> rightErrors)
+    (RegistrationValidationFailure validationErrors, RegistrationValidationSuccess _) -> RegistrationValidationFailure validationErrors
+    (RegistrationValidationSuccess _, RegistrationValidationFailure validationErrors) -> RegistrationValidationFailure validationErrors
+
+succeedRegistrationValidation :: value -> RegistrationValidation value
+succeedRegistrationValidation = RegistrationValidationSuccess
 
 handleRegistrationWorkflow :: RegistrationWorkflowInput -> AccountActionWorkflow
 handleRegistrationWorkflow input =
@@ -138,11 +172,45 @@ parseRegistrationForm actionRequest submission =
       displayNameValue = registrationDisplayNameValue submission
       passwordValue = registrationPasswordValue submission
       form = RegistrationForm usernameValue emailValue displayNameValue
-   in case (Username.mkUsername usernameValue, Email.mkEmailAddress emailValue, validPassword passwordValue) of
-        (Nothing, _, _) -> Left (registrationResponse (accountActionResponseContext actionRequest Http.status422 (Just "registration-username") []) (form (Just (localized actionRequest UsernameInvalid)) True))
-        (_, Nothing, _) -> Left (registrationResponse (accountActionResponseContext actionRequest Http.status422 (Just "registration-email") []) (form (Just (localized actionRequest EnterValidEmailAddress)) True))
-        (_, _, False) -> Left (registrationResponse (accountActionResponseContext actionRequest Http.status422 (Just "registration-password") []) (form (Just (localized actionRequest PasswordTooShort)) True))
-        (Just username, Just emailAddress, True) -> Right (usernameValue, emailValue, displayNameValue, passwordValue, username, emailAddress)
+      parsed =
+        applyRegistrationValidation
+          ( applyRegistrationValidation
+              ( applyRegistrationValidation
+                  (mapRegistrationValidation (,,,) (requireValue RegistrationUsernameInvalid (Username.mkUsername usernameValue)))
+                  (requireValue RegistrationEmailInvalid (Email.mkEmailAddress emailValue))
+              )
+              (requirePassword passwordValue)
+          )
+          (succeedRegistrationValidation displayNameValue)
+   in case parsed of
+        RegistrationValidationFailure errors ->
+          Left
+            ( registrationResponse
+                (accountActionResponseContext actionRequest Http.status422 (Just (registrationErrorFocus errors)) [])
+                (form (FormRejected errors))
+            )
+        RegistrationValidationSuccess (username, emailAddress, password, displayName) -> Right (usernameValue, emailValue, displayName, password, username, emailAddress)
+
+requireValue :: RegistrationValidationError -> Maybe value -> RegistrationValidation value
+requireValue validationError = maybe (RegistrationValidationFailure (validationError :| [])) RegistrationValidationSuccess
+
+requirePassword :: Text -> RegistrationValidation Text
+requirePassword password =
+  case validPassword password of
+    True -> RegistrationValidationSuccess password
+    False -> RegistrationValidationFailure (RegistrationPasswordTooShort :| [])
+
+registrationErrorFocus :: NonEmpty RegistrationValidationError -> HarchWeb.ElementId
+registrationErrorFocus (registrationError :| []) = registrationErrorControlId registrationError
+registrationErrorFocus (_ :| _ : _) = registrationSummaryId
+
+registrationErrorControlId :: RegistrationValidationError -> HarchWeb.ElementId
+registrationErrorControlId validationError =
+  case validationError of
+    RegistrationUsernameInvalid -> registrationUsernameId
+    RegistrationEmailInvalid -> registrationEmailId
+    RegistrationPasswordTooShort -> registrationPasswordId
+    RegistrationUsernameUnavailable -> registrationUsernameId
 
 interpretRegistrationResult ::
   AccountActionRequest ->
@@ -155,16 +223,17 @@ interpretRegistrationResult actionRequest usernameValue emailValue displayNameVa
   Right registrationResult -> pure (registrationResultResponse registrationResult)
   Left registrationError -> throwRegistrationFailure registrationError
   where
-    response status message isError focusId =
+    response status feedback focusId =
       registrationResponse
         (accountActionResponseContext actionRequest status focusId [])
-        (RegistrationForm usernameValue emailValue displayNameValue (Just message) isError)
+        (RegistrationForm usernameValue emailValue displayNameValue feedback)
+    statusFeedback message kind = FormStatusMessage (FormStatus message kind)
     registrationSuccess stage =
       registrationLifecycleResponse
         stage
-        (response Http.status202 (localized actionRequest RegistrationVerificationInbox) False Nothing)
-    unavailableRegistration = response Http.status503 (localized actionRequest RegistrationUnavailable) True (Just "registration-email")
-    deliveryFailureResponse = response Http.status502 (localized actionRequest VerificationDeliveryFailed) True (Just "registration-email")
+        (response Http.status202 (statusFeedback (localized actionRequest RegistrationVerificationInbox) FormStatusSuccess) Nothing)
+    unavailableRegistration = response Http.status503 (statusFeedback (localized actionRequest RegistrationUnavailable) FormStatusFailure) (Just registrationEmailId)
+    deliveryFailureResponse = response Http.status502 (statusFeedback (localized actionRequest VerificationDeliveryFailed) FormStatusFailure) (Just registrationEmailId)
 
     registrationResultResponse = \case
       -- A taken username is a recoverable, user-correctable input (the
@@ -173,7 +242,11 @@ interpretRegistrationResult actionRequest usernameValue emailValue displayNameVa
       -- own note found missing, and does not reopen the address-enumeration
       -- concern the branch below exists to close: usernames, unlike email
       -- addresses, are not privacy-sensitive to confirm as taken.
-      RegistrationUsernameTaken -> response Http.status422 (localized actionRequest UsernameTaken) True (Just "registration-username")
+      RegistrationUsernameTaken ->
+        response
+          Http.status422
+          (FormRejected (RegistrationUsernameUnavailable :| []))
+          (Just (registrationErrorControlId RegistrationUsernameUnavailable))
       -- Both remaining outcomes share this exact branch (not merely the
       -- same wording) so a registered-address probe cannot be
       -- distinguished from a genuine registration by response bytes: the
@@ -205,14 +278,14 @@ handleVerificationWorkflow :: VerificationWorkflowInput -> AccountActionWorkflow
 handleVerificationWorkflow input =
   let tokenValue = verificationTokenValue submission
    in case Account.mkEmailVerificationToken tokenValue of
-        Nothing -> pure (verificationResponse (accountActionResponseContext actionRequest Http.status422 (Just "verification-token") []) (VerificationForm tokenValue (Just (localized actionRequest VerificationLinkInvalid)) True))
+        Nothing -> pure (verificationResponse (accountActionResponseContext actionRequest Http.status422 (Just verificationTokenId) []) (VerificationForm tokenValue (Just (localized actionRequest VerificationLinkInvalid)) True))
         Just token -> do
           (now, confirmationResult) <- confirmEmailVerificationNow token
           case confirmationResult of
             Right (Account.EmailVerificationAccepted accountId _) -> issueVerificationEnrollmentSession actionRequest now accountId
-            Right Account.EmailVerificationExpired -> pure (verificationResponse (accountActionResponseContext actionRequest Http.status422 (Just "verification-token") []) (VerificationForm tokenValue (Just (localized actionRequest VerificationLinkExpired)) True))
-            Right Account.EmailVerificationRejected -> pure (verificationResponse (accountActionResponseContext actionRequest Http.status422 (Just "verification-token") []) (VerificationForm tokenValue (Just (localized actionRequest VerificationLinkUsed)) True))
-            Left storeError -> throwClientActionFailure (verificationResponse (accountActionResponseContext actionRequest Http.status503 (Just "verification-token") []) (VerificationForm tokenValue (Just (localized actionRequest VerificationUnavailable)) True)) VerificationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
+            Right Account.EmailVerificationExpired -> pure (verificationResponse (accountActionResponseContext actionRequest Http.status422 (Just verificationTokenId) []) (VerificationForm tokenValue (Just (localized actionRequest VerificationLinkExpired)) True))
+            Right Account.EmailVerificationRejected -> pure (verificationResponse (accountActionResponseContext actionRequest Http.status422 (Just verificationTokenId) []) (VerificationForm tokenValue (Just (localized actionRequest VerificationLinkUsed)) True))
+            Left storeError -> throwClientActionFailure (verificationResponse (accountActionResponseContext actionRequest Http.status503 (Just verificationTokenId) []) (VerificationForm tokenValue (Just (localized actionRequest VerificationUnavailable)) True)) VerificationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
   where
     actionRequest = verificationWorkflowRequest input
     submission = verificationWorkflowSubmission input

@@ -120,6 +120,17 @@ spec =
       renderHtml quoted `shouldBe` renderHtml direct
       renderHtml quoted `shouldBe` "<main lang=\"en&quot; onload=&quot;unsafe\"><h1>&lt;reviewed&gt;</h1></main>"
 
+    it "lowers typed accessible relationship attributes from literals and expressions" $ do
+      let hintId = literalElementId "email-hint"
+          errorId = literalElementId "email-error"
+          describedIds = hintId :| [errorId]
+          quoted = [harch|<input aria-describedby={describedIds} aria-errormessage={errorId} aria-invalid={True} tabindex={-1} />|]
+          literalQuoted = [harch|<input aria-describedby="email-hint email-error" aria-errormessage="email-error" aria-invalid="false" tabindex="0" />|]
+      renderHtml quoted
+        `shouldBe` renderHtml (voidElement inputTag [ariaDescribedBy describedIds, ariaErrorMessage errorId, ariaInvalid True, tabIndex (-1)])
+      renderHtml literalQuoted
+        `shouldBe` renderHtml (voidElement inputTag [ariaDescribedBy describedIds, ariaErrorMessage errorId, ariaInvalid False, tabIndex 0])
+
     it "composes a list of Html children in a root-level markup fragment" $ do
       let children = [element codeTag [] [text "safe"], element paragraphTag [] [text "after"]]
           quoted = [harch|<label for="email">Email address</label>{children}|]

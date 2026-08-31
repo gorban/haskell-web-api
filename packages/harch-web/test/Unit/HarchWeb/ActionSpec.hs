@@ -20,6 +20,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text (isInfixOf, null)
 import Data.Text.Encoding qualified as TextEncoding (encodeUtf8)
 import HarchWeb (ActionCapability (ConditionalLeaveConfirmation, HandlerSafeRetry, IdempotentMutationRetry, NativeFallback), ActionFormAttributes (actionFormCapabilities), ActionIdempotency (actionIdempotencyKey), ActionRecoveryCopy (actionCancelCopy, actionCancelledCopy, actionDelayedCopy, actionPendingCopy, actionReadyCopy, actionRecoverableCopy, actionRetryCopy), FormMethod (FormGet, FormPost), NativeActionFallback (NativeActionFallback, nativeActionFallbackCsrfToken, nativeActionFallbackMethod, nativeActionFallbackPath), actionForm, actionIdempotency, defaultActionFormAttributes, defaultActionRecoveryCopy, defaultCaptureKernelByteBudget, defaultCaptureKernelScript, renderActionForm, renderHtml, staticActionForm, text)
+import HarchWeb qualified as Web
 import HarchWeb.Action qualified as Action (ActionCodec, ActionCodecError (..), ActionDecoder, ActionMethod (ActionDelete, ActionGet, ActionPatch, ActionPost, ActionPut), ClientActionDecodeResult (..), ClientActionParseError (DuplicateActionField, InvalidActionField, MissingActionField), ClientActionPayload (ClientActionPayload, clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod, clientActionPath, clientActionPayloadContext), action, actionCodec, actionMethod, actionMethodText, actionPath, decodeAction, delete, deleteAt, emptyActionCodec, exactlyOne, formField, get, getAt, methodAt, optional, parseField, patch, patchAt, post, postAt, put, putAt, required, singleActionCodec, singleOrDefault, staticActionPath, textValue)
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -47,6 +48,80 @@ import Unit.HarchWeb.TestSupport (TestContext (testContextPathPrefix), defaultCo
 
 spec = do
   describe "HarchWeb.Action" $ do
+    it "derives accessible field relationships and a non-empty linked error summary" $ do
+      let controlId = Web.literalElementId "email"
+          hintId = Web.literalElementId "email-hint"
+          errorId = Web.literalElementId "email-error"
+          renderInput attributes = Web.voidElement Web.inputTag (Web.fieldControlIdAttribute attributes : Web.fieldControlRelationshipAttributes attributes)
+          hintedField =
+            Web.accessibleField
+              (Web.AccessibleFieldProps controlId (Web.text "Email") (Just (Web.DescribedContent hintId (Web.text "Use your work address."))) Web.FieldValid)
+              renderInput
+          bareField =
+            Web.accessibleField
+              (Web.AccessibleFieldProps controlId (Web.text "Email") Nothing Web.FieldValid)
+              renderInput
+          invalidField =
+            Web.accessibleField
+              (Web.AccessibleFieldProps controlId (Web.text "Email") (Just (Web.DescribedContent hintId (Web.text "Use your work address."))) (Web.FieldInvalid (Web.DescribedContent errorId (Web.text "Enter a valid address."))))
+              renderInput
+          invalidFieldWithoutHint =
+            Web.accessibleField
+              (Web.AccessibleFieldProps controlId (Web.text "Email") Nothing (Web.FieldInvalid (Web.DescribedContent errorId (Web.text "Enter a valid address."))))
+              renderInput
+          summary =
+            Web.errorSummary
+              (Web.ErrorSummary (Web.literalElementId "errors") (Web.text "Fix these problems") (Web.FieldErrorLink controlId (Web.text "Email is invalid") :| []))
+          hintedHtml = Web.renderHtml hintedField
+          bareHtml = Web.renderHtml bareField
+          invalidHtml = Web.renderHtml invalidField
+          invalidWithoutHintHtml = Web.renderHtml invalidFieldWithoutHint
+          summaryHtml = Web.renderHtml summary
+      expectAll
+        ( (hintedHtml `shouldSatisfy` Text.isInfixOf "<label for=\"email\">Email</label><input id=\"email\" aria-describedby=\"email-hint\">")
+            :| [ bareHtml `shouldSatisfy` (not . Text.isInfixOf "aria-describedby"),
+                 hintedHtml `shouldSatisfy` (not . Text.isInfixOf "aria-invalid"),
+                 invalidHtml `shouldSatisfy` Text.isInfixOf "aria-describedby=\"email-hint email-error\" aria-invalid=\"true\" aria-errormessage=\"email-error\"",
+                 invalidWithoutHintHtml `shouldSatisfy` Text.isInfixOf "aria-describedby=\"email-error\" aria-invalid=\"true\"",
+                 invalidHtml `shouldSatisfy` Text.isInfixOf "id=\"email-error\" data-field-error",
+                 summaryHtml `shouldSatisfy` Text.isInfixOf "id=\"errors\" tabindex=\"-1\" data-error-summary",
+                 summaryHtml `shouldSatisfy` Text.isInfixOf "<a href=\"#email\">Email is invalid</a>"
+               ]
+        )
+
+    it "keeps accessible control values comparable and printable" $ do
+      let controlId = Web.literalElementId "email"
+          otherId = Web.literalElementId "other"
+          hint = Web.DescribedContent controlId (Web.text "Hint")
+          otherHint = Web.DescribedContent otherId (Web.text "Other")
+          validProps = Web.AccessibleFieldProps controlId (Web.text "Email") (Just hint) Web.FieldValid
+          invalidProps = validProps {Web.accessibleFieldValidity = Web.FieldInvalid otherHint}
+          controlAttributes = Web.FieldControlAttributes (Web.elementId controlId) [Web.ariaDescribedBy (controlId :| [])]
+          otherControlAttributes = Web.FieldControlAttributes (Web.elementId otherId) []
+          errorLink = Web.FieldErrorLink controlId (Web.text "Invalid")
+          otherErrorLink = Web.FieldErrorLink otherId (Web.text "Other")
+          summary = Web.ErrorSummary controlId (Web.text "Errors") (errorLink :| [])
+          otherSummary = Web.ErrorSummary otherId (Web.text "Other errors") (otherErrorLink :| [])
+          valuesDiffer =
+            [ hint /= otherHint,
+              Web.FieldValid /= Web.FieldInvalid hint,
+              validProps /= invalidProps,
+              controlAttributes /= otherControlAttributes,
+              errorLink /= otherErrorLink,
+              summary /= otherSummary
+            ]
+          printedLength =
+            sum
+              [ length (show hint) + length (showList [hint] ""),
+                length (show Web.FieldValid) + length (showList [Web.FieldValid] ""),
+                length (show validProps) + length (showList [validProps] ""),
+                length (show controlAttributes) + length (showList [controlAttributes] ""),
+                length (show errorLink) + length (showList [errorLink] ""),
+                length (show summary) + length (showList [summary] "")
+              ]
+      valuesDiffer `shouldBe` replicate 6 True
+      printedLength `shouldSatisfy` (> 0)
+
     it "prints codec paths and methods from the same declarations used for parsing and form markup" $ do
       let prefixedContext = defaultContext {testContextPathPrefix = "/app"}
           renderedForm = renderHtml (renderActionForm (actionForm testActionCodec prefixedContext "save" defaultActionFormAttributes [text "Save"]))

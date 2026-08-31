@@ -8,6 +8,7 @@ where
 import Control.Exception (ErrorCall (..), evaluate, try)
 import Data.Functor ((<&>))
 import Data.List (find, intercalate)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.String (fromString)
 import Data.Text qualified as Text
 import HarchWeb.Markup.Implementation qualified as Impl
@@ -298,6 +299,10 @@ lowerLiteralAttribute position attributeName literal =
   case attributeName of
     "id" -> applyNamed 'Impl.elementId [applyNamedPure 'Impl.literalElementId [textLiteral literal]]
     "for" -> applyNamed 'Impl.labelFor [applyNamedPure 'Impl.literalElementId [textLiteral literal]]
+    "aria-describedby" -> lowerLiteralIdReferences position literal
+    "aria-errormessage" -> applyNamed 'Impl.ariaErrorMessage [applyNamedPure 'Impl.literalElementId [textLiteral literal]]
+    "aria-invalid" -> lowerLiteralAriaInvalid position literal
+    "tabindex" -> lowerLiteralTabIndex position literal
     "class" -> failAt position "class requires an interpolated CssClass expression"
     -- 'href' takes a 'SafeUrl', not 'Text': a quoted literal in markup
     -- source is the template author's own text, validated once at compile
@@ -313,8 +318,39 @@ lowerExpressionAttribute position attributeName expressionSource = do
   case attributeName of
     "id" -> applyNamed 'Impl.elementId [expression]
     "for" -> applyNamed 'Impl.labelFor [expression]
+    "aria-describedby" -> applyNamed 'Impl.ariaDescribedBy [expression]
+    "aria-errormessage" -> applyNamed 'Impl.ariaErrorMessage [expression]
+    "aria-invalid" -> applyNamed 'Impl.ariaInvalid [expression]
     "class" -> applyNamed 'Impl.className [expression]
+    "tabindex" -> applyNamed 'Impl.tabIndex [expression]
     _ -> lowerTextAttribute position attributeName expression
+
+lowerLiteralIdReferences :: Position -> String -> Q Exp
+lowerLiteralIdReferences position literal =
+  case words literal of
+    [] -> failAt position "aria-describedby requires at least one element ID"
+    firstIdentifier : remainingIdentifiers ->
+      applyNamed
+        'Impl.ariaDescribedBy
+        [ AppE
+            (AppE (ConE '(:|)) (elementIdentifier firstIdentifier))
+            (ListE (map elementIdentifier remainingIdentifiers))
+        ]
+  where
+    elementIdentifier = applyNamedPure 'Impl.literalElementId . pure . textLiteral
+
+lowerLiteralAriaInvalid :: Position -> String -> Q Exp
+lowerLiteralAriaInvalid position literal =
+  case literal of
+    "true" -> applyNamed 'Impl.ariaInvalid [ConE 'True]
+    "false" -> applyNamed 'Impl.ariaInvalid [ConE 'False]
+    _ -> failAt position "aria-invalid must be true or false"
+
+lowerLiteralTabIndex :: Position -> String -> Q Exp
+lowerLiteralTabIndex position literal =
+  case reads literal of
+    [(tabOrder, "")] -> applyNamed 'Impl.tabIndex [LitE (IntegerL tabOrder)]
+    _ -> failAt position "tabindex must be an integer"
 
 lowerFlagAttribute :: Position -> String -> Q Exp
 lowerFlagAttribute position attributeName =

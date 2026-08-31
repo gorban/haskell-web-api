@@ -1,23 +1,53 @@
 module WebApi.AccountPages.Forms
   ( LoginForm (..),
+    FormFeedback (..),
+    FormStatus (..),
+    FormStatusKind (..),
     MfaEnrollmentForm (..),
     PendingProfileForm (..),
     RegistrationForm (..),
+    RegistrationValidationError (..),
     VerificationForm (..),
     emptyRegistrationForm,
     initialPendingProfileForm,
   )
 where
 
+import Data.List.NonEmpty (NonEmpty)
 import Data.Text (Text)
 import Data.Text qualified as Text
+
+data FormStatusKind = FormStatusSuccess | FormStatusFailure
+  deriving (Eq, Show)
+
+data FormStatus = FormStatus
+  { formStatusMessage :: Text,
+    formStatusKind :: FormStatusKind
+  }
+  deriving (Eq, Show)
+
+-- | Validation rejection and lifecycle status are different states.  Keeping
+-- them separate prevents a page-level message/boolean pair from standing in
+-- for field relationships, while preserving success and infrastructure
+-- feedback that does not belong to one field.
+data FormFeedback error
+  = FormReady
+  | FormRejected (NonEmpty error)
+  | FormStatusMessage FormStatus
+  deriving (Eq, Show)
+
+data RegistrationValidationError
+  = RegistrationUsernameInvalid
+  | RegistrationEmailInvalid
+  | RegistrationPasswordTooShort
+  | RegistrationUsernameUnavailable
+  deriving (Eq, Show)
 
 data RegistrationForm = RegistrationForm
   { registrationFormUsername :: Text,
     registrationFormEmail :: Text,
     registrationFormDisplayName :: Text,
-    registrationFormMessage :: Maybe Text,
-    registrationFormIsError :: Bool
+    registrationFormFeedback :: FormFeedback RegistrationValidationError
   }
   deriving (Eq, Show)
 
@@ -66,7 +96,7 @@ data LoginForm = LoginForm
   deriving (Eq, Show)
 
 emptyRegistrationForm :: RegistrationForm
-emptyRegistrationForm = RegistrationForm Text.empty Text.empty Text.empty Nothing False
+emptyRegistrationForm = RegistrationForm Text.empty Text.empty Text.empty FormReady
 
 -- | The server-rendered pending-profile page has no action outcome yet.  This
 -- constructor keeps that valid initial state named and reusable rather than

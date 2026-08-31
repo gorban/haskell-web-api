@@ -9,6 +9,7 @@ module App.App
 where
 
 import App.Components.Layout (twoPageShell)
+import App.Components.SubscriptionEmailField (subscriptionEmailId)
 import App.CustomPages.Preview (previewPageDefinition)
 import App.Pages.Generated (pageRouteDefinition)
 import App.Pages.Home (nativeSubscriptionFallbackPage, subscriptionResultRegion)
@@ -137,7 +138,7 @@ twoPageClientAction actionRequest =
                 ClientActionResponse
                   { clientActionStatus = Http.status422,
                     clientActionPatches = subscriptionPatch "alert" "Enter a valid email address.",
-                    clientActionFocusId = Just "subscription-email",
+                    clientActionFocusId = Just subscriptionEmailId,
                     clientActionHeaders = [],
                     clientActionObservabilityAttributes = [],
                     clientActionLogEntries = []

@@ -41,6 +41,12 @@ import WebApi.AccountPages.Actions.Common
 import WebApi.AccountPages.Actions.Contract
 import WebApi.AccountPages.Actions.Profile qualified as Profile
 import WebApi.AccountPages.Actions.Registration qualified as Registration
+import WebApi.AccountPages.FieldIds
+  ( loginCodeId,
+    loginEmailId,
+    loginPasswordId,
+    mfaCodeId,
+  )
 import WebApi.AccountPages.Forms
 import WebApi.AppEffect
   ( AccountWorkflow (..),
@@ -172,18 +178,18 @@ startMfaAction :: AccountActionRequest -> Account.AccountId -> AccountActionWork
 startMfaAction actionRequest accountId = do
   started <- startMfaEnrollmentNow accountId
   case started of
-    Right (MfaEnrollmentStart secret) -> pure (mfaEnrollmentResponse (accountActionResponseContext actionRequest Http.status200 (Just "mfa-code") noHeaders) (MfaEnrollmentForm (Just (Totp.renderTotpSecret secret)) [] (Just (localized actionRequest AddAuthenticatorSecret)) False))
+    Right (MfaEnrollmentStart secret) -> pure (mfaEnrollmentResponse (accountActionResponseContext actionRequest Http.status200 (Just mfaCodeId) noHeaders) (MfaEnrollmentForm (Just (Totp.renderTotpSecret secret)) [] (Just (localized actionRequest AddAuthenticatorSecret)) False))
     Left errorValue -> interpretMfaFailure actionRequest MfaEnrollmentStartFailure Nothing errorValue
 
 confirmMfaAction :: AccountActionRequest -> Account.AccountId -> Text -> AccountActionWorkflow
 confirmMfaAction actionRequest accountId codeValue =
   case Totp.mkTotpCode codeValue of
-    Nothing -> pure (mfaEnrollmentResponse (accountActionResponseContext actionRequest Http.status422 (Just "mfa-code") []) (MfaEnrollmentForm Nothing [] (Just (localized actionRequest EnterAuthenticatorCode)) True))
+    Nothing -> pure (mfaEnrollmentResponse (accountActionResponseContext actionRequest Http.status422 (Just mfaCodeId) []) (MfaEnrollmentForm Nothing [] (Just (localized actionRequest EnterAuthenticatorCode)) True))
     Just code -> do
       confirmed <- confirmMfaEnrollmentNow accountId code
       case confirmed of
         Right (MfaEnrollmentConfirmation recoveryCodes) -> pure (mfaEnrollmentResponse (accountActionResponseContext actionRequest Http.status200 Nothing noHeaders) (MfaEnrollmentForm Nothing (map RecoveryCode.recoveryCodeText (toList recoveryCodes)) (Just (localized actionRequest AuthenticatorEnrolled)) False))
-        Left errorValue -> interpretMfaFailure actionRequest MfaEnrollmentConfirmFailure (Just "mfa-code") errorValue
+        Left errorValue -> interpretMfaFailure actionRequest MfaEnrollmentConfirmFailure (Just mfaCodeId) errorValue
 
 confirmMfaEnrollmentNow :: Account.AccountId -> Totp.TotpCode -> AppM publicFailure (Either MfaEnrollmentError MfaEnrollmentConfirmation)
 confirmMfaEnrollmentNow accountId code = do
@@ -205,7 +211,7 @@ confirmMfaEnrollmentNow accountId code = do
 interpretMfaFailure ::
   AccountActionRequest ->
   FailureCode ->
-  Maybe Text ->
+  Maybe HarchWeb.ElementId ->
   MfaEnrollmentError ->
   AccountActionWorkflow
 interpretMfaFailure actionRequest failureCodeValue focusId errorValue =
@@ -280,9 +286,9 @@ parseLoginForm actionRequest submission =
           <|> (LoginUsername <$> Username.mkUsername emailValue)
           <|> (LoginUsername <$> Username.mkUsername usernameValue)
    in case (maybeIdentifier, validPassword passwordValue, loginProof submission) of
-        (Nothing, _, _) -> Left (loginResponse (accountActionResponseContext actionRequest Http.status422 (Just "login-email") []) (loginForm (localized actionRequest EnterValidEmailOrUsername) True))
-        (_, False, _) -> Left (loginResponse (accountActionResponseContext actionRequest Http.status422 (Just "login-password") []) (loginForm (localized actionRequest EnterPassword) True))
-        (_, _, Nothing) -> Left (loginResponse (accountActionResponseContext actionRequest Http.status422 (Just "login-code") []) (loginForm (localized actionRequest EnterAuthenticatorOrRecoveryCode) True))
+        (Nothing, _, _) -> Left (loginResponse (accountActionResponseContext actionRequest Http.status422 (Just loginEmailId) []) (loginForm (localized actionRequest EnterValidEmailOrUsername) True))
+        (_, False, _) -> Left (loginResponse (accountActionResponseContext actionRequest Http.status422 (Just loginPasswordId) []) (loginForm (localized actionRequest EnterPassword) True))
+        (_, _, Nothing) -> Left (loginResponse (accountActionResponseContext actionRequest Http.status422 (Just loginCodeId) []) (loginForm (localized actionRequest EnterAuthenticatorOrRecoveryCode) True))
         (Just identifier, True, Just proof) -> Right (if Text.null emailValue then usernameValue else emailValue, passwordValue, identifier, proof)
 
 interpretLoginResult ::
@@ -299,20 +305,20 @@ interpretLoginResult actionRequest emailValue nowNanoseconds loginResult =
         PasswordMfaLoginAccepted accountId -> issueLoginSession actionRequest emailValue nowNanoseconds accountId
         PasswordMfaLoginEmailVerificationRequired _ -> pure (response Http.status403 (localized actionRequest VerifyEmailBeforeSignIn) True Nothing [])
         PasswordMfaLoginEnrollmentRequired accountId -> issueLoginEnrollmentSession actionRequest emailValue nowNanoseconds accountId
-        PasswordMfaLoginRejected -> pure (response Http.status422 (localized actionRequest SignInRejected) True (Just "login-code") [])
-        PasswordMfaLoginThrottled _retryAfterNanoseconds -> pure (response Http.status429 (localized actionRequest SignInThrottled) True (Just "login-email") [])
-        PasswordMfaLoginCredentialStoreError storeError -> throwClientActionFailure (unavailable (Just "login-email")) LoginCredentialStoreFailure "AccountCredentialStoreError" (credentialStoreErrorMessage storeError)
-        PasswordMfaLoginMfaStoreError storeError -> throwClientActionFailure (unavailable (Just "login-code")) LoginMfaStoreFailure "MfaStoreError" (mfaStoreErrorMessage storeError)
-        PasswordMfaLoginAttemptStoreError storeError -> throwClientActionFailure (unavailable (Just "login-email")) LoginAttemptStoreFailure "LoginAttemptStoreError" (loginAttemptStoreErrorMessage storeError)
-        PasswordMfaLoginPasswordWorkBudgetExhausted -> throwClientActionFailure (unavailable (Just "login-email")) LoginPasswordWorkBudgetFailure "PasswordWorkBudgetExhausted" "password work budget is exhausted"
-        PasswordMfaLoginCorruptEnrollment -> throwClientActionFailure (unavailable (Just "login-code")) LoginCorruptEnrollmentFailure "CorruptTotpEnrollment" "stored MFA enrollment could not be decoded"
+        PasswordMfaLoginRejected -> pure (response Http.status422 (localized actionRequest SignInRejected) True (Just loginCodeId) [])
+        PasswordMfaLoginThrottled _retryAfterNanoseconds -> pure (response Http.status429 (localized actionRequest SignInThrottled) True (Just loginEmailId) [])
+        PasswordMfaLoginCredentialStoreError storeError -> throwClientActionFailure (unavailable (Just loginEmailId)) LoginCredentialStoreFailure "AccountCredentialStoreError" (credentialStoreErrorMessage storeError)
+        PasswordMfaLoginMfaStoreError storeError -> throwClientActionFailure (unavailable (Just loginCodeId)) LoginMfaStoreFailure "MfaStoreError" (mfaStoreErrorMessage storeError)
+        PasswordMfaLoginAttemptStoreError storeError -> throwClientActionFailure (unavailable (Just loginEmailId)) LoginAttemptStoreFailure "LoginAttemptStoreError" (loginAttemptStoreErrorMessage storeError)
+        PasswordMfaLoginPasswordWorkBudgetExhausted -> throwClientActionFailure (unavailable (Just loginEmailId)) LoginPasswordWorkBudgetFailure "PasswordWorkBudgetExhausted" "password work budget is exhausted"
+        PasswordMfaLoginCorruptEnrollment -> throwClientActionFailure (unavailable (Just loginCodeId)) LoginCorruptEnrollmentFailure "CorruptTotpEnrollment" "stored MFA enrollment could not be decoded"
 
 issueLoginSession :: AccountActionRequest -> Text -> UnixTimeNanoseconds -> Account.AccountId -> AccountActionWorkflow
 issueLoginSession actionRequest emailValue nowNanoseconds accountId = do
   issuedSession <- issueAccountSessionNow accountId nowNanoseconds
   let form message = LoginForm emailValue (Just message)
   case issuedSession of
-    Left storeError -> throwClientActionFailure (loginResponse (accountActionResponseContext actionRequest Http.status503 (Just "login-email") []) (form (localized actionRequest SignInUnavailable) True)) LoginSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
+    Left storeError -> throwClientActionFailure (loginResponse (accountActionResponseContext actionRequest Http.status503 (Just loginEmailId) []) (form (localized actionRequest SignInUnavailable) True)) LoginSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
     Right opaqueSession -> pure (loginResponse (accountActionResponseContext actionRequest Http.status200 Nothing [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie defaultSessionCookiePolicy (sessionId opaqueSession)))]) (form (localized actionRequest SignedIn) False))
 
 issueAccountSessionNow :: Account.AccountId -> UnixTimeNanoseconds -> AppM publicFailure (Either AccountSessionStoreError (OpaqueSession Account.AccountId))

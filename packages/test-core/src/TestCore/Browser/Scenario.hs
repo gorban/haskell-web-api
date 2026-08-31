@@ -21,6 +21,7 @@ module TestCore.Browser.Scenario
     fill,
     historyBack,
     historyForward,
+    press,
     releaseRequestsMatching,
     reload,
     runBrowserScenario,
@@ -109,6 +110,12 @@ reload = simpleCommand "reload" []
 
 click :: Locator -> BrowserScenario ()
 click locator = simpleCommand "click" ["locator" .= locator]
+
+-- | Press a real keyboard key while the locator is focused.  This belongs at
+-- the browser-scenario boundary so accessibility tests do not replace user
+-- input with page-script event simulation.
+press :: Locator -> Text -> BrowserScenario ()
+press locator key = simpleCommand "press" ["locator" .= locator, "key" .= key]
 
 -- | Evaluate a test-owned expression in the current page. This is deliberately
 -- limited to E2E fixtures that need to control browser-only failure modes which

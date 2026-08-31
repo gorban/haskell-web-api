@@ -29,7 +29,7 @@ import HarchWeb.Action
   )
 import HarchWeb.Database (DatabaseOperation)
 import HarchWeb.Document (Page)
-import HarchWeb.Markup (RegionPatch)
+import HarchWeb.Markup (ElementId, RegionPatch)
 import HarchWeb.Observability qualified as Observability
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
@@ -169,10 +169,15 @@ data ClientActionRequest action context = ClientActionRequest
 
 -- | Client-action status shares the ordinary response boundary's exact HTTP
 -- status representation, including its reason phrase.
+--
+-- Decision (AHI-7, 2026-08-31): focus extends this existing response with
+-- 'ElementId' rather than an application string or a parallel focus command.
+-- The JSON encoder is the sole boundary that erases the ID to text, making a
+-- mismatch with typed field renderers harder to author.
 data ClientActionResponse = ClientActionResponse
   { clientActionStatus :: Http.Status,
     clientActionPatches :: [RegionPatch],
-    clientActionFocusId :: Maybe Text,
+    clientActionFocusId :: Maybe ElementId,
     clientActionHeaders :: Http.ResponseHeaders,
     clientActionObservabilityAttributes :: [Observability.ObservabilityAttribute],
     clientActionLogEntries :: [Text]

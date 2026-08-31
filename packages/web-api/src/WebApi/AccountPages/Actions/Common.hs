@@ -212,7 +212,7 @@ data AccountActionResponseContext = AccountActionResponseContext
   { accountActionResponseLocale :: AppLocale,
     accountActionResponseRequestContext :: AppRequestContext,
     accountActionResponseStatus :: Http.Status,
-    accountActionResponseFocusId :: Maybe Text,
+    accountActionResponseFocusId :: Maybe HarchWeb.ElementId,
     accountActionResponseHeaders :: Http.ResponseHeaders
   }
 
@@ -220,7 +220,7 @@ data AccountActionResponseContext = AccountActionResponseContext
 -- chooses its form/body. This keeps locale and route context coupled to the
 -- request that supplied them instead of passing transposable copies to every
 -- renderer.
-accountActionResponseContext :: AccountActionRequest -> Http.Status -> Maybe Text -> Http.ResponseHeaders -> AccountActionResponseContext
+accountActionResponseContext :: AccountActionRequest -> Http.Status -> Maybe HarchWeb.ElementId -> Http.ResponseHeaders -> AccountActionResponseContext
 accountActionResponseContext actionRequest status focusId headers =
   AccountActionResponseContext
     { accountActionResponseLocale = actionLocale actionRequest,

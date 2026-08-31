@@ -54,6 +54,7 @@ spec = do
               visit "http://localhost/"
               setCookie "http://localhost/" "session" "opaque-session"
               click (byRole Link `named` "Continue")
+              press emailField "Enter"
               scriptResult <- runPageScript "true"
               fill emailField "person@example.com"
               setInputFiles (byLabel "Attachment") "test-fixtures/attachment.txt"

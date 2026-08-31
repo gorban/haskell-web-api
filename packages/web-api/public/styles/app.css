@@ -35,6 +35,44 @@ a {
   outline-offset: 0.2rem;
 }
 
+[data-error-summary]:focus {
+  outline: 0.2rem solid var(--app-color-focus);
+  outline-offset: 0.2rem;
+}
+
+[data-accessible-field] {
+  display: grid;
+  gap: 0.25rem;
+  margin-block: var(--app-space-2);
+}
+
+[data-accessible-field] :where(input, select) {
+  min-block-size: 2.75rem;
+  padding: var(--app-space-1);
+  border: 1px solid var(--app-color-border);
+  border-radius: calc(var(--app-radius) / 2);
+  font: inherit;
+}
+
+[data-field-hint] {
+  color: var(--app-color-muted);
+}
+
+[data-field-hint],
+[data-field-error] {
+  margin-block: 0;
+}
+
+[data-field-error],
+[data-error-state] {
+  font-weight: 600;
+}
+
+[data-error-summary] {
+  padding: var(--app-space-2);
+  border-inline-start: 0.3rem solid var(--app-color-focus);
+}
+
 .harch-app-shell-navigation {
   display: flex;
   flex-wrap: wrap;

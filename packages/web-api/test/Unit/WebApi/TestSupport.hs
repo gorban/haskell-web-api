@@ -659,7 +659,7 @@ actionHasStatusAndFocus expectedStatus expectedFocus expectedMessage = \case
   Just actionResponse ->
     actionResponseHasValidClientActionTransport actionResponse
       && Http.statusCode (HarchWeb.clientActionStatus actionResponse) == expectedStatus
-      && HarchWeb.clientActionFocusId actionResponse == expectedFocus
+      && HarchWeb.clientActionFocusId actionResponse == (HarchWeb.literalElementId <$> expectedFocus)
       && case HarchWeb.clientActionPatches actionResponse of
         [patch] ->
           HarchWeb.regionPatchId patch `elem` ["registration-region", "verification-region", "mfa-enrollment-region", "login-region", "logout-region"]

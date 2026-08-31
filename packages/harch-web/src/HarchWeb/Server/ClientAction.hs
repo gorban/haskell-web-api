@@ -25,7 +25,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Action (ActionMethod, actionMethodText)
-import HarchWeb.Markup (regionPatchHtml, regionPatchId)
+import HarchWeb.Markup (elementIdText, regionPatchHtml, regionPatchId)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Server.Response
 import HarchWeb.Session (CsrfToken, mkCsrfToken, validateCsrfToken)
@@ -212,7 +212,7 @@ renderClientActionResponse actionResponse =
   jsonText
     ( JsonEncoding.pairs
         ( JsonEncoding.pair "patches" (JsonEncoding.list renderPatch (clientActionPatches actionResponse))
-            <> JsonEncoding.pair "focusId" (Aeson.toEncoding (clientActionFocusId actionResponse))
+            <> JsonEncoding.pair "focusId" (Aeson.toEncoding (elementIdText <$> clientActionFocusId actionResponse))
         )
     )
   where

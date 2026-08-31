@@ -2325,6 +2325,33 @@ and a localized in-memory-adapter API failure. ICU remains the runtime authority
 MessageFormat semantics, while the quasiquoter deliberately catches structural authoring errors
 early rather than claiming type-level validation of every application-specific interpolation record.
 
+### Follow-up decision — AHI-7: structural accessible fields and typed focus (2026-08-31)
+
+**Decision: extend the existing markup, control, and client-action response boundaries; do not add a
+form-builder DSL.** The registration experiment and the separate login form reproduced the same
+inseparable relationship: a visible label targets one native control, while optional hint and error
+nodes contribute stable IDs that the control must reference in order. `HarchWeb.Controls` therefore
+owns a higher-order `accessibleField` renderer and non-empty linked error summaries, while each
+application continues to own its validation ADTs, localization, control choice, and layout. The
+closed markup vocabulary adds typed ID-reference, invalidity, fragment-link, and focus attributes
+instead of exposing a generic unchecked attribute constructor.
+
+Client-action focus now carries `ElementId` through the existing response record and converts to
+text only in the JSON encoder. Reference-app account field IDs are shared typed constants between
+rendering and workflows, so a patch producer cannot silently drift to an arbitrary string. Pure,
+independent registration checks use a small applicative accumulation type in declaration order;
+the existing effectful account workflow remains fail-fast. One invalid field focuses that control,
+multiple invalid fields focus the ordinary labelled summary, and the summary deliberately has no
+`role=alert`: focus supplies the announcement without a duplicate live-region event. Complete form
+regions are not live regions; success uses a polite status, failures use an alert, and the existing
+control-local action lifecycle remains responsible for pending and delayed progress.
+
+The linked summary also exposed a navigation-boundary rule: same-document fragment history remains
+native browser behavior. The progressive-navigation runtime records the document URL represented by
+the current shell and ignores a `popstate` whose origin, path, and query still identify that document.
+Otherwise activating a plain `#field-id` link can fetch and replace the page, discard the patched
+invalid values, and defeat the focus target the accessible control deliberately supplied.
+
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
 the full designed scope shipped; a partial slice must say so and name its follow-up.
 

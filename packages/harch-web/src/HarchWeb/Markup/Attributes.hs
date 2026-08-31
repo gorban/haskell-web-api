@@ -3,6 +3,9 @@ module HarchWeb.Markup.Attributes
     DataAttributeSuffix,
     ElementId,
     SafeUrl,
+    ariaDescribedBy,
+    ariaErrorMessage,
+    ariaInvalid,
     ariaLabel,
     ariaLive,
     autocomplete,
@@ -11,8 +14,10 @@ module HarchWeb.Markup.Attributes
     dataAttributeSuffixText,
     dataFlag,
     elementId,
+    elementIdText,
     enctype,
     formAction,
+    fragmentHref,
     hidden,
     href,
     inputMode,
@@ -31,6 +36,7 @@ module HarchWeb.Markup.Attributes
     requiredSafeUrlOrDie,
     role,
     safeUrlText,
+    tabIndex,
     value,
   )
 where

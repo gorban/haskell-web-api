@@ -110,6 +110,7 @@ library
   other-modules:
     WebApi.AccountPages.Actions.Profile
     WebApi.AccountPages.Actions.Registration
+    WebApi.AccountPages.FieldIds
     WebApi.App.AccountWorkflow
     WebApi.Components.PageFrame
     WebApi.Components.Profile

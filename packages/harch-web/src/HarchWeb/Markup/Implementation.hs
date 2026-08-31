@@ -15,6 +15,9 @@ module HarchWeb.Markup.Implementation
     TrustedHtml,
     VoidTag,
     anchorTag,
+    ariaDescribedBy,
+    ariaErrorMessage,
+    ariaInvalid,
     ariaLabel,
     ariaLive,
     autocomplete,
@@ -28,6 +31,7 @@ module HarchWeb.Markup.Implementation
     divTag,
     element,
     elementId,
+    elementIdText,
     enctype,
     fragment,
     headingOneTag,
@@ -36,6 +40,7 @@ module HarchWeb.Markup.Implementation
     imageTag,
     formTag,
     formAction,
+    fragmentHref,
     href,
     hidden,
     inputTag,
@@ -70,6 +75,7 @@ module HarchWeb.Markup.Implementation
     safeUrlText,
     sectionTag,
     selectTag,
+    tabIndex,
     text,
     trustedHtml,
     value,
@@ -79,6 +85,8 @@ module HarchWeb.Markup.Implementation
 where
 
 import Data.Char qualified as Char
+import Data.List.NonEmpty (NonEmpty)
+import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe (fromMaybe)
 import Data.String (IsString (fromString))
 import Data.Text (Text)
@@ -178,6 +186,19 @@ formAction = attribute (AttributeName "action")
 ariaLabel :: Text -> Attribute
 ariaLabel = attribute (AttributeName "aria-label")
 
+ariaDescribedBy :: NonEmpty ElementId -> Attribute
+ariaDescribedBy =
+  attribute (AttributeName "aria-describedby")
+    . Text.intercalate " "
+    . map Internal.elementIdText
+    . NonEmpty.toList
+
+ariaErrorMessage :: ElementId -> Attribute
+ariaErrorMessage = attribute (AttributeName "aria-errormessage") . Internal.elementIdText
+
+ariaInvalid :: Bool -> Attribute
+ariaInvalid invalid = attribute (AttributeName "aria-invalid") (if invalid then "true" else "false")
+
 ariaLive :: Text -> Attribute
 ariaLive = attribute (AttributeName "aria-live")
 
@@ -248,6 +269,9 @@ requiredSafeUrlOrDie context = fromMaybe (error ("HarchWeb.Markup: " <> Text.unp
 href :: SafeUrl -> Attribute
 href = attribute (AttributeName "href") . safeUrlText
 
+fragmentHref :: ElementId -> Attribute
+fragmentHref = attribute (AttributeName "href") . ("#" <>) . Internal.elementIdText
+
 hidden :: Attribute
 hidden = booleanAttribute (AttributeName "hidden")
 
@@ -298,6 +322,12 @@ value = attribute (AttributeName "value")
 elementId :: ElementId -> Attribute
 elementId elementIdentifier =
   attribute (AttributeName "id") (Internal.elementIdText elementIdentifier)
+
+elementIdText :: ElementId -> Text
+elementIdText = Internal.elementIdText
+
+tabIndex :: Int -> Attribute
+tabIndex = attribute (AttributeName "tabindex") . Text.pack . show
 
 mkElementId :: Text -> Maybe ElementId
 mkElementId identifier

@@ -11,6 +11,12 @@ module HarchWeb.Controls
     ActionFormRendering,
     ActionIdempotency,
     ActionRecoveryCopy (..),
+    AccessibleFieldProps (..),
+    DescribedContent (..),
+    ErrorSummary (..),
+    FieldControlAttributes (..),
+    FieldErrorLink (..),
+    FieldValidity (..),
     FormMethod (..),
     NativeActionFallback (..),
     actionForm,
@@ -18,12 +24,16 @@ module HarchWeb.Controls
     actionIdempotencyKey,
     defaultActionFormAttributes,
     defaultActionRecoveryCopy,
+    accessibleField,
+    errorSummary,
     pageLink,
     renderActionForm,
     staticActionForm,
   )
 where
 
+import Data.List.NonEmpty (NonEmpty)
+import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -36,6 +46,126 @@ import HarchWeb.Action
     staticActionPath,
   )
 import HarchWeb.Markup
+
+-- | Stable described content used as either a hint or a field-local error.
+-- Its ID and body travel together so a caller cannot render one while
+-- pointing the control at another.
+data DescribedContent = DescribedContent
+  { describedContentId :: ElementId,
+    describedContentBody :: Html
+  }
+  deriving (Eq, Show)
+
+-- | The only two validity states a rendered field can have.  An invalid
+-- field necessarily owns concrete error content.
+data FieldValidity
+  = FieldValid
+  | FieldInvalid DescribedContent
+  deriving (Eq, Show)
+
+-- | Structural inputs shared by native input, select, and future controls.
+--
+-- Decision (AHI-7, 2026-08-31): the registration experiment and the distinct
+-- login form both reproduced the same inseparable label/ID/description
+-- relationship.  Extend the existing control boundary with this higher-order
+-- component; do not add a form-builder DSL or leave applications to transpose
+-- raw ARIA IDs.  Validation remains application-owned.
+data AccessibleFieldProps = AccessibleFieldProps
+  { accessibleFieldControlId :: ElementId,
+    accessibleFieldLabel :: Html,
+    accessibleFieldHint :: Maybe DescribedContent,
+    accessibleFieldValidity :: FieldValidity
+  }
+  deriving (Eq, Show)
+
+-- | Attributes derived by 'accessibleField'.  The renderer must attach both
+-- fields to its one native control; separating the ID from relationships keeps
+-- attribute ordering deterministic without exposing unchecked attributes.
+data FieldControlAttributes = FieldControlAttributes
+  { fieldControlIdAttribute :: Attribute,
+    fieldControlRelationshipAttributes :: [Attribute]
+  }
+  deriving (Eq, Show)
+
+-- | One error-summary link.  Non-emptiness belongs to 'ErrorSummary', not to
+-- each link.
+data FieldErrorLink = FieldErrorLink
+  { fieldErrorControlId :: ElementId,
+    fieldErrorBody :: Html
+  }
+  deriving (Eq, Show)
+
+-- | A programmatically focusable summary with at least one target.
+data ErrorSummary = ErrorSummary
+  { errorSummaryId :: ElementId,
+    errorSummaryHeading :: Html,
+    errorSummaryItems :: NonEmpty FieldErrorLink
+  }
+  deriving (Eq, Show)
+
+-- | Render a visible label, exactly one caller-supplied native control, and
+-- the present hint/error nodes.  Description references are derived in hint,
+-- error order and invalid-only ARIA attributes cannot leak into valid state.
+accessibleField :: AccessibleFieldProps -> (FieldControlAttributes -> Html) -> Html
+accessibleField props renderControl =
+  element
+    divTag
+    [dataFlag "accessible-field"]
+    ( [ element labelTag [labelFor controlId] [accessibleFieldLabel props],
+        renderControl
+          FieldControlAttributes
+            { fieldControlIdAttribute = elementId controlId,
+              fieldControlRelationshipAttributes = relationshipAttributes
+            }
+      ]
+        <> maybe [] (pure . renderDescribedContent "field-hint") (accessibleFieldHint props)
+        <> case accessibleFieldValidity props of
+          FieldValid -> []
+          FieldInvalid fieldError -> [renderDescribedContent "field-error" fieldError]
+    )
+  where
+    controlId = accessibleFieldControlId props
+    describedIds =
+      maybe [] (pure . describedContentId) (accessibleFieldHint props)
+        <> case accessibleFieldValidity props of
+          FieldValid -> []
+          FieldInvalid fieldError -> [describedContentId fieldError]
+    relationshipAttributes =
+      maybe [] (pure . ariaDescribedBy) (NonEmpty.nonEmpty describedIds)
+        <> case accessibleFieldValidity props of
+          FieldValid -> []
+          FieldInvalid fieldError -> [ariaInvalid True, ariaErrorMessage (describedContentId fieldError)]
+
+renderDescribedContent :: DataAttributeSuffix -> DescribedContent -> Html
+renderDescribedContent kind content =
+  element
+    paragraphTag
+    [elementId (describedContentId content), dataFlag kind]
+    [describedContentBody content]
+
+-- | Render ordinary labelled content rather than another live region.  The
+-- action response focuses this node only for multiple errors, which announces
+-- the new summary without duplicating a @role=alert@ announcement; each link
+-- remains keyboard-usable and targets its typed field ID.
+errorSummary :: ErrorSummary -> Html
+errorSummary summary =
+  element
+    sectionTag
+    [ elementId (errorSummaryId summary),
+      tabIndex (-1),
+      dataFlag "error-summary"
+    ]
+    [ element headingTwoTag [] [errorSummaryHeading summary],
+      element
+        listTag
+        []
+        [ element
+            listItemTag
+            []
+            [element anchorTag [fragmentHref (fieldErrorControlId item)] [fieldErrorBody item]]
+        | item <- NonEmpty.toList (errorSummaryItems summary)
+        ]
+    ]
 
 -- | The recovery capability an action explicitly declares, each paired with
 -- whatever evidence that capability requires. Attaching the evidence to the

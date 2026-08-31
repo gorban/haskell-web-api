@@ -29,16 +29,19 @@ module WebApi.AccountPages.Rendering
   )
 where
 
+import Data.List.NonEmpty qualified as NonEmpty
 import Data.Text (Text)
 import HarchWeb qualified
 import HarchWeb.Controls qualified as Controls
 import WebApi.AccountPages.Actions.Contract (AccountActionTarget (..), accountActions)
+import WebApi.AccountPages.FieldIds
 import WebApi.AccountPages.Forms
 import WebApi.Components.PageFrame
   ( PageFrameProps (..),
     PageKind (..),
     pageFrame,
   )
+import WebApi.Localization (AppMessage (..), localizedMessage)
 import WebApi.Route (AppLocale (..), AppRequestContext)
 
 data AccountPageCopy = AccountPageCopy
@@ -47,6 +50,8 @@ data AccountPageCopy = AccountPageCopy
     accountEmailLabel :: Text,
     accountDisplayNameLabel :: Text,
     accountRegistrationPasswordLabel :: Text,
+    accountRegistrationPasswordHint :: Text,
+    accountRegistrationErrorHeading :: Text,
     accountCreateAccountLabel :: Text,
     accountVerificationHeading :: Text,
     accountVerificationTokenLabel :: Text,
@@ -78,6 +83,8 @@ accountPageCopy locale =
           accountEmailLabel = "Email address",
           accountDisplayNameLabel = "Display name (optional)",
           accountRegistrationPasswordLabel = "Password",
+          accountRegistrationPasswordHint = "Use at least 12 characters.",
+          accountRegistrationErrorHeading = "Fix the following problems",
           accountCreateAccountLabel = "Create account",
           accountVerificationHeading = "Verify your email address",
           accountVerificationTokenLabel = "Verification token",
@@ -105,6 +112,8 @@ accountPageCopy locale =
           accountEmailLabel = "Direccion de correo",
           accountDisplayNameLabel = "Nombre para mostrar (opcional)",
           accountRegistrationPasswordLabel = "Contrasena",
+          accountRegistrationPasswordHint = "Usa al menos 12 caracteres.",
+          accountRegistrationErrorHeading = "Corrige los siguientes problemas",
           accountCreateAccountLabel = "Crear cuenta",
           accountVerificationHeading = "Verifica tu direccion de correo",
           accountVerificationTokenLabel = "Token de verificacion",
@@ -176,14 +185,10 @@ loginRegion context locale form =
           actionForm
             context
             LoginAccountTarget
-            [ labelWithFor "login-email" (accountLoginIdentifierLabel copy),
-              inputWithId "login-email" [HarchWeb.name "email", HarchWeb.inputType "text", HarchWeb.autocomplete "username", HarchWeb.required, HarchWeb.value (loginFormEmail form)],
-              labelWithFor "login-password" (accountLoginPasswordLabel copy),
-              inputWithId "login-password" [HarchWeb.name "password", HarchWeb.inputType "password", HarchWeb.autocomplete "current-password", HarchWeb.required],
-              labelWithFor "login-proof" (accountVerificationMethodLabel copy),
-              elementWithId HarchWeb.selectTag "login-proof" [HarchWeb.name "proof"] [HarchWeb.element HarchWeb.optionTag [HarchWeb.value "totp"] [HarchWeb.text (accountAuthenticatorCodeLabel copy)], HarchWeb.element HarchWeb.optionTag [HarchWeb.value "recovery"] [HarchWeb.text (accountRecoveryCodeLabel copy)]],
-              labelWithFor "login-code" (accountVerificationCodeLabel copy),
-              inputWithId "login-code" [HarchWeb.name "code", HarchWeb.autocomplete "one-time-code", HarchWeb.required],
+            [ accessibleInput loginEmailId (accountLoginIdentifierLabel copy) Nothing Controls.FieldValid [HarchWeb.name "email", HarchWeb.inputType "text", HarchWeb.autocomplete "username", HarchWeb.required, HarchWeb.value (loginFormEmail form)],
+              accessibleInput loginPasswordId (accountLoginPasswordLabel copy) Nothing Controls.FieldValid [HarchWeb.name "password", HarchWeb.inputType "password", HarchWeb.autocomplete "current-password", HarchWeb.required],
+              accessibleSelect loginProofId (accountVerificationMethodLabel copy) Controls.FieldValid [HarchWeb.name "proof"] [HarchWeb.element HarchWeb.optionTag [HarchWeb.value "totp"] [HarchWeb.text (accountAuthenticatorCodeLabel copy)], HarchWeb.element HarchWeb.optionTag [HarchWeb.value "recovery"] [HarchWeb.text (accountRecoveryCodeLabel copy)]],
+              accessibleInput loginCodeId (accountVerificationCodeLabel copy) Nothing Controls.FieldValid [HarchWeb.name "code", HarchWeb.autocomplete "one-time-code", HarchWeb.required],
               submitButton (accountSignInLabel copy)
             ]
         ]
@@ -244,20 +249,17 @@ renderRegistrationRegionHtml context locale form = HarchWeb.regionHtml (registra
 registrationRegion :: AppRequestContext -> AppLocale -> RegistrationForm -> HarchWeb.Region
 registrationRegion context locale form =
   let copy = accountPageCopy locale
+      errors = registrationErrors form
    in accountRegion
         "registration-region"
-        [ renderMessage (registrationFormMessage form) (registrationFormIsError form),
+        [ renderRegistrationFeedback locale copy (registrationFormFeedback form),
           actionForm
             context
             RegisterAccountTarget
-            [ labelWithFor "registration-username" (accountUsernameLabel copy),
-              inputWithId "registration-username" [HarchWeb.name "username", HarchWeb.autocomplete "username", HarchWeb.minLength "3", HarchWeb.maxLength "20", HarchWeb.required, HarchWeb.value (registrationFormUsername form)],
-              labelWithFor "registration-email" (accountEmailLabel copy),
-              inputWithId "registration-email" [HarchWeb.name "email", HarchWeb.inputType "email", HarchWeb.autocomplete "email", HarchWeb.required, HarchWeb.value (registrationFormEmail form)],
-              labelWithFor "registration-display-name" (accountDisplayNameLabel copy),
-              inputWithId "registration-display-name" [HarchWeb.name "displayName", HarchWeb.autocomplete "name", HarchWeb.value (registrationFormDisplayName form)],
-              labelWithFor "registration-password" (accountRegistrationPasswordLabel copy),
-              inputWithId "registration-password" [HarchWeb.name "password", HarchWeb.inputType "password", HarchWeb.autocomplete "new-password", HarchWeb.minLength "12", HarchWeb.required],
+            [ accessibleInput registrationUsernameId (accountUsernameLabel copy) Nothing (registrationValidity locale registrationUsernameId errors) [HarchWeb.name "username", HarchWeb.autocomplete "username", HarchWeb.minLength "3", HarchWeb.maxLength "20", HarchWeb.required, HarchWeb.value (registrationFormUsername form)],
+              accessibleInput registrationEmailId (accountEmailLabel copy) Nothing (registrationValidity locale registrationEmailId errors) [HarchWeb.name "email", HarchWeb.inputType "email", HarchWeb.autocomplete "email", HarchWeb.required, HarchWeb.value (registrationFormEmail form)],
+              accessibleInput registrationDisplayNameId (accountDisplayNameLabel copy) Nothing Controls.FieldValid [HarchWeb.name "displayName", HarchWeb.autocomplete "name", HarchWeb.value (registrationFormDisplayName form)],
+              accessibleInput registrationPasswordId (accountRegistrationPasswordLabel copy) (Just (Controls.DescribedContent registrationPasswordHintId (HarchWeb.text (accountRegistrationPasswordHint copy)))) (registrationValidity locale registrationPasswordId errors) [HarchWeb.name "password", HarchWeb.inputType "password", HarchWeb.autocomplete "new-password", HarchWeb.minLength "12", HarchWeb.required],
               submitButton (accountCreateAccountLabel copy)
             ]
         ]
@@ -280,7 +282,7 @@ verificationRegion context locale form =
    in accountRegion
         "verification-region"
         [ renderMessage (verificationFormMessage form) (verificationFormIsError form),
-          actionForm context VerifyEmailTarget [labelWithFor "verification-token" (accountVerificationTokenLabel copy), inputWithId "verification-token" [HarchWeb.name "token", HarchWeb.autocomplete "one-time-code", HarchWeb.required, HarchWeb.value (verificationFormToken form)], submitButton (accountVerifyEmailLabel copy)]
+          actionForm context VerifyEmailTarget [accessibleInput verificationTokenId (accountVerificationTokenLabel copy) Nothing Controls.FieldValid [HarchWeb.name "token", HarchWeb.autocomplete "one-time-code", HarchWeb.required, HarchWeb.value (verificationFormToken form)], submitButton (accountVerifyEmailLabel copy)]
         ]
 
 pageSection :: PageKind -> Text -> HarchWeb.Html -> HarchWeb.Html
@@ -297,19 +299,77 @@ actionForm :: AppRequestContext -> AccountActionTarget -> [HarchWeb.Html] -> Har
 actionForm context target = Controls.renderActionForm . Controls.actionForm accountActions context target Controls.defaultActionFormAttributes
 
 accountRegion :: Text -> [HarchWeb.Html] -> HarchWeb.Region
-accountRegion identifier = HarchWeb.region (HarchWeb.mkRegionId (HarchWeb.literalElementId identifier)) HarchWeb.sectionTag [HarchWeb.ariaLive "polite"]
+accountRegion identifier = HarchWeb.region (HarchWeb.mkRegionId (HarchWeb.literalElementId identifier)) HarchWeb.sectionTag []
 
 replaceRegionPatch :: HarchWeb.Region -> [HarchWeb.RegionPatch]
 replaceRegionPatch = pure . HarchWeb.replaceRegion
+
+registrationErrors :: RegistrationForm -> [RegistrationValidationError]
+registrationErrors form =
+  case registrationFormFeedback form of
+    FormRejected errors -> NonEmpty.toList errors
+    FormReady -> []
+    FormStatusMessage _ -> []
+
+renderRegistrationFeedback :: AppLocale -> AccountPageCopy -> FormFeedback RegistrationValidationError -> HarchWeb.Html
+renderRegistrationFeedback locale copy feedback =
+  case feedback of
+    FormReady -> HarchWeb.fragment []
+    FormStatusMessage status -> renderFormStatus status
+    FormRejected errors ->
+      Controls.errorSummary
+        Controls.ErrorSummary
+          { Controls.errorSummaryId = registrationSummaryId,
+            Controls.errorSummaryHeading = HarchWeb.text (accountRegistrationErrorHeading copy),
+            Controls.errorSummaryItems = fmap (registrationErrorLink locale) errors
+          }
+
+registrationErrorLink :: AppLocale -> RegistrationValidationError -> Controls.FieldErrorLink
+registrationErrorLink locale validationError =
+  let (controlId, _, message) = registrationErrorDetails locale validationError
+   in Controls.FieldErrorLink controlId (HarchWeb.text message)
+
+registrationValidity :: AppLocale -> HarchWeb.ElementId -> [RegistrationValidationError] -> Controls.FieldValidity
+registrationValidity locale controlId validationErrors =
+  case [details | validationError <- validationErrors, let details@(targetId, _, _) = registrationErrorDetails locale validationError, targetId == controlId] of
+    [] -> Controls.FieldValid
+    (_, errorId, message) : _ -> Controls.FieldInvalid (Controls.DescribedContent errorId (HarchWeb.text message))
+
+registrationErrorDetails :: AppLocale -> RegistrationValidationError -> (HarchWeb.ElementId, HarchWeb.ElementId, Text)
+registrationErrorDetails locale validationError =
+  case validationError of
+    RegistrationUsernameInvalid -> (registrationUsernameId, registrationUsernameErrorId, localizedMessage locale UsernameInvalid)
+    RegistrationEmailInvalid -> (registrationEmailId, registrationEmailErrorId, localizedMessage locale EnterValidEmailAddress)
+    RegistrationPasswordTooShort -> (registrationPasswordId, registrationPasswordErrorId, localizedMessage locale PasswordTooShort)
+    RegistrationUsernameUnavailable -> (registrationUsernameId, registrationUsernameErrorId, localizedMessage locale UsernameTaken)
+
+accessibleInput :: HarchWeb.ElementId -> Text -> Maybe Controls.DescribedContent -> Controls.FieldValidity -> [HarchWeb.Attribute] -> HarchWeb.Html
+accessibleInput controlId label hint validity controlAttributes =
+  Controls.accessibleField
+    Controls.AccessibleFieldProps
+      { Controls.accessibleFieldControlId = controlId,
+        Controls.accessibleFieldLabel = HarchWeb.text label,
+        Controls.accessibleFieldHint = hint,
+        Controls.accessibleFieldValidity = validity
+      }
+    (\derived -> HarchWeb.voidElement HarchWeb.inputTag (Controls.fieldControlIdAttribute derived : Controls.fieldControlRelationshipAttributes derived <> controlAttributes))
+
+accessibleSelect :: HarchWeb.ElementId -> Text -> Controls.FieldValidity -> [HarchWeb.Attribute] -> [HarchWeb.Html] -> HarchWeb.Html
+accessibleSelect controlId label validity controlAttributes children =
+  Controls.accessibleField
+    Controls.AccessibleFieldProps
+      { Controls.accessibleFieldControlId = controlId,
+        Controls.accessibleFieldLabel = HarchWeb.text label,
+        Controls.accessibleFieldHint = Nothing,
+        Controls.accessibleFieldValidity = validity
+      }
+    (\derived -> HarchWeb.element HarchWeb.selectTag (Controls.fieldControlIdAttribute derived : Controls.fieldControlRelationshipAttributes derived <> controlAttributes) children)
 
 hiddenInput :: Text -> Text -> HarchWeb.Html
 hiddenInput name value = HarchWeb.voidElement HarchWeb.inputTag [HarchWeb.name name, HarchWeb.inputType "hidden", HarchWeb.value value]
 
 inputWithId :: Text -> [HarchWeb.Attribute] -> HarchWeb.Html
 inputWithId identifier attributes = HarchWeb.voidElement HarchWeb.inputTag (HarchWeb.elementId (HarchWeb.literalElementId identifier) : attributes)
-
-elementWithId :: HarchWeb.NormalTag -> Text -> [HarchWeb.Attribute] -> [HarchWeb.Html] -> HarchWeb.Html
-elementWithId tag identifier attributes = HarchWeb.element tag (HarchWeb.elementId (HarchWeb.literalElementId identifier) : attributes)
 
 labelWithFor :: Text -> Text -> HarchWeb.Html
 labelWithFor identifier label = HarchWeb.element HarchWeb.labelTag [HarchWeb.labelFor (HarchWeb.literalElementId identifier)] [HarchWeb.text label]
@@ -320,7 +380,17 @@ submitButton label = HarchWeb.element HarchWeb.buttonTag [HarchWeb.inputType "su
 renderMessage :: Maybe Text -> Bool -> HarchWeb.Html
 renderMessage maybeMessage isError = maybe (HarchWeb.fragment []) (HarchWeb.element HarchWeb.paragraphTag attributes . pure . HarchWeb.text) maybeMessage
   where
-    attributes = HarchWeb.dataAttribute "account-message" "true" : [HarchWeb.dataAttribute "error-state" "true" | isError]
+    attributes =
+      HarchWeb.dataAttribute "account-message" "true"
+        : if isError
+          then [HarchWeb.dataAttribute "error-state" "true", HarchWeb.role "alert"]
+          else [HarchWeb.role "status", HarchWeb.ariaLive "polite"]
+
+renderFormStatus :: FormStatus -> HarchWeb.Html
+renderFormStatus status =
+  renderMessage
+    (Just (formStatusMessage status))
+    (case formStatusKind status of FormStatusSuccess -> False; FormStatusFailure -> True)
 
 renderEnrollmentSecret :: Maybe Text -> HarchWeb.Html
 renderEnrollmentSecret = maybe (HarchWeb.fragment []) (HarchWeb.element HarchWeb.paragraphTag [HarchWeb.dataAttribute "totp-secret" "true"] . pure . HarchWeb.element HarchWeb.codeTag [] . pure . HarchWeb.text)
