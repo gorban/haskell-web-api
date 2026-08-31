@@ -20,11 +20,12 @@ data AppShellProps = AppShellProps
   { appShellTitlePrefix :: Text,
     appShellPathPrefix :: HarchWeb.PathPrefix,
     appShellStylesheet :: HarchWeb.Stylesheet,
-    appShellNavigationItems :: [HarchWeb.NavigationItem AppRoute]
+    appShellNavigationItems :: [HarchWeb.NavigationItem AppRoute],
+    appShellNavigationLifecycle :: Maybe HarchWeb.NavigationLifecycle
   }
 
 appPageShell :: AppShellProps -> HarchWeb.PageShell AppRoute AppRequestContext
-appPageShell AppShellProps {appShellTitlePrefix, appShellPathPrefix, appShellStylesheet, appShellNavigationItems} =
+appPageShell AppShellProps {appShellTitlePrefix, appShellPathPrefix, appShellStylesheet, appShellNavigationItems, appShellNavigationLifecycle} =
   HarchWeb.PageShell
     { HarchWeb.shellBodyAttributes =
         [ HarchWeb.HtmlAttribute "data-app" appShellTitlePrefix,
@@ -35,11 +36,12 @@ appPageShell AppShellProps {appShellTitlePrefix, appShellPathPrefix, appShellSty
           scopedClassAttribute "app-shell" "navigation"
         ],
       HarchWeb.shellNavigationItems = appShellNavigationItems,
-      HarchWeb.shellMainId = "app-main",
+      HarchWeb.shellMainId = HarchWeb.literalElementId "app-main",
       HarchWeb.shellMainAttributes =
         [ HarchWeb.HtmlAttribute "data-navigation-content" "true",
           scopedClassAttribute "app-shell" "main"
         ],
+      HarchWeb.shellNavigationLifecycle = appShellNavigationLifecycle,
       HarchWeb.shellStylesheets = [stylesheetWithPrefix appShellPathPrefix appShellStylesheet],
       HarchWeb.shellRuntimeDescriptors = []
     }

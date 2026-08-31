@@ -14,6 +14,7 @@ import HarchWeb
     Page (..),
     PageShell (..),
     RuntimeDescriptor (..),
+    literalElementId,
     stylesheet,
   )
 
@@ -33,13 +34,14 @@ twoPageShell page =
             }
         ],
       shellNavigationItems = [],
-      shellMainId = "app-main",
+      shellMainId = literalElementId "app-main",
       shellMainAttributes =
         [ HtmlAttribute
             { attributeName = "data-navigation-content",
               attributeValue = "true"
             }
         ],
+      shellNavigationLifecycle = Nothing,
       shellStylesheets = [stylesheet (AssetPath "/assets/two-pages.css")],
       shellRuntimeDescriptors =
         case pageRoute page of

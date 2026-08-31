@@ -277,8 +277,9 @@ spec = do
                       { shellBodyAttributes = [],
                         shellNavigationAttributes = [],
                         shellNavigationItems = [],
-                        shellMainId = "app-main",
+                        shellMainId = HarchWeb.literalElementId "app-main",
                         shellMainAttributes = [],
+                        shellNavigationLifecycle = Nothing,
                         shellStylesheets = [],
                         shellRuntimeDescriptors = []
                       }
@@ -433,13 +434,14 @@ samplePageShell page =
               }
           ],
         shellNavigationItems = [],
-        shellMainId = "app-main",
+        shellMainId = HarchWeb.literalElementId "app-main",
         shellMainAttributes =
           [ HtmlAttribute
               { attributeName = "data-navigation-content",
                 attributeValue = "true"
               }
           ],
+        shellNavigationLifecycle = Nothing,
         shellStylesheets = [],
         shellRuntimeDescriptors = []
       }

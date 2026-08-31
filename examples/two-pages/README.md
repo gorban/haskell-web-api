@@ -146,6 +146,21 @@ subscriptionEmailField SubscriptionEmailFieldProps children =
 6. `/live-data` begins with meaningful SSR status. Its deferred `EventSource` module replaces that
    status after an event; without scripts, the initial content remains.
 
+The same runtime also interprets an optional `NavigationLifecycle` declared by
+`PageShell`. `mainNavigationLifecycle` is the accessible default: provide a
+localized skip-link label and the rendered document places that native link
+first, makes the typed main landmark programmatically focusable, and renders
+an initially empty polite status. A successful enhanced click or Back/Forward
+replacement commits the final same-origin response URL, focuses and scrolls
+the new main, and writes the destination title to that status exactly once.
+`FocusElement` and `AnnounceElementText` are typed alternatives for an app that
+owns stable elements inside the replaced regions. A missing binding or unsafe
+final URL is incompatible and falls back to ordinary navigation. An
+application that needs a different algorithm supplies its own existing
+`NavigationRuntime`; lifecycle adapters do not embed selector strings or
+JavaScript callbacks. The two-pages example deliberately leaves this optional
+adapter disabled, while `web-api` is the localized reference implementation.
+
 The subscription target is declared once in `App.Routes.twoPageActions` as an
 `ActionCodec TwoPageActionTarget () TwoPageAction`. `App.Components.Controls.actionForm` passes that
 codec and a typed `Subscribe` target to `HarchWeb.Controls.actionForm`; the same declaration decodes the

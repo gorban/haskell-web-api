@@ -102,9 +102,15 @@ movedSpec = do
           scopedCssScope = cssScope "sample"
           scopedCssClass = ScopedCssClass scopedCssScope "title"
           globalCssClass = GlobalCssClass "visually-hidden"
+          skipLink = NavigationSkipLink {skipLinkLabel = "Skip to main", skipLinkClass = Just globalCssClass}
+          navigationLifecycle =
+            (mainNavigationLifecycle "Skip to main")
+              { navigationSkipLink = Just skipLink,
+                navigationStatusClass = Just globalCssClass
+              }
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
-          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = trustedMarkup "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentStylesheets = [stylesheetValue], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
-          shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellStylesheets = [stylesheetValue], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
+          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = literalElementId "app-main", documentMainAttributes = [mainAttribute], documentMainContent = trustedMarkup "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentNavigationLifecycle = Just navigationLifecycle, documentStylesheets = [stylesheetValue], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
+          shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = literalElementId "app-main", shellMainAttributes = [mainAttribute], shellNavigationLifecycle = Just navigationLifecycle, shellStylesheets = [stylesheetValue], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
           responseBodyValue = ResponseBody {responseStatus = Http.status202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}
           clientActionPayload =
             ClientActionPayload
@@ -160,6 +166,11 @@ movedSpec = do
             :| [ Text.isInfixOf "captureKernel.register(captureKernel.eventTypes.Submit" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "settlement.completed();" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "if (isRenderedDocument(window.location.href))" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "finalUrl = new URL(response.url);" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "window.history.pushState({ path: finalUrl.href }, '', finalUrl.href);" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "activeNavigation.abortController.abort();" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "focusTarget.focus({ preventScroll: true });" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "lifecycle.status.replaceChildren(lifecycle.announcementText);" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "['click', 'input', 'change', 'keydown', 'submit']" defaultCaptureKernelScript `shouldBe` False
                ]
         )
@@ -168,6 +179,12 @@ movedSpec = do
       cssScopeName scopedCssScope `shouldBe` "sample"
       cssClassText scopedCssClass `shouldBe` "harch-sample-title"
       cssClassText globalCssClass `shouldBe` "visually-hidden"
+      skipLinkLabel skipLink `shouldBe` "Skip to main"
+      skipLinkClass skipLink `shouldBe` Just globalCssClass
+      navigationSkipLink navigationLifecycle `shouldBe` Just skipLink
+      navigationFocusTarget navigationLifecycle `shouldBe` FocusMainLandmark
+      navigationAnnouncement navigationLifecycle `shouldBe` AnnounceDocumentTitle
+      navigationStatusClass navigationLifecycle `shouldBe` Just globalCssClass
       resolvedNavigationItemLabel `shouldBe` "Known"
       resolvedNavigationItemRoute `shouldBe` KnownRoute
       resolvedNavigationItemHref `shouldBe` "/known"
@@ -176,7 +193,7 @@ movedSpec = do
       documentBodyAttributes document `shouldBe` [attribute]
       documentNavigationAttributes document `shouldBe` [navigationAttribute]
       documentNavigation document `shouldBe` [resolvedNavigationItem]
-      documentMainId document `shouldBe` "app-main"
+      documentMainId document `shouldBe` literalElementId "app-main"
       documentMainAttributes document `shouldBe` [mainAttribute]
       renderHtml (documentMainContent document) `shouldBe` "<h1>Known</h1>"
       documentBootstrapHooks document `shouldBe` ["known-page"]
@@ -185,8 +202,10 @@ movedSpec = do
       shellBodyAttributes shell `shouldBe` [attribute]
       shellNavigationAttributes shell `shouldBe` [navigationAttribute]
       shellNavigationItems shell `shouldBe` [navigationItem]
-      shellMainId shell `shouldBe` "app-main"
+      shellMainId shell `shouldBe` literalElementId "app-main"
       shellMainAttributes shell `shouldBe` [mainAttribute]
+      shellNavigationLifecycle shell `shouldBe` Just navigationLifecycle
+      documentNavigationLifecycle document `shouldBe` Just navigationLifecycle
       shellStylesheets shell `shouldBe` [stylesheetValue]
       shellRuntimeDescriptors shell `shouldBe` [DeferredModule "navigation" "/assets/navigation.js"]
       localServerHost localTestServer `shouldBe` "127.0.0.1"
@@ -251,16 +270,32 @@ movedSpec = do
           otherScopedCssClass = ScopedCssClass otherScopedCssScope "title"
           globalCssClass = GlobalCssClass "visually-hidden"
           otherGlobalCssClass = GlobalCssClass "other-global"
+          skipLink = NavigationSkipLink "Skip to main" (Just globalCssClass)
+          otherSkipLink = NavigationSkipLink "Skip to heading" Nothing
+          navigationLifecycle =
+            NavigationLifecycle
+              { navigationSkipLink = Just skipLink,
+                navigationFocusTarget = FocusMainLandmark,
+                navigationAnnouncement = AnnounceDocumentTitle,
+                navigationStatusClass = Just globalCssClass
+              }
+          otherNavigationLifecycle =
+            NavigationLifecycle
+              { navigationSkipLink = Just otherSkipLink,
+                navigationFocusTarget = FocusElement (literalElementId "heading"),
+                navigationAnnouncement = AnnounceElementText (literalElementId "summary"),
+                navigationStatusClass = Nothing
+              }
           liveRegion = PoliteStatus
           otherLiveRegion = AssertiveAlert
           serverSentEvent = ServerSentEvent {serverSentEventName = Just "status", serverSentEventId = Just "42", serverSentEventData = "Ready"}
           otherServerSentEvent = ServerSentEvent {serverSentEventName = Nothing, serverSentEventId = Just "43", serverSentEventData = "Waiting"}
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
           otherResolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Missing", navigationRoute = MissingRoute, navigationHref = "/404", navigationIsActive = False}
-          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = trustedMarkup "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentStylesheets = [], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
-          otherDocument = Document {documentTitle = "Missing", documentBodyAttributes = [otherAttribute], documentNavigationAttributes = [otherNavigationAttribute], documentNavigation = [otherResolvedNavigationItem], documentMainId = "other-main", documentMainAttributes = [otherMainAttribute], documentMainContent = trustedMarkup "<h1>Missing</h1>", documentBootstrapHooks = [], documentStylesheets = [], documentRuntimeDescriptors = []}
-          shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellStylesheets = [], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
-          otherShell = PageShell {shellBodyAttributes = [otherAttribute], shellNavigationAttributes = [otherNavigationAttribute], shellNavigationItems = [otherNavigationItem], shellMainId = "other-main", shellMainAttributes = [otherMainAttribute], shellStylesheets = [], shellRuntimeDescriptors = []}
+          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = literalElementId "app-main", documentMainAttributes = [mainAttribute], documentMainContent = trustedMarkup "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentNavigationLifecycle = Just navigationLifecycle, documentStylesheets = [], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
+          otherDocument = Document {documentTitle = "Missing", documentBodyAttributes = [otherAttribute], documentNavigationAttributes = [otherNavigationAttribute], documentNavigation = [otherResolvedNavigationItem], documentMainId = literalElementId "other-main", documentMainAttributes = [otherMainAttribute], documentMainContent = trustedMarkup "<h1>Missing</h1>", documentBootstrapHooks = [], documentNavigationLifecycle = Just otherNavigationLifecycle, documentStylesheets = [], documentRuntimeDescriptors = []}
+          shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = literalElementId "app-main", shellMainAttributes = [mainAttribute], shellNavigationLifecycle = Just navigationLifecycle, shellStylesheets = [], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
+          otherShell = PageShell {shellBodyAttributes = [otherAttribute], shellNavigationAttributes = [otherNavigationAttribute], shellNavigationItems = [otherNavigationItem], shellMainId = literalElementId "other-main", shellMainAttributes = [otherMainAttribute], shellNavigationLifecycle = Just otherNavigationLifecycle, shellStylesheets = [], shellRuntimeDescriptors = []}
           body = ResponseBody {responseStatus = Http.status202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}
           otherBody = ResponseBody {responseStatus = Http.status200, responseContentType = "text/html", responseBody = "<h1>OK</h1>", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR sample"], responseDatabaseOperations = []}
           pageMetadata = ResponseBody {responseStatus = Http.status500, responseContentType = "text/html; charset=utf-8", responseBody = "", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR page"], responseDatabaseOperations = []}
@@ -334,6 +369,19 @@ movedSpec = do
       show globalCssClass `shouldBe` "GlobalCssClass \"visually-hidden\""
       show [scopedCssClass, globalCssClass]
         `shouldBe` "[ScopedCssClass (CssScope {cssScopeName = \"sample\"}) \"title\",GlobalCssClass \"visually-hidden\"]"
+      (skipLink /= otherSkipLink) `shouldBe` True
+      show skipLink `shouldBe` "NavigationSkipLink {skipLinkLabel = \"Skip to main\", skipLinkClass = Just (GlobalCssClass \"visually-hidden\")}"
+      show [skipLink] `shouldContain` "NavigationSkipLink"
+      (navigationLifecycle /= otherNavigationLifecycle) `shouldBe` True
+      show navigationLifecycle `shouldContain` "navigationFocusTarget = FocusMainLandmark"
+      show otherNavigationLifecycle `shouldContain` "navigationFocusTarget = FocusElement"
+      show [navigationLifecycle, otherNavigationLifecycle] `shouldContain` "AnnounceElementText"
+      FocusMainLandmark `shouldNotBe` FocusElement (literalElementId "heading")
+      show FocusMainLandmark `shouldBe` "FocusMainLandmark"
+      show [FocusElement (literalElementId "heading")] `shouldContain` "FocusElement"
+      AnnounceDocumentTitle `shouldNotBe` AnnounceElementText (literalElementId "summary")
+      show AnnounceDocumentTitle `shouldBe` "AnnounceDocumentTitle"
+      show [AnnounceElementText (literalElementId "summary")] `shouldContain` "AnnounceElementText"
       (resolvedNavigationItem /= otherResolvedNavigationItem) `shouldBe` True
       show resolvedNavigationItem `shouldBe` "ResolvedNavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute, navigationHref = \"/known\", navigationIsActive = True}"
       (document /= otherDocument) `shouldBe` True

@@ -135,6 +135,205 @@ spec =
             )
             `shouldReturn` Right ()
 
+    it "focuses and announces one lifecycle for keyboard navigation, history, and final redirected URLs" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let baseUrl = HarchWeb.localServerBaseUrl server
+              secondUrl = baseUrl <> "/second"
+              spacesUrl = baseUrl <> "/spaces"
+              mainContent = css "#app-main"
+              routeStatus = byRole Status
+          runBrowserScenario
+            browser
+            ( do
+                setViewportSize 320 480
+                visit secondUrl
+                assertText routeStatus (`shouldBe` "")
+                _ <-
+                  runPageScript
+                    "window.__ahi8HistoryLength = history.length; const status = document.querySelector('[data-navigation-route-status]'); let count = 0; status.dataset.testMutationCount = '0'; new MutationObserver((records) => { count += records.filter((record) => record.type === 'childList' || record.type === 'characterData').length; status.dataset.testMutationCount = String(count); }).observe(status, { childList: true, characterData: true, subtree: true }); document.documentElement.style.zoom = '2'; true"
+                press (byRole Link `named` "Spaces") "Enter"
+                assertAll
+                  ((,) <$> currentUrl <*> isFocused mainContent)
+                  (\(url, mainFocused) -> (url `shouldBe` spacesUrl) :| [mainFocused `shouldBe` True])
+                _ <-
+                  runPageScript
+                    "const main = document.querySelector('#app-main'); const box = main.getBoundingClientRect(); const sampleX = Math.min(window.innerWidth - 1, Math.max(0, box.left + 1)); const sampleY = Math.min(window.innerHeight - 1, Math.max(0, box.top + 1)); const topElement = document.elementFromPoint(sampleX, sampleY); const style = getComputedStyle(main); main.dataset.testFocusUnobscured = String(document.activeElement === main && box.top >= 0 && box.top < window.innerHeight && (topElement === main || main.contains(topElement)) && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0); true"
+                assertAll
+                  ( (,,,,,,)
+                      <$> currentUrl
+                      <*> textContent (css "title")
+                      <*> textContent (byRole Heading)
+                      <*> textContent routeStatus
+                      <*> isFocused mainContent
+                      <*> attributeValue routeStatus "data-test-mutation-count"
+                      <*> attributeValue mainContent "data-test-focus-unobscured"
+                  )
+                  ( \(url, title, heading, announcement, mainFocused, mutationCount, unobscured) ->
+                      (url `shouldBe` spacesUrl)
+                        :| [ title `shouldBe` "web-api: Spaces",
+                             heading `shouldBe` "Site under construction",
+                             announcement `shouldBe` "web-api: Spaces",
+                             mainFocused `shouldBe` True,
+                             mutationCount `shouldBe` Just "1",
+                             unobscured `shouldBe` Just "true"
+                           ]
+                  )
+                historyBack
+                assertAll
+                  ((,,,) <$> currentUrl <*> textContent (css "title") <*> textContent routeStatus <*> attributeValue routeStatus "data-test-mutation-count")
+                  ( \(url, title, announcement, mutationCount) ->
+                      (url `shouldBe` secondUrl)
+                        :| [ title `shouldBe` "web-api: Second",
+                             announcement `shouldBe` "web-api: Second",
+                             mutationCount `shouldBe` Just "2"
+                           ]
+                  )
+                assertFocused mainContent (`shouldBe` True)
+                historyForward
+                assertAll
+                  ((,,,) <$> currentUrl <*> textContent routeStatus <*> attributeValue routeStatus "data-test-mutation-count" <*> attributeValue (byRole Link `named` "Spaces") "aria-current")
+                  ( \(url, announcement, mutationCount, activeRoute) ->
+                      (url `shouldBe` spacesUrl)
+                        :| [ announcement `shouldBe` "web-api: Spaces",
+                             mutationCount `shouldBe` Just "3",
+                             activeRoute `shouldBe` Just "page"
+                           ]
+                  )
+                _ <- runPageScript "document.querySelector('#app-main').dataset.testHistoryStable = String(history.length === window.__ahi8HistoryLength + 1); true"
+                assertAttribute mainContent "data-test-history-stable" (`shouldBe` Just "true")
+                visit secondUrl
+                press (byRole Link `named` "Home") "Enter"
+                assertAll
+                  ((,,,,) <$> currentUrl <*> textContent (css "title") <*> textContent routeStatus <*> isFocused mainContent <*> browserMetrics)
+                  ( \(url, title, announcement, mainFocused, metrics) ->
+                      (url `shouldBe` spacesUrl)
+                        :| [ title `shouldBe` "web-api: Spaces",
+                             announcement `shouldBe` "web-api: Spaces",
+                             mainFocused `shouldBe` True,
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                           ]
+                  )
+            )
+            `shouldReturn` Right ()
+
+    it "keeps only the newest overlapping enhanced navigation lifecycle" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let baseUrl = HarchWeb.localServerBaseUrl server
+              spacesUrl = baseUrl <> "/spaces"
+              profileUrl = baseUrl <> "/profile"
+              routeStatus = byRole Status
+          runBrowserScenario
+            browser
+            ( do
+                visit spacesUrl
+                blockRequestsMatching "**/second"
+                _ <-
+                  runPageScript
+                    "const status = document.querySelector('[data-navigation-route-status]'); let count = 0; status.dataset.testMutationCount = '0'; new MutationObserver((records) => { count += records.filter((record) => record.type === 'childList' || record.type === 'characterData').length; status.dataset.testMutationCount = String(count); }).observe(status, { childList: true, characterData: true, subtree: true }); true"
+                press (byRole Link `named` "Second") "Enter"
+                press (byRole Link `named` "Profile") "Enter"
+                releaseRequestsMatching "**/second"
+                assertAll
+                  ((,,,,) <$> currentUrl <*> textContent (byRole Heading) <*> textContent routeStatus <*> attributeValue routeStatus "data-test-mutation-count" <*> browserMetrics)
+                  ( \(url, heading, announcement, mutationCount, metrics) ->
+                      (url `shouldBe` profileUrl)
+                        :| [ heading `shouldBe` "Profile",
+                             announcement `shouldBe` "web-api: Profile",
+                             mutationCount `shouldBe` Just "1",
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 2, hardNavigationCount = 0}|])
+                           ]
+                  )
+                assertFocused (css "#app-main") (`shouldBe` True)
+            )
+            `shouldReturn` Right ()
+
+    it "falls back natively for failed, incompatible, and unsafe final responses without announcing success" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let baseUrl = HarchWeb.localServerBaseUrl server
+              secondUrl = baseUrl <> "/second"
+              spacesUrl = baseUrl <> "/spaces"
+              routeStatus = byRole Status
+              assertNativeFallback =
+                assertAll
+                  ((,,,) <$> currentUrl <*> textContent (byRole Heading) <*> textContent routeStatus <*> browserMetrics)
+                  ( \(url, heading, announcement, metrics) ->
+                      (url `shouldBe` secondUrl)
+                        :| [ heading `shouldBe` "Second",
+                             announcement `shouldBe` "",
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
+                           ]
+                  )
+          runBrowserScenario
+            browser
+            ( do
+                visit spacesUrl
+                blockRequestsMatching "**/second"
+                press (byRole Link `named` "Second") "Enter"
+                failBlockedRequestsMatching "**/second"
+                assertNativeFallback
+                visit spacesUrl
+                _ <-
+                  runPageScript
+                    "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: response.url, text: async () => '<!DOCTYPE html><html><head><title>Incompatible</title></head><body><main>Missing lifecycle markers</main></body></html>' }; }; true"
+                press (byRole Link `named` "Second") "Enter"
+                assertNativeFallback
+                visit spacesUrl
+                _ <-
+                  runPageScript
+                    "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: 'https://outside.example/redirect', text: () => response.text() }; }; true"
+                press (byRole Link `named` "Second") "Enter"
+                assertNativeFallback
+                visit spacesUrl
+                _ <-
+                  runPageScript
+                    "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: '://malformed', text: () => response.text() }; }; true"
+                press (byRole Link `named` "Second") "Enter"
+                assertNativeFallback
+            )
+            `shouldReturn` Right ()
+
+    it "keeps delayed-runtime and scripts-disabled keyboard navigation native, including the skip link" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let baseUrl = HarchWeb.localServerBaseUrl server
+              secondUrl = baseUrl <> "/second"
+              spacesUrl = baseUrl <> "/spaces"
+              mainContent = css "#app-main"
+          runBrowserScenario
+            browser
+            ( do
+                blockRequestsMatching "**/assets/navigation.js"
+                visit secondUrl
+                press (byRole Link `named` "Spaces") "Enter"
+                assertAll
+                  ((,,) <$> currentUrl <*> textContent (byRole Status) <*> browserMetrics)
+                  ( \(url, announcement, metrics) ->
+                      (url `shouldBe` spacesUrl)
+                        :| [ announcement `shouldBe` "",
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
+                           ]
+                  )
+                releaseRequestsMatching "**/assets/navigation.js"
+                visitWithoutScripts secondUrl
+                press (css "body") "Tab"
+                assertFocused (byRole Link `named` "Skip to main content") (`shouldBe` True)
+                press (byRole Link `named` "Skip to main content") "Enter"
+                assertFocused mainContent (`shouldBe` True)
+                press (byRole Link `named` "Spaces") "Enter"
+                assertAll
+                  ((,,) <$> currentUrl <*> textContent (byRole Heading) <*> browserMetrics)
+                  ( \(url, heading, metrics) ->
+                      (url `shouldBe` spacesUrl)
+                        :| [ heading `shouldBe` "Site under construction",
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
+                           ]
+                  )
+            )
+            `shouldReturn` Right ()
+
     it "preserves Spanish registration input until the delayed runtime sends its localized patch" $
       withBrowserApp $ \browser appConfig ->
         HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultPageRepository localizedRegistrationWorkflow) $ \server -> do

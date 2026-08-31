@@ -2380,12 +2380,47 @@ order, focus at narrow/zoomed layout, secret clearing, and the explicit
 scripts-disabled `method=dialog` policy. The complete inventory and limits of
 that proof are recorded in `docs/accessibility.md`.
 
+### Follow-up decision — AHI-8: pluggable accessible navigation lifecycle (2026-08-31)
+
+**Decision: extend `PageShell` and the existing replaceable
+`NavigationRuntime` with a declarative lifecycle adapter; do not add a second
+navigation dispatcher or accept application JavaScript callbacks.** A shell
+may declare a typed focus target, a document-title or element-text
+announcement source, a localized native skip link, and application-owned CSS
+classes. `mainNavigationLifecycle` supplies the reference default: the stable
+typed main ID is programmatically focusable, the skip link is the first body
+control, and one fixed polite/atomic status receives the destination document
+title. Harch fixes the live-region semantics and runtime ordering so an
+adapter cannot accidentally contradict the accessibility contract.
+
+This split is deliberately pluggable at both established boundaries. An
+application can use `FocusElement` and `AnnounceElementText` when its replaced
+main or navigation region owns a stable alternative; a missing or
+out-of-region target makes the fetched document incompatible and uses native
+navigation. Applications needing a different completion algorithm can already
+replace `NavigationRuntime` as a whole. Selector strings, arbitrary status
+attributes, and script callbacks are therefore unnecessary new surfaces.
+`PageShell` and `Document` now carry the existing opaque `ElementId` for their
+main IDs instead of raw text.
+
+The one runtime validates the final same-origin `Response.url`, document
+regions, and lifecycle bindings before replacement; commits that final URL to
+history; then focuses with `preventScroll`, scrolls deliberately, and performs
+one status-node mutation. Back/Forward uses the same function. A new
+navigation aborts and supersedes the older fetch, so the older response cannot
+move focus, add history, or announce. Failed, malformed, cross-origin, and
+incompatible responses retain native hard-navigation fallback and do not
+announce success. The `web-api` shell supplies English/Spanish copy and
+app-owned focus/visually-hidden CSS; real-browser tests cover redirect,
+history, overlap, narrow 200% zoom, delayed runtime, scripts-disabled skip
+navigation, and every fallback class.
+
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
 the full designed scope shipped; a partial slice must say so and name its follow-up.
 
 | Area | State | Guidance |
 | --- | --- | --- |
-| Complete SSR and enhanced navigation | Implemented | Keep direct loads and scripts-disabled behavior in every page test. |
+| Complete SSR and enhanced navigation | Implemented | `NavigationLifecycle` is the optional declarative accessibility adapter interpreted by the existing replaceable runtime. The reference adapter focuses the stable main, commits final same-origin redirect URLs, and announces the destination title once; direct loads, incompatible responses, delayed modules, and scripts-disabled links retain native behavior. |
 | Immediate modeled-form capture | Implemented | Extend the kernel contract before adding another enabled framework event type. |
 | Generated static page algebra/dispatch | Implemented | Export `pageDefinition`; keep API and dynamic routes explicit. |
 | Typed markup and component calls | Implemented | Prefer named record fields; reserve positional `props` for distinct typed values. |

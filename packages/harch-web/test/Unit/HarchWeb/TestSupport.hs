@@ -202,13 +202,14 @@ sampleShell =
               navigationRoute = MissingRoute
             }
         ],
-      shellMainId = "app-main",
+      shellMainId = literalElementId "app-main",
       shellMainAttributes =
         [ HtmlAttribute
             { attributeName = "data-navigation-content",
               attributeValue = "true"
             }
         ],
+      shellNavigationLifecycle = Nothing,
       shellStylesheets = [],
       shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]
     }

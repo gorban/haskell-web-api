@@ -36,6 +36,7 @@ data AppMessage
   | SignInBeforeResend
   | SignInUnavailable
   | SignInRejected
+  | SkipToMainContent
   | SignOutUnavailable
   | StartAuthenticatorEnrollment
   | AuthenticatorCodeInvalid
@@ -144,6 +145,8 @@ messageTemplateFor messageKey appLocale =
     (SignInUnavailable, Spanish) -> [message|El inicio de sesion no esta disponible temporalmente.|]
     (SignInRejected, English) -> [message|Sign-in was rejected.|]
     (SignInRejected, Spanish) -> [message|El inicio de sesion fue rechazado.|]
+    (SkipToMainContent, English) -> [message|Skip to main content|]
+    (SkipToMainContent, Spanish) -> [message|Saltar al contenido principal|]
     (SignOutUnavailable, English) -> [message|Sign-out is temporarily unavailable.|]
     (SignOutUnavailable, Spanish) -> [message|El cierre de sesion no esta disponible temporalmente.|]
     (StartAuthenticatorEnrollment, English) -> [message|Start a new authenticator enrollment.|]

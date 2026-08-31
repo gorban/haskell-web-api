@@ -6,8 +6,12 @@ module HarchWeb.Document
   ( Document (..),
     HtmlAttribute (..),
     LiveRegion (..),
+    NavigationAnnouncement (..),
+    NavigationFocusTarget (..),
     NavigationItem (..),
+    NavigationLifecycle (..),
     NavigationRuntime (..),
+    NavigationSkipLink (..),
     Page (..),
     PageShell (..),
     ResolvedNavigationItem (..),
@@ -22,6 +26,7 @@ module HarchWeb.Document
     defaultNavigationRuntimeScript,
     generateRuntimeNonce,
     liveRegionAttributes,
+    mainNavigationLifecycle,
     navigationRuntimeScriptSource,
     renderDocumentForTests,
     renderDocumentWithNonce,
@@ -34,10 +39,10 @@ import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
-import HarchWeb.Markup (Html, renderHtml, text)
+import HarchWeb.Markup (ElementId, Html, elementIdText, renderHtml, text)
 import HarchWeb.PathPrefix (PathPrefix, applyPathPrefix, mkUrlPath, urlPathText)
 import HarchWeb.Routing (RouteCodec, routeHref)
-import HarchWeb.StaticAssets (AssetPath (..), Stylesheet (..))
+import HarchWeb.StaticAssets (AssetPath (..), CssClass, Stylesheet (..), cssClassText)
 
 data Page route context = Page
   { pageTitle :: Text,
@@ -96,6 +101,64 @@ data NavigationRuntime = NavigationRuntime
   }
   deriving (Eq, Show)
 
+-- | A native skip link rendered before every other focusable body control.
+-- The label is page-specific so applications can localize it at their normal
+-- shell boundary. Styling remains an optional typed class owned by the app.
+data NavigationSkipLink = NavigationSkipLink
+  { skipLinkLabel :: Text,
+    skipLinkClass :: Maybe CssClass
+  }
+  deriving (Eq, Show)
+
+-- | The element that receives focus after a compatible enhanced navigation.
+-- 'FocusMainLandmark' is the framework-owned safe default. An application may
+-- instead name an element inside the replaced navigation or main region; it
+-- then owns rendering that element as programmatically focusable on every
+-- compatible page. A missing or out-of-region target makes the response
+-- incompatible and preserves the hard-navigation fallback.
+data NavigationFocusTarget
+  = FocusMainLandmark
+  | FocusElement ElementId
+  deriving (Eq, Show)
+
+-- | The text copied into the fixed polite route-status node after navigation.
+-- Role, politeness, and atomicity are deliberately not configurable because
+-- contradictory live-region semantics would break the lifecycle contract.
+data NavigationAnnouncement
+  = AnnounceDocumentTitle
+  | AnnounceElementText ElementId
+  deriving (Eq, Show)
+
+-- | Declarative DOM bindings for the existing navigation runtime.
+--
+-- Decision (AHI-8, 2026-08-31): Harch extends the existing 'PageShell' and
+-- 'NavigationRuntime' boundaries instead of adding a second SPA dispatcher.
+-- This ordinary value is the pluggable server-rendered adapter: applications
+-- can select a typed focus target and announcement source, localize or omit
+-- the native skip link, and style the fixed status node. The supplied
+-- 'mainNavigationLifecycle' is the accessible default. Applications needing a
+-- genuinely different completion algorithm keep using the already-replaceable
+-- 'NavigationRuntime'; Harch does not accept selector strings, JavaScript
+-- callbacks, or arbitrary live-region attributes through this value.
+data NavigationLifecycle = NavigationLifecycle
+  { navigationSkipLink :: Maybe NavigationSkipLink,
+    navigationFocusTarget :: NavigationFocusTarget,
+    navigationAnnouncement :: NavigationAnnouncement,
+    navigationStatusClass :: Maybe CssClass
+  }
+  deriving (Eq, Show)
+
+-- | The recommended lifecycle adapter: a native skip link to the stable main
+-- landmark, main focus after replacement, and one document-title announcement.
+mainNavigationLifecycle :: Text -> NavigationLifecycle
+mainNavigationLifecycle label =
+  NavigationLifecycle
+    { navigationSkipLink = Just NavigationSkipLink {skipLinkLabel = label, skipLinkClass = Nothing},
+      navigationFocusTarget = FocusMainLandmark,
+      navigationAnnouncement = AnnounceDocumentTitle,
+      navigationStatusClass = Nothing
+    }
+
 -- | The default progressive-navigation asset. It is document-facing authoring
 -- data: servers only decide how to deliver the declared path. The runtime
 -- tracks the last document it rendered and leaves same-document history
@@ -121,7 +184,10 @@ defaultNavigationRuntimeScript =
       "  const pageLinkSelector = 'a[data-page-link=\"true\"]';",
       "  const navigationRegionSelector = 'nav[data-navigation-region=\"primary\"]';",
       "  const navigationContentSelector = 'main[data-navigation-content=\"true\"]';",
-      "  let navigationInFlight = false;",
+      "  const navigationSkipLinkSelector = 'a[data-navigation-skip-link=\"true\"]';",
+      "  const navigationStatusSelector = '[data-navigation-route-status=\"true\"]';",
+      "  let activeNavigation = null;",
+      "  let nextNavigationId = 1;",
       "  let renderedDocumentUrl = new URL(window.location.href);",
       "",
       "  function applyActionResponse(actionResponse) {",
@@ -224,7 +290,58 @@ defaultNavigationRuntimeScript =
       "    });",
       "  }",
       "",
-      "  function applyFetchedDocument(responseText, targetUrl, shouldPushState) {",
+      "  function syncElementAttributes(currentElement, nextElement) {",
+      "    const nextAttributes = new Map(Array.from(nextElement.attributes, (attribute) => [attribute.name, attribute.value]));",
+      "    Array.from(currentElement.attributes).forEach((attribute) => {",
+      "      if (!nextAttributes.has(attribute.name)) {",
+      "        currentElement.removeAttribute(attribute.name);",
+      "      }",
+      "    });",
+      "    nextAttributes.forEach((value, name) => currentElement.setAttribute(name, value));",
+      "  }",
+      "",
+      "  function readNavigationLifecycle(rootDocument, navigationRegion, navigationContent) {",
+      "    const status = rootDocument.querySelector(navigationStatusSelector);",
+      "    const skipLink = rootDocument.querySelector(navigationSkipLinkSelector);",
+      "    if (!status) {",
+      "      return skipLink ? null : { status: null, skipLink: null, focusTargetId: null, announcementText: null };",
+      "    }",
+      "",
+      "    const focusTargetId = status.dataset.navigationFocusTargetId;",
+      "    const announcementSource = status.dataset.navigationAnnouncementSource;",
+      "    const focusTarget = focusTargetId ? rootDocument.getElementById(focusTargetId) : null;",
+      "    const focusIsReplaced = focusTarget && (focusTarget === navigationRegion || focusTarget === navigationContent || navigationRegion.contains(focusTarget) || navigationContent.contains(focusTarget));",
+      "    if (!focusIsReplaced) {",
+      "      return null;",
+      "    }",
+      "",
+      "    let announcementText = null;",
+      "    if (announcementSource === 'document-title') {",
+      "      announcementText = rootDocument.title;",
+      "    } else if (announcementSource === 'element-text') {",
+      "      const sourceId = status.dataset.navigationAnnouncementSourceId;",
+      "      const sourceElement = sourceId ? rootDocument.getElementById(sourceId) : null;",
+      "      announcementText = sourceElement ? sourceElement.textContent : null;",
+      "    }",
+      "",
+      "    if (announcementText === null) {",
+      "      return null;",
+      "    }",
+      "",
+      "    return { status, skipLink, focusTargetId, announcementText };",
+      "  }",
+      "",
+      "  function applyNavigationLifecycle(lifecycle) {",
+      "    if (!lifecycle.status) {",
+      "      return;",
+      "    }",
+      "    const focusTarget = document.getElementById(lifecycle.focusTargetId);",
+      "    focusTarget.focus({ preventScroll: true });",
+      "    focusTarget.scrollIntoView({ block: 'start' });",
+      "    lifecycle.status.replaceChildren(lifecycle.announcementText);",
+      "  }",
+      "",
+      "  function applyFetchedDocument(responseText, finalUrl, shouldPushState) {",
       "    const parsedDocument = new DOMParser().parseFromString(responseText, 'text/html');",
       "    const nextTitle = parsedDocument.querySelector('title');",
       "    const nextNavigationRegion = parsedDocument.querySelector(navigationRegionSelector);",
@@ -236,47 +353,89 @@ defaultNavigationRuntimeScript =
       "      return false;",
       "    }",
       "",
-      "    document.title = nextTitle.textContent || document.title;",
+      "    const nextLifecycle = readNavigationLifecycle(parsedDocument, nextNavigationRegion, nextNavigationContent);",
+      "    const currentLifecycle = readNavigationLifecycle(document, currentNavigationRegion, currentNavigationContent);",
+      "    if (!nextLifecycle || !currentLifecycle || Boolean(nextLifecycle.status) !== Boolean(currentLifecycle.status) || Boolean(nextLifecycle.skipLink) !== Boolean(currentLifecycle.skipLink)) {",
+      "      return false;",
+      "    }",
+      "",
+      "    if (currentLifecycle.skipLink) {",
+      "      currentLifecycle.skipLink.replaceWith(nextLifecycle.skipLink);",
+      "    }",
       "    currentNavigationRegion.replaceWith(nextNavigationRegion);",
       "    currentNavigationContent.replaceWith(nextNavigationContent);",
       "    syncBodyAttributes(parsedDocument.body);",
-      "    renderedDocumentUrl = toAbsoluteUrl(targetUrl);",
+      "    if (currentLifecycle.status) {",
+      "      syncElementAttributes(currentLifecycle.status, nextLifecycle.status);",
+      "      nextLifecycle.status = currentLifecycle.status;",
+      "    }",
+      "    document.title = nextTitle.textContent || document.title;",
+      "    renderedDocumentUrl = finalUrl;",
       "",
       "    if (shouldPushState) {",
-      "      window.history.pushState({ path: targetUrl }, '', targetUrl);",
+      "      window.history.pushState({ path: finalUrl.href }, '', finalUrl.href);",
+      "    } else if (window.location.href !== finalUrl.href) {",
+      "      window.history.replaceState({ path: finalUrl.href }, '', finalUrl.href);",
       "    }",
       "",
+      "    applyNavigationLifecycle(nextLifecycle);",
       "    return true;",
       "  }",
       "",
       "  async function navigateTo(targetUrl, shouldPushState) {",
-      "    if (navigationInFlight) {",
-      "      return;",
+      "    const navigationId = nextNavigationId++;",
+      "    const abortController = new AbortController();",
+      "    if (activeNavigation) {",
+      "      activeNavigation.abortController.abort();",
       "    }",
-      "",
-      "    navigationInFlight = true;",
+      "    activeNavigation = { navigationId, abortController };",
+      "    const isCurrentNavigation = () => activeNavigation && activeNavigation.navigationId === navigationId;",
       "",
       "    try {",
       "      const response = await window.fetch(targetUrl, {",
       "        credentials: 'same-origin',",
+      "        signal: abortController.signal,",
       "        headers: {",
       "          'X-Requested-With': 'tiny-navigation',",
       "        },",
       "      });",
+      "",
+      "      if (!isCurrentNavigation()) {",
+      "        return;",
+      "      }",
       "",
       "      if (!response.ok) {",
       "        window.location.assign(targetUrl);",
       "        return;",
       "      }",
       "",
+      "      let finalUrl;",
+      "      try {",
+      "        finalUrl = new URL(response.url);",
+      "      } catch (_error) {",
+      "        window.location.assign(targetUrl);",
+      "        return;",
+      "      }",
+      "      if (finalUrl.origin !== window.location.origin) {",
+      "        window.location.assign(targetUrl);",
+      "        return;",
+      "      }",
+      "",
       "      const responseText = await response.text();",
-      "      if (!applyFetchedDocument(responseText, targetUrl, shouldPushState)) {",
+      "      if (!isCurrentNavigation()) {",
+      "        return;",
+      "      }",
+      "      if (!applyFetchedDocument(responseText, finalUrl, shouldPushState)) {",
       "        window.location.assign(targetUrl);",
       "      }",
-      "    } catch (_error) {",
-      "      window.location.assign(targetUrl);",
+      "    } catch (error) {",
+      "      if (isCurrentNavigation() && error.name !== 'AbortError') {",
+      "        window.location.assign(targetUrl);",
+      "      }",
       "    } finally {",
-      "      navigationInFlight = false;",
+      "      if (isCurrentNavigation()) {",
+      "        activeNavigation = null;",
+      "      }",
       "    }",
       "  }",
       "",
@@ -342,10 +501,11 @@ data Document route = Document
     documentBodyAttributes :: [HtmlAttribute],
     documentNavigationAttributes :: [HtmlAttribute],
     documentNavigation :: [ResolvedNavigationItem route],
-    documentMainId :: Text,
+    documentMainId :: ElementId,
     documentMainAttributes :: [HtmlAttribute],
     documentMainContent :: Html,
     documentBootstrapHooks :: [Text],
+    documentNavigationLifecycle :: Maybe NavigationLifecycle,
     documentStylesheets :: [Stylesheet],
     documentRuntimeDescriptors :: [RuntimeDescriptor]
   }
@@ -355,8 +515,9 @@ data PageShell route context = PageShell
   { shellBodyAttributes :: [HtmlAttribute],
     shellNavigationAttributes :: [HtmlAttribute],
     shellNavigationItems :: [NavigationItem route],
-    shellMainId :: Text,
+    shellMainId :: ElementId,
     shellMainAttributes :: [HtmlAttribute],
+    shellNavigationLifecycle :: Maybe NavigationLifecycle,
     shellStylesheets :: [Stylesheet],
     shellRuntimeDescriptors :: [RuntimeDescriptor]
   }
@@ -567,9 +728,10 @@ buildPageShell codec shell page =
       documentNavigationAttributes = shellNavigationAttributes shell,
       documentNavigation = buildNavigation codec page (shellNavigationItems shell),
       documentMainId = shellMainId shell,
-      documentMainAttributes = shellMainAttributes shell,
+      documentMainAttributes = navigationMainAttributes (shellNavigationLifecycle shell) (shellMainAttributes shell),
       documentMainContent = pageBody page,
       documentBootstrapHooks = pageBootstrapHooks page,
+      documentNavigationLifecycle = shellNavigationLifecycle shell,
       documentStylesheets = shellStylesheets shell,
       documentRuntimeDescriptors = shellRuntimeDescriptors shell
     }
@@ -607,18 +769,86 @@ renderDocumentWithNonce runtimeNonce document =
       renderRuntimeDescriptors runtimeNonce (documentRuntimeDescriptors document),
       "</head><body",
       renderAttributes (documentBodyAttributes document),
-      "><nav",
+      ">",
+      renderNavigationSkipLink document,
+      "<nav",
       renderAttributes (documentNavigationAttributes document),
       ">",
       Text.concat (map renderNavigationItem (documentNavigation document)),
       "</nav><main id=\"",
-      renderHtml (text (documentMainId document)),
+      renderHtml (text (elementIdText (documentMainId document))),
       "\"",
       renderAttributes (documentMainAttributes document <> renderBootstrapHookAttributes (documentBootstrapHooks document)),
       ">",
       renderHtml (documentMainContent document),
-      "</main></body></html>"
+      "</main>",
+      renderNavigationStatus document,
+      "</body></html>"
     ]
+
+navigationMainAttributes :: Maybe NavigationLifecycle -> [HtmlAttribute] -> [HtmlAttribute]
+navigationMainAttributes lifecycle attributes =
+  case navigationFocusTarget <$> lifecycle of
+    Just FocusMainLandmark ->
+      setFrameworkAttribute
+        "data-navigation-focus-target"
+        "true"
+        (setFrameworkAttribute "tabindex" "-1" attributes)
+    _ -> attributes
+
+setFrameworkAttribute :: Text -> Text -> [HtmlAttribute] -> [HtmlAttribute]
+setFrameworkAttribute name value attributes =
+  filter ((/= name) . attributeName) attributes <> [HtmlAttribute name value]
+
+renderNavigationSkipLink :: Document route -> Text
+renderNavigationSkipLink document =
+  case documentNavigationLifecycle document >>= navigationSkipLink of
+    Nothing -> Text.empty
+    Just NavigationSkipLink {skipLinkLabel = label, skipLinkClass = cssClass} ->
+      Text.concat
+        [ "<a href=\"#",
+          renderHtml (text (navigationFocusTargetId document)),
+          "\" data-navigation-skip-link=\"true\"",
+          renderOptionalClass cssClass,
+          ">",
+          renderHtml (text label),
+          "</a>"
+        ]
+
+renderNavigationStatus :: Document route -> Text
+renderNavigationStatus document =
+  case documentNavigationLifecycle document of
+    Nothing -> Text.empty
+    Just lifecycle ->
+      Text.concat
+        [ "<div data-navigation-route-status=\"true\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\" data-navigation-focus-target-id=\"",
+          renderHtml (text (navigationFocusTargetId document)),
+          "\"",
+          renderAnnouncementAttributes (navigationAnnouncement lifecycle),
+          renderOptionalClass (navigationStatusClass lifecycle),
+          "></div>"
+        ]
+
+navigationFocusTargetId :: Document route -> Text
+navigationFocusTargetId document =
+  case navigationFocusTarget <$> documentNavigationLifecycle document of
+    Just (FocusElement elementIdentifier) -> elementIdText elementIdentifier
+    _ -> elementIdText (documentMainId document)
+
+renderAnnouncementAttributes :: NavigationAnnouncement -> Text
+renderAnnouncementAttributes announcement =
+  case announcement of
+    AnnounceDocumentTitle -> " data-navigation-announcement-source=\"document-title\""
+    AnnounceElementText elementIdentifier ->
+      Text.concat
+        [ " data-navigation-announcement-source=\"element-text\" data-navigation-announcement-source-id=\"",
+          renderHtml (text (elementIdText elementIdentifier)),
+          "\""
+        ]
+
+renderOptionalClass :: Maybe CssClass -> Text
+renderOptionalClass =
+  maybe Text.empty (\cssClass -> " class=\"" <> renderHtml (text (cssClassText cssClass)) <> "\"")
 
 testRuntimeNonce :: RuntimeNonce
 testRuntimeNonce = RuntimeNonce "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY"

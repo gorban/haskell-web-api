@@ -9,6 +9,7 @@ where
 import HarchWeb qualified
 import WebApi.Components.Shell (AppShellProps (..), appPageShell)
 import WebApi.Config (AppConfig (..))
+import WebApi.Localization (AppMessage (SkipToMainContent), localizedMessage)
 import WebApi.Route
   ( AppRequestContext (..),
     AppRoute (..),
@@ -52,8 +53,27 @@ buildAppPageShellConfig config context =
       { appShellTitlePrefix = appTitlePrefix config,
         appShellPathPrefix = requestPathPrefix context,
         appShellStylesheet = HarchWeb.stylesheet (HarchWeb.AssetPath "/assets/styles/app.css"),
-        appShellNavigationItems = noAppShellNavigationItems
+        appShellNavigationItems = noAppShellNavigationItems,
+        appShellNavigationLifecycle = Just (appNavigationLifecycle context)
       }
+
+-- | The application localizes and styles the declarative lifecycle adapter;
+-- Harch owns its stable main target, polite semantics, and runtime ordering.
+appNavigationLifecycle :: AppRequestContext -> HarchWeb.NavigationLifecycle
+appNavigationLifecycle context =
+  let lifecycle = HarchWeb.mainNavigationLifecycle (localizedMessage (requestLocale context) SkipToMainContent)
+   in lifecycle
+        { HarchWeb.navigationSkipLink =
+            addSkipLinkClass <$> HarchWeb.navigationSkipLink lifecycle,
+          HarchWeb.navigationStatusClass = Just (HarchWeb.ScopedCssClass appShellScope "route-status")
+        }
+
+addSkipLinkClass :: HarchWeb.NavigationSkipLink -> HarchWeb.NavigationSkipLink
+addSkipLinkClass skipLink =
+  skipLink {HarchWeb.skipLinkClass = Just (HarchWeb.ScopedCssClass appShellScope "skip-link")}
+
+appShellScope :: HarchWeb.CssScope
+appShellScope = HarchWeb.cssScope "app-shell"
 
 -- | Route navigation belongs to 'HarchWeb.Site' through the application's
 -- declared navigation routes.  The app shell deliberately contributes no

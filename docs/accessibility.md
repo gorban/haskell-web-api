@@ -6,6 +6,32 @@ complete server document. A client-action patch is an accessibility surface in
 its own right: labels, hints, errors, focus targets, and status announcements
 must remain correct after replacement.
 
+## Enhanced navigation lifecycle
+
+The `web-api` shell uses Harch's default `NavigationLifecycle` adapter. Its
+localized skip link is the first focusable body control and targets the same
+typed main landmark that receives focus after an enhanced navigation. The
+main is focused with scroll suppression before an explicit scroll, and the
+application stylesheet gives both the skip link and focused main visible,
+unobscured treatment. The route-status node is empty on initial SSR and has
+fixed polite, atomic semantics.
+
+After a compatible click or Back/Forward fetch, the existing navigation
+runtime validates the destination regions, lifecycle bindings, and final
+same-origin response URL before changing the document. It then replaces the
+regions, commits history, focuses main, and mutates the route status exactly
+once with the destination document title. A newer request aborts and
+supersedes an older one. Redirects use their final same-origin URL; failed,
+malformed, cross-origin, or incompatible responses use native navigation and
+do not announce success. Direct loads, activation before the deferred module
+arrives, and scripts-disabled links remain browser-native.
+
+The adapter is an ordinary declarative value, not a closed application UX.
+Apps can select a typed element focus target and element-text announcement
+source inside the replaced regions, or replace the existing
+`NavigationRuntime` for a genuinely different algorithm. Harch keeps status
+semantics fixed and does not accept arbitrary selectors or script callbacks.
+
 ## Authentication control inventory
 
 This table is the review contract for the `web-api` reference application.

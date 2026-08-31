@@ -86,6 +86,37 @@ a {
   width: min(100% - 2rem, var(--app-content-width));
   margin-inline: auto;
   padding-block: clamp(2rem, 8vw, 4rem);
+  scroll-margin-block-start: var(--app-space-3);
+}
+
+.harch-app-shell-main:focus {
+  outline: 0.2rem solid var(--app-color-focus);
+  outline-offset: 0.2rem;
+}
+
+.harch-app-shell-skip-link,
+.harch-app-shell-route-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.harch-app-shell-skip-link:focus {
+  position: fixed;
+  z-index: 10;
+  inset-block-start: calc(env(safe-area-inset-top, 0px) + var(--app-space-1));
+  inset-inline-start: calc(env(safe-area-inset-left, 0px) + var(--app-space-1));
+  width: auto;
+  height: auto;
+  padding: var(--app-space-1) var(--app-space-2);
+  overflow: visible;
+  clip-path: none;
+  border-radius: var(--app-radius);
+  background: var(--app-color-surface);
 }
 
 .harch-page-frame-root {

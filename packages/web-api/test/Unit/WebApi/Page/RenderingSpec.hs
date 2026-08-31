@@ -114,7 +114,7 @@ spec = do
             :| [ Text.isInfixOf "href=\"/\" data-page-link=\"true\">Home" secondShell `shouldBe` True,
                  Text.isInfixOf "href=\"/second\" data-page-link=\"true\" aria-current=\"page\">Second" secondShell `shouldBe` True,
                  Text.isInfixOf "href=\"/spaces\" data-page-link=\"true\">Spaces" secondShell `shouldBe` True,
-                 Text.isInfixOf "<main id=\"app-main\" data-navigation-content=\"true\" class=\"harch-app-shell-main\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
+                 Text.isInfixOf "<main id=\"app-main\" data-navigation-content=\"true\" class=\"harch-app-shell-main\" tabindex=\"-1\" data-navigation-focus-target=\"true\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
                ]
         )
 

@@ -63,14 +63,18 @@ spec = do
       homeShellWithoutAssets <- renderedShell defaultAppConfig HomeRoute
       homeShell <- renderedShell navigationAppConfig HomeRoute
       secondShell <- renderedShell navigationAppConfig SecondRoute
+      spanishSecondShell <- renderedShellForRequest navigationAppConfig spanishSecondRequest
       rootMountedShell <- renderedShell rootMountedConfig HomeRoute
       Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" homeShellWithoutAssets `shouldBe` True
       Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" homeShell `shouldBe` True
       Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" rootMountedShell `shouldBe` True
       Text.isInfixOf "<nav data-navigation-region=\"primary\" class=\"harch-app-shell-navigation\">" homeShell `shouldBe` True
-      Text.isInfixOf "<main id=\"app-main\" data-navigation-content=\"true\" class=\"harch-app-shell-main\">" homeShell `shouldBe` True
+      Text.isInfixOf "<a href=\"#app-main\" data-navigation-skip-link=\"true\" class=\"harch-app-shell-skip-link\">Skip to main content</a><nav" homeShell `shouldBe` True
+      Text.isInfixOf ">Saltar al contenido principal</a><nav" spanishSecondShell `shouldBe` True
+      Text.isInfixOf "<main id=\"app-main\" data-navigation-content=\"true\" class=\"harch-app-shell-main\" tabindex=\"-1\" data-navigation-focus-target=\"true\">" homeShell `shouldBe` True
+      Text.isInfixOf "<div data-navigation-route-status=\"true\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\" data-navigation-focus-target-id=\"app-main\" data-navigation-announcement-source=\"document-title\" class=\"harch-app-shell-route-status\"></div>" homeShell `shouldBe` True
       Text.isInfixOf "data-bootstrap-hooks" homeShell `shouldBe` False
-      Text.isInfixOf "<main id=\"app-main\" data-navigation-content=\"true\" class=\"harch-app-shell-main\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
+      Text.isInfixOf "<main id=\"app-main\" data-navigation-content=\"true\" class=\"harch-app-shell-main\" tabindex=\"-1\" data-navigation-focus-target=\"true\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
 
     it "renders navigation and script hrefs under the forwarded request path prefix" $ do
       prefixedShell <- renderedShellForRequest navigationAppConfig prefixedSecondRequest
@@ -94,6 +98,9 @@ spec = do
       Text.isInfixOf "font-family: system-ui, sans-serif;" stylesheetBody `shouldBe` True
       Text.isInfixOf ":where(a, button, input, select):focus-visible" stylesheetBody `shouldBe` True
       Text.isInfixOf ".harch-page-frame-root" stylesheetBody `shouldBe` True
+      Text.isInfixOf ".harch-app-shell-skip-link:focus" stylesheetBody `shouldBe` True
+      Text.isInfixOf ".harch-app-shell-main:focus" stylesheetBody `shouldBe` True
+      Text.isInfixOf "scroll-margin-block-start" stylesheetBody `shouldBe` True
 
       fontStylesheetResponse <- performWaiRequest (HarchWeb.toWaiApplication (buildApp navigationAppConfig)) (waiRequest ["assets", "fonts", "font-faces.css"])
       Wai.responseStatus fontStylesheetResponse `shouldBe` Http.status200
@@ -124,6 +131,14 @@ spec = do
       let shellConfig = buildAppPageShellConfig navigationAppConfig defaultRequestContext
       HarchWeb.shellNavigationItems shellConfig `shouldBe` []
       HarchWeb.shellRuntimeDescriptors shellConfig `shouldBe` []
+      HarchWeb.shellNavigationLifecycle shellConfig
+        `shouldBe` Just
+          ( (HarchWeb.mainNavigationLifecycle "Skip to main content")
+              { HarchWeb.navigationSkipLink =
+                  Just (HarchWeb.NavigationSkipLink "Skip to main content" (Just (HarchWeb.ScopedCssClass (HarchWeb.cssScope "app-shell") "skip-link"))),
+                HarchWeb.navigationStatusClass = Just (HarchWeb.ScopedCssClass (HarchWeb.cssScope "app-shell") "route-status")
+              }
+          )
 
     it "keeps not-found pages inside the shared shell" $ do
       notFoundShell <- renderedShell defaultAppConfig NotFoundRoute

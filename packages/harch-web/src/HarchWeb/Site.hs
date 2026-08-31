@@ -49,6 +49,7 @@ import HarchWeb
     defaultNavigationRuntime,
     defaultResponseSecurityHeadersConfig,
     emptyPathPrefix,
+    literalElementId,
     navigationRuntimeScriptSource,
     unboundedRequestHeadLimits,
     unboundedRouteExecutionPolicy,
@@ -167,8 +168,9 @@ apiOnlyFallbackPageShell =
     { shellBodyAttributes = [],
       shellNavigationAttributes = [],
       shellNavigationItems = [],
-      shellMainId = "main",
+      shellMainId = literalElementId "main",
       shellMainAttributes = [],
+      shellNavigationLifecycle = Nothing,
       shellStylesheets = [],
       shellRuntimeDescriptors = []
     }

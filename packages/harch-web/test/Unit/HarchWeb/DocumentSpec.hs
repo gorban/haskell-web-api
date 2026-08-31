@@ -19,7 +19,7 @@ import Data.Maybe ()
 import Data.Text ()
 import Data.Text qualified as Text (isInfixOf, isSuffixOf, length)
 import Data.Text.Encoding qualified as TextEncoding ()
-import HarchWeb (AssetPath (AssetPath), Document (Document, documentBodyAttributes, documentBootstrapHooks, documentMainAttributes, documentMainContent, documentMainId, documentNavigation, documentNavigationAttributes, documentRuntimeDescriptors, documentStylesheets, documentTitle), HtmlAttribute (HtmlAttribute, attributeName, attributeValue), LiveRegion (AssertiveAlert, PoliteStatus), Page (Page, pageBody, pageBootstrapHooks, pageContext, pageRoute, pageTitle), PageShell (shellNavigationItems), ResolvedNavigationItem (ResolvedNavigationItem, navigationHref, navigationIsActive, navigationLabel, navigationRoute), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (DeferredModule), RuntimeNonce (runtimeNonceValue), buildNavigation, buildPageShell, generateRuntimeNonce, liveRegionAttributes, stylesheet)
+import HarchWeb (AssetPath (AssetPath), CssClass (GlobalCssClass), Document (Document, documentBodyAttributes, documentBootstrapHooks, documentMainAttributes, documentMainContent, documentMainId, documentNavigation, documentNavigationAttributes, documentNavigationLifecycle, documentRuntimeDescriptors, documentStylesheets, documentTitle), HtmlAttribute (HtmlAttribute, attributeName, attributeValue), LiveRegion (AssertiveAlert, PoliteStatus), NavigationAnnouncement (AnnounceElementText), NavigationFocusTarget (FocusElement), NavigationLifecycle (navigationAnnouncement, navigationFocusTarget, navigationSkipLink, navigationStatusClass), NavigationSkipLink (NavigationSkipLink, skipLinkClass, skipLinkLabel), Page (Page, pageBody, pageBootstrapHooks, pageContext, pageRoute, pageTitle), PageShell (shellMainAttributes, shellNavigationItems, shellNavigationLifecycle), ResolvedNavigationItem (ResolvedNavigationItem, navigationHref, navigationIsActive, navigationLabel, navigationRoute), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (DeferredModule), RuntimeNonce (runtimeNonceValue), buildNavigation, buildPageShell, generateRuntimeNonce, literalElementId, liveRegionAttributes, mainNavigationLifecycle, stylesheet)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -106,7 +106,7 @@ movedSpec = do
                     navigationIsActive = False
                   }
               ],
-            documentMainId = "app-main",
+            documentMainId = literalElementId "app-main",
             documentMainAttributes =
               [ HtmlAttribute
                   { attributeName = "data-navigation-content",
@@ -115,6 +115,7 @@ movedSpec = do
               ],
             documentMainContent = trustedMarkup "<h1>Known</h1>",
             documentBootstrapHooks = [],
+            documentNavigationLifecycle = Nothing,
             documentStylesheets = [],
             documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]
           }
@@ -147,10 +148,11 @@ movedSpec = do
                     navigationIsActive = False
                   }
               ],
-            documentMainId = "app-main\" onclick=\"steal()",
+            documentMainId = literalElementId "app-main\" onclick=\"steal()",
             documentMainAttributes = [],
             documentMainContent = trustedMarkup "<h1>Known</h1>",
             documentBootstrapHooks = [],
+            documentNavigationLifecycle = Nothing,
             documentStylesheets = [stylesheet (AssetPath "/assets/sample.css?a=1&b=2")],
             documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js?a=1&b=2"]
           }
@@ -171,6 +173,56 @@ movedSpec = do
             )
         )
         `shouldBe` "<!DOCTYPE html><html><head><title>Known</title><script type=\"module\" src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"known-page,hydrate-known\"><h1>Known</h1></main></body></html>"
+
+    it "renders the pluggable main lifecycle with a first localized skip link and fixed polite status" $ do
+      let defaultLifecycle = mainNavigationLifecycle "Skip < main"
+          lifecycle =
+            defaultLifecycle
+              { navigationSkipLink =
+                  Just
+                    NavigationSkipLink
+                      { skipLinkLabel = "Skip < main",
+                        skipLinkClass = Just (GlobalCssClass "visually-hidden")
+                      },
+                navigationStatusClass = Just (GlobalCssClass "route-status")
+              }
+          lifecycleShell =
+            sampleShell
+              { shellMainAttributes =
+                  [ HtmlAttribute "data-navigation-content" "true",
+                    HtmlAttribute "tabindex" "8",
+                    HtmlAttribute "data-navigation-focus-target" "false"
+                  ],
+                shellNavigationLifecycle = Just lifecycle
+              }
+          rendered = renderDocument (buildPageShell sampleCodec lifecycleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext})))
+      rendered
+        `shouldBe` "<!DOCTYPE html><html><head><title>Known</title><script type=\"module\" src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><a href=\"#app-main\" data-navigation-skip-link=\"true\" class=\"visually-hidden\">Skip &lt; main</a><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\" tabindex=\"-1\" data-navigation-focus-target=\"true\"><h1>Known</h1></main><div data-navigation-route-status=\"true\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\" data-navigation-focus-target-id=\"app-main\" data-navigation-announcement-source=\"document-title\" class=\"route-status\"></div></body></html>"
+
+    it "supports typed application focus and announcement sources without changing the runtime" $ do
+      let headingId = literalElementId "page-heading"
+          summaryId = literalElementId "page-summary"
+          lifecycle =
+            (mainNavigationLifecycle "Skip to heading")
+              { navigationFocusTarget = FocusElement headingId,
+                navigationAnnouncement = AnnounceElementText summaryId
+              }
+          rendered =
+            renderDocument
+              ( buildPageShell
+                  sampleCodec
+                  (sampleShell {shellNavigationLifecycle = Just lifecycle})
+                  ( (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
+                      { pageBody = trustedMarkup "<h1 id=\"page-heading\" tabindex=\"-1\">Known</h1><p id=\"page-summary\">Known page loaded</p>"
+                      }
+                  )
+              )
+      expectAll
+        ( (rendered `shouldSatisfy` Text.isInfixOf "<a href=\"#page-heading\" data-navigation-skip-link=\"true\">Skip to heading</a>")
+            :| [ rendered `shouldSatisfy` Text.isInfixOf "<main id=\"app-main\" data-navigation-content=\"true\"><h1 id=\"page-heading\" tabindex=\"-1\">",
+                 rendered `shouldSatisfy` Text.isInfixOf "data-navigation-focus-target-id=\"page-heading\" data-navigation-announcement-source=\"element-text\" data-navigation-announcement-source-id=\"page-summary\""
+               ]
+        )
 
     it "generates a fresh unpadded 32-byte CSP nonce for each response" $ do
       firstNonce <- generateRuntimeNonce
