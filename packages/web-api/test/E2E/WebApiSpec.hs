@@ -14,7 +14,7 @@ import HarchWeb.Session qualified as Session
 import System.Directory (copyFile, createDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
-import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..))
+import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..), VerificationResendAdmission (..), VerificationResendClaim (..), VerificationResendClaimSettlement (..))
 import WebApi.App (buildApp, buildAppWithDatabaseAndAccountWorkflow, unavailableAccountWorkflow)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
@@ -696,6 +696,9 @@ pendingProfileWorkflow =
           { createPendingAccount = \_ _ -> error "unexpected account creation",
             completePendingRegistrationDelivery = \_ -> pure (Right True),
             releasePendingRegistrationDelivery = \_ -> pure (Right True),
+            reserveVerificationResend = \_ verification _ -> pure (Right (VerificationResendReserved (VerificationResendClaim (Account.storedVerificationAccountId verification) (Account.storedVerificationTokenDigest verification)))),
+            completeVerificationResend = \_ _ -> pure (Right VerificationResendClaimSettled),
+            releaseVerificationResend = \_ -> pure (Right VerificationResendClaimSettled),
             replaceEmailVerification = \_ -> pure (Right True),
             findEmailVerification = \_ -> error "unexpected verification lookup",
             consumeEmailVerification = \_ _ -> error "unexpected verification consumption"

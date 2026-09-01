@@ -2104,6 +2104,30 @@ it is not an unauthenticated caller-controlled KDF surface. No other production 
 
 ### Decision record — DM: opportunistic password-hash migration (2026-08-25)
 
+### Decision record — AHI-2: durable staged verification resend (2026-09-01)
+
+**Decision: extend `AccountStore` with an account-verification-specific
+reserve/complete/release claim lifecycle, instead of a generic keyed budget or
+a separate mail queue.** The account store already owns pending state and the
+active verification token. A PostgreSQL reservation writes a candidate into
+`verification_resend_claims` while deliberately preserving the currently
+delivered `email_verifications` row; completion atomically promotes the
+candidate and appends one `verification_resend_deliveries` record. Release,
+lease expiry, and the rolling-window prune remove only the candidate/history
+they own. This is consequently safe when SMTP fails or async cancellation
+arrives at either handoff: the old token remains valid, and an abandoned claim
+is reclaimable after five minutes.
+
+The policy is application-owned and bounded (three deliveries per account per
+hour, one live claim, and 100,000 combined claim/history rows in the reference
+application). PostgreSQL transaction advisory locks serialize the global
+capacity/prune decision and the account lifecycle decision. The public action
+maps delivered, throttled, and no-longer-pending results to one generic 202
+body; the Haskell ADTs retain only closed lifecycle classifications, never an
+email, token, row id, or provider exception. This narrow extension remains
+separate from AHI-3: login attempts have a different principal, retention
+policy, and settlement meaning.
+
 **Decision: extend the existing account-credential store with an atomic
 compare-and-replace operation, rather than add a migration table, a background
 worker, or a second login path.** After a bounded, valid legacy Argon2id hash

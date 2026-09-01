@@ -15,6 +15,7 @@ import Core.Control.Error (liftEitherWith)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Word (Word64)
 import HarchWeb.Account
   ( AccountId,
     EmailVerificationTokenDigest,
@@ -29,7 +30,7 @@ import HarchWeb.Account
   )
 import HarchWeb.Email (emailAddressText, mkEmailAddress)
 import HarchWeb.Password (passwordHashText, readPasswordHash)
-import HarchWeb.Time (unixTimeNanoseconds, unixTimeNanosecondsValue)
+import HarchWeb.Time (UnixTimeNanoseconds, unixTimeNanoseconds, unixTimeNanosecondsValue)
 import HarchWeb.Username (mkUsername, usernameText)
 import Text.Read (readMaybe)
 import WebApi.Account
@@ -42,8 +43,17 @@ import WebApi.Account
     PendingRegistrationClaim (..),
     PendingRegistrationDeliveryStage (..),
     PendingRegistrationStoragePolicy,
+    VerificationResendAdmission (..),
+    VerificationResendClaim (..),
+    VerificationResendClaimSettlement (..),
+    VerificationResendPolicy,
+    VerificationResendSuppression (..),
     pendingRegistrationClaimLeaseNanoseconds,
     pendingRegistrationMaximumAccounts,
+    verificationResendClaimLeaseNanoseconds,
+    verificationResendMaximumDeliveries,
+    verificationResendMaximumRecords,
+    verificationResendWindowNanoseconds,
   )
 import WebApi.Login
   ( AccountCredential (..),
@@ -99,6 +109,9 @@ buildRuntimePostgresAccountStoreWithRunner runQuery source =
     { createPendingAccount = createAccount,
       completePendingRegistrationDelivery = completeRegistrationDelivery,
       releasePendingRegistrationDelivery = releaseRegistrationDelivery,
+      reserveVerificationResend = reserveResend,
+      completeVerificationResend = completeResend,
+      releaseVerificationResend = releaseResend,
       replaceEmailVerification = replaceVerification,
       findEmailVerification = findVerification,
       consumeEmailVerification = consumeVerification
@@ -114,6 +127,21 @@ buildRuntimePostgresAccountStoreWithRunner runQuery source =
     completeRegistrationDelivery = updateRegistrationDeliveryClaim completePendingRegistrationDeliveryQuery
 
     releaseRegistrationDelivery = updateRegistrationDeliveryClaim releasePendingRegistrationDeliveryQuery
+
+    reserveResend policy verification now =
+      runExceptT $ do
+        rows <- unavailableAccountStoreQuery $ runQuery source reserveVerificationResendQuery (reserveVerificationResendParameters policy verification now)
+        liftEither (decodeVerificationResendAdmission verification rows)
+
+    completeResend claim now =
+      runExceptT $ do
+        rows <- unavailableAccountStoreQuery $ runQuery source completeVerificationResendQuery [accountIdText (verificationResendClaimAccountId claim), emailVerificationTokenDigestText (verificationResendClaimTokenDigest claim), Text.pack (show (unixTimeNanosecondsValue now))]
+        liftEither (decodeVerificationResendSettlement claim rows)
+
+    releaseResend claim =
+      runExceptT $ do
+        rows <- unavailableAccountStoreQuery $ runQuery source releaseVerificationResendQuery [accountIdText (verificationResendClaimAccountId claim), emailVerificationTokenDigestText (verificationResendClaimTokenDigest claim)]
+        liftEither (decodeVerificationResendSettlement claim rows)
 
     updateRegistrationDeliveryClaim query claim =
       runExceptT $ do
@@ -241,6 +269,27 @@ decodeRegistrationDeliveryClaimUpdate claim rows =
       | accountIdValue == accountIdText (pendingRegistrationClaimAccountId claim) -> Right True
     _ -> Left (AccountStoreCorruptData ("unexpected pending-registration delivery update result: " <> renderUnexpectedResultShape rows))
 
+decodeVerificationResendAdmission :: StoredEmailVerification -> [[Text]] -> Either AccountStoreError VerificationResendAdmission
+decodeVerificationResendAdmission verification rows =
+  case rows of
+    [["reserved", accountIdValue]] -> do
+      accountId <- maybe (Left (AccountStoreCorruptData "verification resend reservation returned an invalid account id")) Right (mkAccountId accountIdValue)
+      if accountId == storedVerificationAccountId verification
+        then Right (VerificationResendReserved (VerificationResendClaim accountId (storedVerificationTokenDigest verification)))
+        else Left (AccountStoreCorruptData "verification resend reservation returned a different account id")
+    [["throttled", ""]] -> Right (VerificationResendAdmissionSuppressed VerificationResendThrottled)
+    [["no-longer-pending", ""]] -> Right (VerificationResendAdmissionSuppressed VerificationResendNoLongerPending)
+    [["storage-exhausted", ""]] -> Left (AccountStoreUnavailable "verification resend storage is exhausted")
+    _ -> Left (AccountStoreCorruptData ("unexpected verification resend reservation result: " <> renderUnexpectedResultShape rows))
+
+decodeVerificationResendSettlement :: VerificationResendClaim -> [[Text]] -> Either AccountStoreError VerificationResendClaimSettlement
+decodeVerificationResendSettlement claim rows =
+  case rows of
+    [["settled", accountIdValue]]
+      | accountIdValue == accountIdText (verificationResendClaimAccountId claim) -> Right VerificationResendClaimSettled
+    [["lost", ""]] -> Right VerificationResendClaimLost
+    _ -> Left (AccountStoreCorruptData ("unexpected verification resend claim settlement result: " <> renderUnexpectedResultShape rows))
+
 decodeReplacedVerification :: StoredEmailVerification -> [[Text]] -> Either AccountStoreError Bool
 decodeReplacedVerification verification rows =
   case rows of
@@ -300,10 +349,37 @@ stagePendingRegistrationParameters storagePolicy pendingAccount =
         then now - pendingRegistrationClaimLeaseNanoseconds storagePolicy
         else 0
 
-stagePendingRegistrationQuery, completePendingRegistrationDeliveryQuery, releasePendingRegistrationDeliveryQuery, replaceEmailVerificationQuery, findEmailVerificationQuery, consumeEmailVerificationQuery, replacePasswordHashIfCurrentQuery :: Text
+reserveVerificationResendParameters :: VerificationResendPolicy -> StoredEmailVerification -> UnixTimeNanoseconds -> [Text]
+reserveVerificationResendParameters policy verification now =
+  [ accountIdText (storedVerificationAccountId verification),
+    emailVerificationTokenDigestText (storedVerificationTokenDigest verification),
+    emailAddressText (storedVerificationEmail verification),
+    Text.pack (show (unixTimeNanosecondsValue (storedVerificationExpiresAtNanoseconds verification))),
+    Text.pack (show current),
+    Text.pack (show windowSince),
+    Text.pack (show leaseRecoveryBefore),
+    Text.pack (show (verificationResendMaximumDeliveries policy)),
+    Text.pack (show (verificationResendMaximumRecords policy))
+  ]
+  where
+    current = unixTimeNanosecondsValue now
+    windowSince = subtractBounded current (verificationResendWindowNanoseconds policy)
+    leaseRecoveryBefore = subtractBounded current (verificationResendClaimLeaseNanoseconds policy)
+
+subtractBounded :: Word64 -> Word64 -> Word64
+subtractBounded value amount =
+  case compare value amount of
+    GT -> value - amount
+    EQ -> 0
+    LT -> 0
+
+stagePendingRegistrationQuery, completePendingRegistrationDeliveryQuery, releasePendingRegistrationDeliveryQuery, reserveVerificationResendQuery, completeVerificationResendQuery, releaseVerificationResendQuery, replaceEmailVerificationQuery, findEmailVerificationQuery, consumeEmailVerificationQuery, replacePasswordHashIfCurrentQuery :: Text
 stagePendingRegistrationQuery = "SELECT outcome, value FROM web_api.stage_pending_registration($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);"
 completePendingRegistrationDeliveryQuery = "UPDATE web_api.email_verifications SET delivery_state = 'delivered', delivery_claimed_at_nanoseconds = NULL WHERE account_id = $1 AND token_digest = $2 AND delivery_state = 'claimed' RETURNING account_id;"
 releasePendingRegistrationDeliveryQuery = "UPDATE web_api.email_verifications SET delivery_state = 'awaiting', delivery_claimed_at_nanoseconds = NULL WHERE account_id = $1 AND token_digest = $2 AND delivery_state = 'claimed' RETURNING account_id;"
+reserveVerificationResendQuery = "SELECT outcome, value FROM web_api.reserve_verification_resend($1, $2, $3, $4, $5, $6, $7, $8, $9);"
+completeVerificationResendQuery = "SELECT outcome, value FROM web_api.complete_verification_resend($1, $2, $3);"
+releaseVerificationResendQuery = "SELECT outcome, value FROM web_api.release_verification_resend($1, $2);"
 replaceEmailVerificationQuery = "WITH pending_account AS (SELECT account_id FROM web_api.accounts WHERE account_id = $1 AND email_verified_at_nanoseconds IS NULL FOR UPDATE), removed_verifications AS (DELETE FROM web_api.email_verifications WHERE account_id IN (SELECT account_id FROM pending_account)) INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds) SELECT $2, account_id, $3, $4 FROM pending_account RETURNING account_id;"
 findEmailVerificationQuery = "SELECT account_id, email_normalized, expires_at_nanoseconds FROM web_api.email_verifications WHERE token_digest = $1;"
 consumeEmailVerificationQuery = "WITH consumed_verification AS (DELETE FROM web_api.email_verifications WHERE token_digest = $1 AND expires_at_nanoseconds > $2 RETURNING account_id) UPDATE web_api.accounts SET email_verified_at_nanoseconds = $2 WHERE account_id IN (SELECT account_id FROM consumed_verification) RETURNING account_id;"

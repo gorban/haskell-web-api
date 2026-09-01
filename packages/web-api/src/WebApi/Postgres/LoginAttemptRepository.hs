@@ -47,9 +47,11 @@ defaultLoginAttemptStoragePolicy =
     }
 
 mkLoginAttemptStoragePolicy :: Word64 -> Word64 -> Maybe LoginAttemptStoragePolicy
-mkLoginAttemptStoragePolicy maximumRows retentionNanoseconds
-  | maximumRows == 0 || retentionNanoseconds == 0 = Nothing
-  | otherwise = Just (LoginAttemptStoragePolicy maximumRows retentionNanoseconds)
+mkLoginAttemptStoragePolicy maximumRows retentionNanoseconds =
+  case (maximumRows, retentionNanoseconds) of
+    (0, _) -> Nothing
+    (_, 0) -> Nothing
+    _ -> Just (LoginAttemptStoragePolicy maximumRows retentionNanoseconds)
 
 buildRuntimePostgresLoginAttemptStore :: PostgresPool -> LoginAttemptStore
 buildRuntimePostgresLoginAttemptStore !pool =

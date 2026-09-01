@@ -33,7 +33,7 @@ import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress, opaqueSession, sessionIdValue, testSessionId)
 import Unit.WebApi.TestSupport qualified as TestSupport (databaseConfig)
-import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), defaultPendingRegistrationStoragePolicy, mkRegistrationDeliveryTimeout, pendingRegistrationClaimLeaseNanoseconds, pendingRegistrationMaximumAccounts)
+import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), VerificationResendAdmission (..), VerificationResendClaim (..), VerificationResendClaimSettlement (..), VerificationResendSuppression (..), defaultPendingRegistrationStoragePolicy, defaultVerificationResendPolicy, mkRegistrationDeliveryTimeout, pendingRegistrationClaimLeaseNanoseconds, pendingRegistrationMaximumAccounts)
 import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), FormFeedback (..), FormStatus (..), FormStatusKind (..), LoginForm (..), LoginProofChoice (..), LoginValidationError (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), RegistrationValidationError (..), VerificationForm (..), accountActions, authorizeAccountActionCsrf, emptyLoginForm, emptyRegistrationForm, handleAccountAction, initialPendingProfileForm, mfaEnrollmentFailureDiagnostics, pageCsrfTokenForAccountPage, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderPendingProfileRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buildActionCodecOrDie)
 import WebApi.AccountPages.Validation (Validation, invalid, valid, validate3, validate4, validationResult)
@@ -195,7 +195,16 @@ existingSpec = do
               { createPendingAccount = \_ _ -> error "unexpected account creation",
                 completePendingRegistrationDelivery = \_ -> pure (Right True),
                 releasePendingRegistrationDelivery = \_ -> pure (Right True),
-                replaceEmailVerification = \verification -> storedVerificationTokenDigest verification `seq` pure replacementResult,
+                reserveVerificationResend = \_ verification _ -> do
+                  storedVerificationTokenDigest verification `seq` pure ()
+                  pure $
+                    case replacementResult of
+                      Left storeError -> Left storeError
+                      Right True -> Right (VerificationResendReserved (VerificationResendClaim (Account.storedVerificationAccountId verification) (storedVerificationTokenDigest verification)))
+                      Right False -> Right (VerificationResendAdmissionSuppressed VerificationResendNoLongerPending),
+                completeVerificationResend = \_ _ -> pure (Right VerificationResendClaimSettled),
+                releaseVerificationResend = \_ -> pure (Right VerificationResendClaimSettled),
+                replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
               }
@@ -233,8 +242,8 @@ existingSpec = do
       expect pendingWorkflow (actionRequest (defaultRequestContext {WebApi.Route.requestLocale = WebApi.Route.Spanish, WebApi.Route.requestLocaleIsExplicit = True}) [("intent", "resend-verification")]) 403 "Inicia sesion antes"
       expect (workflow (Right True) delivery (Right (Just activeSession)) (Right (Just verifiedProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 409 "already verified"
       expect (workflow (Right True) delivery (Right (Just activeSession)) (Right (Just verifiedProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 409 "Tu direccion de correo ya esta verificada"
-      expect (workflow (Right False) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 409 "profile state changed"
-      expect (workflow (Right False) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 409 "El estado de tu perfil ha cambiado"
+      expect (workflow (Right False) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 202 "Check your inbox"
+      expect (workflow (Right False) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 202 "Revisa tu bandeja"
       expect (workflow (Left (AccountStoreUnavailable "database unavailable")) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
       expect (workflow (Left (AccountStoreUnavailable "database unavailable")) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 503 "Tu perfil no esta disponible"
       expect (workflow (Right True) (EmailDelivery (\_ -> ioError (userError "SMTP unavailable"))) (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 502 "could not send"
@@ -625,6 +634,9 @@ spec = do
                     pure (Right PendingAccountCreated),
                 completePendingRegistrationDelivery = \_ -> pure (Right True),
                 releasePendingRegistrationDelivery = \_ -> pure (Right True),
+                reserveVerificationResend = \_ _ _ -> error "unexpected verification resend",
+                completeVerificationResend = \_ _ -> error "unexpected verification resend completion",
+                releaseVerificationResend = \_ -> error "unexpected verification resend release",
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> pure (Right (Just storedVerification)),
                 consumeEmailVerification = \_ _ -> pure (Right (Just accountId))
@@ -779,6 +791,15 @@ spec = do
         (releasePendingRegistrationDelivery unconfiguredStore (error "the unavailable store must ignore delivery-claim input"))
         (isUnavailable "account persistence is not configured")
       assertAccountStoreError
+        (reserveVerificationResend unconfiguredStore defaultVerificationResendPolicy (error "the unavailable store must ignore verification input") 0)
+        (isUnavailable "account persistence is not configured")
+      assertAccountStoreError
+        (completeVerificationResend unconfiguredStore (error "the unavailable store must ignore resend-claim input") 0)
+        (isUnavailable "account persistence is not configured")
+      assertAccountStoreError
+        (releaseVerificationResend unconfiguredStore (error "the unavailable store must ignore resend-claim input"))
+        (isUnavailable "account persistence is not configured")
+      assertAccountStoreError
         (replaceEmailVerification unconfiguredStore (error "the unavailable store must ignore verification input"))
         (isUnavailable "account persistence is not configured")
       assertAccountStoreError
@@ -910,6 +931,9 @@ spec = do
                   pure createResult,
                 completePendingRegistrationDelivery = \_ -> pure (Right True),
                 releasePendingRegistrationDelivery = \_ -> pure (Right True),
+                reserveVerificationResend = \_ _ _ -> error "unexpected verification resend",
+                completeVerificationResend = \_ _ -> error "unexpected verification resend completion",
+                releaseVerificationResend = \_ -> error "unexpected verification resend release",
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> pure lookupResult,
                 consumeEmailVerification = \_ _ -> pure consumeResult

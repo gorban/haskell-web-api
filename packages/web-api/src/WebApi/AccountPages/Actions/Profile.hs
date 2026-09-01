@@ -22,6 +22,7 @@ import WebApi.Account
   ( AccountProfile (..),
     EmailVerificationEnvironment (..),
     ResendVerificationError (..),
+    ResendVerificationResult,
     VerificationDeliveryEnvironment (..),
     resendEmailVerificationAt,
   )
@@ -80,8 +81,8 @@ handlePendingProfile actionRequest submission now profile =
       interpretProfileResendResult actionRequest profile resendResult
     _ -> pure (profileResponse actionRequest Http.status422 (pendingProfileForm actionRequest profile (Just (localized actionRequest ChooseProfileAction)) True))
 
-resendEmailVerificationNow :: AccountActionRequest -> UnixTimeNanoseconds -> AccountProfile -> AppM publicFailure (Either ResendVerificationError ())
-resendEmailVerificationNow actionRequest now profile = do
+resendEmailVerificationNow :: AccountActionRequest -> UnixTimeNanoseconds -> AccountProfile -> AppM publicFailure (Either ResendVerificationError ResendVerificationResult)
+resendEmailVerificationNow actionRequest now profile@AccountProfile {} = do
   workflow <- accountWorkflow
   liftIO $
     resendEmailVerificationAt
@@ -102,13 +103,12 @@ resendEmailVerificationNow actionRequest now profile = do
 interpretProfileResendResult ::
   AccountActionRequest ->
   AccountProfile ->
-  Either ResendVerificationError () ->
+  Either ResendVerificationError ResendVerificationResult ->
   AccountActionWorkflow
 interpretProfileResendResult actionRequest profile resendResult =
   let form message = pendingProfileForm actionRequest profile (Just message)
    in case resendResult of
-        Right () -> pure (profileResponse actionRequest Http.status202 (form (localized actionRequest CheckVerificationInbox) False))
-        Left ResendVerificationNoLongerPending -> pure (profileResponse actionRequest Http.status409 (form (localized actionRequest ProfileStateChanged) True))
-        Left (ResendVerificationDeliveryFailed detail) -> throwClientActionFailure (profileResponse actionRequest Http.status502 (form (localized actionRequest VerificationDeliveryFailed) True)) ProfileResendDeliveryFailure "EmailDeliveryError" detail
+        Right _ -> pure (profileResponse actionRequest Http.status202 (form (localized actionRequest CheckVerificationInbox) False))
+        Left (ResendVerificationDeliveryFailed _) -> throwClientActionFailure (profileResponse actionRequest Http.status502 (form (localized actionRequest VerificationDeliveryFailed) True)) ProfileResendDeliveryFailure "EmailDeliveryError" "verification delivery failed"
         Left (ResendVerificationStoreError storeError) -> throwClientActionFailure (profileResponse actionRequest Http.status503 (form (localized actionRequest ProfileUnavailable) True)) ProfileResendStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
         Left ResendVerificationClockOverflow -> throwClientActionFailure (profileResponse actionRequest Http.status503 (form (localized actionRequest ProfileUnavailable) True)) ProfileResendClockFailure "ClockOverflow" "verification expiry overflowed"

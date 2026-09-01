@@ -141,9 +141,10 @@ handleMfaEnrollmentSubmission actionRequest submission = do
       case loadedSession of
         Left storeError -> throwClientActionFailure (invalidEnrollmentSessionResponse actionRequest) MfaEnrollmentSessionFailure "MfaEnrollmentSessionStoreError" (mfaEnrollmentSessionStoreErrorMessage storeError)
         Right Nothing -> pure (invalidEnrollmentSessionResponse actionRequest)
-        Right (Just opaqueSession)
-          | sessionExpiresAtNanoseconds opaqueSession <= now -> pure (invalidEnrollmentSessionResponse actionRequest)
-          | otherwise ->
+        Right (Just opaqueSession) ->
+          if sessionExpiresAtNanoseconds opaqueSession <= now
+            then pure (invalidEnrollmentSessionResponse actionRequest)
+            else
               let accountId = sessionPrincipal opaqueSession
                in case mfaEnrollmentIntentValue submission of
                     "start" -> startMfaAction actionRequest accountId

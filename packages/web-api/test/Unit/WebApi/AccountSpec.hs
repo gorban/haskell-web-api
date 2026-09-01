@@ -3,7 +3,9 @@
 
 {-# SPEC #-}
 
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (forkIO, killThread, newEmptyMVar, putMVar, takeMVar, threadDelay)
+import Control.Exception (AsyncException (UserInterrupt), SomeException, throwIO, try)
+import Control.Monad (when)
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
@@ -13,7 +15,7 @@ import HarchWeb.Email qualified as Email
 import HarchWeb.Password qualified as Password
 import HarchWeb.Username qualified as Username
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress)
-import WebApi.Account (AccountProfile (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), EmailVerificationEnvironment (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), RegistrationEnvironment (..), RegistrationError (..), RegistrationRequest (..), RegistrationResult (..), ResendVerificationError (..), VerificationDeliveryEnvironment (..), VerificationDeliveryFailure (..), confirmEmailVerificationAt, defaultPendingRegistrationStoragePolicy, defaultRegistrationDeliveryTimeout, mkPendingRegistrationStoragePolicy, mkRegistrationDeliveryTimeout, pendingRegistrationClaimLeaseNanoseconds, pendingRegistrationMaximumAccounts, registerAccount, resendEmailVerificationAt)
+import WebApi.Account (AccountProfile (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), EmailVerificationEnvironment (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), RegistrationEnvironment (..), RegistrationError (..), RegistrationRequest (..), RegistrationResult (..), ResendVerificationError (..), ResendVerificationResult (..), VerificationDeliveryEnvironment (..), VerificationDeliveryFailure (..), VerificationResendAdmission (..), VerificationResendClaim (..), VerificationResendClaimSettlement (..), VerificationResendSuppression (..), confirmEmailVerificationAt, defaultPendingRegistrationStoragePolicy, defaultRegistrationDeliveryTimeout, defaultVerificationResendPolicy, mkPendingRegistrationStoragePolicy, mkRegistrationDeliveryTimeout, mkVerificationResendPolicy, pendingRegistrationClaimLeaseNanoseconds, pendingRegistrationMaximumAccounts, registerAccount, resendEmailVerificationAt, verificationResendClaimLeaseNanoseconds, verificationResendMaximumDeliveries, verificationResendMaximumRecords, verificationResendWindowNanoseconds)
 
 spec = do
   describe "WebApi.Account" $ do
@@ -24,6 +26,9 @@ spec = do
               { createPendingAccount = \_ _ -> error "registration persistence must not run after password-work rejection",
                 completePendingRegistrationDelivery = \_ -> error "unexpected registration delivery completion",
                 releasePendingRegistrationDelivery = \_ -> error "unexpected registration delivery release",
+                reserveVerificationResend = \_ _ _ -> error "unexpected verification resend",
+                completeVerificationResend = \_ _ -> error "unexpected verification resend completion",
+                releaseVerificationResend = \_ -> error "unexpected verification resend release",
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -64,6 +69,9 @@ spec = do
                   pure (Right PendingAccountCreated),
                 completePendingRegistrationDelivery = \claim -> modifyIORef' settledClaimsReference (<> [claim]) >> pure (Right True),
                 releasePendingRegistrationDelivery = \_ -> pure (Right True),
+                reserveVerificationResend = \_ _ _ -> error "unexpected verification resend",
+                completeVerificationResend = \_ _ -> error "unexpected verification resend completion",
+                releaseVerificationResend = \_ -> error "unexpected verification resend release",
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -134,6 +142,9 @@ spec = do
               { createPendingAccount = \_ pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right PendingAccountCreated),
                 completePendingRegistrationDelivery = \_ -> pure (Right True),
                 releasePendingRegistrationDelivery = \_ -> pure (Right True),
+                reserveVerificationResend = \_ _ _ -> error "unexpected verification resend",
+                completeVerificationResend = \_ _ -> error "unexpected verification resend completion",
+                releaseVerificationResend = \_ -> error "unexpected verification resend release",
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -182,6 +193,9 @@ spec = do
               { createPendingAccount = \_ _ -> error "password hashing should stop before persistence",
                 completePendingRegistrationDelivery = \_ -> error "unexpected registration delivery completion",
                 releasePendingRegistrationDelivery = \_ -> error "unexpected registration delivery release",
+                reserveVerificationResend = \_ _ _ -> error "unexpected verification resend",
+                completeVerificationResend = \_ _ -> error "unexpected verification resend completion",
+                releaseVerificationResend = \_ -> error "unexpected verification resend release",
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -198,6 +212,9 @@ spec = do
               { createPendingAccount = \_ pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right PendingAccountCreated),
                 completePendingRegistrationDelivery = \_ -> pure (Right True),
                 releasePendingRegistrationDelivery = \_ -> pure (Right True),
+                reserveVerificationResend = \_ _ _ -> error "unexpected verification resend",
+                completeVerificationResend = \_ _ -> error "unexpected verification resend completion",
+                releaseVerificationResend = \_ -> error "unexpected verification resend release",
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -214,17 +231,10 @@ spec = do
       AccountStoreUnavailable "database unavailable" `shouldNotBe` AccountStoreCorruptData "database unavailable"
       show (AccountStoreUnavailable "database unavailable") `shouldBe` "AccountStoreUnavailable \"database unavailable\""
       show (AccountStoreCorruptData "malformed account") `shouldBe` "AccountStoreCorruptData \"malformed account\""
-      ResendVerificationStoreError (AccountStoreUnavailable "database unavailable") `shouldNotBe` ResendVerificationDeliveryFailed "SMTP unavailable"
-      ResendVerificationClockOverflow `shouldNotBe` ResendVerificationNoLongerPending
-      show (ResendVerificationStoreError (AccountStoreUnavailable "database unavailable")) `shouldBe` "ResendVerificationStoreError (AccountStoreUnavailable \"database unavailable\")"
-      show (ResendVerificationDeliveryFailed "SMTP unavailable") `shouldBe` "ResendVerificationDeliveryFailed \"SMTP unavailable\""
-      show ResendVerificationClockOverflow `shouldBe` "ResendVerificationClockOverflow"
-      show ResendVerificationNoLongerPending `shouldBe` "ResendVerificationNoLongerPending"
       expectAll
         ( ((AccountStoreUnavailable "database unavailable" /= AccountStoreCorruptData "database unavailable") `shouldBe` True)
             :| [ show [AccountStoreUnavailable "database unavailable"] `shouldBe` "[AccountStoreUnavailable \"database unavailable\"]",
-                 (ResendVerificationStoreError (AccountStoreUnavailable "database unavailable") /= ResendVerificationDeliveryFailed "database unavailable") `shouldBe` True,
-                 show [ResendVerificationStoreError (AccountStoreUnavailable "database unavailable")] `shouldBe` "[ResendVerificationStoreError (AccountStoreUnavailable \"database unavailable\")]"
+                 pure ()
                ]
         )
 
@@ -237,6 +247,9 @@ spec = do
               { createPendingAccount = \_ _ -> pure (Right PendingAccountEmailTaken),
                 completePendingRegistrationDelivery = \_ -> pure (Right True),
                 releasePendingRegistrationDelivery = \_ -> pure (Right True),
+                reserveVerificationResend = \_ _ _ -> error "unexpected verification resend",
+                completeVerificationResend = \_ _ -> error "unexpected verification resend completion",
+                releaseVerificationResend = \_ -> error "unexpected verification resend release",
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -266,12 +279,30 @@ spec = do
               { createPendingAccount = \_ _ -> error "unexpected account creation",
                 completePendingRegistrationDelivery = \_ -> error "unexpected registration delivery completion",
                 releasePendingRegistrationDelivery = \_ -> error "unexpected registration delivery release",
-                replaceEmailVerification = \verification -> writeIORef storedVerificationReference (Just verification) >> pure (Right True),
+                reserveVerificationResend = \policy verification now -> do
+                  verificationResendMaximumDeliveries policy `shouldBe` verificationResendMaximumDeliveries defaultVerificationResendPolicy
+                  now `shouldBe` 100
+                  writeIORef storedVerificationReference (Just verification)
+                  pure (Right (VerificationResendReserved (VerificationResendClaim (Account.storedVerificationAccountId verification) (Account.storedVerificationTokenDigest verification)))),
+                completeVerificationResend = \claim now -> do
+                  case claim of
+                    VerificationResendClaim claimAccountId claimDigest -> do
+                      Account.accountIdText claimAccountId `shouldBe` Account.accountIdText accountId
+                      Account.emailVerificationTokenDigestText claimDigest `shouldSatisfy` (not . Text.null)
+                  now `shouldBe` 100
+                  pure (Right VerificationResendClaimSettled),
+                releaseVerificationResend = \claim -> do
+                  case claim of
+                    VerificationResendClaim claimAccountId claimDigest -> do
+                      Account.accountIdText claimAccountId `shouldBe` Account.accountIdText accountId
+                      Account.emailVerificationTokenDigestText claimDigest `shouldSatisfy` (not . Text.null)
+                  pure (Right VerificationResendClaimSettled),
+                replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
               }
-          unavailableStore = successfulStore {replaceEmailVerification = \_ -> pure (Left (AccountStoreUnavailable "database unavailable"))}
-          noLongerPendingStore = successfulStore {replaceEmailVerification = \_ -> pure (Right False)}
+          unavailableStore = successfulStore {reserveVerificationResend = \policy verification now -> verificationResendMaximumDeliveries policy `seq` Account.storedVerificationAccountId verification `seq` now `seq` pure (Left (AccountStoreUnavailable "database unavailable"))}
+          noLongerPendingStore = successfulStore {reserveVerificationResend = \policy verification now -> verificationResendMaximumDeliveries policy `seq` Account.storedVerificationAccountId verification `seq` now `seq` pure (Right (VerificationResendAdmissionSuppressed VerificationResendNoLongerPending))}
           delivery = Email.EmailDelivery (\message -> modifyIORef' deliveredMessagesReference (<> [message]))
           failingDelivery = Email.EmailDelivery (\_ -> ioError (userError "SMTP unavailable"))
           resend store emailDelivery profile now lifetime =
@@ -289,7 +320,9 @@ spec = do
                   verificationLifetime = lifetime
                 }
               profile
-      resend successfulStore delivery pendingProfile 100 200 >>= (`shouldSatisfy` \case Right () -> True; _ -> False)
+      resend successfulStore delivery pendingProfile 100 200 >>= \case
+        Right ResendVerificationDelivered -> pure ()
+        _ -> expectationFailure "expected a delivered resend"
       storedVerification <- readIORef storedVerificationReference
       deliveredMessages <- readIORef deliveredMessagesReference
       case (storedVerification, deliveredMessages) of
@@ -301,9 +334,16 @@ spec = do
           Email.emailMessageSubject message `shouldBe` "Verifica tu correo electrónico"
           Email.emailMessageBody message `shouldSatisfy` Text.isPrefixOf "Abre este enlace para verificar tu correo electrónico:\nhttps://account.example.test/es/verify?token="
         _ -> expectationFailure "expected a rotated verification and one email"
-      resend unavailableStore delivery pendingProfile 100 200 >>= (`shouldSatisfy` \case Left (ResendVerificationStoreError storeError) -> isUnavailable "database unavailable" storeError; _ -> False)
-      resend noLongerPendingStore delivery pendingProfile 100 200 >>= (`shouldSatisfy` \case Left ResendVerificationNoLongerPending -> True; _ -> False)
-      resend successfulStore failingDelivery pendingProfile 100 200 >>= (`shouldSatisfy` \case Left (ResendVerificationDeliveryFailed detail) -> detail == "email delivery transport failed"; _ -> False)
+      resend unavailableStore delivery pendingProfile 100 200 >>= \case
+        Left (ResendVerificationStoreError storeError)
+          | isUnavailable "database unavailable" storeError -> pure ()
+        _ -> expectationFailure "expected an unavailable resend store"
+      resend noLongerPendingStore delivery pendingProfile 100 200 >>= \case
+        Right (ResendVerificationSuppressed VerificationResendNoLongerPending) -> pure ()
+        _ -> expectationFailure "expected pending-state suppression"
+      resend successfulStore failingDelivery pendingProfile 100 200 >>= \case
+        Left (ResendVerificationDeliveryFailed VerificationDeliveryTransportFailed) -> pure ()
+        _ -> expectationFailure "expected a transport delivery failure"
       resendEmailVerificationAt
         EmailVerificationEnvironment
           { verificationStore = successfulStore,
@@ -318,9 +358,126 @@ spec = do
             verificationLifetime = 200
           }
         pendingProfile
-        >>= (`shouldSatisfy` \case Left (ResendVerificationDeliveryFailed detail) -> detail == "email delivery timed out"; _ -> False)
-      resend successfulStore delivery pendingProfile maxBound 1 >>= (`shouldSatisfy` \case Left ResendVerificationClockOverflow -> True; _ -> False)
-      resend successfulStore delivery verifiedProfile 100 200 >>= (`shouldSatisfy` \case Left ResendVerificationNoLongerPending -> True; _ -> False)
+        >>= \case
+          Left (ResendVerificationDeliveryFailed VerificationDeliveryTimedOut) -> pure ()
+          _ -> expectationFailure "expected a timed-out delivery"
+      resend successfulStore delivery pendingProfile maxBound 1 >>= \case
+        Left ResendVerificationClockOverflow -> pure ()
+        _ -> expectationFailure "expected resend clock overflow"
+      resend noLongerPendingStore delivery verifiedProfile 100 200 >>= \case
+        Right (ResendVerificationSuppressed VerificationResendNoLongerPending) -> pure ()
+        _ -> expectationFailure "expected verified-state suppression"
+
+    it "keeps resend policy and claim settlement outcomes on explicit rails" $ do
+      let accountId = requiredAccountId "account_01"
+          emailAddress = requiredEmailAddress "person@example.test"
+          profile = AccountProfile accountId emailAddress Nothing Nothing False
+          candidateClaim verification = VerificationResendClaim (Account.storedVerificationAccountId verification) (Account.storedVerificationTokenDigest verification)
+          storeFor admission completion release =
+            AccountStore
+              { createPendingAccount = \_ _ -> error "unexpected account creation",
+                completePendingRegistrationDelivery = \_ -> error "unexpected registration delivery completion",
+                releasePendingRegistrationDelivery = \_ -> error "unexpected registration delivery release",
+                reserveVerificationResend = \_ verification _ -> pure (Right (admission (candidateClaim verification))),
+                completeVerificationResend = \_ _ -> pure completion,
+                releaseVerificationResend = \_ -> pure release,
+                replaceEmailVerification = \_ -> error "unexpected verification replacement",
+                findEmailVerification = \_ -> error "unexpected verification lookup",
+                consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
+              }
+          environment store delivery =
+            EmailVerificationEnvironment
+              { verificationStore = store,
+                verificationDeliveryEnvironment = VerificationDeliveryEnvironment defaultRegistrationDeliveryTimeout delivery Email.EmailEnglish (const "https://account.example.test/verify"),
+                verificationNow = 100,
+                verificationLifetime = 200
+              }
+          noDelivery = Email.EmailDelivery (\_ -> error "suppressed resend must not deliver")
+          successfulDelivery = Email.EmailDelivery (\_ -> pure ())
+          failingDelivery = Email.EmailDelivery (\_ -> ioError (userError "SMTP unavailable"))
+          throttledStore = storeFor (const (VerificationResendAdmissionSuppressed VerificationResendThrottled)) (Right VerificationResendClaimSettled) (Right VerificationResendClaimSettled)
+          lostCompletionStore = storeFor VerificationResendReserved (Right VerificationResendClaimLost) (Right VerificationResendClaimSettled)
+          failedCompletionStore = storeFor VerificationResendReserved (Left (AccountStoreUnavailable "completion unavailable")) (Right VerificationResendClaimSettled)
+          failedReleaseStore = storeFor VerificationResendReserved (Right VerificationResendClaimSettled) (Left (AccountStoreUnavailable "release unavailable"))
+          lostReleaseStore = storeFor VerificationResendReserved (Right VerificationResendClaimSettled) (Right VerificationResendClaimLost)
+      case (mkVerificationResendPolicy 0 1 1 1, mkVerificationResendPolicy 1 0 1 1, mkVerificationResendPolicy 1 1 0 1, mkVerificationResendPolicy 1 1 1 0, mkVerificationResendPolicy 1 2 3 4) of
+        (Nothing, Nothing, Nothing, Nothing, Just policy) -> do
+          verificationResendMaximumDeliveries policy `shouldBe` 1
+          verificationResendWindowNanoseconds policy `shouldBe` 2
+          verificationResendClaimLeaseNanoseconds policy `shouldBe` 3
+          verificationResendMaximumRecords policy `shouldBe` 4
+        _ -> expectationFailure "resend policy must reject every zero bound"
+      verificationResendMaximumDeliveries defaultVerificationResendPolicy `shouldBe` 3
+      resendEmailVerificationAt (environment throttledStore noDelivery) profile >>= \case
+        Right (ResendVerificationSuppressed VerificationResendThrottled) -> pure ()
+        _ -> expectationFailure "expected throttled resend suppression"
+      resendEmailVerificationAt (environment lostCompletionStore successfulDelivery) profile >>= \case
+        Right (ResendVerificationSuppressed VerificationResendNoLongerPending) -> pure ()
+        _ -> expectationFailure "expected lost-claim suppression"
+      resendEmailVerificationAt (environment failedCompletionStore successfulDelivery) profile >>= \case
+        Left (ResendVerificationStoreError (AccountStoreUnavailable "completion unavailable")) -> pure ()
+        _ -> expectationFailure "expected a completion-store failure"
+      resendEmailVerificationAt (environment failedReleaseStore failingDelivery) profile >>= \case
+        Left (ResendVerificationStoreError (AccountStoreUnavailable "release unavailable")) -> pure ()
+        _ -> expectationFailure "expected a release-store failure"
+      resendEmailVerificationAt (environment lostReleaseStore failingDelivery) profile >>= \case
+        Left (ResendVerificationStoreError (AccountStoreCorruptData "verification resend claim was lost while releasing delivery")) -> pure ()
+        _ -> expectationFailure "expected a lost-release claim failure"
+
+      let interruptedDelivery = Email.EmailDelivery (\_ -> throwIO UserInterrupt)
+      (try (resendEmailVerificationAt (environment (storeFor VerificationResendReserved (Right VerificationResendClaimSettled) (Right VerificationResendClaimSettled)) interruptedDelivery) profile) :: IO (Either AsyncException (Either ResendVerificationError ResendVerificationResult)))
+        >>= \case
+          Left UserInterrupt -> pure ()
+          _ -> expectationFailure "expected resend delivery cancellation to be rethrown"
+
+    it "releases a resend claim when cancellation interrupts SMTP or promotion" $ do
+      let accountId = requiredAccountId "account_01"
+          emailAddress = requiredEmailAddress "person@example.test"
+          profile = AccountProfile accountId emailAddress Nothing Nothing False
+          runInterrupted interruptDelivery = do
+            claimedReference <- newIORef []
+            interruptionPoint <- newEmptyMVar
+            completed <- newEmptyMVar
+            let store =
+                  AccountStore
+                    { createPendingAccount = \_ _ -> error "unexpected account creation",
+                      completePendingRegistrationDelivery = \_ -> error "unexpected registration delivery completion",
+                      releasePendingRegistrationDelivery = \_ -> error "unexpected registration delivery release",
+                      reserveVerificationResend = \_ verification _ -> do
+                        let claim = VerificationResendClaim (Account.storedVerificationAccountId verification) (Account.storedVerificationTokenDigest verification)
+                        pure (Right (VerificationResendReserved claim)),
+                      completeVerificationResend = \_ _ -> do
+                        if interruptDelivery then pure (Right VerificationResendClaimSettled) else putMVar interruptionPoint () >> threadDelay 10000000 >> pure (Right VerificationResendClaimSettled),
+                      releaseVerificationResend = \claim -> do
+                        case claim of
+                          VerificationResendClaim claimedAccountId claimedDigest -> do
+                            Account.accountIdText claimedAccountId `shouldBe` Account.accountIdText accountId
+                            Account.emailVerificationTokenDigestText claimedDigest `shouldSatisfy` (not . Text.null)
+                        modifyIORef' claimedReference (<> [claim])
+                        pure (Right VerificationResendClaimSettled),
+                      replaceEmailVerification = \_ -> error "unexpected verification replacement",
+                      findEmailVerification = \_ -> error "unexpected verification lookup",
+                      consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
+                    }
+                delivery =
+                  Email.EmailDelivery $ \_ ->
+                    when interruptDelivery (putMVar interruptionPoint () >> threadDelay 10000000)
+                environment =
+                  EmailVerificationEnvironment
+                    { verificationStore = store,
+                      verificationDeliveryEnvironment = VerificationDeliveryEnvironment defaultRegistrationDeliveryTimeout delivery Email.EmailEnglish (const "https://account.example.test/verify"),
+                      verificationNow = 100,
+                      verificationLifetime = 200
+                    }
+            worker <- forkIO $ try (resendEmailVerificationAt environment profile) >>= putMVar completed
+            takeMVar interruptionPoint
+            killThread worker
+            _ <- takeMVar completed :: IO (Either SomeException (Either ResendVerificationError ResendVerificationResult))
+            readIORef claimedReference
+      deliveryClaims <- runInterrupted True
+      completionClaims <- runInterrupted False
+      length deliveryClaims `shouldBe` 1
+      length completionClaims `shouldBe` 1
 
     it "reports delivery failures after the pending account has been stored and rejects overflowing expiry calculations" $ do
       pendingAccountsReference <- newIORef []
@@ -329,6 +486,9 @@ spec = do
               { createPendingAccount = \_ pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right PendingAccountCreated),
                 completePendingRegistrationDelivery = \_ -> pure (Right True),
                 releasePendingRegistrationDelivery = \_ -> pure (Right True),
+                reserveVerificationResend = \_ _ _ -> error "unexpected verification resend",
+                completeVerificationResend = \_ _ -> error "unexpected verification resend completion",
+                releaseVerificationResend = \_ -> error "unexpected verification resend release",
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -379,6 +539,9 @@ spec = do
                     ),
                 completePendingRegistrationDelivery = \claim -> modifyIORef' settledClaimsReference (<> [claim]) >> pure (Right True),
                 releasePendingRegistrationDelivery = \claim -> modifyIORef' releasedClaimsReference (<> [claim]) >> pure (Right True),
+                reserveVerificationResend = \_ _ _ -> error "unexpected verification resend",
+                completeVerificationResend = \_ _ -> error "unexpected verification resend completion",
+                releaseVerificationResend = \_ -> error "unexpected verification resend release",
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -440,6 +603,9 @@ spec = do
                   pure (Right PendingAccountStorageExhausted),
                 completePendingRegistrationDelivery = \_ -> error "unexpected registration delivery completion",
                 releasePendingRegistrationDelivery = \_ -> error "unexpected registration delivery release",
+                reserveVerificationResend = \_ _ _ -> error "unexpected verification resend",
+                completeVerificationResend = \_ _ -> error "unexpected verification resend completion",
+                releaseVerificationResend = \_ -> error "unexpected verification resend release",
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -459,8 +625,8 @@ spec = do
           pendingRegistrationMaximumAccounts storagePolicy `shouldBe` 1
           pendingRegistrationClaimLeaseNanoseconds storagePolicy `shouldBe` 1
         _ -> expectationFailure "expected only positive pending-registration bounds to be accepted"
-      case (mkRegistrationDeliveryTimeout 0, mkRegistrationDeliveryTimeout 1) of
-        (Nothing, Just _) -> pure ()
+      case (mkRegistrationDeliveryTimeout (-1), mkRegistrationDeliveryTimeout 0, mkRegistrationDeliveryTimeout 1) of
+        (Nothing, Nothing, Just _) -> pure ()
         _ -> expectationFailure "expected only a positive delivery timeout to be accepted"
       assertRegistrationResult
         (registerAccount (registrationEnvironmentAt Password.hashPassword storageExhaustedStore delivery 100 200) (registrationRequestOf emailAddress))
@@ -479,6 +645,9 @@ spec = do
               { createPendingAccount = \_ _ -> error "unexpected account creation",
                 completePendingRegistrationDelivery = \_ -> error "unexpected registration delivery completion",
                 releasePendingRegistrationDelivery = \_ -> error "unexpected registration delivery release",
+                reserveVerificationResend = \_ _ _ -> error "unexpected verification resend",
+                completeVerificationResend = \_ _ -> error "unexpected verification resend completion",
+                releaseVerificationResend = \_ -> error "unexpected verification resend release",
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \digest ->
                   if digest == Account.emailVerificationTokenDigest token
@@ -507,6 +676,9 @@ spec = do
               { createPendingAccount = \_ _ -> error "unexpected account creation",
                 completePendingRegistrationDelivery = \_ -> error "unexpected registration delivery completion",
                 releasePendingRegistrationDelivery = \_ -> error "unexpected registration delivery release",
+                reserveVerificationResend = \_ _ _ -> error "unexpected verification resend",
+                completeVerificationResend = \_ _ -> error "unexpected verification resend completion",
+                releaseVerificationResend = \_ -> error "unexpected verification resend release",
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> pure lookupResult,
                 consumeEmailVerification = \_ _ -> pure consumptionResult

@@ -151,9 +151,11 @@ data AppMode
 newtype DatabasePoolCapacity = DatabasePoolCapacity Int
 
 mkDatabasePoolCapacity :: Int -> Maybe DatabasePoolCapacity
-mkDatabasePoolCapacity capacity
-  | capacity > 0 = Just (DatabasePoolCapacity capacity)
-  | otherwise = Nothing
+mkDatabasePoolCapacity capacity =
+  case compare capacity 0 of
+    GT -> Just (DatabasePoolCapacity capacity)
+    EQ -> Nothing
+    LT -> Nothing
 
 databasePoolCapacityValue :: DatabasePoolCapacity -> Int
 databasePoolCapacityValue (DatabasePoolCapacity capacity) = capacity
@@ -645,9 +647,10 @@ parseSslMode key value =
     )
 
 parseNonEmpty :: Text -> Text -> Either ConfigParseError Text
-parseNonEmpty key value
-  | Text.null value = Left (InvalidConfigValue key value)
-  | otherwise = Right value
+parseNonEmpty key value =
+  case Text.uncons value of
+    Nothing -> Left (InvalidConfigValue key value)
+    Just _ -> Right value
 
 parseSmtpPort :: Text -> Either ConfigParseError Int
 parseSmtpPort value = do

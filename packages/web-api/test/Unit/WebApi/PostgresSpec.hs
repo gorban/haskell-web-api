@@ -4,6 +4,9 @@
 
 {-# SPEC #-}
 
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
+import Control.Monad (replicateM)
 import Data.ByteString qualified as ByteString
 import Data.Foldable (for_)
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
@@ -13,6 +16,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
 import HarchWeb.Account qualified as Account
+import HarchWeb.Email qualified as Email
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
 import HarchWeb.Password qualified as Password
 import HarchWeb.Username qualified as Username
@@ -20,7 +24,7 @@ import Network.HTTP.Types qualified as Http
 import System.Exit (ExitCode (..))
 import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath, withPostgresTlsFixtures)
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress)
-import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), defaultPendingRegistrationStoragePolicy, mkPendingRegistrationStoragePolicy)
+import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), VerificationResendAdmission (..), VerificationResendClaim (..), VerificationResendClaimSettlement (..), VerificationResendSuppression (..), defaultPendingRegistrationStoragePolicy, defaultVerificationResendPolicy, mkPendingRegistrationStoragePolicy, mkVerificationResendPolicy)
 import WebApi.App (buildAppWithDatabase)
 import WebApi.Components.AppControls (appControls)
 import WebApi.Config (DatabaseConfig (..), DatabaseSslMode (..), DatabaseTransportSecurity (..), defaultAppConfig)
@@ -59,18 +63,21 @@ spec = do
             config `seq` do
               modifyIORef' recordedQueriesReference (<> [(sql, parameters)])
               pure $
-                if "stage_pending_registration" `Text.isInfixOf` sql
-                  then Right [["created", "account_01"]]
+                if "reserve_verification_resend" `Text.isInfixOf` sql
+                  then Right [["reserved", "account_01"]]
                   else
-                    if "INSERT INTO web_api.accounts" `Text.isInfixOf` sql
-                      then Right [["account_01"]]
+                    if "stage_pending_registration" `Text.isInfixOf` sql
+                      then Right [["created", "account_01"]]
                       else
-                        if "SELECT account_id, email_normalized" `Text.isInfixOf` sql
-                          then Right [["account_01", "person@example.test", "500"]]
+                        if "INSERT INTO web_api.accounts" `Text.isInfixOf` sql
+                          then Right [["account_01"]]
                           else
-                            if "DELETE FROM web_api.email_verifications" `Text.isInfixOf` sql
-                              then Right [["account_01"]]
-                              else Left "unexpected query"
+                            if "SELECT account_id, email_normalized" `Text.isInfixOf` sql
+                              then Right [["account_01", "person@example.test", "500"]]
+                              else
+                                if "DELETE FROM web_api.email_verifications" `Text.isInfixOf` sql
+                                  then Right [["account_01"]]
+                                  else Left "unexpected query"
           accountStore = buildRuntimePostgresAccountStoreWithRunner runner postgresTestConfig
       createPendingAccount accountStore defaultPendingRegistrationStoragePolicy pendingAccount >>= \case
         Right (PendingAccountDeliveryClaimed claim) -> do
@@ -89,6 +96,9 @@ spec = do
       assertAccountStoreSuccess
         (consumeEmailVerification accountStore (Account.emailVerificationTokenDigest token) 499)
         (\case Just consumedAccountId -> consumedAccountId == accountId; Nothing -> False)
+      assertAccountStoreSuccess
+        (reserveVerificationResend accountStore (required "verification resend policy" (mkVerificationResendPolicy 3 100 50 100)) (pendingAccountVerification pendingAccount) 100)
+        (\case VerificationResendReserved _ -> True; VerificationResendAdmissionSuppressed _ -> False)
       recordedQueries <- readIORef recordedQueriesReference
       let queryText = Text.intercalate "\n" (map fst recordedQueries)
           parameterText = Text.intercalate "\n" (concatMap snd recordedQueries)
@@ -98,6 +108,8 @@ spec = do
       Text.isInfixOf (Account.emailVerificationTokenDigestText (Account.emailVerificationTokenDigest token)) parameterText `shouldBe` True
       Text.isInfixOf (Username.usernameText username) parameterText `shouldBe` True
       Text.isInfixOf "Person Example" parameterText `shouldBe` True
+      [parameters | (query, parameters) <- recordedQueries, "reserve_verification_resend" `Text.isInfixOf` query]
+        `shouldBe` [["account_01", Account.emailVerificationTokenDigestText (Account.emailVerificationTokenDigest token), "person@example.test", "500", "100", "0", "50", "3", "100"]]
 
     it "delegates username and capacity decisions to one atomic pending-registration stage" $ do
       recordedQueriesReference <- newIORef []
@@ -194,6 +206,136 @@ spec = do
       assertAccountStoreError (consumeEmailVerification (storeFor (Left "connection failed")) (Account.emailVerificationTokenDigest token) 499) (isUnavailable "connection failed")
       assertAccountStoreSuccess (consumeEmailVerification (storeFor (Right [])) (Account.emailVerificationTokenDigest token) 499) (\case Nothing -> True; Just _ -> False)
       assertAccountStoreError (consumeEmailVerification (storeFor (Right [["account_01", "extra"]])) (Account.emailVerificationTokenDigest token) 499) (isCorrupt "unexpected email-verification consumption result: row-count=1, column-counts=[2]")
+      let resendClaim = VerificationResendClaim accountId (Account.emailVerificationTokenDigest token)
+          resendVerification = pendingAccountVerification pendingAccount
+      assertAccountStoreSuccess
+        (reserveVerificationResend (storeFor (Right [["throttled", ""]])) defaultVerificationResendPolicy resendVerification 100)
+        (\case VerificationResendAdmissionSuppressed VerificationResendThrottled -> True; _ -> False)
+      assertAccountStoreSuccess
+        (reserveVerificationResend (storeFor (Right [["no-longer-pending", ""]])) defaultVerificationResendPolicy resendVerification 100)
+        (\case VerificationResendAdmissionSuppressed VerificationResendNoLongerPending -> True; _ -> False)
+      assertAccountStoreError
+        (reserveVerificationResend (storeFor (Right [["storage-exhausted", ""]])) defaultVerificationResendPolicy resendVerification 100)
+        (isUnavailable "verification resend storage is exhausted")
+      assertAccountStoreError
+        (reserveVerificationResend (storeFor (Right [["reserved", "invalid id"]])) defaultVerificationResendPolicy resendVerification 100)
+        (isCorrupt "verification resend reservation returned an invalid account id")
+      assertAccountStoreError
+        (reserveVerificationResend (storeFor (Right [["reserved", "other_account"]])) defaultVerificationResendPolicy resendVerification 100)
+        (isCorrupt "verification resend reservation returned a different account id")
+      assertAccountStoreError
+        (reserveVerificationResend (storeFor (Right [["reserved"]])) defaultVerificationResendPolicy resendVerification 100)
+        (isCorrupt "unexpected verification resend reservation result: row-count=1, column-counts=[1]")
+      assertAccountStoreSuccess
+        (completeVerificationResend (storeFor (Right [["lost", ""]])) resendClaim 100)
+        (\case VerificationResendClaimLost -> True; VerificationResendClaimSettled -> False)
+      assertAccountStoreSuccess
+        (releaseVerificationResend (storeFor (Right [["settled", "account_01"]])) resendClaim)
+        (\case VerificationResendClaimSettled -> True; VerificationResendClaimLost -> False)
+      assertAccountStoreError
+        (releaseVerificationResend (storeFor (Right [["settled", "other_account"]])) resendClaim)
+        (isCorrupt "unexpected verification resend claim settlement result: row-count=1, column-counts=[2]")
+
+    it "keeps the delivered token valid until a real PostgreSQL resend claim settles" $ do
+      ensureDefaultPostgresAvailable
+      runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig `shouldReturn` Right ()
+      let accountId = requiredAccountId "ahi2_resend_account"
+          emailAddress = requiredEmailAddress "ahi2-resend@example.test"
+          oldToken = requiredVerificationToken (Text.replicate 43 "a")
+          candidateToken = requiredVerificationToken (Text.replicate 43 "b")
+          concurrentTokens = fmap (requiredVerificationToken . Text.replicate 43) ["c", "d", "e", "f"]
+          deliveredTokens = fmap (requiredVerificationToken . Text.replicate 43) ["c", "d"]
+          oldVerification = Account.mkStoredEmailVerification accountId emailAddress 900 oldToken
+          candidateVerification = Account.mkStoredEmailVerification accountId emailAddress 1200 candidateToken
+      _ <- runRuntimeParameterizedRowsQuery defaultRealPostgresConfig "DELETE FROM web_api.accounts WHERE account_id = $1;" [Account.accountIdText accountId]
+      _ <- runRuntimeParameterizedRowsQuery defaultRealPostgresConfig "INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds) VALUES ($1, $2, 'test-hash', 1) RETURNING account_id;" [Account.accountIdText accountId, Email.emailAddressText emailAddress]
+      _ <- runRuntimeParameterizedRowsQuery defaultRealPostgresConfig "INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds, delivery_state) VALUES ($1, $2, $3, 900, 'delivered') RETURNING account_id;" [Account.emailVerificationTokenDigestText (Account.storedVerificationTokenDigest oldVerification), Account.accountIdText accountId, Email.emailAddressText emailAddress]
+      pool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
+      let store = buildRuntimePostgresAccountStore pool
+      reservedClaim <-
+        reserveVerificationResend store defaultVerificationResendPolicy candidateVerification 1000 >>= \case
+          Right (VerificationResendReserved claim) -> pure claim
+          _ -> expectationFailure "expected a durable resend claim" >> pure (VerificationResendClaim accountId (Account.storedVerificationTokenDigest candidateVerification))
+      findEmailVerification store (Account.emailVerificationTokenDigest oldToken) `shouldReturn` Right (Just oldVerification)
+      releaseVerificationResend store reservedClaim >>= \case
+        Right VerificationResendClaimSettled -> pure ()
+        _ -> expectationFailure "expected resend claim release"
+      findEmailVerification store (Account.emailVerificationTokenDigest oldToken) `shouldReturn` Right (Just oldVerification)
+      promotedClaim <-
+        reserveVerificationResend store defaultVerificationResendPolicy candidateVerification 1001 >>= \case
+          Right (VerificationResendReserved claim) -> pure claim
+          _ -> expectationFailure "expected a reclaimed resend claim" >> pure reservedClaim
+      completeVerificationResend store promotedClaim 1002 >>= \case
+        Right VerificationResendClaimSettled -> pure ()
+        _ -> expectationFailure "expected resend claim promotion"
+      findEmailVerification store (Account.emailVerificationTokenDigest candidateToken) `shouldReturn` Right (Just candidateVerification)
+      findEmailVerification store (Account.emailVerificationTokenDigest oldToken) `shouldReturn` Right Nothing
+      concurrentResults <- newEmptyMVar
+      for_ [0 .. 3] $ \index ->
+        let token = concurrentTokens !! index
+            verification = Account.mkStoredEmailVerification accountId emailAddress 1300 token
+         in forkIO (reserveVerificationResend store defaultVerificationResendPolicy verification 1003 >>= putMVar concurrentResults)
+      admissions <- replicateM 4 (takeMVar concurrentResults)
+      let concurrentClaims = [claim | Right (VerificationResendReserved claim) <- admissions]
+      case concurrentClaims of
+        [claim] ->
+          releaseVerificationResend store claim >>= \case
+            Right VerificationResendClaimSettled -> pure ()
+            _ -> expectationFailure "expected concurrent claim release"
+        _ -> expectationFailure "exactly one concurrent resend claim must be reserved"
+      for_ (zip deliveredTokens [1004, 1005]) $ \(token, now) -> do
+        let verification = Account.mkStoredEmailVerification accountId emailAddress 1400 token
+        reserveVerificationResend store defaultVerificationResendPolicy verification now >>= \case
+          Right (VerificationResendReserved claim) ->
+            completeVerificationResend store claim (now + 1) >>= \case
+              Right VerificationResendClaimSettled -> pure ()
+              _ -> expectationFailure "expected resend delivery settlement"
+          _ -> expectationFailure "expected delivery below the resend budget"
+      let throttledVerification = Account.mkStoredEmailVerification accountId emailAddress 1500 (requiredVerificationToken (Text.replicate 43 "g"))
+      reserveVerificationResend store defaultVerificationResendPolicy throttledVerification 1007 >>= \case
+        Right (VerificationResendAdmissionSuppressed VerificationResendThrottled) -> pure ()
+        _ -> expectationFailure "expected resend budget throttling"
+
+    it "reclaims resend claims and rolling delivery history at their retention boundaries" $ do
+      ensureDefaultPostgresAvailable
+      runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig `shouldReturn` Right ()
+      let accountId = requiredAccountId "ahi2_boundary_account"
+          emailAddress = requiredEmailAddress "ahi2-boundary@example.test"
+          policy = fromMaybe (error "expected resend policy") (mkVerificationResendPolicy 1 1 1 100000)
+          token value = requiredVerificationToken (Text.replicate 43 value)
+          verification value = Account.mkStoredEmailVerification accountId emailAddress 1000 (token value)
+      _ <- runRuntimeParameterizedRowsQuery defaultRealPostgresConfig "DELETE FROM web_api.accounts WHERE account_id = $1;" [Account.accountIdText accountId]
+      _ <- runRuntimeParameterizedRowsQuery defaultRealPostgresConfig "INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds) VALUES ($1, $2, 'test-hash', 1) RETURNING account_id;" [Account.accountIdText accountId, Email.emailAddressText emailAddress]
+      pool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
+      let store = buildRuntimePostgresAccountStore pool
+      firstClaim <-
+        reserveVerificationResend store policy (verification "a") 10 >>= \case
+          Right (VerificationResendReserved claim) -> pure claim
+          _ -> expectationFailure "expected first resend claim" >> pure (VerificationResendClaim accountId (Account.emailVerificationTokenDigest (token "a")))
+      completeVerificationResend store firstClaim 10 >>= \case
+        Right VerificationResendClaimSettled -> pure ()
+        _ -> expectationFailure "expected first delivery settlement"
+      secondClaim <-
+        reserveVerificationResend store policy (verification "b") 11 >>= \case
+          Right (VerificationResendReserved claim) -> pure claim
+          _ -> expectationFailure "delivery at the rolling-window boundary must have been pruned" >> pure firstClaim
+      releaseVerificationResend store secondClaim >>= \case
+        Right VerificationResendClaimSettled -> pure ()
+        _ -> expectationFailure "expected boundary claim release"
+      abandonedClaim <-
+        reserveVerificationResend store policy (verification "c") 20 >>= \case
+          Right (VerificationResendReserved claim) -> pure claim
+          _ -> expectationFailure "expected an abandoned resend claim" >> pure firstClaim
+      recovered <- reserveVerificationResend store policy (verification "d") 21
+      case recovered of
+        Right (VerificationResendReserved recoveredClaim) -> do
+          releaseVerificationResend store recoveredClaim >>= \case
+            Right VerificationResendClaimSettled -> pure ()
+            _ -> expectationFailure "expected recovered-claim release"
+          releaseVerificationResend store abandonedClaim >>= \case
+            Right VerificationResendClaimLost -> pure ()
+            _ -> expectationFailure "expired claim must remain lost"
+        _ -> expectationFailure "claim at the lease boundary must have been reclaimed"
 
     it "loads safe account profiles and rejects malformed profile rows" $ do
       let accountId = requiredAccountId "account_01"
@@ -740,7 +882,7 @@ spec = do
       ensureDefaultPostgresAvailable
       runPostgresMigrations defaultMigrationPostgresConfig `shouldReturn` Right ()
       runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
-        `shouldReturn` Right ["epoch-security-time-v1", "initial-schema", "login-attempt-reservation-function-v1", "login-attempt-reservations-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1"]
+        `shouldReturn` Right ["epoch-security-time-v1", "initial-schema", "login-attempt-reservation-function-v1", "login-attempt-reservations-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1"]
       withUnusedTcpEndpoint $ \unusedEndpoint -> do
         runPostgresMigrations
           defaultMigrationPostgresConfig
@@ -821,7 +963,7 @@ spec = do
               "CREATE TABLE IF NOT EXISTS web_api.schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);",
               "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
             ]
-      runPostgresMigrationsWithExecutor (executor ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1"] "never") migrationPostgresTestConfig postgresTestConfig `shouldReturn` Right ()
+      runPostgresMigrationsWithExecutor (executor ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1"] "never") migrationPostgresTestConfig postgresTestConfig `shouldReturn` Right ()
       skippedRecordedSql <- readIORef recordedSqlReference
       take (length setupSql) skippedRecordedSql `shouldBe` setupSql
       skippedRecordedSql `shouldContain` ["ALTER SCHEMA web_api OWNER TO \"web_api_owner\";"]
@@ -938,18 +1080,18 @@ spec = do
       recordSql `shouldBe` setupSql <> migrationStatementsFor <> ["INSERT INTO web_api.schema_migrations (version) VALUES ('initial-schema');", "ROLLBACK;"]
 
       (reconciliationResult, reconciliationSql) <-
-        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "ALTER SCHEMA web_api OWNER TO \"web_api_owner\";" then migrationFailure else versionRows ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1"] sql)
+        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "ALTER SCHEMA web_api OWNER TO \"web_api_owner\";" then migrationFailure else versionRows ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1"] sql)
       reconciliationResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
       reconciliationSql `shouldBe` setupSql <> ["ALTER SCHEMA web_api OWNER TO \"web_api_owner\";", "ROLLBACK;"]
 
       (commitResult, commitSql) <-
-        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "COMMIT;" then migrationFailure else versionRows ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1"] sql)
+        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "COMMIT;" then migrationFailure else versionRows ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1"] sql)
       commitResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
       take (length setupSql) commitSql `shouldBe` setupSql
       drop (length commitSql - 2) commitSql `shouldBe` ["COMMIT;", "ROLLBACK;"]
 
       (sameIdentityResult, sameIdentitySql) <-
-        runWith migrationPostgresTestConfig migrationPostgresTestConfig (versionRows ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1"])
+        runWith migrationPostgresTestConfig migrationPostgresTestConfig (versionRows ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1"])
       sameIdentityResult `shouldBe` Right ()
       sameIdentitySql `shouldNotContain` ["DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'web_api_owner') THEN EXECUTE 'ALTER ROLE \"web_api_owner\" WITH LOGIN PASSWORD ''owner-secret'' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION INHERIT'; ELSE EXECUTE 'CREATE ROLE \"web_api_owner\" WITH LOGIN PASSWORD ''owner-secret'' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION INHERIT'; END IF; END $$;"]
 

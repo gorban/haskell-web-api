@@ -7,6 +7,14 @@
 -- timeout form 'VerificationDeliveryEnvironment'. Registration and resend
 -- therefore share one explicit delivery capability without conflating it
 -- with credential hashing or account storage.
+--
+-- Decision (AHI-2, 2026-09-01): resend is a staged claim owned by
+-- 'AccountStore'.  The existing delivered verification remains usable until
+-- SMTP succeeds and the store atomically promotes the candidate token.  This
+-- is deliberately a narrow lifecycle capability, rather than a generic
+-- budget abstraction: account verification owns the pending-state check, its
+-- token, and the bounded delivery history.  Claim values contain only an
+-- account id and digest, never a row id or raw token.
 module WebApi.Account
   ( AccountStore (..),
     AccountStoreError (..),
@@ -16,6 +24,7 @@ module WebApi.Account
     PendingRegistrationClaim (..),
     PendingRegistrationDeliveryStage (..),
     PendingRegistrationStoragePolicy,
+    VerificationResendPolicy,
     RegistrationDeliveryTimeout,
     PendingAccount (..),
     EmailVerificationEnvironment (..),
@@ -23,22 +32,34 @@ module WebApi.Account
     RegistrationEnvironment (..),
     RegistrationRequest (..),
     ResendVerificationError (..),
+    ResendVerificationResult (..),
+    VerificationResendAdmission (..),
+    VerificationResendClaim (..),
+    VerificationResendClaimSettlement (..),
+    VerificationResendSuppression (..),
     RegistrationError (..),
     RegistrationResult (..),
     VerificationDeliveryFailure (..),
     confirmEmailVerificationAt,
     defaultPendingRegistrationStoragePolicy,
     defaultRegistrationDeliveryTimeout,
+    defaultVerificationResendPolicy,
     mkPendingRegistrationStoragePolicy,
     mkRegistrationDeliveryTimeout,
+    mkVerificationResendPolicy,
     pendingRegistrationClaimLeaseNanoseconds,
     pendingRegistrationMaximumAccounts,
+    verificationResendClaimLeaseNanoseconds,
+    verificationResendMaximumDeliveries,
+    verificationResendMaximumRecords,
+    verificationResendWindowNanoseconds,
     registerAccount,
     resendEmailVerificationAt,
   )
 where
 
-import Control.Exception (SomeException, try)
+import Control.Exception (AsyncException, SomeException, fromException, mask, onException, throwIO, try)
+import Control.Monad (void)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Core.Control.Error (fromMaybeError, guardError, liftEitherWith, liftMaybeWith)
@@ -108,6 +129,9 @@ data AccountStore = AccountStore
   { createPendingAccount :: PendingRegistrationStoragePolicy -> PendingAccount -> IO (Either AccountStoreError CreatePendingAccountOutcome),
     completePendingRegistrationDelivery :: PendingRegistrationClaim -> IO (Either AccountStoreError Bool),
     releasePendingRegistrationDelivery :: PendingRegistrationClaim -> IO (Either AccountStoreError Bool),
+    reserveVerificationResend :: VerificationResendPolicy -> StoredEmailVerification -> UnixTimeNanoseconds -> IO (Either AccountStoreError VerificationResendAdmission),
+    completeVerificationResend :: VerificationResendClaim -> UnixTimeNanoseconds -> IO (Either AccountStoreError VerificationResendClaimSettlement),
+    releaseVerificationResend :: VerificationResendClaim -> IO (Either AccountStoreError VerificationResendClaimSettlement),
     replaceEmailVerification :: StoredEmailVerification -> IO (Either AccountStoreError Bool),
     findEmailVerification :: EmailVerificationTokenDigest -> IO (Either AccountStoreError (Maybe StoredEmailVerification)),
     consumeEmailVerification :: EmailVerificationTokenDigest -> UnixTimeNanoseconds -> IO (Either AccountStoreError (Maybe AccountId))
@@ -152,9 +176,11 @@ data PendingRegistrationStoragePolicy = PendingRegistrationStoragePolicy
   }
 
 mkPendingRegistrationStoragePolicy :: Word64 -> Word64 -> Maybe PendingRegistrationStoragePolicy
-mkPendingRegistrationStoragePolicy maximumAccounts claimLeaseNanoseconds
-  | maximumAccounts == 0 || claimLeaseNanoseconds == 0 = Nothing
-  | otherwise = Just (PendingRegistrationStoragePolicy maximumAccounts claimLeaseNanoseconds)
+mkPendingRegistrationStoragePolicy maximumAccounts claimLeaseNanoseconds =
+  case (maximumAccounts, claimLeaseNanoseconds) of
+    (0, _) -> Nothing
+    (_, 0) -> Nothing
+    _ -> Just (PendingRegistrationStoragePolicy maximumAccounts claimLeaseNanoseconds)
 
 -- | Reference-application policy: a maximum of 100,000 unverified accounts
 -- and a five-minute abandoned-delivery lease.  Expired verification tokens
@@ -163,6 +189,31 @@ mkPendingRegistrationStoragePolicy maximumAccounts claimLeaseNanoseconds
 defaultPendingRegistrationStoragePolicy :: PendingRegistrationStoragePolicy
 defaultPendingRegistrationStoragePolicy = PendingRegistrationStoragePolicy 100000 (5 * 60 * 1000000000)
 
+-- | Bounded resend policy.  Delivery records use a rolling window while a
+-- short claim lease makes a cancelled or failed process recoverable.  The
+-- record limit applies to both claims and delivery history, preventing a
+-- wide account-id keyspace from becoming unbounded storage.
+data VerificationResendPolicy = VerificationResendPolicy
+  { verificationResendMaximumDeliveries :: Word64,
+    verificationResendWindowNanoseconds :: Word64,
+    verificationResendClaimLeaseNanoseconds :: Word64,
+    verificationResendMaximumRecords :: Word64
+  }
+
+mkVerificationResendPolicy :: Word64 -> Word64 -> Word64 -> Word64 -> Maybe VerificationResendPolicy
+mkVerificationResendPolicy maximumDeliveries windowNanoseconds claimLeaseNanoseconds maximumRecords =
+  case (maximumDeliveries, windowNanoseconds, claimLeaseNanoseconds, maximumRecords) of
+    (0, _, _, _) -> Nothing
+    (_, 0, _, _) -> Nothing
+    (_, _, 0, _) -> Nothing
+    (_, _, _, 0) -> Nothing
+    _ -> Just (VerificationResendPolicy maximumDeliveries windowNanoseconds claimLeaseNanoseconds maximumRecords)
+
+-- | Reference policy: at most three accepted resend deliveries per hour, a
+-- five-minute abandoned-claim lease, and 100,000 retained lifecycle rows.
+defaultVerificationResendPolicy :: VerificationResendPolicy
+defaultVerificationResendPolicy = VerificationResendPolicy 3 (60 * 60 * 1000000000) (5 * 60 * 1000000000) 100000
+
 -- | A positive, account-workflow-owned deadline for one SMTP delivery.  The
 -- SMTP transport can otherwise wait indefinitely for DNS, connect, or a peer
 -- response, retaining a registration delivery claim forever instead of
@@ -170,9 +221,11 @@ defaultPendingRegistrationStoragePolicy = PendingRegistrationStoragePolicy 10000
 newtype RegistrationDeliveryTimeout = RegistrationDeliveryTimeout Int
 
 mkRegistrationDeliveryTimeout :: Int -> Maybe RegistrationDeliveryTimeout
-mkRegistrationDeliveryTimeout microseconds
-  | microseconds <= 0 = Nothing
-  | otherwise = Just (RegistrationDeliveryTimeout microseconds)
+mkRegistrationDeliveryTimeout microseconds =
+  case compare microseconds 0 of
+    GT -> Just (RegistrationDeliveryTimeout microseconds)
+    EQ -> Nothing
+    LT -> Nothing
 
 defaultRegistrationDeliveryTimeout :: RegistrationDeliveryTimeout
 defaultRegistrationDeliveryTimeout = RegistrationDeliveryTimeout (10 * 1000000)
@@ -194,15 +247,46 @@ data RegistrationResult
 
 data ResendVerificationError
   = ResendVerificationStoreError AccountStoreError
-  | ResendVerificationDeliveryFailed Text
+  | ResendVerificationDeliveryFailed VerificationDeliveryFailure
   | ResendVerificationClockOverflow
-  | ResendVerificationNoLongerPending
-  deriving (Eq, Show)
+
+-- | The workflow's expected, non-public result states.  Page actions map
+-- delivery and suppression to the same generic acceptance response, while
+-- retaining this closed classification for private low-cardinality telemetry.
+-- 'ResendVerificationError' deliberately has no 'Show' instance: an
+-- application boundary must select its safe classification instead of
+-- rendering an operational error value.
+data ResendVerificationResult
+  = ResendVerificationDelivered
+  | ResendVerificationSuppressed VerificationResendSuppression
+
+data VerificationResendSuppression
+  = VerificationResendThrottled
+  | VerificationResendNoLongerPending
+
+-- | A candidate has been durably claimed or has an ordinary suppression.
+data VerificationResendAdmission
+  = VerificationResendReserved VerificationResendClaim
+  | VerificationResendAdmissionSuppressed VerificationResendSuppression
+
+-- | The opaque-equivalent ownership handle returned by the store.  Its
+-- fields are durable identities only; no caller can use it to recover a raw
+-- token or address a database row outside the account lifecycle.
+data VerificationResendClaim = VerificationResendClaim
+  { verificationResendClaimAccountId :: AccountId,
+    verificationResendClaimTokenDigest :: EmailVerificationTokenDigest
+  }
+
+data VerificationResendClaimSettlement
+  = VerificationResendClaimSettled
+  | VerificationResendClaimLost
 
 -- | Private failure classification for a verification-email attempt.  A
 -- timeout is a distinct operational outcome, rather than a matching message
 -- string, so application telemetry can alert on exhausted SMTP deadlines
 -- without recording the recipient, token, or SMTP conversation.
+-- The type deliberately has no 'Show' instance for the same boundary
+-- discipline.
 data VerificationDeliveryFailure
   = VerificationDeliveryTimedOut
   | -- | An email adapter threw an unexpected exception.  The adapter is an
@@ -342,21 +426,43 @@ confirmEmailVerificationAt accountStore now token =
 resendEmailVerificationAt ::
   EmailVerificationEnvironment ->
   AccountProfile ->
-  IO (Either ResendVerificationError ())
-resendEmailVerificationAt verificationEnvironment profile =
-  runExceptT $ do
-    guardError ResendVerificationNoLongerPending (not (accountProfileEmailVerified profile))
-    expiresAt <- fromMaybeError ResendVerificationClockOverflow (addNanoseconds now verificationLifetimeNanoseconds)
-    token <- liftIO generateEmailVerificationToken
-    let verification = mkStoredEmailVerification (accountProfileId profile) (accountProfileEmail profile) expiresAt token
-    replaced <- liftAccountStore ResendVerificationStoreError (replaceEmailVerification accountStore verification)
-    guardError ResendVerificationNoLongerPending replaced
-    deliverVerificationEmail (ResendVerificationDeliveryFailed . renderVerificationDeliveryFailure) deliveryEnvironment (accountProfileEmail profile) token
+  IO (Either ResendVerificationError ResendVerificationResult)
+resendEmailVerificationAt verificationEnvironment profile@AccountProfile {} =
+  mask $ \restore ->
+    runExceptT $ do
+      expiresAt <- fromMaybeError ResendVerificationClockOverflow (addNanoseconds now verificationLifetimeNanoseconds)
+      token <- liftIO generateEmailVerificationToken
+      let verification = mkStoredEmailVerification (accountProfileId profile) (accountProfileEmail profile) expiresAt token
+      admission <- liftAccountStore ResendVerificationStoreError (restore (reserveVerificationResend accountStore defaultVerificationResendPolicy verification now))
+      case admission of
+        VerificationResendAdmissionSuppressed suppression -> pure (ResendVerificationSuppressed suppression)
+        VerificationResendReserved claim -> do
+          deliveryResult <-
+            liftIO $
+              restore (deliverVerificationMessage deliveryEnvironment (accountProfileEmail profile) token)
+                `onException` discardClaim claim
+          case deliveryResult of
+            Left deliveryFailure -> do
+              settled <- liftAccountStore ResendVerificationStoreError (releaseVerificationResend accountStore claim)
+              case settled of
+                VerificationResendClaimSettled -> throwError (ResendVerificationDeliveryFailed deliveryFailure)
+                VerificationResendClaimLost -> throwError (ResendVerificationStoreError (AccountStoreCorruptData "verification resend claim was lost while releasing delivery"))
+            Right () -> do
+              settled <-
+                liftAccountStore ResendVerificationStoreError $
+                  restore (completeVerificationResend accountStore claim now)
+                    `onException` discardClaim claim
+              pure $
+                case settled of
+                  VerificationResendClaimSettled -> ResendVerificationDelivered
+                  VerificationResendClaimLost -> ResendVerificationSuppressed VerificationResendNoLongerPending
   where
     accountStore = verificationStore verificationEnvironment
     deliveryEnvironment = verificationDeliveryEnvironment verificationEnvironment
     now = verificationNow verificationEnvironment
     verificationLifetimeNanoseconds = verificationLifetime verificationEnvironment
+    discardClaim claim@VerificationResendClaim {} =
+      void (releaseVerificationResend accountStore claim)
 
 liftAccountStore ::
   (AccountStoreError -> error) ->
@@ -375,16 +481,6 @@ generateRegistrationInputs passwordHasher passwordHashingPolicy password =
     generateIdentifiers passwordHash =
       (,,) passwordHash <$> generateAccountId <*> generateEmailVerificationToken
 
-deliverVerificationEmail ::
-  (VerificationDeliveryFailure -> error) ->
-  VerificationDeliveryEnvironment ->
-  EmailAddress ->
-  EmailVerificationToken ->
-  ExceptT error IO ()
-deliverVerificationEmail toError deliveryEnvironment emailAddress token =
-  either (throwError . toError) pure
-    =<< liftIO (deliverVerificationMessage deliveryEnvironment emailAddress token)
-
 deliverVerificationMessage ::
   VerificationDeliveryEnvironment ->
   EmailAddress ->
@@ -392,22 +488,18 @@ deliverVerificationMessage ::
   IO (Either VerificationDeliveryFailure ())
 deliverVerificationMessage deliveryEnvironment emailAddress token = do
   deliveryResult <- try (timeout microseconds (deliverEmail emailDelivery (verificationEmail locale emailAddress (renderVerificationUrl token)))) :: IO (Either SomeException (Maybe ()))
-  pure $
-    case deliveryResult of
-      Left _ -> Left VerificationDeliveryTransportFailed
-      Right Nothing -> Left VerificationDeliveryTimedOut
-      Right (Just ()) -> Right ()
+  case deliveryResult of
+    Left exception ->
+      case fromException exception :: Maybe AsyncException of
+        Just asyncException -> throwIO asyncException
+        Nothing -> pure (Left VerificationDeliveryTransportFailed)
+    Right Nothing -> pure (Left VerificationDeliveryTimedOut)
+    Right (Just ()) -> pure (Right ())
   where
     RegistrationDeliveryTimeout microseconds = verificationDeliveryTimeout deliveryEnvironment
     emailDelivery = verificationDelivery deliveryEnvironment
     locale = verificationLocale deliveryEnvironment
     renderVerificationUrl = verificationUrl deliveryEnvironment
-
-renderVerificationDeliveryFailure :: VerificationDeliveryFailure -> Text
-renderVerificationDeliveryFailure deliveryFailure =
-  case deliveryFailure of
-    VerificationDeliveryTimedOut -> "email delivery timed out"
-    VerificationDeliveryTransportFailed -> "email delivery transport failed"
 
 addNanoseconds :: UnixTimeNanoseconds -> Word64 -> Maybe UnixTimeNanoseconds
 addNanoseconds = addUnixTimeNanoseconds
