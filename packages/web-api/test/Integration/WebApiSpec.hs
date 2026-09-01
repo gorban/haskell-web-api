@@ -14,9 +14,10 @@ import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (St
 import Network.Socket qualified as NetworkSocket
 import Network.Socket.ByteString qualified as SocketByteString
 import Numeric (readHex)
-import System.Environment (getEnvironment, lookupEnv, setEnv, unsetEnv)
+import System.Directory (doesFileExist)
+import System.Environment (getEnvironment, getExecutablePath, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (ExitSuccess))
-import System.FilePath ((</>))
+import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose)
 import System.IO.Error (tryIOError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
@@ -42,10 +43,11 @@ spec = do
                 <> show unusedPort
                 <> "\nDATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
             )
+          webApiExecutable <- testBuildToolPath "haskell-web-api"
           withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
             (_, _, _, processHandle) <-
               createProcess
-                ( (proc "haskell-web-api" [])
+                ( (proc webApiExecutable [])
                     { cwd = Just workingDirectory,
                       std_out = UseHandle outputHandle
                     }
@@ -99,10 +101,11 @@ spec = do
                       "TOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                     ]
                 )
+              webApiExecutable <- testBuildToolPath "haskell-web-api"
               withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
                 (_, _, _, processHandle) <-
                   createProcess
-                    ( (proc "haskell-web-api" [])
+                    ( (proc webApiExecutable [])
                         { cwd = Just workingDirectory,
                           std_out = UseHandle outputHandle
                         }
@@ -159,10 +162,11 @@ spec = do
                       "TOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                     ]
                 )
+              webApiExecutable <- testBuildToolPath "haskell-web-api"
               withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
                 (_, _, _, processHandle) <-
                   createProcess
-                    ( (proc "haskell-web-api" [])
+                    ( (proc webApiExecutable [])
                         { cwd = Just workingDirectory,
                           std_out = UseHandle outputHandle
                         }
@@ -204,9 +208,10 @@ spec = do
           exitCode <-
             withSystemTempDirectory "haskell-web-api-db" $ \workingDirectory ->
               withSystemTempFile "haskell-web-api-db-stdout.txt" $ \outputPath outputHandle -> do
+                databaseSetupExecutable <- testBuildToolPath "haskell-web-api-db"
                 (_, _, _, processHandle) <-
                   createProcess
-                    ( (proc "haskell-web-api-db" ["migrate-and-seed"])
+                    ( (proc databaseSetupExecutable ["migrate-and-seed"])
                         { cwd = Just workingDirectory,
                           env = Just (databaseSetupEnvironment inheritedEnvironment),
                           std_out = UseHandle outputHandle
@@ -459,6 +464,18 @@ decodeChunkedBody chunkedBytes =
                    in chunk <> decodeChunkedBody (ByteString.drop 2 withChunkSuffix)
             _ ->
               chunkedBytes
+
+-- | Cabal's build-tool path is available during compilation but some test
+-- runners do not preserve it in the child process environment.  Resolve the
+-- sibling executable built for this package and retain the normal PATH name
+-- for installed-suite runs.
+testBuildToolPath :: FilePath -> IO FilePath
+testBuildToolPath executableName = do
+  testExecutable <- getExecutablePath
+  let buildDirectory = takeDirectory (takeDirectory testExecutable)
+      siblingExecutable = buildDirectory </> executableName </> executableName
+  exists <- doesFileExist siblingExecutable
+  pure (if exists then siblingExecutable else executableName)
 
 withManualTlsFiles :: (FilePath -> FilePath -> IO a) -> IO a
 withManualTlsFiles action =

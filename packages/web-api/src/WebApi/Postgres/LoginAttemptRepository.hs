@@ -11,17 +11,25 @@ module WebApi.Postgres.LoginAttemptRepository
   )
 where
 
+import Data.Aeson qualified as Aeson
+import Data.ByteString.Lazy qualified as LazyByteString
+import Data.List.NonEmpty qualified as NonEmpty
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
 import HarchWeb.LoginProtection (LoginProtectionPolicy (..), defaultLoginProtectionPolicy)
 import HarchWeb.Time (UnixTimeNanoseconds, unixTimeNanoseconds, unixTimeNanosecondsValue)
 import Text.Read (readMaybe)
 import WebApi.Login
   ( LoginAttemptAdmission (..),
+    LoginAttemptBudget (..),
+    LoginAttemptBudgets,
     LoginAttemptReservation (..),
     LoginAttemptStore (..),
     LoginAttemptStoreError (..),
+    loginAttemptBudgetsToList,
+    loginAttemptScopeStorageKey,
   )
 import WebApi.Postgres.Pool (PostgresPool)
 import WebApi.Postgres.Runtime (renderUnexpectedResultShape, runPooledParameterizedRowsQuery)
@@ -74,9 +82,10 @@ buildRuntimePostgresLoginAttemptStoreWithRunner =
 -- row, checks the global bound, and creates the provisional reservation.
 -- Successful settlement and cancellation delete their row; failed or
 -- abandoned reservations remain only until a later admission prunes the
--- storage-retention window.  The application validates email length and this
--- adapter refuses a key over 'maximumLoginAttemptKeyCharacters' before any
--- query, so untrusted identifiers cannot allocate an unbounded durable key.
+-- storage-retention window. Closed identifier and trusted-address domain
+-- constructors select the key namespace, while the standard JSON encoder
+-- keeps opaque direct socket peers data rather than query syntax. The SQL
+-- function retains the authoritative database-side validation.
 buildRuntimePostgresLoginAttemptStoreWithRunnerAndStoragePolicy ::
   LoginAttemptStoragePolicy ->
   (source -> Text -> [Text] -> IO (Either Text [[Text]])) ->
@@ -89,24 +98,18 @@ buildRuntimePostgresLoginAttemptStoreWithRunnerAndStoragePolicy storagePolicy ru
       cancelLoginAttempt = cancelAttempt
     }
   where
-    reserveAttempt key policy now =
-      if Text.length key > maximumLoginAttemptKeyCharacters
-        then pure (Left (LoginAttemptStoreUnavailable "login-attempt key exceeds storage limit"))
-        else
-          runLoginAttemptStoreQuery
-            ( runQuery
-                source
-                reserveLoginAttemptQuery
-                [ key,
-                  Text.pack (show (windowStartNanoseconds policy now)),
-                  Text.pack (show (storageRetentionStartNanoseconds storagePolicy now)),
-                  Text.pack (show (unixTimeNanosecondsValue now)),
-                  Text.pack (show (loginProtectionMaximumFailures policy)),
-                  Text.pack (show (loginProtectionLockoutNanoseconds policy)),
-                  Text.pack (show (loginAttemptStorageMaximumRows storagePolicy))
-                ]
-            )
-            decodeAdmission
+    reserveAttempt budgets now =
+      runLoginAttemptStoreQuery
+        ( runQuery
+            source
+            reserveLoginAttemptQuery
+            [ encodeLoginAttemptBudgets budgets,
+              Text.pack (show (storageRetentionStartNanoseconds storagePolicy now)),
+              Text.pack (show (unixTimeNanosecondsValue now)),
+              Text.pack (show (loginAttemptStorageMaximumRows storagePolicy))
+            ]
+        )
+        decodeAdmission
 
     settleAttempt (LoginAttemptReservation reservationId) succeeded =
       runLoginAttemptStoreQuery
@@ -117,10 +120,6 @@ buildRuntimePostgresLoginAttemptStoreWithRunnerAndStoragePolicy storagePolicy ru
       runLoginAttemptStoreQuery
         (runQuery source cancelLoginAttemptQuery [reservationId])
         (const (Right ()))
-
-windowStartNanoseconds :: LoginProtectionPolicy -> UnixTimeNanoseconds -> Word64
-windowStartNanoseconds policy =
-  startNanoseconds (loginProtectionWindowNanoseconds policy)
 
 storageRetentionStartNanoseconds :: LoginAttemptStoragePolicy -> UnixTimeNanoseconds -> Word64
 storageRetentionStartNanoseconds storagePolicy =
@@ -161,16 +160,31 @@ requireOneRow rows =
 -- of a tuples-returning result). Every other INSERT in this package follows
 -- the same convention.
 reserveLoginAttemptQuery :: Text
-reserveLoginAttemptQuery = "SELECT outcome, value FROM web_api.reserve_login_attempt($1::TEXT, $2::BIGINT, $3::BIGINT, $4::BIGINT, $5::BIGINT, $6::BIGINT, $7::BIGINT);"
+reserveLoginAttemptQuery = "SELECT outcome, value FROM web_api.reserve_login_attempt_group($1::JSONB, $2::BIGINT, $3::BIGINT, $4::BIGINT);"
 
 settleLoginAttemptQuery :: Bool -> Text
 settleLoginAttemptQuery succeeded =
   if succeeded
     then cancelLoginAttemptQuery
-    else "UPDATE web_api.login_attempts SET succeeded = 'false', settled = true WHERE attempt_id = $1::BIGINT AND settled = false RETURNING attempt_id::TEXT;"
+    else "UPDATE web_api.login_attempt_groups SET succeeded = 'false', settled = true WHERE attempt_group_id = $1::BIGINT AND settled = false RETURNING attempt_group_id::TEXT;"
 
 cancelLoginAttemptQuery :: Text
-cancelLoginAttemptQuery = "DELETE FROM web_api.login_attempts WHERE attempt_id = $1::BIGINT AND settled = false RETURNING attempt_id::TEXT;"
+cancelLoginAttemptQuery = "DELETE FROM web_api.login_attempt_groups WHERE attempt_group_id = $1::BIGINT AND settled = false RETURNING attempt_group_id::TEXT;"
 
-maximumLoginAttemptKeyCharacters :: Int
-maximumLoginAttemptKeyCharacters = 260
+encodeLoginAttemptBudgets :: LoginAttemptBudgets -> Text
+encodeLoginAttemptBudgets budgets =
+  TextEncoding.decodeUtf8
+    ( LazyByteString.toStrict
+        (Aeson.encode (map encodeBudget (NonEmpty.toList (loginAttemptBudgetsToList budgets))))
+    )
+
+encodeBudget :: LoginAttemptBudget -> Aeson.Value
+encodeBudget budget =
+  Aeson.object
+    [ "key" Aeson..= loginAttemptScopeStorageKey (loginAttemptScope budget),
+      "maximum" Aeson..= loginProtectionMaximumFailures policy,
+      "window" Aeson..= loginProtectionWindowNanoseconds policy,
+      "lockout" Aeson..= loginProtectionLockoutNanoseconds policy
+    ]
+  where
+    policy = loginAttemptPolicy budget

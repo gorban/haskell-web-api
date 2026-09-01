@@ -10,11 +10,14 @@ import Control.Monad (replicateM_, when)
 import Crypto.Error (CryptoFailable, maybeCryptoError)
 import Data.ByteString qualified as ByteString
 import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
+import Data.List (find)
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
+import HarchWeb qualified
 import HarchWeb.Account (accountIdText)
 import HarchWeb.Email (EmailAddress)
 import HarchWeb.LoginProtection (LoginProtectionPolicy (..), defaultLoginProtectionPolicy, loginProtectionLockoutNanoseconds, loginProtectionWindowNanoseconds)
@@ -30,6 +33,31 @@ import WebApi.Login qualified as Login
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 
 spec = do
+  describe "typed login-attempt budgets" $
+    it "deduplicates and orders closed principal and peer scope keys" $ do
+      let username = required "username" (mkUsername "Person_01")
+          policy = defaultLoginProtectionPolicy
+          peerBudget = LoginAttemptBudget (LoginPeerScope HarchWeb.defaultClientAddress) policy
+          passwordAccountBudget = LoginAttemptBudget (LoginPrincipalScope (KnownAccountPrincipal accountId PasswordLoginStage)) policy
+          mfaAccountBudget = LoginAttemptBudget (LoginPrincipalScope (KnownAccountPrincipal accountId SecondFactorLoginStage)) policy
+          unknownPasswordEmailBudget = LoginAttemptBudget (LoginPrincipalScope (UnknownIdentifierPrincipal (LoginEmailAddress emailAddress) PasswordLoginStage)) policy
+          unknownMfaUsernameBudget = LoginAttemptBudget (LoginPrincipalScope (UnknownIdentifierPrincipal (LoginUsername username) SecondFactorLoginStage)) policy
+          deduplicated = mkLoginAttemptBudgets (peerBudget :| [mfaAccountBudget, mfaAccountBudget, passwordAccountBudget, peerBudget])
+      expectAll
+        ( (scopeKeys deduplicated `shouldBe` ["account-mfa:" <> accountIdText accountId, "account-password:" <> accountIdText accountId, "peer:127.0.0.1"])
+            :| [ LoginEmailAddress emailAddress == LoginEmailAddress emailAddress `shouldBe` True,
+                 LoginEmailAddress emailAddress /= LoginUsername username `shouldBe` True,
+                 PasswordLoginStage == PasswordLoginStage `shouldBe` True,
+                 PasswordLoginStage /= SecondFactorLoginStage `shouldBe` True,
+                 KnownAccountPrincipal accountId PasswordLoginStage == KnownAccountPrincipal accountId PasswordLoginStage `shouldBe` True,
+                 KnownAccountPrincipal accountId PasswordLoginStage /= UnknownIdentifierPrincipal (LoginUsername username) PasswordLoginStage `shouldBe` True,
+                 LoginPeerScope HarchWeb.defaultClientAddress == LoginPeerScope HarchWeb.defaultClientAddress `shouldBe` True,
+                 LoginPeerScope HarchWeb.defaultClientAddress /= LoginPrincipalScope (KnownAccountPrincipal accountId PasswordLoginStage) `shouldBe` True,
+                 scopeKeys (mkLoginAttemptBudgets (unknownPasswordEmailBudget :| [])) `shouldBe` ["unknown-password:email:person@example.test"],
+                 scopeKeys (mkLoginAttemptBudgets (unknownMfaUsernameBudget :| [])) `shouldBe` ["unknown-mfa:username:person_01"]
+               ]
+        )
+
   describe "password-first MFA login" $ do
     it "requires a confirmed authenticator only after a correct verified password" $ do
       beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedMfaStore permissiveThrottle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")
@@ -386,18 +414,19 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \requestedKey _ _ ->
-                        pure (Right (if requestedKey == matchingKey then LoginAttemptThrottled expectedLockoutEnd else LoginAttemptReserved (LoginAttemptReservation "permitted"))),
+                    { reserveLoginAttempt = \budgets _ ->
+                        pure (Right (if hasScope matchingKey budgets then LoginAttemptThrottled expectedLockoutEnd else LoginAttemptReserved (LoginAttemptReservation "permitted"))),
                       settleLoginAttempt = \_ _ -> pure (Right ()),
                       cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleClientAddress = HarchWeb.defaultClientAddress,
                 loginThrottleNow = 500
               }
           knownCredentialStore = credentialStore (Right (Just verifiedCredential))
-      beginPasswordLogin knownCredentialStore unexpectedMfaStore (throttledStoreFor ("account:" <> accountIdText accountId)) testPasswordWorkGate emailAddress (mkPassword "irrelevant")
+      beginPasswordLogin knownCredentialStore unexpectedMfaStore (throttledStoreFor ("account-password:" <> accountIdText accountId)) testPasswordWorkGate emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordLoginThrottled expectedLockoutEnd
-      completePasswordLogin knownCredentialStore (withSecondFactorThrottle (throttledStoreFor ("account:" <> accountIdText accountId)) (secondFactorContextFor unexpectedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456"))))) emailAddress (mkPassword "irrelevant")
+      completePasswordLogin knownCredentialStore (withSecondFactorThrottle (throttledStoreFor ("account-password:" <> accountIdText accountId)) (secondFactorContextFor unexpectedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456"))))) emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordMfaLoginThrottled expectedLockoutEnd
       let recoveryContext =
             -- 'confirmedMfaStore' lets the password step's and the second-factor
@@ -405,33 +434,41 @@ spec = do
             -- before 'completeRecoveryCode' can even run), while its recovery-code
             -- methods still error out — proving the throttle short-circuits before
             -- the KDF-heavy recovery-code hash comparison this test is guarding.
-            withSecondFactorThrottle (throttledStoreFor ("mfa:" <> accountIdText accountId)) (secondFactorContextFor confirmedMfaStore (RecoveryCodeLoginProof (required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123"))))
+            withSecondFactorThrottle (throttledStoreFor ("account-mfa:" <> accountIdText accountId)) (secondFactorContextFor confirmedMfaStore (RecoveryCodeLoginProof (required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123"))))
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) recoveryContext emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginThrottled expectedLockoutEnd
 
     it "records failed unknown and known-password attempts in their respective identifier and account throttle scopes" $ do
-      let recordingThrottle recordedReference =
+      let recordingThrottle reservedScopesReference recordedReference =
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \key _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                    { reserveLoginAttempt = \budgets _ -> modifyIORef' reservedScopesReference (scopeKeys budgets :) >> pure (Right (LoginAttemptReserved (LoginAttemptReservation (nonPeerScope budgets)))),
                       settleLoginAttempt = \reservation succeeded -> modifyIORef' recordedReference ((showReservation reservation, succeeded) :) >> pure (Right ()),
                       cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleClientAddress = HarchWeb.defaultClientAddress,
                 loginThrottleNow = 500
               }
       unknownReference <- newIORef []
-      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore (recordingThrottle unknownReference) testPasswordWorkGate emailAddress (mkPassword "whatever")
+      unknownScopesReference <- newIORef []
+      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore (recordingThrottle unknownScopesReference unknownReference) testPasswordWorkGate emailAddress (mkPassword "whatever")
         `shouldReturnEqual` PasswordLoginRejected
       unknownRecorded <- readIORef unknownReference
       knownReference <- newIORef []
-      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) unexpectedMfaStore (recordingThrottle knownReference) testPasswordWorkGate emailAddress (mkPassword "incorrect password")
+      knownScopesReference <- newIORef []
+      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) unexpectedMfaStore (recordingThrottle knownScopesReference knownReference) testPasswordWorkGate emailAddress (mkPassword "incorrect password")
         `shouldReturnEqual` PasswordLoginRejected
       knownRecorded <- readIORef knownReference
+      unknownScopes <- readIORef unknownScopesReference
+      knownScopes <- readIORef knownScopesReference
       expectAll
-        ( (unknownRecorded `shouldBe` [("email:person@example.test", False)])
-            :| [knownRecorded `shouldBe` [("account:" <> accountIdText accountId, False)]]
+        ( (unknownRecorded `shouldBe` [("unknown-password:email:person@example.test", False)])
+            :| [ knownRecorded `shouldBe` [("account-password:" <> accountIdText accountId, False)],
+                 unknownScopes `shouldBe` [["peer:127.0.0.1", "unknown-password:email:person@example.test"]],
+                 knownScopes `shouldBe` [["account-password:" <> accountIdText accountId, "peer:127.0.0.1"]]
+               ]
         )
 
     it "records a successful attempt whenever the password check itself succeeds, even though a further step is still required" $ do
@@ -441,11 +478,12 @@ spec = do
                   LoginThrottleContext
                     { loginThrottleStore =
                         LoginAttemptStore
-                          { reserveLoginAttempt = \key _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                          { reserveLoginAttempt = \budgets _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation (primaryScope budgets)))),
                             settleLoginAttempt = \reservation succeeded -> modifyIORef' recordedReference ((showReservation reservation, succeeded) :) >> pure (Right ()),
                             cancelLoginAttempt = \_ -> pure (Right ())
                           },
                       loginThrottlePolicy = defaultLoginProtectionPolicy,
+                      loginThrottleClientAddress = HarchWeb.defaultClientAddress,
                       loginThrottleNow = 500
                     }
             result <- beginPasswordLogin (credentialStore (Right (Just credential))) mfaStoreValue throttle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")
@@ -460,13 +498,13 @@ spec = do
       (mfaStoreErrorResult, mfaStoreErrorRecorded) <- recordFor (mfaStore (Left (MfaStoreUnavailable "MFA store down"))) verifiedCredential
       expectAll
         ( (mfaRequiredResult == PasswordLoginMfaRequired accountId `shouldBe` True)
-            :| [ mfaRequiredRecorded `shouldBe` [("account:" <> accountIdText accountId, True)],
+            :| [ mfaRequiredRecorded `shouldBe` [("account-password:" <> accountIdText accountId, True)],
                  unverifiedResult == PasswordLoginEmailVerificationRequired accountId `shouldBe` True,
-                 unverifiedRecorded `shouldBe` [("account:" <> accountIdText accountId, True)],
+                 unverifiedRecorded `shouldBe` [("account-password:" <> accountIdText accountId, True)],
                  mfaEnrollmentResult == PasswordLoginMfaEnrollmentRequired accountId `shouldBe` True,
-                 mfaEnrollmentRecorded `shouldBe` [("account:" <> accountIdText accountId, True)],
+                 mfaEnrollmentRecorded `shouldBe` [("account-password:" <> accountIdText accountId, True)],
                  mfaStoreErrorResult == PasswordLoginMfaStoreError (MfaStoreUnavailable "MFA store down") `shouldBe` True,
-                 mfaStoreErrorRecorded `shouldBe` [("account:" <> accountIdText accountId, True)]
+                 mfaStoreErrorRecorded `shouldBe` [("account-password:" <> accountIdText accountId, True)]
                ]
         )
 
@@ -475,11 +513,12 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \_ _ _ -> pure (Left (LoginAttemptStoreUnavailable "database unavailable")),
+                    { reserveLoginAttempt = \_ _ -> pure (Left (LoginAttemptStoreUnavailable "database unavailable")),
                       settleLoginAttempt = \_ _ -> error "unexpected throttle settlement after a failed admission",
                       cancelLoginAttempt = \_ -> error "unexpected throttle cancellation after a failed admission"
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleClientAddress = HarchWeb.defaultClientAddress,
                 loginThrottleNow = 500
               }
           knownCredentialStore = credentialStore (Right (Just verifiedCredential))
@@ -495,11 +534,12 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \_ _ _ -> pure (Right (LoginAttemptReserved reservation)),
+                    { reserveLoginAttempt = \_ _ -> pure (Right (LoginAttemptReserved reservation)),
                       settleLoginAttempt = \_ _ -> error "unexpected settlement for a typed credential-store failure",
                       cancelLoginAttempt = \receivedReservation -> modifyIORef' cancelledReservationsReference (receivedReservation :) >> pure cancellationResult
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleClientAddress = HarchWeb.defaultClientAddress,
                 loginThrottleNow = 500
               }
           typedCredentialFailure = credentialStore (Left (AccountCredentialStoreUnavailable "credential store down"))
@@ -512,11 +552,12 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \_ _ _ -> pure (Right (LoginAttemptReserved reservation)),
+                    { reserveLoginAttempt = \_ _ -> pure (Right (LoginAttemptReserved reservation)),
                       settleLoginAttempt = \_ _ -> pure (Left (LoginAttemptStoreUnavailable "settlement failed")),
                       cancelLoginAttempt = \receivedReservation -> modifyIORef' cancelledReservationsReference (receivedReservation :) >> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleClientAddress = HarchWeb.defaultClientAddress,
                 loginThrottleNow = 500
               }
       beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore settlementFailureThrottle testPasswordWorkGate emailAddress (mkPassword "irrelevant")
@@ -530,11 +571,12 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \_ _ _ -> pure (Right (LoginAttemptReserved reservation)),
+                    { reserveLoginAttempt = \_ _ -> pure (Right (LoginAttemptReserved reservation)),
                       settleLoginAttempt = \_ _ -> error "password work exhaustion must not settle an attempt",
                       cancelLoginAttempt = \receivedReservation -> modifyIORef' cancelledReservationsReference (receivedReservation :) >> pure cancellationResult
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleClientAddress = HarchWeb.defaultClientAddress,
                 loginThrottleNow = 500
               }
       exhaustedPasswordWork <- newPasswordWorkGate (required "password-work budget" (mkPasswordWorkBudget 8))
@@ -568,12 +610,13 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \key _ _ ->
-                        pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                    { reserveLoginAttempt = \budgets _ ->
+                        pure (Right (LoginAttemptReserved (LoginAttemptReservation (primaryScope budgets)))),
                       settleLoginAttempt = \_ _ -> error "unexpected settlement after asynchronous cancellation",
                       cancelLoginAttempt = \reservation -> modifyIORef' cancelledReservationsReference (showReservation reservation :) >> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleClientAddress = HarchWeb.defaultClientAddress,
                 loginThrottleNow = 500
               }
           blockedMfaStore =
@@ -593,23 +636,24 @@ spec = do
       case cancellationResult of
         Left _ -> pure ()
         Right _ -> expectationFailure "expected asynchronous cancellation"
-      readIORef cancelledReservationsReference `shouldReturn` ["account:" <> accountIdText accountId]
+      readIORef cancelledReservationsReference `shouldReturn` ["account-password:" <> accountIdText accountId]
 
     it "cancels a reservation when asynchronous cancellation interrupts settlement after completed password work" $ do
       cancelledReservationsReference <- newIORef []
       settlementStarted <- newEmptyMVar
       blockedSettlement <- newEmptyMVar
       workerResult <- newEmptyMVar
-      let reservation = LoginAttemptReservation ("account:" <> accountIdText accountId)
+      let reservation = LoginAttemptReservation ("account-password:" <> accountIdText accountId)
           cancellationThrottle =
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \_ _ _ -> pure (Right (LoginAttemptReserved reservation)),
+                    { reserveLoginAttempt = \_ _ -> pure (Right (LoginAttemptReserved reservation)),
                       settleLoginAttempt = \_ _ -> putMVar settlementStarted () >> takeMVar blockedSettlement,
                       cancelLoginAttempt = \receivedReservation -> modifyIORef' cancelledReservationsReference (showReservation receivedReservation :) >> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleClientAddress = HarchWeb.defaultClientAddress,
                 loginThrottleNow = 500
               }
       worker <- forkIO $ do
@@ -621,7 +665,7 @@ spec = do
       case cancellationResult of
         Left _ -> pure ()
         Right _ -> expectationFailure "expected asynchronous cancellation"
-      readIORef cancelledReservationsReference `shouldReturn` ["account:" <> accountIdText accountId]
+      readIORef cancelledReservationsReference `shouldReturn` ["account-password:" <> accountIdText accountId]
 
     it "keys case variants of a username identifier with the same canonical throttle identity, distinct from email" $ do
       keyReference <- newIORef []
@@ -629,11 +673,12 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \key _ _ -> modifyIORef' keyReference (key :) >> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                    { reserveLoginAttempt = \budgets _ -> modifyIORef' keyReference (nonPeerScope budgets :) >> pure (Right (LoginAttemptReserved (LoginAttemptReservation (nonPeerScope budgets)))),
                       settleLoginAttempt = \_ _ -> pure (Right ()),
                       cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleClientAddress = HarchWeb.defaultClientAddress,
                 loginThrottleNow = 500
               }
           username = required "username" (mkUsername "Person_01")
@@ -643,7 +688,7 @@ spec = do
       beginPasswordLoginWithIdentifier (credentialStore (Right Nothing)) unexpectedMfaStore capturingThrottle testPasswordWorkGate (LoginUsername lowercaseUsername) (mkPassword "whatever")
         `shouldReturnEqual` PasswordLoginRejected
       capturedKeys <- readIORef keyReference
-      capturedKeys `shouldBe` ["username:person_01", "username:person_01"]
+      capturedKeys `shouldBe` ["unknown-password:username:person_01", "unknown-password:username:person_01"]
 
     it "shares one concurrent password-failure budget across email and username aliases of a resolved account" $ do
       admittedCountReference <- newIORef (0 :: Word64)
@@ -651,7 +696,7 @@ spec = do
       lookupCountReference <- newIORef (0 :: Int)
       allLookupsStarted <- newEmptyMVar
       releaseLookups <- newEmptyMVar
-      let expectedKey = "account:" <> accountIdText accountId
+      let expectedKey = "account-password:" <> accountIdText accountId
           username = required "username" (mkUsername "person_01")
           aliasCredential = AccountCredential accountId concurrentPasswordHash True
           awaitConcurrentLookup = do
@@ -671,18 +716,18 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \key policy now ->
+                    { reserveLoginAttempt = \budgets now ->
                         do
                           admission <-
                             atomicModifyIORef' admittedCountReference $ \count ->
-                              if count < loginProtectionMaximumFailures policy
+                              if count < loginProtectionMaximumFailures (firstPolicy budgets)
                                 then
                                   ( count + 1,
-                                    LoginAttemptReserved (LoginAttemptReservation key)
+                                    LoginAttemptReserved (LoginAttemptReservation (primaryScope budgets))
                                   )
                                 else
                                   ( count,
-                                    LoginAttemptThrottled (now + fromIntegral (loginProtectionLockoutNanoseconds policy))
+                                    LoginAttemptThrottled (now + fromIntegral (loginProtectionLockoutNanoseconds (firstPolicy budgets)))
                                   )
                           case admission of
                             LoginAttemptReserved reservation -> do
@@ -694,6 +739,7 @@ spec = do
                       cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleClientAddress = HarchWeb.defaultClientAddress,
                 loginThrottleNow = 500
               }
           startAttempt identifier resultSlot =
@@ -729,11 +775,12 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \_ policy admittedNow -> writeIORef admissionReference (Just (policy, admittedNow)) >> pure (Right (LoginAttemptReserved (LoginAttemptReservation "captured"))),
+                    { reserveLoginAttempt = \budgets admittedNow -> writeIORef admissionReference (Just (firstPolicy budgets, admittedNow)) >> pure (Right (LoginAttemptReserved (LoginAttemptReservation "captured"))),
                       settleLoginAttempt = \_ _ -> pure (Right ()),
                       cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleClientAddress = HarchWeb.defaultClientAddress,
                 loginThrottleNow = now
               }
       beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore (capturingThrottleAt 500) testPasswordWorkGate emailAddress (mkPassword "whatever")
@@ -745,16 +792,17 @@ spec = do
       readIORef admissionReference `shouldReturn` Just (defaultLoginProtectionPolicy, largeNow)
 
     it "propagates a login-attempt store failure from the recovery-code step's own throttle check, distinct from an already-throttled recovery attempt" $ do
-      let recoveryKey = "mfa:" <> accountIdText accountId
+      let recoveryKey = "account-mfa:" <> accountIdText accountId
           recoveryFailingThrottle =
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \requestedKey _ _ -> pure (if requestedKey == recoveryKey then Left (LoginAttemptStoreUnavailable "recovery throttle store down") else Right (LoginAttemptReserved (LoginAttemptReservation requestedKey))),
+                    { reserveLoginAttempt = \budgets _ -> pure (if hasScope recoveryKey budgets then Left (LoginAttemptStoreUnavailable "recovery throttle store down") else Right (LoginAttemptReserved (LoginAttemptReservation (primaryScope budgets)))),
                       settleLoginAttempt = \_ _ -> pure (Right ()),
                       cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleClientAddress = HarchWeb.defaultClientAddress,
                 loginThrottleNow = 500
               }
           -- 'confirmedMfaStore' lets both 'loadTotpEnrollment' lookups succeed
@@ -768,16 +816,17 @@ spec = do
 
     it "gates exhausted TOTP attempts before decrypting or marking the proof" $ do
       let expectedLockoutEnd = 450 + fromIntegral (loginProtectionLockoutNanoseconds defaultLoginProtectionPolicy)
-          mfaKey = "mfa:" <> accountIdText accountId
+          mfaKey = "account-mfa:" <> accountIdText accountId
           exhaustedTotpThrottle =
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \key _ _ -> pure (Right (if key == mfaKey then LoginAttemptThrottled expectedLockoutEnd else LoginAttemptReserved (LoginAttemptReservation key))),
+                    { reserveLoginAttempt = \budgets _ -> pure (Right (if hasScope mfaKey budgets then LoginAttemptThrottled expectedLockoutEnd else LoginAttemptReserved (LoginAttemptReservation (primaryScope budgets)))),
                       settleLoginAttempt = \_ _ -> pure (Right ()),
                       cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleClientAddress = HarchWeb.defaultClientAddress,
                 loginThrottleNow = 500
               }
           totpContext =
@@ -786,16 +835,17 @@ spec = do
         `shouldReturnEqual` PasswordMfaLoginThrottled expectedLockoutEnd
 
     it "propagates an attempt-store failure from the TOTP throttle check before validating the proof" $ do
-      let mfaKey = "mfa:" <> accountIdText accountId
+      let mfaKey = "account-mfa:" <> accountIdText accountId
           failingTotpThrottle =
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \key _ _ -> pure (if key == mfaKey then Left (LoginAttemptStoreUnavailable "TOTP throttle store down") else Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                    { reserveLoginAttempt = \budgets _ -> pure (if hasScope mfaKey budgets then Left (LoginAttemptStoreUnavailable "TOTP throttle store down") else Right (LoginAttemptReserved (LoginAttemptReservation (primaryScope budgets)))),
                       settleLoginAttempt = \_ _ -> pure (Right ()),
                       cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleClientAddress = HarchWeb.defaultClientAddress,
                 loginThrottleNow = 500
               }
           totpContext =
@@ -811,11 +861,12 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \key _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                    { reserveLoginAttempt = \budgets _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation (nonPeerScope budgets)))),
                       settleLoginAttempt = \reservation succeeded -> modifyIORef' recordedAttemptsReference ((showReservation reservation, succeeded) :) >> pure (Right ()),
                       cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleClientAddress = HarchWeb.defaultClientAddress,
                 loginThrottleNow = 500
               }
           totpStore =
@@ -846,11 +897,11 @@ spec = do
       complete racedTotpStore (TotpLoginProof (totpCode 123456 secret))
         `shouldReturnEqual` PasswordMfaLoginRejected
       recordedAttempts <- readIORef recordedAttemptsReference
-      filter ((== "mfa:" <> accountIdText accountId) . fst) recordedAttempts
-        `shouldBe` [ ("mfa:" <> accountIdText accountId, False),
-                     ("mfa:" <> accountIdText accountId, False),
-                     ("mfa:" <> accountIdText accountId, True),
-                     ("mfa:" <> accountIdText accountId, False)
+      filter ((== "account-mfa:" <> accountIdText accountId) . fst) recordedAttempts
+        `shouldBe` [ ("account-mfa:" <> accountIdText accountId, False),
+                     ("account-mfa:" <> accountIdText accountId, False),
+                     ("account-mfa:" <> accountIdText accountId, True),
+                     ("account-mfa:" <> accountIdText accountId, False)
                    ]
 
     it "settles rejected and accepted recovery proofs in the shared MFA history" $ do
@@ -861,11 +912,12 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \key _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                    { reserveLoginAttempt = \budgets _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation (nonPeerScope budgets)))),
                       settleLoginAttempt = \reservation succeeded -> modifyIORef' recordedAttemptsReference ((showReservation reservation, succeeded) :) >> pure (Right ()),
                       cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleClientAddress = HarchWeb.defaultClientAddress,
                 loginThrottleNow = 500
               }
           recoveryStore hashes =
@@ -884,9 +936,9 @@ spec = do
       complete (recoveryStore [])
         `shouldReturnEqual` PasswordMfaLoginRejected
       recordedAttempts <- readIORef recordedAttemptsReference
-      filter ((== "mfa:" <> accountIdText accountId) . fst) recordedAttempts
-        `shouldBe` [ ("mfa:" <> accountIdText accountId, False),
-                     ("mfa:" <> accountIdText accountId, True)
+      filter ((== "account-mfa:" <> accountIdText accountId) . fst) recordedAttempts
+        `shouldBe` [ ("account-mfa:" <> accountIdText accountId, False),
+                     ("account-mfa:" <> accountIdText accountId, True)
                    ]
 
     it "fails closed when a required password, TOTP, or recovery settlement write fails" $ do
@@ -899,23 +951,24 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \key _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                    { reserveLoginAttempt = \budgets _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation (nonPeerScope budgets)))),
                       settleLoginAttempt = \reservation _ ->
-                        if showReservation reservation == "email:person@example.test"
+                        if showReservation reservation == "unknown-password:email:person@example.test"
                           then pure (Left settlementFailure)
                           else pure (Right ()),
                       cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleClientAddress = HarchWeb.defaultClientAddress,
                 loginThrottleNow = 500
               }
           secondFactorSettlementFailure =
             failingThrottle
               { loginThrottleStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \key _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                    { reserveLoginAttempt = \budgets _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation (primaryScope budgets)))),
                       settleLoginAttempt = \reservation _ ->
-                        if showReservation reservation == "mfa:" <> accountIdText accountId
+                        if showReservation reservation == "account-mfa:" <> accountIdText accountId
                           then pure (Left settlementFailure)
                           else pure (Right ()),
                       cancelLoginAttempt = \_ -> pure (Right ())
@@ -1079,11 +1132,12 @@ permissiveThrottle =
   LoginThrottleContext
     { loginThrottleStore =
         LoginAttemptStore
-          { reserveLoginAttempt = \_ _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation "permissive"))),
+          { reserveLoginAttempt = \_ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation "permissive"))),
             settleLoginAttempt = \_ _ -> pure (Right ()),
             cancelLoginAttempt = \_ -> pure (Right ())
           },
       loginThrottlePolicy = defaultLoginProtectionPolicy,
+      loginThrottleClientAddress = HarchWeb.defaultClientAddress,
       loginThrottleNow = 500
     }
 
@@ -1092,3 +1146,21 @@ requiredCrypto = fromMaybe (error "expected cryptographic operation to succeed")
 
 showReservation :: LoginAttemptReservation -> Text.Text
 showReservation (LoginAttemptReservation value) = value
+
+scopeKeys :: LoginAttemptBudgets -> [Text.Text]
+scopeKeys = map renderBudget . NonEmpty.toList . loginAttemptBudgetsToList
+  where
+    renderBudget budget = loginAttemptPolicy budget `seq` loginAttemptScopeStorageKey (loginAttemptScope budget)
+
+primaryScope :: LoginAttemptBudgets -> Text.Text
+primaryScope = loginAttemptScopeStorageKey . loginAttemptScope . NonEmpty.head . loginAttemptBudgetsToList
+
+nonPeerScope :: LoginAttemptBudgets -> Text.Text
+nonPeerScope budgets =
+  fromMaybe (primaryScope budgets) (find (not . Text.isPrefixOf "peer:") (scopeKeys budgets))
+
+hasScope :: Text.Text -> LoginAttemptBudgets -> Bool
+hasScope expected = elem expected . scopeKeys
+
+firstPolicy :: LoginAttemptBudgets -> LoginProtectionPolicy
+firstPolicy = loginAttemptPolicy . NonEmpty.head . loginAttemptBudgetsToList

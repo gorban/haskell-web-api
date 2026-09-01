@@ -515,7 +515,7 @@ testPasswordWorkGate =
 permissiveLoginAttemptStore :: LoginAttemptStore
 permissiveLoginAttemptStore =
   LoginAttemptStore
-    { reserveLoginAttempt = \_ _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation "test-reservation"))),
+    { reserveLoginAttempt = \_ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation "test-reservation"))),
       settleLoginAttempt = \_ _ -> pure (Right ()),
       cancelLoginAttempt = \_ -> pure (Right ())
     }
@@ -525,6 +525,7 @@ permissiveLoginThrottleContext now =
   LoginThrottleContext
     { loginThrottleStore = permissiveLoginAttemptStore,
       loginThrottlePolicy = LoginProtection.defaultLoginProtectionPolicy,
+      loginThrottleClientAddress = HarchWeb.defaultClientAddress,
       loginThrottleNow = now
     }
 

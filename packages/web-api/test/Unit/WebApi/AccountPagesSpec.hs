@@ -11,6 +11,7 @@ import Data.Foldable (toList)
 import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -42,7 +43,7 @@ import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.AppEffect qualified as AppEffect
 import WebApi.Config (AppEnvironmentConfig (..), defaultAppConfig, defaultAppEnvironmentConfig)
 import WebApi.Database (defaultPageRepository)
-import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..), LoginAttemptAdmission (..), LoginAttemptReservation (..), LoginAttemptStore (..), LoginAttemptStoreError (..), LoginIdentifier (..), PasswordLoginEnvironment (..), PasswordLoginResult (..), beginPasswordLoginWithIdentifier, defaultPasswordRehasher)
+import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..), LoginAttemptAdmission (..), LoginAttemptBudget (..), LoginAttemptBudgets, LoginAttemptReservation (..), LoginAttemptScope (..), LoginAttemptStore (..), LoginAttemptStoreError (..), LoginIdentifier (..), PasswordLoginEnvironment (..), PasswordLoginResult (..), beginPasswordLoginWithIdentifier, defaultPasswordRehasher, loginAttemptBudgetsToList, loginAttemptPolicy, loginAttemptScope, loginAttemptScopeStorageKey, mkLoginAttemptBudgets)
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), ProfilePageModel (..), SignedOutProfilePageDetails (..), buildPageModelFromRouteData, renderPageFromRouteData)
@@ -839,7 +840,7 @@ spec = do
             action >>= \case
               Left (LoginAttemptStoreUnavailable "login-attempt persistence is not configured") -> pure ()
               _ -> expectationFailure "expected unavailable login-attempt persistence"
-      assertLoginAttemptsUnavailable (reserveLoginAttempt unconfiguredLoginAttemptStore "key" LoginProtection.defaultLoginProtectionPolicy 0)
+      assertLoginAttemptsUnavailable (reserveLoginAttempt unconfiguredLoginAttemptStore (peerAttemptBudgets LoginProtection.defaultLoginProtectionPolicy) 0)
       assertLoginAttemptsUnavailable (settleLoginAttempt unconfiguredLoginAttemptStore (LoginAttemptReservation "reservation") True)
       assertLoginAttemptsUnavailable (cancelLoginAttempt unconfiguredLoginAttemptStore (LoginAttemptReservation "reservation"))
       let unconfiguredSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow
@@ -1279,17 +1280,17 @@ spec = do
           recoveryWorkflow = validWorkflow {accountWorkflowMfaStore = recoveryMfaStore}
           recoveryFields = [("identifier", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "recovery"), ("recoveryCode", RecoveryCode.recoveryCodeText recoveryCode)]
           unavailableSession = workflowFor (Right (Just confirmedCredential)) (Right (Just confirmedEnrollment)) (Left AccountSessionStoreUnavailable) (Right True)
-          mfaAttemptKey = "mfa:" <> Account.accountIdText accountId
+          mfaAttemptKey = "account-mfa:" <> Account.accountIdText accountId
           exhaustedMfaThrottleStore =
             LoginAttemptStore
-              { reserveLoginAttempt = \key _ _ -> pure (Right (if key == mfaAttemptKey then LoginAttemptThrottled 1000 else LoginAttemptReserved (LoginAttemptReservation key))),
+              { reserveLoginAttempt = \budgets _ -> pure (Right (if hasAttemptScope mfaAttemptKey budgets then LoginAttemptThrottled 1000 else LoginAttemptReserved (LoginAttemptReservation (primaryAttemptScope budgets)))),
                 settleLoginAttempt = \_ _ -> pure (Right ()),
                 cancelLoginAttempt = \_ -> pure (Right ())
               }
           postCheckWriteFailure = LoginAttemptStoreUnavailable "post-check attempt write failed"
           postCheckWriteFailureStore =
             LoginAttemptStore
-              { reserveLoginAttempt = \key _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+              { reserveLoginAttempt = \budgets _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation (primaryAttemptScope budgets)))),
                 settleLoginAttempt = \(LoginAttemptReservation key) _ -> if key == mfaAttemptKey then pure (Left postCheckWriteFailure) else pure (Right ()),
                 cancelLoginAttempt = \_ -> pure (Right ())
               }
@@ -1298,7 +1299,7 @@ spec = do
             validWorkflow
               { accountWorkflowLoginAttemptStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \key _ _ -> modifyIORef' canonicalUsernameKeysReference (key :) >> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                    { reserveLoginAttempt = \budgets _ -> modifyIORef' canonicalUsernameKeysReference (primaryAttemptScope budgets :) >> pure (Right (LoginAttemptReserved (LoginAttemptReservation (primaryAttemptScope budgets)))),
                       settleLoginAttempt = \_ _ -> pure (Right ()),
                       cancelLoginAttempt = \_ -> pure (Right ())
                     }
@@ -1323,7 +1324,7 @@ spec = do
             validWorkflow
               { accountWorkflowLoginAttemptStore =
                   LoginAttemptStore
-                    { reserveLoginAttempt = \_ policy now -> writeIORef admissionContextReference (Just (policy, now)) >> pure (Right (LoginAttemptReserved (LoginAttemptReservation "captured"))),
+                    { reserveLoginAttempt = \budgets now -> writeIORef admissionContextReference (Just (firstAttemptPolicy budgets, now)) >> pure (Right (LoginAttemptReserved (LoginAttemptReservation "captured"))),
                       settleLoginAttempt = \_ _ -> pure (Right ()),
                       cancelLoginAttempt = \_ -> pure (Right ())
                     }
@@ -1393,7 +1394,7 @@ spec = do
       handleAccountAction canonicalUsernameWorkflow (loginRequest defaultRequestContext uppercaseUsernameFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
       canonicalUsernameKeys <- readIORef canonicalUsernameKeysReference
-      filter (Text.isPrefixOf "account:") canonicalUsernameKeys `shouldBe` ["account:" <> Account.accountIdText accountId, "account:" <> Account.accountIdText accountId]
+      filter (Text.isPrefixOf "account-password:") canonicalUsernameKeys `shouldBe` ["account-password:" <> Account.accountIdText accountId, "account-password:" <> Account.accountIdText accountId]
       handleAccountAction validWorkflow (loginRequest defaultRequestContext emailUsernameFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
       handleAccountAction exhaustedTotpWorkflow (loginRequest defaultRequestContext validFields)
@@ -1435,19 +1436,19 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-authenticator-code") "temporarily unavailable")
       let failingLoginAttemptStore =
             LoginAttemptStore
-              { reserveLoginAttempt = \_ _ _ -> pure (Left (LoginAttemptStoreUnavailable "attempt store down")),
+              { reserveLoginAttempt = \_ _ -> pure (Left (LoginAttemptStoreUnavailable "attempt store down")),
                 settleLoginAttempt = \_ _ -> pure (Left (LoginAttemptStoreUnavailable "attempt store down")),
                 cancelLoginAttempt = \_ -> pure (Left (LoginAttemptStoreUnavailable "attempt store down"))
               }
           corruptLoginAttemptStore =
             LoginAttemptStore
-              { reserveLoginAttempt = \_ _ _ -> pure (Left (LoginAttemptStoreCorruptData "attempt store corrupt")),
+              { reserveLoginAttempt = \_ _ -> pure (Left (LoginAttemptStoreCorruptData "attempt store corrupt")),
                 settleLoginAttempt = \_ _ -> pure (Left (LoginAttemptStoreCorruptData "attempt store corrupt")),
                 cancelLoginAttempt = \_ -> pure (Left (LoginAttemptStoreCorruptData "attempt store corrupt"))
               }
           throttledLoginAttemptStore =
             LoginAttemptStore
-              { reserveLoginAttempt = \_ _ _ -> pure (Right (LoginAttemptThrottled 1000)),
+              { reserveLoginAttempt = \_ _ -> pure (Right (LoginAttemptThrottled 1000)),
                 settleLoginAttempt = \_ _ -> error "unexpected throttle settlement while already throttled",
                 cancelLoginAttempt = \_ -> error "unexpected throttle cancellation while already throttled"
               }
@@ -1692,3 +1693,20 @@ spec = do
                 `shouldSatisfy` not
                 . any (Text.isInfixOf "encrypted-mfa-recovery-sentinel")
         Right _ -> expectationFailure "expected malformed MFA persistence output to fail"
+
+peerAttemptBudgets :: LoginProtection.LoginProtectionPolicy -> LoginAttemptBudgets
+peerAttemptBudgets policy =
+  mkLoginAttemptBudgets
+    (LoginAttemptBudget (LoginPeerScope HarchWeb.defaultClientAddress) policy :| [])
+
+attemptScopeKeys :: LoginAttemptBudgets -> [Text.Text]
+attemptScopeKeys = map (loginAttemptScopeStorageKey . loginAttemptScope) . NonEmpty.toList . loginAttemptBudgetsToList
+
+primaryAttemptScope :: LoginAttemptBudgets -> Text.Text
+primaryAttemptScope = loginAttemptScopeStorageKey . loginAttemptScope . NonEmpty.head . loginAttemptBudgetsToList
+
+hasAttemptScope :: Text.Text -> LoginAttemptBudgets -> Bool
+hasAttemptScope expected = elem expected . attemptScopeKeys
+
+firstAttemptPolicy :: LoginAttemptBudgets -> LoginProtection.LoginProtectionPolicy
+firstAttemptPolicy = loginAttemptPolicy . NonEmpty.head . loginAttemptBudgetsToList

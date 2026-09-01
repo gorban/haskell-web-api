@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | Public login capabilities and outcomes.
 --
 -- Decision (FQ6, 2026-08-29): the password and MFA stages share a stable
@@ -12,12 +14,20 @@ module WebApi.Login.Types
     AccountCredentialStore (..),
     AccountCredentialStoreError (..),
     LoginAttemptAdmission (..),
+    LoginAttemptBudget (..),
+    LoginAttemptBudgets,
     LoginAttemptReservation (..),
+    LoginAttemptScope (..),
     LoginAttemptStore (..),
     LoginAttemptStoreError (..),
     LoginIdentifier (..),
+    LoginPrincipal (..),
+    LoginStage (..),
     LoginThrottleContext (..),
     MfaLoginProof (..),
+    loginAttemptBudgetsToList,
+    loginAttemptScopeStorageKey,
+    mkLoginAttemptBudgets,
     PasswordLoginEnvironment (..),
     PasswordRehasher (..),
     PasswordMfaLoginResult (..),
@@ -27,16 +37,20 @@ module WebApi.Login.Types
   )
 where
 
+import Data.List.NonEmpty (NonEmpty)
+import Data.List.NonEmpty qualified as NonEmpty
 import Data.Text (Text)
-import HarchWeb.Account (AccountId)
-import HarchWeb.Email (EmailAddress)
+import Data.Text qualified as Text
+import HarchWeb qualified
+import HarchWeb.Account (AccountId, accountIdText)
+import HarchWeb.Email (EmailAddress, emailAddressText)
 import HarchWeb.LoginProtection (LoginProtectionPolicy)
 import HarchWeb.Password (Password, PasswordHash, PasswordHashingPolicy, PasswordWorkGate, defaultPasswordHashingPolicy, hashPassword)
 import HarchWeb.RecoveryCode (RecoveryCode)
 import HarchWeb.Secret (SecretEncryptionKey)
 import HarchWeb.Time (UnixTimeNanoseconds, UnixTimeSeconds)
 import HarchWeb.Totp (TotpCode)
-import HarchWeb.Username (Username)
+import HarchWeb.Username (Username, usernameText)
 import WebApi.Mfa (MfaStore, MfaStoreError)
 
 data AccountCredential = AccountCredential
@@ -62,6 +76,80 @@ data AccountCredentialStore = AccountCredentialStore
 data LoginIdentifier
   = LoginEmailAddress EmailAddress
   | LoginUsername Username
+  deriving (Eq)
+
+-- | The stage is part of the principal namespace: password and second-factor
+-- failures are different evidence, while each still shares the same peer
+-- scope.  Callers cannot supply arbitrary persistence prefixes.
+data LoginStage
+  = PasswordLoginStage
+  | SecondFactorLoginStage
+  deriving (Eq)
+
+-- | A stable principal for one authentication stage.  Known aliases converge
+-- on their account ID; unknown identifiers retain their validated canonical
+-- identity without becoming credential storage.
+data LoginPrincipal
+  = KnownAccountPrincipal AccountId LoginStage
+  | UnknownIdentifierPrincipal LoginIdentifier LoginStage
+  deriving (Eq)
+
+-- | Every admitted authentication operation has a principal scope and the
+-- trusted client peer that presented it.  The peer value can only originate
+-- at 'HarchWeb.requestClientAddress'.
+data LoginAttemptScope
+  = LoginPrincipalScope LoginPrincipal
+  | LoginPeerScope HarchWeb.ClientAddress
+  deriving (Eq)
+
+data LoginAttemptBudget = LoginAttemptBudget
+  { loginAttemptScope :: LoginAttemptScope,
+    -- | Admission must have a concrete policy before it can reserve durable
+    -- state. Strictness prevents a deferred policy failure after ownership of
+    -- a reservation has transferred to the lifecycle.
+    loginAttemptPolicy :: !LoginProtectionPolicy
+  }
+
+-- | A non-empty, deduplicated, canonical order of scope budgets.  One opaque
+-- reservation owns the complete group, so no caller can settle a principal
+-- scope while leaving its peer scope provisional.
+newtype LoginAttemptBudgets = LoginAttemptBudgets (NonEmpty LoginAttemptBudget)
+
+mkLoginAttemptBudgets :: NonEmpty LoginAttemptBudget -> LoginAttemptBudgets
+mkLoginAttemptBudgets budgets = LoginAttemptBudgets (firstBudget NonEmpty.:| deduplicateScopes (scopeKey firstBudget) remainingBudgets)
+  where
+    firstBudget NonEmpty.:| remainingBudgets = NonEmpty.sortBy compareBudget budgets
+    compareBudget left right = compare (scopeKey left) (scopeKey right)
+    scopeKey = loginAttemptScopeStorageKey . loginAttemptScope
+    deduplicateScopes _ [] = []
+    deduplicateScopes previousKey (budget : remaining) =
+      let currentKey = scopeKey budget
+       in if currentKey == previousKey
+            then deduplicateScopes previousKey remaining
+            else budget : deduplicateScopes currentKey remaining
+
+loginAttemptBudgetsToList :: LoginAttemptBudgets -> NonEmpty LoginAttemptBudget
+loginAttemptBudgetsToList (LoginAttemptBudgets budgets) = budgets
+
+-- | The sole application-to-database namespace encoder.  Each component is
+-- already validated by its domain type or the trusted-peer boundary, so no
+-- request value can choose or escape a scope prefix.
+loginAttemptScopeStorageKey :: LoginAttemptScope -> Text
+loginAttemptScopeStorageKey scope =
+  case scope of
+    LoginPrincipalScope principal ->
+      case principal of
+        KnownAccountPrincipal accountId PasswordLoginStage -> "account-password:" <> accountIdText accountId
+        KnownAccountPrincipal accountId SecondFactorLoginStage -> "account-mfa:" <> accountIdText accountId
+        UnknownIdentifierPrincipal identifier PasswordLoginStage -> unknownIdentifierKey "unknown-password:" identifier
+        UnknownIdentifierPrincipal identifier SecondFactorLoginStage -> unknownIdentifierKey "unknown-mfa:" identifier
+    LoginPeerScope clientAddress -> "peer:" <> HarchWeb.clientAddressText clientAddress
+
+unknownIdentifierKey :: Text -> LoginIdentifier -> Text
+unknownIdentifierKey namespace identifier =
+  case identifier of
+    LoginEmailAddress emailAddress -> namespace <> "email:" <> emailAddressText emailAddress
+    LoginUsername username -> namespace <> "username:" <> Text.toLower (usernameText username)
 
 -- | The current-policy hash operation used only after an existing credential
 -- has already verified. Keeping it injectable makes optional migration
@@ -94,7 +182,7 @@ data LoginAttemptAdmission
 -- atomically. The shared lifecycle owner makes cancellation-safe handoffs;
 -- durable cleanup after process loss remains separate retention work.
 data LoginAttemptStore = LoginAttemptStore
-  { reserveLoginAttempt :: Text -> LoginProtectionPolicy -> UnixTimeNanoseconds -> IO (Either LoginAttemptStoreError LoginAttemptAdmission),
+  { reserveLoginAttempt :: LoginAttemptBudgets -> UnixTimeNanoseconds -> IO (Either LoginAttemptStoreError LoginAttemptAdmission),
     settleLoginAttempt :: LoginAttemptReservation -> Bool -> IO (Either LoginAttemptStoreError ()),
     cancelLoginAttempt :: LoginAttemptReservation -> IO (Either LoginAttemptStoreError ())
   }
@@ -102,6 +190,7 @@ data LoginAttemptStore = LoginAttemptStore
 data LoginThrottleContext = LoginThrottleContext
   { loginThrottleStore :: LoginAttemptStore,
     loginThrottlePolicy :: LoginProtectionPolicy,
+    loginThrottleClientAddress :: HarchWeb.ClientAddress,
     loginThrottleNow :: UnixTimeNanoseconds
   }
 

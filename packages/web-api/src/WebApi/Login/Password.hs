@@ -10,22 +10,29 @@ where
 import Control.Exception (evaluate)
 import Control.Monad (join, void, when)
 import Data.Foldable (for_)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
-import HarchWeb.Account (AccountId, accountIdText)
-import HarchWeb.Email (EmailAddress, emailAddressText)
+import HarchWeb.Account (AccountId)
+import HarchWeb.Email (EmailAddress)
 import HarchWeb.Password (Password, PasswordHash (..), PasswordWorkGate, passwordHashMemoryKibibytes, passwordHashNeedsRehash, passwordHashWorkKibibytes, verifyPassword, withPasswordWork)
-import HarchWeb.Username (usernameText)
 import WebApi.Login.Attempt (runAdmittedLoginAttempt)
 import WebApi.Login.Types
   ( AccountCredential (..),
     AccountCredentialStore (..),
     AccountCredentialStoreError,
+    LoginAttemptBudget (..),
+    LoginAttemptBudgets,
+    LoginAttemptScope (..),
     LoginIdentifier (..),
+    LoginPrincipal (..),
+    LoginStage (..),
+    LoginThrottleContext (..),
     PasswordLoginEnvironment (..),
     PasswordLoginResult (..),
     PasswordRehasher (..),
+    mkLoginAttemptBudgets,
   )
 import WebApi.Mfa (MfaStore (..), MfaStoreError, StoredTotpEnrollment (..))
 
@@ -39,15 +46,6 @@ dummyPasswordHash = PasswordHash "$argon2id$v=19$m=65536,t=3,p=1$MDAwMDAwMDAwMDA
 -- native allocation failure is impossible.
 requiredPasswordHashOrDie :: Text -> Maybe PasswordHash -> PasswordHash
 requiredPasswordHashOrDie context = fromMaybe (error ("WebApi.Login: " <> Text.unpack context))
-
-loginIdentifierKey :: LoginIdentifier -> Text
-loginIdentifierKey identifier =
-  case identifier of
-    LoginEmailAddress emailAddress -> "email:" <> emailAddressText emailAddress
-    LoginUsername username -> "username:" <> Text.toLower (usernameText username)
-
-accountPasswordAttemptKey :: AccountId -> Text
-accountPasswordAttemptKey accountId = "account:" <> accountIdText accountId
 
 -- | Validates a password and then identifies its MFA state; it never creates
 -- a session. One environment owns every invariant capability for this stage.
@@ -66,13 +64,30 @@ beginPasswordLoginWithIdentifier environment identifier password = do
     Right maybeCredential ->
       runAdmittedLoginAttempt
         throttle
-        (maybe (loginIdentifierKey identifier) (accountPasswordAttemptKey . accountCredentialId) maybeCredential)
+        (passwordAttemptBudgets throttle identifier maybeCredential)
         PasswordLoginThrottled
         PasswordLoginAttemptStoreError
         (credentialCheckToPasswordLoginAdmission <$> continueWithCredential environment password maybeCredential)
   where
     credentialStore = passwordLoginCredentialStore environment
     throttle = passwordLoginThrottle environment
+
+passwordAttemptBudgets :: LoginThrottleContext -> LoginIdentifier -> Maybe AccountCredential -> LoginAttemptBudgets
+passwordAttemptBudgets throttle identifier maybeCredential =
+  mkLoginAttemptBudgets
+    ( LoginAttemptBudget principalScope policy
+        :| [LoginAttemptBudget (LoginPeerScope clientAddress) policy]
+    )
+  where
+    policy = loginThrottlePolicy throttle
+    clientAddress = loginThrottleClientAddress throttle
+    principalScope =
+      LoginPrincipalScope
+        ( maybe
+            (UnknownIdentifierPrincipal identifier PasswordLoginStage)
+            (\credential -> KnownAccountPrincipal (accountCredentialId credential) PasswordLoginStage)
+            maybeCredential
+        )
 
 data CredentialCheckOutcome
   = CredentialCheckRejected

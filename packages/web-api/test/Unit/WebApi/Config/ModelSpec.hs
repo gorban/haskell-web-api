@@ -115,6 +115,7 @@ spec = do
               { requestLocale = Spanish,
                 requestLocaleIsExplicit = False,
                 requestCorrelationId = Just "req-456",
+                requestClientAddress = requestClientAddress defaultRequestContext,
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
                 requestSessionId = Nothing,
@@ -302,13 +303,14 @@ spec = do
             { requestLocale = Spanish,
               requestLocaleIsExplicit = False,
               requestCorrelationId = Just "req-789",
+              requestClientAddress = requestClientAddress defaultRequestContext,
               requestPathPrefix = requestPathPrefix defaultRequestContext,
               requestQueryParameters = [],
               requestSessionId = Nothing,
               requestMfaEnrollmentSessionId = Nothing
             }
         )
-        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-789\", requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}"
+        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-789\", requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}"
       show
         ( CallToAction
             { callToActionLabel = "Return home",
@@ -434,6 +436,7 @@ spec = do
               { requestLocale = Spanish,
                 requestLocaleIsExplicit = False,
                 requestCorrelationId = Just "req-123",
+                requestClientAddress = requestClientAddress defaultRequestContext,
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
                 requestSessionId = Nothing,
@@ -574,6 +577,7 @@ spec = do
               { requestLocale = Spanish,
                 requestLocaleIsExplicit = False,
                 requestCorrelationId = Just "req-999",
+                requestClientAddress = requestClientAddress defaultRequestContext,
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
                 requestSessionId = Nothing,
@@ -703,6 +707,7 @@ spec = do
               { requestLocale = Spanish,
                 requestLocaleIsExplicit = False,
                 requestCorrelationId = Just "req-list",
+                requestClientAddress = requestClientAddress defaultRequestContext,
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
                 requestSessionId = Nothing,
@@ -757,7 +762,7 @@ spec = do
       show [Page WebApi.Route.HomePage, Api WebApi.Route.StatusApi]
         `shouldBe` "[HomeRoute,StatusApiRoute]"
       show [requestContext]
-        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-list\", requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}]"
+        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-list\", requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}]"
       show [callToAction]
         `shouldBe` "[CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = SafeUrl \"/\"}]"
       show [secondPageModel]

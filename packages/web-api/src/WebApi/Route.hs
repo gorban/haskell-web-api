@@ -67,6 +67,7 @@ data AppRequestContext = AppRequestContext
   { requestLocale :: AppLocale,
     requestLocaleIsExplicit :: Bool,
     requestCorrelationId :: Maybe Text,
+    requestClientAddress :: HarchWeb.ClientAddress,
     requestPathPrefix :: HarchWeb.PathPrefix,
     requestQueryParameters :: [(Text, Text)],
     requestSessionId :: Maybe SessionId,
@@ -200,6 +201,7 @@ defaultRequestContext =
     { requestLocale = English,
       requestLocaleIsExplicit = False,
       requestCorrelationId = Nothing,
+      requestClientAddress = HarchWeb.defaultClientAddress,
       requestPathPrefix = HarchWeb.emptyPathPrefix,
       requestQueryParameters = [],
       requestSessionId = Nothing,
@@ -322,6 +324,7 @@ requestContextFromWaiRequest requestPolicyConfig request requestContext =
   requestContext
     { requestPathPrefix =
         HarchWeb.requestPathPrefix requestPolicyConfig request,
+      requestClientAddress = HarchWeb.requestClientAddress requestPolicyConfig request,
       requestSessionId = sessionIdFromCookieHeaders (sessionCookieNameText (sessionCookieName defaultSessionCookiePolicy)) (Wai.requestHeaders request),
       requestMfaEnrollmentSessionId = sessionIdFromCookieHeaders (sessionCookieNameText (sessionCookieName mfaEnrollmentSessionCookiePolicy)) (Wai.requestHeaders request)
     }

@@ -52,7 +52,11 @@ spec =
               }
           rebootedUnixEpoch = unixTimeNanoseconds 1
       let replayContext = HarchWeb.requestContextFromRequest pureApplication rawReplayRequest defaultRequestContext
-      replayContext `shouldBe` defaultRequestContext {WebApi.Route.requestSessionId = mkSessionId replayedCookieValue}
+      replayContext
+        `shouldBe` defaultRequestContext
+          { WebApi.Route.requestClientAddress = HarchWeb.requestClientAddress (HarchWeb.applicationRequestPolicy pureApplication) rawReplayRequest,
+            WebApi.Route.requestSessionId = mkSessionId replayedCookieValue
+          }
       assertProfileResult
         (loadProfile (sessionStore (Right Nothing)) (profileStore (Right (Just verifiedProfile))) rebootedUnixEpoch (WebApi.Route.requestSessionId replayContext))
         isUnauthenticated

@@ -184,6 +184,10 @@ migrations =
     PostgresMigration
       { postgresMigrationVersion = "verification-resend-lifecycle-v1",
         postgresMigrationStatements = verificationResendLifecycleMigrationStatements
+      },
+    PostgresMigration
+      { postgresMigrationVersion = "keyed-login-attempt-groups-v1",
+        postgresMigrationStatements = keyedLoginAttemptGroupMigrationStatements
       }
   ]
 
@@ -326,6 +330,24 @@ verificationResendLifecycleMigrationStatements =
     "CREATE FUNCTION web_api.release_verification_resend(p_account_id TEXT, p_token_digest TEXT) RETURNS TABLE(outcome TEXT, value TEXT) LANGUAGE plpgsql VOLATILE AS $$ BEGIN DELETE FROM web_api.verification_resend_claims WHERE account_id = p_account_id AND token_digest = p_token_digest; IF FOUND THEN RETURN QUERY SELECT 'settled'::TEXT, p_account_id; ELSE RETURN QUERY SELECT 'lost'::TEXT, ''::TEXT; END IF; END $$;"
   ]
 
+-- | AHI-3 makes one logical authentication attempt own every principal and
+-- trusted-peer scope together.  Groups, rather than child rows, remain the
+-- globally bounded unit because each normal attempt now has two children.
+-- The database revalidates the closed JSON transport before locking scopes in
+-- lexical order, so a malformed adapter request cannot create a partial
+-- reservation or deadlock a concurrent caller.
+keyedLoginAttemptGroupMigrationStatements :: [Text]
+keyedLoginAttemptGroupMigrationStatements =
+  [ "DELETE FROM web_api.login_attempts;",
+    "DROP FUNCTION IF EXISTS web_api.reserve_login_attempt(TEXT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT);",
+    "CREATE TABLE IF NOT EXISTS web_api.login_attempt_groups (attempt_group_id BIGSERIAL PRIMARY KEY, attempted_at_nanoseconds BIGINT NOT NULL, succeeded TEXT NOT NULL DEFAULT 'false', settled BOOLEAN NOT NULL DEFAULT false);",
+    "ALTER TABLE web_api.login_attempts ADD COLUMN IF NOT EXISTS attempt_group_id BIGINT REFERENCES web_api.login_attempt_groups (attempt_group_id) ON DELETE CASCADE;",
+    "ALTER TABLE web_api.login_attempts ALTER COLUMN attempt_group_id SET NOT NULL;",
+    "CREATE INDEX IF NOT EXISTS login_attempt_groups_time ON web_api.login_attempt_groups (attempted_at_nanoseconds);",
+    "CREATE INDEX IF NOT EXISTS login_attempts_group ON web_api.login_attempts (attempt_group_id);",
+    "CREATE OR REPLACE FUNCTION web_api.reserve_login_attempt_group(p_budgets JSONB, p_retention_since BIGINT, p_now BIGINT, p_storage_max BIGINT) RETURNS TABLE(outcome TEXT, value TEXT) LANGUAGE plpgsql VOLATILE AS $$ DECLARE budget JSONB; budget_key TEXT; budget_max BIGINT; budget_window BIGINT; budget_lockout BIGINT; latest_failure BIGINT; failure_count BIGINT; lockout_ends_at BIGINT := 0; stored_count BIGINT; reserved_group_id BIGINT; budget_count BIGINT; BEGIN IF jsonb_typeof(p_budgets) <> 'array' THEN RETURN QUERY SELECT 'invalid-budget'::TEXT, ''::TEXT; RETURN; END IF; SELECT jsonb_array_length(p_budgets) INTO budget_count; IF budget_count < 1 OR budget_count > 4 OR (SELECT count(DISTINCT entry->>'key') FROM jsonb_array_elements(p_budgets) entry) <> budget_count THEN RETURN QUERY SELECT 'invalid-budget'::TEXT, ''::TEXT; RETURN; END IF; PERFORM pg_advisory_xact_lock(hashtextextended('web_api.login_attempt_groups.capacity', 0)); DELETE FROM web_api.login_attempt_groups WHERE attempted_at_nanoseconds < p_retention_since; FOR budget IN SELECT entry FROM jsonb_array_elements(p_budgets) entry ORDER BY entry->>'key' LOOP budget_key := budget->>'key'; IF budget_key IS NULL OR char_length(budget_key) < 1 OR char_length(budget_key) > 260 OR (budget->>'maximum') !~ '^[1-9][0-9]{0,17}$' OR (budget->>'window') !~ '^[1-9][0-9]{0,17}$' OR (budget->>'lockout') !~ '^[1-9][0-9]{0,17}$' THEN RETURN QUERY SELECT 'invalid-budget'::TEXT, ''::TEXT; RETURN; END IF; budget_max := (budget->>'maximum')::BIGINT; budget_window := (budget->>'window')::BIGINT; budget_lockout := (budget->>'lockout')::BIGINT; PERFORM pg_advisory_xact_lock(hashtextextended('web_api.login_attempt.scope.' || budget_key, 0)); SELECT max(group_row.attempted_at_nanoseconds), count(*) INTO latest_failure, failure_count FROM web_api.login_attempts attempt JOIN web_api.login_attempt_groups group_row ON group_row.attempt_group_id = attempt.attempt_group_id WHERE attempt.attempt_key = budget_key AND group_row.succeeded = 'false' AND group_row.attempted_at_nanoseconds >= GREATEST(0, p_now - budget_window) AND group_row.attempted_at_nanoseconds <= p_now; IF failure_count >= budget_max AND latest_failure + budget_lockout > p_now THEN lockout_ends_at := GREATEST(lockout_ends_at, latest_failure + budget_lockout); END IF; END LOOP; IF lockout_ends_at > 0 THEN RETURN QUERY SELECT 'throttled'::TEXT, lockout_ends_at::TEXT; RETURN; END IF; SELECT count(*) INTO stored_count FROM web_api.login_attempt_groups; IF stored_count >= p_storage_max THEN RETURN QUERY SELECT 'storage-exhausted'::TEXT, ''::TEXT; RETURN; END IF; INSERT INTO web_api.login_attempt_groups (attempted_at_nanoseconds, succeeded, settled) VALUES (p_now, 'false', false) RETURNING attempt_group_id INTO reserved_group_id; FOR budget IN SELECT entry FROM jsonb_array_elements(p_budgets) entry ORDER BY entry->>'key' LOOP INSERT INTO web_api.login_attempts (attempt_key, attempted_at_nanoseconds, succeeded, settled, attempt_group_id) VALUES (budget->>'key', p_now, 'false', false, reserved_group_id); END LOOP; RETURN QUERY SELECT 'reserved'::TEXT, reserved_group_id::TEXT; END $$;"
+  ]
+
 migrationEpochNanoseconds :: Text
 migrationEpochNanoseconds = "floor(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000000000)::BIGINT"
 
@@ -371,6 +393,7 @@ applicationTableNames =
     "account_sessions",
     "mfa_enrollment_sessions",
     "login_attempts",
+    "login_attempt_groups",
     "verification_resend_claims",
     "verification_resend_deliveries"
   ]
@@ -380,7 +403,7 @@ tablePrivileges runtimeOwner =
   let revoke tableName = "REVOKE ALL ON TABLE " <> qualifiedTableName tableName <> " FROM PUBLIC;"
       readOnly tableName = "GRANT SELECT ON TABLE " <> qualifiedTableName tableName <> " TO " <> runtimeOwner <> ";"
       readWrite tableName = "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " <> qualifiedTableName tableName <> " TO " <> runtimeOwner <> ";"
-   in [revoke "page_content", revoke "page_highlights", revoke "accounts", revoke "email_verifications", revoke "account_totp", revoke "account_recovery_codes", revoke "account_sessions", revoke "mfa_enrollment_sessions", revoke "login_attempts", revoke "verification_resend_claims", revoke "verification_resend_deliveries", readOnly "page_content", readOnly "page_highlights", readWrite "accounts", readWrite "email_verifications", readWrite "account_totp", readWrite "account_recovery_codes", readWrite "account_sessions", readWrite "mfa_enrollment_sessions", readWrite "login_attempts", readWrite "verification_resend_claims", readWrite "verification_resend_deliveries", "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA " <> appSchemaName <> " TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.reserve_login_attempt(TEXT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.reserve_login_attempt(TEXT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.stage_pending_registration(TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, TEXT, BIGINT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.stage_pending_registration(TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, TEXT, BIGINT, BIGINT) TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.reserve_verification_resend(TEXT, TEXT, TEXT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.reserve_verification_resend(TEXT, TEXT, TEXT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.complete_verification_resend(TEXT, TEXT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.complete_verification_resend(TEXT, TEXT, BIGINT) TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.release_verification_resend(TEXT, TEXT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.release_verification_resend(TEXT, TEXT) TO " <> runtimeOwner <> ";"]
+   in [revoke "page_content", revoke "page_highlights", revoke "accounts", revoke "email_verifications", revoke "account_totp", revoke "account_recovery_codes", revoke "account_sessions", revoke "mfa_enrollment_sessions", revoke "login_attempts", revoke "login_attempt_groups", revoke "verification_resend_claims", revoke "verification_resend_deliveries", readOnly "page_content", readOnly "page_highlights", readWrite "accounts", readWrite "email_verifications", readWrite "account_totp", readWrite "account_recovery_codes", readWrite "account_sessions", readWrite "mfa_enrollment_sessions", readWrite "login_attempts", readWrite "login_attempt_groups", readWrite "verification_resend_claims", readWrite "verification_resend_deliveries", "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA " <> appSchemaName <> " TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.reserve_login_attempt_group(JSONB, BIGINT, BIGINT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.reserve_login_attempt_group(JSONB, BIGINT, BIGINT, BIGINT) TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.stage_pending_registration(TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, TEXT, BIGINT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.stage_pending_registration(TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, TEXT, BIGINT, BIGINT) TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.reserve_verification_resend(TEXT, TEXT, TEXT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.reserve_verification_resend(TEXT, TEXT, TEXT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.complete_verification_resend(TEXT, TEXT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.complete_verification_resend(TEXT, TEXT, BIGINT) TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.release_verification_resend(TEXT, TEXT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.release_verification_resend(TEXT, TEXT) TO " <> runtimeOwner <> ";"]
 
 seedStatements :: [Text]
 seedStatements =

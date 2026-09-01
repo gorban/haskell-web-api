@@ -160,7 +160,7 @@ unavailableAccountCredentialStore =
 unavailableLoginAttemptStore :: LoginAttemptStore
 unavailableLoginAttemptStore =
   LoginAttemptStore
-    { reserveLoginAttempt = \_ _ _ -> unavailableResult loginAttemptsUnavailable,
+    { reserveLoginAttempt = \_ _ -> unavailableResult loginAttemptsUnavailable,
       settleLoginAttempt = \_ _ -> unavailableResult loginAttemptsUnavailable,
       cancelLoginAttempt = \_ -> unavailableResult loginAttemptsUnavailable
     }

@@ -245,11 +245,11 @@ handleLoginSubmission actionRequest submission =
   case parseLoginForm actionRequest submission of
     Left response -> pure response
     Right (identifierValue, proofChoice, passwordValue, identifier, proof) -> do
-      (nowNanoseconds, loginResult) <- completePasswordLoginNow identifier passwordValue proof
+      (nowNanoseconds, loginResult) <- completePasswordLoginNow actionRequest identifier passwordValue proof
       interpretLoginResult actionRequest identifierValue proofChoice nowNanoseconds loginResult
 
-completePasswordLoginNow :: LoginIdentifier -> Text -> MfaLoginProof -> AppM publicFailure (UnixTimeNanoseconds, PasswordMfaLoginResult)
-completePasswordLoginNow identifier passwordValue proof = do
+completePasswordLoginNow :: AccountActionRequest -> LoginIdentifier -> Text -> MfaLoginProof -> AppM publicFailure (UnixTimeNanoseconds, PasswordMfaLoginResult)
+completePasswordLoginNow actionRequest identifier passwordValue proof = do
   workflow <- accountWorkflow
   liftIO $ do
     nowNanoseconds <- accountWorkflowClock workflow
@@ -264,6 +264,7 @@ completePasswordLoginNow identifier passwordValue proof = do
                     LoginThrottleContext
                       { loginThrottleStore = accountWorkflowLoginAttemptStore workflow,
                         loginThrottlePolicy = LoginProtection.defaultLoginProtectionPolicy,
+                        loginThrottleClientAddress = requestClientAddress (HarchWeb.clientActionContext actionRequest),
                         loginThrottleNow = nowNanoseconds
                       },
                   passwordLoginWorkGate = accountWorkflowPasswordWorkGate workflow,

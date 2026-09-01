@@ -5,10 +5,10 @@ where
 
 import Control.Exception (mask, onException)
 import Control.Monad (void)
-import Data.Text (Text)
 import HarchWeb.Time (UnixTimeNanoseconds)
 import WebApi.Login.Types
   ( LoginAttemptAdmission (..),
+    LoginAttemptBudgets,
     LoginAttemptReservation,
     LoginAttemptStore (..),
     LoginAttemptStoreError,
@@ -22,14 +22,14 @@ import WebApi.Login.Types
 -- recovery; this function does not claim crash-proof cleanup.
 runAdmittedLoginAttempt ::
   LoginThrottleContext ->
-  Text ->
+  LoginAttemptBudgets ->
   (UnixTimeNanoseconds -> result) ->
   (LoginAttemptStoreError -> result) ->
   IO (result, Maybe Bool) ->
   IO result
-runAdmittedLoginAttempt throttle key throttled storeFailure work =
+runAdmittedLoginAttempt throttle budgets throttled storeFailure work =
   mask $ \restore -> do
-    admissionResult <- restore (reserveLoginAttempt store key policy now)
+    admissionResult <- restore (reserveLoginAttempt store budgets now)
     case admissionResult of
       Left storeError -> pure (storeFailure storeError)
       Right (LoginAttemptThrottled lockoutEndsAt) -> pure (throttled lockoutEndsAt)
@@ -40,7 +40,6 @@ runAdmittedLoginAttempt throttle key throttled storeFailure work =
           Just succeeded -> settleOrFail restore reservation succeeded result
   where
     store = loginThrottleStore throttle
-    policy = loginThrottlePolicy throttle
     now = loginThrottleNow throttle
     discardReservation :: LoginAttemptReservation -> IO ()
     discardReservation reservation = void (cancelLoginAttempt store reservation)

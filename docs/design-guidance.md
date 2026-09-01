@@ -2128,6 +2128,31 @@ email, token, row id, or provider exception. This narrow extension remains
 separate from AHI-3: login attempts have a different principal, retention
 policy, and settlement meaning.
 
+### Decision record — AHI-3: keyed authentication reservation groups (2026-09-01)
+
+**Decision: extend `HarchWeb.Security`'s existing trusted-forwarding resolver
+with an opaque `ClientAddress`, then extend the existing `LoginAttemptStore`
+reservation into one typed, non-empty group of principal and peer scopes.**
+The framework already decides whether a socket peer may supply forwarded
+context; a second web-api parser would risk accepting a spoofed header or
+giving observability and authentication different meanings. `ClientAddress`
+therefore uses that same resolver, normalizes a bounded address-shaped trusted
+token, and falls back to the accepted socket peer on absent or malformed input.
+It enters `AppRequestContext` through the existing context-enrichment path;
+application workflows never read forwarding headers directly.
+
+At the application boundary, known aliases use an account-and-stage principal,
+unknown identifiers use their validated canonical identity, and every attempt
+also has a stage-independent trusted-peer scope. `LoginAttemptBudgets` orders
+and deduplicates this closed set before it reaches PostgreSQL. One opaque group
+reservation owns all child scopes for admission, failure settlement, and
+cancellation; this preserves the existing masked ownership handoffs without a
+custom monad or compensating multi-store calls. PostgreSQL locks the group
+capacity then scopes in canonical order and counts logical groups for its
+100,000-row limit, avoiding a silent capacity-halving when normal attempts
+gain two scope rows. Raw values stay database-only and are never public,
+metric, or log labels.
+
 **Decision: extend the existing account-credential store with an atomic
 compare-and-replace operation, rather than add a migration table, a background
 worker, or a second login path.** After a bounded, valid legacy Argon2id hash

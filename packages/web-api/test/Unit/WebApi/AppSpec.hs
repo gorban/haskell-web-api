@@ -149,14 +149,18 @@ spec = do
             (waiRequest ["logout"])
               { Wai.requestHeaders = [("Cookie", ByteString.pack [255])]
               }
+          contextFor request =
+            defaultRequestContext
+              { requestClientAddress = HarchWeb.requestClientAddress (HarchWeb.applicationRequestPolicy pureApplication) request
+              }
       HarchWeb.requestContextFromRequest pureApplication forwardedPrefixRequest defaultRequestContext
-        `shouldBe` defaultRequestContext
+        `shouldBe` contextFor forwardedPrefixRequest
       HarchWeb.requestContextFromRequest pureApplication emptyForwardedPrefixRequest defaultRequestContext
-        `shouldBe` defaultRequestContext
+        `shouldBe` contextFor emptyForwardedPrefixRequest
       HarchWeb.requestContextFromRequest pureApplication cookieRequest defaultRequestContext
-        `shouldBe` defaultRequestContext {requestSessionId = Session.mkSessionId sessionToken}
+        `shouldBe` (contextFor cookieRequest) {requestSessionId = Session.mkSessionId sessionToken}
       HarchWeb.requestContextFromRequest pureApplication invalidCookieRequest defaultRequestContext
-        `shouldBe` defaultRequestContext
+        `shouldBe` contextFor invalidCookieRequest
 
     it "derives normalized forwarded path prefixes when forwarded headers are trusted" $ do
       let forwardedPrefixRequest =
@@ -171,12 +175,16 @@ spec = do
             (waiRequest ["second"])
               { Wai.requestHeaders = [("X-Forwarded-Prefix", "\255")]
               }
+          contextFor request =
+            defaultRequestContext
+              { requestClientAddress = HarchWeb.requestClientAddress (HarchWeb.applicationRequestPolicy trustedForwardedApplication) request
+              }
       HarchWeb.requestContextFromRequest trustedForwardedApplication forwardedPrefixRequest defaultRequestContext
-        `shouldBe` defaultRequestContext {requestPathPrefix = testPathPrefix "/app"}
+        `shouldBe` (contextFor forwardedPrefixRequest) {requestPathPrefix = testPathPrefix "/app"}
       HarchWeb.requestContextFromRequest trustedForwardedApplication emptyForwardedPrefixRequest defaultRequestContext
-        `shouldBe` defaultRequestContext
+        `shouldBe` contextFor emptyForwardedPrefixRequest
       HarchWeb.requestContextFromRequest trustedForwardedApplication invalidForwardedPrefixRequest defaultRequestContext
-        `shouldBe` defaultRequestContext
+        `shouldBe` contextFor invalidForwardedPrefixRequest
 
     it "stores the configured static assets used by the WAI adapter" $
       HarchWeb.applicationStaticAssets pureApplication `shouldBe` staticAssets defaultAppConfig

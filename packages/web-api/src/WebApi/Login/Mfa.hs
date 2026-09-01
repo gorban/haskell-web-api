@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module WebApi.Login.Mfa
   ( completePasswordLogin,
     completePasswordLoginWithIdentifier,
@@ -10,8 +8,9 @@ import Control.Exception (evaluate)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Core.Control.Error (fromMaybeError, liftEitherWith)
 import Crypto.Error (maybeCryptoError)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
-import HarchWeb.Account (AccountId, accountIdText)
+import HarchWeb.Account (AccountId)
 import HarchWeb.Email (EmailAddress)
 import HarchWeb.Password (Password, PasswordWorkGate, withPasswordWork)
 import HarchWeb.RecoveryCode (RecoveryCode, RecoveryCodeHash, readRecoveryCodeHash, recoveryCodeHashText, recoveryCodeHashWorkKibibytes, verifyRecoveryCode)
@@ -20,12 +19,19 @@ import HarchWeb.Totp (TotpCode, TotpSecret, mkTotpSecret, validateTotpCodeCounte
 import WebApi.Login.Attempt (runAdmittedLoginAttempt)
 import WebApi.Login.Password (beginPasswordLoginWithIdentifier)
 import WebApi.Login.Types
-  ( LoginIdentifier (..),
+  ( LoginAttemptBudget (..),
+    LoginAttemptBudgets,
+    LoginAttemptScope (..),
+    LoginIdentifier (..),
+    LoginPrincipal (..),
+    LoginStage (..),
+    LoginThrottleContext (..),
     MfaLoginProof (..),
     PasswordLoginEnvironment (..),
     PasswordLoginResult (..),
     PasswordMfaLoginResult (..),
     SecondFactorContext (..),
+    mkLoginAttemptBudgets,
   )
 import WebApi.Mfa (MfaStore (..), MfaStoreError, StoredTotpEnrollment (..))
 
@@ -84,7 +90,7 @@ verifyTotpProof :: SecondFactorContext -> AccountId -> StoredTotpEnrollment -> T
 verifyTotpProof context accountId enrollment suppliedCode =
   runAdmittedLoginAttempt
     (passwordLoginThrottle (secondFactorPasswordLoginEnvironment context))
-    (secondFactorAttemptKey accountId)
+    (secondFactorAttemptBudgets (passwordLoginThrottle (secondFactorPasswordLoginEnvironment context)) accountId)
     PasswordMfaLoginThrottled
     PasswordMfaLoginAttemptStoreError
     (verifyPermittedTotpProof context accountId enrollment suppliedCode)
@@ -111,12 +117,11 @@ verifyPermittedTotpProof context accountId enrollment suppliedCode =
 
 completeRecoveryCode :: SecondFactorContext -> AccountId -> RecoveryCode -> IO PasswordMfaLoginResult
 completeRecoveryCode context accountId suppliedCode =
-  runAdmittedLoginAttempt throttle key PasswordMfaLoginThrottled PasswordMfaLoginAttemptStoreError work
+  runAdmittedLoginAttempt throttle (secondFactorAttemptBudgets throttle accountId) PasswordMfaLoginThrottled PasswordMfaLoginAttemptStoreError work
   where
     environment = secondFactorPasswordLoginEnvironment context
     mfaStore = passwordLoginMfaStore environment
     throttle = passwordLoginThrottle environment
-    key = secondFactorAttemptKey accountId
     work = do
       recoveryResult <- runExceptT $ do
         recoveryHashValues <- liftMfaStore (loadUnusedRecoveryCodeHashes mfaStore accountId)
@@ -138,8 +143,14 @@ completeRecoveryCode context accountId suppliedCode =
       liftMfaStore
         (consumeRecoveryCodeHash mfaStore accountId (recoveryCodeHashText matchingHash) (secondFactorNowNanoseconds context))
 
-secondFactorAttemptKey :: AccountId -> Text
-secondFactorAttemptKey accountId = "mfa:" <> accountIdText accountId
+secondFactorAttemptBudgets :: LoginThrottleContext -> AccountId -> LoginAttemptBudgets
+secondFactorAttemptBudgets throttle accountId =
+  mkLoginAttemptBudgets
+    ( LoginAttemptBudget (LoginPrincipalScope (KnownAccountPrincipal accountId SecondFactorLoginStage)) (loginThrottlePolicy throttle)
+        :| [LoginAttemptBudget (LoginPeerScope clientAddress) (loginThrottlePolicy throttle)]
+    )
+  where
+    clientAddress = loginThrottleClientAddress throttle
 
 findMatchingRecoveryHash :: PasswordWorkGate -> RecoveryCode -> [RecoveryCodeHash] -> IO (Maybe (Maybe RecoveryCodeHash))
 findMatchingRecoveryHash passwordWorkGate suppliedCode = go

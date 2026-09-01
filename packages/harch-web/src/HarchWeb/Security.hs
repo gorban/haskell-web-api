@@ -17,6 +17,7 @@ module HarchWeb.Security
   ( module HarchWeb.Security.ForwardedTrust,
     module HarchWeb.Security.RequestLimits,
     CorsPolicyConfig (..),
+    ClientAddress,
     PathPrefix.PathPrefix,
     PathPrefix.PathPrefixError (..),
     PathPrefix.UrlPath,
@@ -27,7 +28,9 @@ module HarchWeb.Security
     addRuntimeNonceToContentSecurityPolicy,
     applyRequestPathPrefix,
     corsPreflightResponse,
+    clientAddressText,
     defaultContentSecurityPolicy,
+    defaultClientAddress,
     defaultCorsPolicyConfig,
     defaultResponseSecurityHeadersConfig,
     externalRequestPath,
@@ -37,6 +40,7 @@ module HarchWeb.Security
     parseRequestPathPrefix,
     PathPrefix.pathPrefixText,
     requestContextObservabilityAttributes,
+    requestClientAddress,
     requestContextFields,
     requestHostWithoutPort,
     requestLogContextFields,
@@ -59,7 +63,7 @@ where
 import Control.Applicative ((<|>))
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Char8 qualified as ByteStringChar8
-import Data.Char (isHexDigit)
+import Data.Char (isAscii, isDigit, isHexDigit)
 import Data.Either (fromRight)
 import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe)
 import Data.Text (Text)
@@ -97,6 +101,34 @@ data RequestContextField = RequestContextField
     requestContextFieldValue :: Text
   }
   deriving (Eq, Show)
+
+-- | A bounded, canonicalized address selected at the one trusted-forwarding
+-- boundary.  Its constructor stays private: applications may persist the
+-- explicitly rendered value as an application-owned rate-limit key, but may
+-- not turn an arbitrary request header into a trusted client identity.
+--
+-- Decision (AHI-3, 2026-09-01): this extends the existing request-context
+-- resolver rather than adding an application forwarding parser.  A trusted
+-- @Forwarded@ or @X-Forwarded-For@ token is accepted only when it is a short
+-- address-shaped ASCII value; malformed values safely fall back to the
+-- accepted socket peer.  Direct socket peers retain the existing Unix and
+-- IPv6 rendering policy.
+newtype ClientAddress = ClientAddress Text
+  deriving (Eq)
+
+instance Show ClientAddress where
+  show _ = "ClientAddress <redacted>"
+
+-- | Render the opaque address only at a deliberate application persistence
+-- boundary.  It is unsuitable for public diagnostics, metrics, or logs.
+clientAddressText :: ClientAddress -> Text
+clientAddressText (ClientAddress address) = address
+
+-- | The loopback identity used only when an application synthesizes a request
+-- context without an accepted socket peer, such as a deterministic unit test.
+-- Real server requests always use 'requestClientAddress'.
+defaultClientAddress :: ClientAddress
+defaultClientAddress = ClientAddress "127.0.0.1"
 
 defaultCorsPolicyConfig :: CorsPolicyConfig
 defaultCorsPolicyConfig =
@@ -370,7 +402,7 @@ requestLogContextFields requestPolicyConfig request =
 
 requestContextFields :: RequestPolicyConfig -> Wai.Request -> [RequestContextField]
 requestContextFields requestPolicyConfig request =
-  requiredField "client.address" (effectiveClientAddress requestPolicyConfig request)
+  requiredField "client.address" (clientAddressText (requestClientAddress requestPolicyConfig request))
     : requiredField "network.peer.address" (peerAddressText request)
     : optionalField "harch.client.address.source" (effectiveClientAddressSource requestPolicyConfig request)
     ++ optionalField "http.request.header.x_forwarded_for" (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-For" request)
@@ -401,19 +433,61 @@ requestScheme requestPolicyConfig request =
     Just "http" -> "http"
     _ -> if Wai.isSecure request then "https" else "http"
 
-effectiveClientAddress :: RequestPolicyConfig -> Wai.Request -> Text
-effectiveClientAddress requestPolicyConfig request =
+-- | Resolve the effective client identity from a trusted proxy header when it
+-- is valid, otherwise from the accepted socket peer.  This is the same
+-- resolver request observability uses, so applications cannot accidentally
+-- assign a different trust meaning to the same request.
+requestClientAddress :: RequestPolicyConfig -> Wai.Request -> ClientAddress
+requestClientAddress requestPolicyConfig request =
   fromMaybe
-    (peerAddressText request)
-    (trustedForwardedHeaderToken requestPolicyConfig "for" request <|> trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-For" request)
+    (socketClientAddress (Wai.remoteHost request))
+    (trustedClientAddress requestPolicyConfig request)
+
+trustedClientAddress :: RequestPolicyConfig -> Wai.Request -> Maybe ClientAddress
+trustedClientAddress requestPolicyConfig request =
+  (trustedForwardedHeaderToken requestPolicyConfig "for" request <|> trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-For" request)
+    >>= forwardedClientAddress
+
+forwardedClientAddress :: Text -> Maybe ClientAddress
+forwardedClientAddress rawAddress = do
+  address <- nonEmptyForwardedAddress rawAddress
+  if Text.length address <= maximumClientAddressCharacters && Text.all isForwardedAddressCharacter address
+    then Just (ClientAddress (Text.toLower address))
+    else Nothing
+
+nonEmptyForwardedAddress :: Text -> Maybe Text
+nonEmptyForwardedAddress rawAddress =
+  let address = Text.strip rawAddress
+   in case Text.stripPrefix "[" address >>= Text.stripSuffix "]" of
+        Just bracketedAddress -> nonEmptyText bracketedAddress
+        Nothing -> nonEmptyText address
+
+nonEmptyText :: Text -> Maybe Text
+nonEmptyText value =
+  if Text.null value
+    then Nothing
+    else Just value
+
+isForwardedAddressCharacter :: Char -> Bool
+isForwardedAddressCharacter character =
+  isAscii character
+    && (isDigit character || isHexDigit character || character == '.' || character == ':')
+
+socketClientAddress :: Socket.SockAddr -> ClientAddress
+socketClientAddress = ClientAddress . Text.take maximumClientAddressCharacters . socketAddressText
+
+maximumClientAddressCharacters :: Int
+maximumClientAddressCharacters = 128
 
 effectiveClientAddressSource :: RequestPolicyConfig -> Wai.Request -> Maybe Text
 effectiveClientAddressSource requestPolicyConfig request =
   case trustedForwardedHeaderToken requestPolicyConfig "for" request of
-    Just _ -> Just "forwarded"
-    Nothing -> case trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-For" request of
-      Just _ -> Just "x-forwarded-for"
-      Nothing -> Nothing
+    Just value
+      | Just _ <- forwardedClientAddress value -> Just "forwarded"
+    _ -> case trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-For" request of
+      Just value
+        | Just _ <- forwardedClientAddress value -> Just "x-forwarded-for"
+      _ -> Nothing
 
 peerAddressText :: Wai.Request -> Text
 peerAddressText = socketAddressText . Wai.remoteHost

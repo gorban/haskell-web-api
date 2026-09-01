@@ -1756,7 +1756,12 @@ spec = do
             Right (Just _) -> pure ()
             Right Nothing -> expectationFailure "expected the runtime registration to create a credential"
             Left _ -> expectationFailure "expected the runtime credential store to load the registered account"
-        Login.reserveLoginAttempt workflowLoginAttemptStore ("runtime-login:" <> registrationEmail) LoginProtection.defaultLoginProtectionPolicy 1
+        Login.reserveLoginAttempt
+          workflowLoginAttemptStore
+          ( Login.mkLoginAttemptBudgets
+              (Login.LoginAttemptBudget (Login.LoginPeerScope HarchWeb.defaultClientAddress) LoginProtection.defaultLoginProtectionPolicy :| [])
+          )
+          1
           >>= \case
             Right (Login.LoginAttemptReserved reservation) ->
               Login.cancelLoginAttempt workflowLoginAttemptStore reservation

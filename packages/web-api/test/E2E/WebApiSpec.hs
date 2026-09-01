@@ -11,8 +11,8 @@ import HarchWeb.Account qualified as Account
 import HarchWeb.Email qualified as Email
 import HarchWeb.Password qualified as Password
 import HarchWeb.Session qualified as Session
-import System.Directory (copyFile, createDirectory)
-import System.FilePath ((</>))
+import System.Directory (copyFile, createDirectory, doesFileExist, getCurrentDirectory)
+import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..), VerificationResendAdmission (..), VerificationResendClaim (..), VerificationResendClaimSettlement (..))
 import WebApi.App (buildApp, buildAppWithDatabaseAndAccountWorkflow, unavailableAccountWorkflow)
@@ -671,7 +671,8 @@ withBrowserApp action = do
     do
       let stylesDirectory = assetDirectory </> "styles"
       createDirectory stylesDirectory
-      copyFile "public/styles/app.css" (stylesDirectory </> "app.css")
+      sourceStylesheet <- findSourceStylesheet
+      copyFile sourceStylesheet (stylesDirectory </> "app.css")
       action
         browser
         defaultAppConfig
@@ -687,6 +688,36 @@ withBrowserApp action = do
                   staticCacheControlSeconds = Nothing
                 }
           }
+
+-- | Cabal can execute this suite from either the package directory, the
+-- workspace root, or a build directory.  Locate the checked-in stylesheet
+-- relative to an ancestor rather than making the browser fixture depend on
+-- the runner's working directory.
+findSourceStylesheet :: IO FilePath
+findSourceStylesheet = getCurrentDirectory >>= searchFrom
+  where
+    searchFrom directory = do
+      let candidates =
+            [ directory </> "public/styles/app.css",
+              directory </> "packages/web-api/public/styles/app.css"
+            ]
+      existing <- firstExisting candidates
+      case existing of
+        Just stylesheet -> pure stylesheet
+        Nothing ->
+          let parent = takeDirectory directory
+           in if parent == directory
+                then ioError (userError "could not locate packages/web-api/public/styles/app.css")
+                else searchFrom parent
+
+    firstExisting paths =
+      case paths of
+        [] -> pure Nothing
+        path : remaining -> do
+          exists <- doesFileExist path
+          if exists
+            then pure (Just path)
+            else firstExisting remaining
 
 pendingProfileWorkflow :: AccountWorkflow
 pendingProfileWorkflow =
