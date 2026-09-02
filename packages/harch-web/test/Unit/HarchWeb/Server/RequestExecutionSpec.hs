@@ -20,7 +20,8 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text (isInfixOf, pack)
 import Data.Text.Encoding qualified as TextEncoding (decodeUtf8, encodeUtf8)
-import HarchWeb (Application (applicationNavigationRuntime, applicationRequestMiddleware, applicationRequestPolicy, authorizeClientActionCsrf, decodeClientAction, handleClientAction, pageCsrfToken, pageShell, renderRequestResponse, reportApplicationLog, reportRequestObservability, requestContextFromRequest, routeExecutionPolicy), ClientActionDecodeResult (DecodedClientAction, UnrecognizedClientAction), ClientActionPayload (clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod), ClientActionRequest (ClientActionRequest, clientAction, clientActionContext, clientActionRequestIdempotencyKey), ClientActionResponse (ClientActionResponse, clientActionFocusId, clientActionHeaders, clientActionLogEntries, clientActionObservabilityAttributes, clientActionPatches, clientActionStatus), CorsPolicyConfig (CorsPolicyConfig, corsAllowedHeaders, corsAllowedMethods, corsAllowedOrigins, corsMaxAgeSeconds), Document (documentRuntimeDescriptors), ForwardedHeaderTrust (NeverTrustForwarded), MiddlewareResult (ContinueMiddleware, HaltMiddleware), Page (pageRoute), ProtocolResponse (ProtocolResponse, protocolResponseBody, protocolResponseDatabaseOperations, protocolResponseHeaders, protocolResponseLogEntries, protocolResponseObservabilityAttributes, protocolResponseStatus), ProtocolResponseBody (ProtocolResponseBytes, ProtocolResponseStream), RequestMiddleware (RequestMiddleware), RequestPolicyConfig (RequestPolicyConfig, corsPolicy, forwardedHeaderTrust, httpsRedirectAuthority, httpsRedirectPort, redirectHttpToHttps, requestConcurrencyLimit, requestHeadLimits, requestTransportLimits, responseSecurityHeaders, strictTransportSecurity), Response (BodyResponse, ClientActionBodyResponse, EventStreamResponse, PageResponse, PageResponseWithMetadata, ProtocolResponseResult), ResponseBody (ResponseBody, responseBody, responseContentType, responseDatabaseOperations, responseLogEntries, responseObservabilityAttributes, responseStatus), ResponseDiagnostics (diagnosticLogEntries, diagnosticObservabilityAttributes), ResponseSecurityHeadersConfig (ResponseSecurityHeadersConfig, contentSecurityPolicy, contentTypeOptionsNoSniff, frameOptions, permissionsPolicy, referrerPolicy, xssProtection), RouteExecutionPolicy (RouteExecutionPolicy), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (InlineBootstrap), ServerSentEvent (ServerSentEvent), StaticAssetRoot (StaticAssetRoot, staticDirectory, staticUrlPrefix), StaticAssetsConfig (StaticAssetsConfig, staticAssetContentTypes, staticAssetRoots, staticCacheControlSeconds), StrictTransportSecurityConfig (StrictTransportSecurityConfig, strictTransportSecurityIncludeSubDomains, strictTransportSecurityMaxAgeSeconds, strictTransportSecurityPreload), clientActionResponseBody, defaultContentSecurityPolicy, defaultCorsPolicyConfig, defaultNavigationRuntime, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, eventStreamResponse, isClientActionRequest, literalElementId, mkRequestConcurrencyLimit, parseClientActionFields, redirectResponse, responseDiagnostics, responseKind, responseStatusCode, serverSentEventSourceFromList, toWaiApplication, toWaiResponse, unboundedRequestHeadLimits, unboundedRouteExecutionPolicy, warpDefaultRequestTransportLimits)
+import HarchWeb (Application (applicationNavigationRuntime, applicationRequestMiddleware, applicationRequestPolicy, authorizeClientActionCsrf, decodeClientAction, handleClientAction, pageCsrfToken, pageShell, renderRequestResponse, reportApplicationLog, reportRequestObservability, requestContextFromRequest, routeExecutionPolicy), ClientActionDecodeResult (DecodedClientAction, UnrecognizedClientAction), ClientActionPayload (clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod), ClientActionRequest (ClientActionRequest, clientAction, clientActionContext, clientActionRequestIdempotencyKey), ClientActionResponse (ClientActionResponse, clientActionFocusId, clientActionHeaders, clientActionLogEntries, clientActionObservabilityAttributes, clientActionPatches, clientActionStatus), CorsPolicyConfig (CorsPolicyConfig, corsAllowedHeaders, corsAllowedMethods, corsAllowedOrigins, corsMaxAgeSeconds), Document (documentRuntimeDescriptors), ForwardedHeaderTrust (NeverTrustForwarded), MiddlewareResult (ContinueMiddleware, HaltMiddleware), Page (pageRoute), ProtocolResponse (ProtocolResponse, protocolResponseBody, protocolResponseDatabaseOperations, protocolResponseHeaders, protocolResponseLogEntries, protocolResponseObservabilityAttributes, protocolResponseStatus), ProtocolResponseBody (ProtocolResponseBytes, ProtocolResponseStream, ProtocolResponseWai), RequestMiddleware (RequestMiddleware), RequestPolicyConfig (RequestPolicyConfig, corsPolicy, forwardedHeaderTrust, httpsRedirectAuthority, httpsRedirectPort, redirectHttpToHttps, requestConcurrencyLimit, requestHeadLimits, requestTransportLimits, responseSecurityHeaders, strictTransportSecurity), Response (BodyResponse, ClientActionBodyResponse, EventStreamResponse, PageResponse, PageResponseWithMetadata, ProtocolResponseResult), ResponseBody (ResponseBody, responseBody, responseContentType, responseDatabaseOperations, responseLogEntries, responseObservabilityAttributes, responseStatus), ResponseDiagnostics (diagnosticLogEntries, diagnosticObservabilityAttributes), ResponseSecurityHeadersConfig (ResponseSecurityHeadersConfig, contentSecurityPolicy, contentTypeOptionsNoSniff, frameOptions, permissionsPolicy, referrerPolicy, xssProtection), RouteExecutionPolicy (RouteExecutionPolicy), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (InlineBootstrap), ServerSentEvent (ServerSentEvent), StaticAssetRoot (StaticAssetRoot, staticDirectory, staticUrlPrefix), StaticAssetsConfig (StaticAssetsConfig, staticAssetContentTypes, staticAssetRoots, staticCacheControlSeconds), StrictTransportSecurityConfig (StrictTransportSecurityConfig, strictTransportSecurityIncludeSubDomains, strictTransportSecurityMaxAgeSeconds, strictTransportSecurityPreload), clientActionResponseBody, defaultContentSecurityPolicy, defaultCorsPolicyConfig, defaultNavigationRuntime, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, eventStreamResponse, isClientActionRequest, literalElementId, mkRequestConcurrencyLimit, parseClientActionFields, redirectResponse, responseDiagnostics, responseKind, responseStatusCode, serverSentEventSourceFromList, toWaiApplication, toWaiResponse, unboundedRequestHeadLimits, unboundedRouteExecutionPolicy, warpDefaultRequestTransportLimits)
+import HarchWeb qualified
 import HarchWeb.Action qualified as Action (ActionDecoder, action, actionCodec, decodeAction, post)
 import HarchWeb.Database qualified as Database (DatabaseOperation (DatabaseOperation, databaseOperationEndedAtNanoseconds, databaseOperationName, databaseOperationStartedAtNanoseconds, databaseOperationSystem, databaseQueryTemplate))
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -31,7 +32,7 @@ import Network.HTTP.Client qualified as HttpClient ()
 import Network.HTTP.Types qualified as Http (Status (statusCode, statusMessage), hAcceptRanges, hAllow, hCacheControl, hContentLength, hContentRange, hContentType, hETag, hIfModifiedSince, hIfNoneMatch, hLastModified, hLocation, hRange, status200, status201, status202, status204, status206, status302, status304, status308, status400, status401, status403, status404, status405, status413, status415, status416, status422, status500, status503)
 import Network.Socket qualified as Socket (SockAddr (SockAddrInet, SockAddrUnix), tupleToHostAddress)
 import Network.Socket.ByteString qualified as SocketByteString ()
-import Network.Wai qualified as Wai (Request (isSecure, pathInfo, rawPathInfo, rawQueryString, requestHeaders, requestMethod), defaultRequest, responseHeaders, responseStatus, setRequestBodyChunks)
+import Network.Wai qualified as Wai (Request (isSecure, pathInfo, rawPathInfo, rawQueryString, requestHeaders, requestMethod), defaultRequest, responseHeaders, responseLBS, responseStatus, setRequestBodyChunks)
 import Network.Wai.Handler.Warp qualified as Warp ()
 import System.Directory (createDirectoryIfMissing, createFileLink)
 import System.Environment ()
@@ -55,6 +56,220 @@ spec = do
       Wai.responseStatus response `shouldBe` Http.status500
       Wai.responseHeaders response `shouldBe` [(Http.hContentType, "text/html; charset=utf-8")]
       readResponseBody response `shouldReturn` "A page response was missing its CSP nonce."
+
+    it "attaches the matched root route facts to a guard security event" $ do
+      emitted <- newIORef []
+      let delivery =
+            HarchWeb.SecurityEventDelivery $ \eventEnvelope -> do
+              modifyIORef' emitted (<> [eventEnvelope])
+              pure HarchWeb.SecurityEventDelivered
+          eventRoot =
+            HarchWeb.SecurityEventRoot
+              { HarchWeb.securityEventRootModule = requiredModuleName "root.web",
+                HarchWeb.securityEventRootLocale = HarchWeb.locale . requestLanguage,
+                HarchWeb.securityEventRootDelivery = delivery,
+                HarchWeb.securityEventRootUndelivered = const (pure ())
+              }
+          eventBody = HarchWeb.AuthenticationEvaluated (HarchWeb.AuthenticationEvent HarchWeb.AuthenticationMissing Nothing)
+          guardedApplication =
+            sampleApplication
+              { HarchWeb.applicationSecurity =
+                  HarchWeb.AuthenticationEnabled
+                    []
+                    ( HarchWeb.AuthenticationGuard $ \endpointRequest ->
+                        case HarchWeb.endpointSecurityEventSink endpointRequest of
+                          Nothing -> pure (HarchWeb.HaltEndpoint (HarchWeb.BodyResponse securityEventUnavailableResponse))
+                          Just sink -> do
+                            _ <- HarchWeb.emitSecurityEvent sink HarchWeb.TelemetryBestEffort eventBody
+                            pure (HarchWeb.ContinueEndpoint (requestContext (HarchWeb.endpointRouteRequest endpointRequest)))
+                    )
+                    [],
+                HarchWeb.applicationSecurityEventRoot = Just eventRoot,
+                HarchWeb.applicationRouteModuleChain =
+                  Just $ \case
+                    KnownRoute -> requiredModuleName "root.web" :| [requiredModuleName "catalog"]
+                    routeValue -> error ("unexpected test route: " <> show routeValue),
+                HarchWeb.routeEndpointMetadata = \case
+                  KnownRoute -> protectedEndpointMetadata
+                  routeValue -> error ("unexpected test route: " <> show routeValue)
+              }
+          expectedEnvelope =
+            HarchWeb.SecurityEventEnvelope
+              { HarchWeb.securityEventRoute =
+                  HarchWeb.RouteObservation
+                    { HarchWeb.observedEndpointName = requiredEndpointName "test.protected",
+                      HarchWeb.observedMountChain = requiredModuleName "root.web" :| [requiredModuleName "catalog"],
+                      HarchWeb.observedRouteTemplate = requiredRouteTemplate "/known",
+                      HarchWeb.observedLocale = HarchWeb.locale "en"
+                    },
+                HarchWeb.securityEventBody = eventBody,
+                HarchWeb.securityEventRequirement = HarchWeb.TelemetryBestEffort
+              }
+      response <- performWaiRequest (toWaiApplication guardedApplication) (waiRequest ["known"])
+      expectAll
+        ( (Wai.responseStatus response `shouldBe` Http.status200)
+            :| [readIORef emitted `shouldReturn` [expectedEnvelope]]
+        )
+
+    it "attaches observed route context to an unmounted root security event" $ do
+      emitted <- newIORef []
+      let delivery =
+            HarchWeb.SecurityEventDelivery $ \eventEnvelope -> do
+              modifyIORef' emitted (<> [eventEnvelope])
+              pure HarchWeb.SecurityEventDelivered
+          eventRoot =
+            HarchWeb.SecurityEventRoot
+              { HarchWeb.securityEventRootModule = requiredModuleName "root.web",
+                HarchWeb.securityEventRootLocale = HarchWeb.locale . requestLanguage,
+                HarchWeb.securityEventRootDelivery = delivery,
+                HarchWeb.securityEventRootUndelivered = const (pure ())
+              }
+          eventBody = HarchWeb.AuthenticationEvaluated (HarchWeb.AuthenticationEvent HarchWeb.AuthenticationEstablished Nothing)
+          guardedApplication =
+            sampleApplication
+              { HarchWeb.applicationSecurity =
+                  HarchWeb.AuthenticationEnabled
+                    []
+                    ( HarchWeb.AuthenticationGuard $ \endpointRequest ->
+                        case HarchWeb.endpointSecurityEventSink endpointRequest of
+                          Nothing -> pure (HarchWeb.HaltEndpoint (HarchWeb.BodyResponse securityEventUnavailableResponse))
+                          Just sink -> do
+                            _ <- HarchWeb.emitSecurityEvent sink HarchWeb.TelemetryBestEffort eventBody
+                            pure (HarchWeb.ContinueEndpoint (requestContext (HarchWeb.endpointRouteRequest endpointRequest)))
+                    )
+                    [],
+                HarchWeb.applicationSecurityEventRoot = Just eventRoot,
+                HarchWeb.applicationAttachRouteObservation = \routeValue metadata requestContextValue ->
+                  if routeValue == KnownRoute && HarchWeb.endpointName metadata == requiredEndpointName "test.protected"
+                    then requestContextValue {requestLanguage = "es"}
+                    else requestContextValue,
+                HarchWeb.routeEndpointMetadata = \case
+                  KnownRoute -> protectedEndpointMetadata
+                  routeValue -> error ("unexpected test route: " <> show routeValue)
+              }
+          expectedEnvelope =
+            HarchWeb.SecurityEventEnvelope
+              { HarchWeb.securityEventRoute =
+                  HarchWeb.RouteObservation
+                    { HarchWeb.observedEndpointName = requiredEndpointName "test.protected",
+                      HarchWeb.observedMountChain = requiredModuleName "root.web" :| [],
+                      HarchWeb.observedRouteTemplate = requiredRouteTemplate "/known",
+                      HarchWeb.observedLocale = HarchWeb.locale "es"
+                    },
+                HarchWeb.securityEventBody = eventBody,
+                HarchWeb.securityEventRequirement = HarchWeb.TelemetryBestEffort
+              }
+      response <- performWaiRequest (toWaiApplication guardedApplication) (waiRequest ["known"])
+      expectAll
+        ( (Wai.responseStatus response `shouldBe` Http.status200)
+            :| [readIORef emitted `shouldReturn` [expectedEnvelope]]
+        )
+
+    it "fails closed before guards or handlers when a public root declares a protected endpoint" $ do
+      guardRuns <- newIORef (0 :: Int)
+      handlerRuns <- newIORef (0 :: Int)
+      reportedLogs <- newIORef []
+      let protectedApplication =
+            sampleApplication
+              { HarchWeb.applicationSecurity =
+                  HarchWeb.AuthenticationDisabled
+                    [ HarchWeb.EndpointGuard $ \_ -> do
+                        modifyIORef' guardRuns (+ 1)
+                        pure (HarchWeb.ContinueEndpoint defaultContext)
+                    ],
+                HarchWeb.routeEndpointMetadata = const protectedEndpointMetadata,
+                renderRequestResponse = \_ routeRequest -> do
+                  modifyIORef' handlerRuns (+ 1)
+                  pure (renderSampleResponse routeRequest),
+                HarchWeb.reportApplicationLog = \entry -> modifyIORef' reportedLogs (<> [entry])
+              }
+          headRequest = (waiRequest ["known"]) {Wai.requestMethod = "HEAD"}
+          optionsRequest = (waiRequest ["known"]) {Wai.requestMethod = "OPTIONS"}
+          methodMismatchRequest = (waiRequest ["known"]) {Wai.requestMethod = "DELETE"}
+      normalResponse <- performWaiRequest (toWaiApplication protectedApplication) (waiRequest ["known"])
+      headResponse <- performWaiRequest (toWaiApplication protectedApplication) headRequest
+      optionsResponse <- performWaiRequest (toWaiApplication protectedApplication) optionsRequest
+      methodMismatchResponse <- performWaiRequest (toWaiApplication protectedApplication) methodMismatchRequest
+      expectAll
+        ( ( map Wai.responseStatus [normalResponse, headResponse, optionsResponse, methodMismatchResponse]
+              `shouldBe` replicate 4 Http.status503
+          )
+            :| [ readIORef guardRuns `shouldReturn` 0,
+                 readIORef handlerRuns `shouldReturn` 0,
+                 lookup Http.hContentType (Wai.responseHeaders normalResponse) `shouldBe` Just "text/plain; charset=utf-8",
+                 (map (Text.isInfixOf "endpoint security configuration rejected a protected endpoint") <$> readIORef reportedLogs) `shouldReturn` replicate 4 True,
+                 readResponseBody normalResponse `shouldReturn` "Authentication is unavailable."
+               ]
+        )
+
+    it "passes every selected route protocol form to an enabled endpoint guard" $ do
+      observedDispatchKinds <- newIORef []
+      let guardedApplication =
+            sampleApplication
+              { HarchWeb.applicationSecurity =
+                  HarchWeb.AuthenticationEnabled
+                    []
+                    ( HarchWeb.AuthenticationGuard $ \endpointRequest -> do
+                        modifyIORef' observedDispatchKinds (<> [HarchWeb.endpointDispatchKind endpointRequest])
+                        pure (HarchWeb.ContinueEndpoint (requestContext (HarchWeb.endpointRouteRequest endpointRequest)))
+                    )
+                    [],
+                HarchWeb.routeEndpointMetadata = const protectedEndpointMetadata
+              }
+          headRequest = (waiRequest ["known"]) {Wai.requestMethod = "HEAD"}
+          optionsRequest = (waiRequest ["known"]) {Wai.requestMethod = "OPTIONS"}
+          methodMismatchRequest = (waiRequest ["known"]) {Wai.requestMethod = "DELETE"}
+      waiApplication <- toWaiApplication guardedApplication
+      _ <- performWaiRequest (pure waiApplication) (waiRequest ["known"])
+      _ <- performWaiRequest (pure waiApplication) headRequest
+      _ <- performWaiRequest (pure waiApplication) optionsRequest
+      _ <- performWaiRequest (pure waiApplication) methodMismatchRequest
+      readIORef observedDispatchKinds
+        `shouldReturn` [ HarchWeb.EndpointMatched,
+                         HarchWeb.EndpointMatchedHead,
+                         HarchWeb.EndpointOptions,
+                         HarchWeb.EndpointMethodNotAllowed
+                       ]
+
+    it "halts a protected client action before decoding its body or invoking its handler" $ do
+      guardRuns <- newIORef (0 :: Int)
+      handlerRuns <- newIORef (0 :: Int)
+      let actionApplication =
+            sampleApplication
+              { HarchWeb.applicationSecurity =
+                  HarchWeb.AuthenticationEnabled
+                    []
+                    ( HarchWeb.AuthenticationGuard $ \endpointRequest -> do
+                        modifyIORef' guardRuns (+ 1)
+                        HarchWeb.endpointDispatchKind endpointRequest `shouldBe` HarchWeb.EndpointClientAction
+                        Wai.requestMethod (HarchWeb.endpointWaiRequest endpointRequest) `shouldBe` "POST"
+                        pure (HarchWeb.HaltEndpoint (HarchWeb.BodyResponse securityEventUnavailableResponse))
+                    )
+                    [],
+                HarchWeb.applicationRequestMiddleware =
+                  [RequestMiddleware $ \_ requestContextValue -> pure (ContinueMiddleware requestContextValue {requestLanguage = "es"})],
+                HarchWeb.clientActionEndpointMetadata = \methodValue pathValue requestContextValue ->
+                  if methodValue == "POST" && pathValue == "/known" && requestLanguage requestContextValue == "es"
+                    then Just protectedEndpointMetadata
+                    else Nothing,
+                HarchWeb.decodeClientAction = \_ ->
+                  error "client action decoder must not run after guard halt",
+                HarchWeb.handleClientAction = \_ -> do
+                  modifyIORef' handlerRuns (+ 1)
+                  pure Nothing
+              }
+          actionRequest =
+            (waiRequest ["known"])
+              { Wai.requestMethod = "POST",
+                Wai.requestHeaders = [("X-Harch-Action", "1")]
+              }
+      response <- performWaiRequest (toWaiApplication actionApplication) actionRequest
+      expectAll
+        ( (Wai.responseStatus response `shouldBe` Http.status503)
+            :| [ readIORef guardRuns `shouldReturn` 1,
+                 readIORef handlerRuns `shouldReturn` 0
+               ]
+        )
 
     it "runs app middleware for dynamic routes while preserving transformed context" $ do
       let middlewareApplication =
@@ -507,8 +722,7 @@ spec = do
     it "passes decoded client-action CSRF and idempotency metadata to the application" $ do
       receivedAction <- newIORef Nothing
       actionBodyChunks <- newIORef ["intent=save&_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
-      let metadataApplication :: Application TestRoute Text TestContext
-          metadataApplication =
+      let metadataApplication =
             sampleApplication
               { decodeClientAction = \payload ->
                   ( case ( clientActionMethod payload,
@@ -782,6 +996,31 @@ spec = do
                  renderedResponse `shouldBe` sameMetadataDifferentStream,
                  renderedResponse `shouldNotBe` strictResponse,
                  show renderedResponse `shouldSatisfy` isInfixOf "ProtocolResponseStream <stream>"
+               ]
+        )
+
+    it "preserves a framework-owned WAI protocol response while applying root headers" $ do
+      let frameworkResponse = Wai.responseLBS Http.status200 [(Http.hContentType, "application/octet-stream"), ("X-Asset", "present")] "asset"
+          protocolResponse =
+            ProtocolResponse
+              { protocolResponseStatus = Http.status200,
+                protocolResponseHeaders = [("X-Protocol", "present")],
+                protocolResponseBody = ProtocolResponseWai frameworkResponse,
+                protocolResponseObservabilityAttributes = [],
+                protocolResponseLogEntries = [],
+                protocolResponseDatabaseOperations = []
+              }
+          sameResponse = protocolResponse {protocolResponseBody = ProtocolResponseWai (Wai.responseLBS Http.status200 [] "different")}
+          rendered = toWaiResponse [("X-Policy", "present")] Nothing sampleApplication (ProtocolResponseResult protocolResponse)
+      expectAll
+        ( (protocolResponse `shouldBe` sameResponse)
+            :| [ show protocolResponse `shouldSatisfy` isInfixOf "ProtocolResponseWai <framework-response>",
+                 Wai.responseStatus rendered `shouldBe` Http.status200,
+                 lookup Http.hContentType (Wai.responseHeaders rendered) `shouldBe` Just "application/octet-stream",
+                 lookup "X-Asset" (Wai.responseHeaders rendered) `shouldBe` Just "present",
+                 lookup "X-Protocol" (Wai.responseHeaders rendered) `shouldBe` Just "present",
+                 lookup "X-Policy" (Wai.responseHeaders rendered) `shouldBe` Just "present",
+                 readResponseBody rendered `shouldReturn` "asset"
                ]
         )
 
@@ -2682,7 +2921,7 @@ spec = do
         Wai.responseStatus response `shouldBe` Http.status200
         readResponseBody response `shouldReturn` "console.log('admin');"
 
-    it "returns plain 404 responses for missing or invalid matched static asset paths" $
+    it "keeps missing static assets as 404 while rejecting malformed route targets before asset matching" $
       withSystemTempDirectory "harch-web-static-missing" $ \tempDirectory -> do
         let assetConfig =
               StaticAssetsConfig
@@ -2696,11 +2935,30 @@ spec = do
         lookup Http.hContentType (Wai.responseHeaders missingResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "text/plain; charset=utf-8")
         readResponseBody missingResponse `shouldReturn` "Not Found"
         invalidResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "..", "secret.txt"])
-        Wai.responseStatus invalidResponse `shouldBe` Http.status404
-        readResponseBody invalidResponse `shouldReturn` "Not Found"
+        Wai.responseStatus invalidResponse `shouldBe` Http.status400
+        readResponseBody invalidResponse `shouldReturn` "Request target was rejected."
+        malformedDynamicResponse <-
+          performWaiRequest
+            (toWaiApplication sampleApplication)
+            ((waiRequest []) {Wai.rawPathInfo = "/known%2Fextra"})
+        Wai.responseStatus malformedDynamicResponse `shouldBe` Http.status400
+        readResponseBody malformedDynamicResponse `shouldReturn` "Request target was rejected."
         rootResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets"])
         Wai.responseStatus rootResponse `shouldBe` Http.status404
         readResponseBody rootResponse `shouldReturn` "Not Found"
+
+    it "rejects a route codec's malformed result after structural request-target decoding" $ do
+      let malformedCodecApplication =
+            sampleApplication
+              { HarchWeb.routeCodec =
+                  (HarchWeb.routeCodec sampleApplication)
+                    { HarchWeb.parseRoute = \_ _ -> HarchWeb.RouteMalformed HarchWeb.InvalidRouteTargetEncoding
+                    }
+              }
+      malformedResponse <- performWaiRequest (toWaiApplication malformedCodecApplication) (waiRequest ["known"])
+      Wai.responseStatus malformedResponse `shouldBe` Http.status400
+      lookup Http.hContentType (Wai.responseHeaders malformedResponse) `shouldBe` Just "text/plain; charset=utf-8"
+      readResponseBody malformedResponse `shouldReturn` "Request target was rejected."
 
     it "rejects an asset path reconstructed as an absolute filesystem path" $
       withSystemTempDirectory "harch-web-static-absolute-escape" $ \tempDirectory -> do
@@ -2858,3 +3116,40 @@ spec = do
         lookup Http.hCacheControl (Wai.responseHeaders rootResponse) `shouldBe` Nothing
         unsupportedExtensionResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "secret.bin"])
         lookup Http.hCacheControl (Wai.responseHeaders unsupportedExtensionResponse) `shouldBe` Nothing
+
+protectedEndpointMetadata :: HarchWeb.EndpointMetadata ()
+protectedEndpointMetadata =
+  HarchWeb.mkEndpointMetadata
+    (requiredEndpointName "test.protected")
+    (requiredRouteTemplate "/known")
+    HarchWeb.HtmlEndpoint
+    HarchWeb.RequireAuthenticated
+
+securityEventUnavailableResponse :: ResponseBody
+securityEventUnavailableResponse =
+  ResponseBody
+    { responseStatus = Http.status503,
+      responseContentType = "text/plain; charset=utf-8",
+      responseBody = "Security-event sink unavailable.",
+      responseObservabilityAttributes = [],
+      responseLogEntries = [],
+      responseDatabaseOperations = []
+    }
+
+requiredEndpointName :: Text -> HarchWeb.EndpointName
+requiredEndpointName value =
+  case HarchWeb.mkEndpointName value of
+    Right endpointName -> endpointName
+    Left metadataError -> error ("invalid endpoint-name test literal: " <> show metadataError)
+
+requiredRouteTemplate :: Text -> HarchWeb.RouteTemplate
+requiredRouteTemplate value =
+  case HarchWeb.mkRouteTemplate value of
+    Right routeTemplate -> routeTemplate
+    Left metadataError -> error ("invalid route-template test literal: " <> show metadataError)
+
+requiredModuleName :: Text -> HarchWeb.ModuleName
+requiredModuleName value =
+  case HarchWeb.mkModuleName value of
+    Right moduleName -> moduleName
+    Left moduleNameError -> error ("invalid module-name test literal: " <> show moduleNameError)

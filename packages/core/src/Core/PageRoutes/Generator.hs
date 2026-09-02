@@ -50,7 +50,8 @@ data GeneratorConfig = GeneratorConfig
     dispatcherModuleName :: String,
     applicationRouteModuleName :: String,
     applicationRouteTypeName :: String,
-    requestContextTypeName :: String
+    requestContextTypeName :: String,
+    authorizationTypeName :: String
   }
   deriving (Eq, Show)
 
@@ -63,7 +64,8 @@ defaultGeneratorConfig pagesDirectory generatedDirectory =
       dispatcherModuleName = "App.Pages.Generated",
       applicationRouteModuleName = "App.Routes",
       applicationRouteTypeName = "TwoPageRoute",
-      requestContextTypeName = "()"
+      requestContextTypeName = "()",
+      authorizationTypeName = "()"
     }
 
 data PageSpec = PageSpec
@@ -210,7 +212,9 @@ renderDispatcherModule config pageSpecs =
              "pageRouteDefinition :: PageRoute -> RouteDefinition "
                <> applicationRouteTypeName config
                <> " "
-               <> requestContextTypeName config,
+               <> requestContextTypeName config
+               <> " "
+               <> authorizationTypeName config,
              "pageRouteDefinition route =",
              "  case route of"
            ]

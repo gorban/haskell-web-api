@@ -51,7 +51,7 @@ spec =
             secondMessage = required (mkEmailMessage (EmailMessageInput recipient "Second" "Second body"))
         deliverSmtpEmail config firstMessage
         deliverSmtpEmail config secondMessage
-        receivedEmails <- devSmtpReceivedEmails server
+        receivedEmails <- awaitEmails server 2
         latestEmail <- awaitEmail server "ada@example.test"
         ( map (ByteString.isInfixOf "Subject: First" . devSmtpRawMessage) receivedEmails,
           map (ByteString.isInfixOf "Subject: Second" . devSmtpRawMessage) receivedEmails
@@ -83,6 +83,18 @@ awaitEmail server recipient = go (100 :: Int)
         Nothing
           | remaining > 0 -> threadDelay 10000 >> go (remaining - 1)
           | otherwise -> expectationFailure "Timed out waiting for development SMTP mail" >> error "unreachable"
+
+awaitEmails :: DevSmtpServer -> Int -> IO [DevSmtpEmail]
+awaitEmails server expectedCount = go (100 :: Int)
+  where
+    go remaining = do
+      received <- devSmtpReceivedEmails server
+      if length received >= expectedCount
+        then pure received
+        else
+          if remaining > 0
+            then threadDelay 10000 >> go (remaining - 1)
+            else expectationFailure "Timed out waiting for development SMTP mail" >> error "unreachable"
 
 fromString :: String -> Text.Text
 fromString = Text.pack

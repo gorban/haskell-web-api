@@ -35,10 +35,23 @@ import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Document (NavigationRuntime, RuntimeAsset)
 import HarchWeb.Document qualified as Document
+import HarchWeb.EndpointSecurity
+  ( AccessRequirement (..),
+    ApplicationSecurity (..),
+    AuthenticationGuard (..),
+    EndpointDispatchKind (..),
+    EndpointGuard (..),
+    EndpointGuardResult (..),
+    EndpointMetadata (endpointAccess, endpointName, endpointRouteTemplate),
+    EndpointRequest (..),
+    runEndpointGuardPipeline,
+  )
 import HarchWeb.Routing
   ( RouteDispatch (..),
+    RouteLocation,
     RouteMethod,
     RouteRequest (..),
+    decodeRouteLocation,
     matchRouteMethod,
     routeAllowHeaderValue,
   )
@@ -59,6 +72,7 @@ import HarchWeb.Security
     waiRequestPath,
     waiRequestRouteTarget,
   )
+import HarchWeb.SecurityEvent (rootSecurityEventSink, rootSecurityEventSinkWithMountChain)
 import HarchWeb.Server.Application
 import HarchWeb.Server.ClientAction
 import HarchWeb.Server.ClientAction.Runtime (clientActionResponse)
@@ -119,7 +133,7 @@ runtimeAssetResponse runtimeAsset requestPath =
 -- | Handle framework-owned responses before routing or application middleware.
 -- Each response receives the request policy headers exactly once.
 runEarlyRequestStages ::
-  Application route action context ->
+  Application route action context authorization ->
   Wai.Request ->
   Text ->
   Http.ResponseHeaders ->
@@ -150,13 +164,14 @@ runEarlyRequestStages webApplication request requestPath policyResponseHeaders =
 -- routing. Grouping them keeps the lifecycle helpers focused on their
 -- changing request state rather than plumbing the same environment through
 -- every stage.
-data RoutedRequestExecution route action context = RoutedRequestExecution
-  { routedRequestApplication :: Application route action context,
+data RoutedRequestExecution route action context authorization = RoutedRequestExecution
+  { routedRequestApplication :: Application route action context authorization,
     routedRequestRouteGateCache :: RouteConcurrencyGateCache route,
     routedRequestWaiRequest :: Wai.Request,
     routedRequestRespond :: Wai.Response -> IO Wai.ResponseReceived,
     routedRequestPolicyConfig :: RequestPolicyConfig,
-    routedRequestPath :: Text
+    routedRequestPath :: Text,
+    routedRequestLocation :: RouteLocation
   }
 
 -- | Timing values stable after policy, middleware, and route matching have
@@ -170,7 +185,7 @@ data RequestExecutionTimingState = RequestExecutionTimingState
     requestTimingRouteMatchedAt :: Word64
   }
 
-routedRequestObservabilityContext :: RoutedRequestExecution route action context -> RequestObservabilityContext route action context
+routedRequestObservabilityContext :: RoutedRequestExecution route action context authorization -> RequestObservabilityContext route action context authorization
 routedRequestObservabilityContext routedRequestExecution =
   requestObservabilityContext
     (routedRequestApplication routedRequestExecution)
@@ -188,13 +203,13 @@ routedRequestObservabilityContext routedRequestExecution =
 -- running server, since the gate's in-flight counter is allocated here and
 -- must be shared across every request that server handles, not
 -- reallocated per request.
-toWaiApplication :: (Eq route) => Application route action context -> IO Wai.Application
+toWaiApplication :: (Eq route) => Application route action context authorization -> IO Wai.Application
 toWaiApplication webApplication = do
   gateMiddleware <- concurrencyLimitedMiddleware (requestConcurrencyLimit (applicationRequestPolicy webApplication)) id
   routeGateCache <- newRouteConcurrencyGateCache
   pure (gateMiddleware (headLimitedWaiApplication routeGateCache webApplication))
 
-headLimitedWaiApplication :: (Eq route) => RouteConcurrencyGateCache route -> Application route action context -> Wai.Application
+headLimitedWaiApplication :: (Eq route) => RouteConcurrencyGateCache route -> Application route action context authorization -> Wai.Application
 headLimitedWaiApplication routeGateCache webApplication request respond =
   case validateRequestHead (requestHeadLimits (applicationRequestPolicy webApplication)) request of
     Left limitFailure -> respond (requestHeadLimitResponse limitFailure)
@@ -203,38 +218,49 @@ headLimitedWaiApplication routeGateCache webApplication request respond =
 -- | Only valid, budgeted request heads reach the ordinary request pipeline.
 -- This keeps malformed target bytes and oversized metadata out of route
 -- parsing, application middleware, logs, and observability extraction.
-toValidatedWaiApplication :: (Eq route) => RouteConcurrencyGateCache route -> Application route action context -> Wai.Application
+toValidatedWaiApplication :: (Eq route) => RouteConcurrencyGateCache route -> Application route action context authorization -> Wai.Application
 toValidatedWaiApplication routeGateCache webApplication request respond = do
-  requestStartedAt <- getMonotonicTimeNSec
   let requestPolicyConfig = applicationRequestPolicy webApplication
-      policyResponseHeaders = requestPolicyResponseHeaders requestPolicyConfig request
-      requestPath = waiRequestPath requestPolicyConfig request
-  policyEvaluatedAt <- policyResponseHeaders `seq` getMonotonicTimeNSec
-  earlyResult <- runExceptT (runEarlyRequestStages webApplication request requestPath policyResponseHeaders)
-  let respondEarlyRequest (earlyResponsePath, earlyResponseValue) = do
-        responseReportedAt <- earlyResponseValue `seq` getMonotonicTimeNSec
-        responseReceived <- respond earlyResponseValue
-        reportEarlyRequestObservability
-          (requestObservabilityContext webApplication request requestPolicyConfig)
-          requestStartedAt
-          responseReportedAt
-          earlyResponsePath
-          earlyResponseValue
-        pure responseReceived
+  case decodeRouteLocation (waiRequestRouteTarget requestPolicyConfig request) of
+    Left _ -> respond routeLocationDecodeResponse
+    Right routeLocation -> do
+      requestStartedAt <- getMonotonicTimeNSec
+      let policyResponseHeaders = requestPolicyResponseHeaders requestPolicyConfig request
+          requestPath = waiRequestPath requestPolicyConfig request
+      policyEvaluatedAt <- policyResponseHeaders `seq` getMonotonicTimeNSec
+      earlyResult <- runExceptT (runEarlyRequestStages webApplication request requestPath policyResponseHeaders)
+      let respondEarlyRequest (earlyResponsePath, earlyResponseValue) = do
+            responseReportedAt <- earlyResponseValue `seq` getMonotonicTimeNSec
+            responseReceived <- respond earlyResponseValue
+            reportEarlyRequestObservability
+              (requestObservabilityContext webApplication request requestPolicyConfig)
+              requestStartedAt
+              responseReportedAt
+              earlyResponsePath
+              earlyResponseValue
+            pure responseReceived
 
-      handleRoutedRequestAfterEarlyStages =
-        handleRoutedRequest
-          RoutedRequestExecution
-            { routedRequestApplication = webApplication,
-              routedRequestRouteGateCache = routeGateCache,
-              routedRequestWaiRequest = request,
-              routedRequestRespond = respond,
-              routedRequestPolicyConfig = requestPolicyConfig,
-              routedRequestPath = requestPath
-            }
-          requestStartedAt
-          policyEvaluatedAt
-  either respondEarlyRequest (const handleRoutedRequestAfterEarlyStages) earlyResult
+          handleRoutedRequestAfterEarlyStages =
+            handleRoutedRequest
+              RoutedRequestExecution
+                { routedRequestApplication = webApplication,
+                  routedRequestRouteGateCache = routeGateCache,
+                  routedRequestWaiRequest = request,
+                  routedRequestRespond = respond,
+                  routedRequestPolicyConfig = requestPolicyConfig,
+                  routedRequestPath = requestPath,
+                  routedRequestLocation = routeLocation
+                }
+              requestStartedAt
+              policyEvaluatedAt
+      either respondEarlyRequest (const handleRoutedRequestAfterEarlyStages) earlyResult
+
+routeLocationDecodeResponse :: Wai.Response
+routeLocationDecodeResponse =
+  Wai.responseLBS
+    Http.status400
+    [(Http.hContentType, "text/plain; charset=utf-8")]
+    "Request target was rejected."
 
 requestHeadLimitResponse :: RequestHeadLimitFailure -> Wai.Response
 requestHeadLimitResponse limitFailure =
@@ -260,14 +286,13 @@ requestHeadLimitResponse limitFailure =
 
 handleRoutedRequest ::
   (Eq route) =>
-  RoutedRequestExecution route action context ->
+  RoutedRequestExecution route action context authorization ->
   Word64 ->
   Word64 ->
   IO Wai.ResponseReceived
 handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = do
   let webApplication = routedRequestApplication routedRequestExecution
       request = routedRequestWaiRequest routedRequestExecution
-      requestPolicyConfig = routedRequestPolicyConfig routedRequestExecution
   middlewareStartedAt <- getMonotonicTimeNSec
   middlewareResult <- runRequestMiddlewarePipeline (applicationRequestMiddleware webApplication) request (requestContextFromRequest webApplication request (defaultRequestContext webApplication))
   middlewareCompletedAt <- middlewareResult `seq` getMonotonicTimeNSec
@@ -275,13 +300,13 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
       middlewareTiming = middlewareTimingEntry webApplication middlewareStartedAt middlewareCompletedAt
   routeMatchingStartedAt <- getMonotonicTimeNSec
   let decodedRequestMethod = requestMethodText request
-      routeDispatch =
+      routeDispatchResult =
         matchRouteMethod
           (routeCodec webApplication)
           requestContext
           (Routing.requestMethod decodedRequestMethod)
-          (Routing.requestPath (waiRequestRouteTarget requestPolicyConfig request))
-  routeMatchedAt <- routeDispatch `seq` getMonotonicTimeNSec
+          (routedRequestLocation routedRequestExecution)
+  routeMatchedAt <- routeDispatchResult `seq` getMonotonicTimeNSec
   let timingState =
         RequestExecutionTimingState
           { requestTimingStartedAt = requestStartedAt,
@@ -290,24 +315,120 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
             requestTimingRouteMatchingStartedAt = routeMatchingStartedAt,
             requestTimingRouteMatchedAt = routeMatchedAt
           }
-  routeMiddleware <- routeAdmissionMiddleware routedRequestExecution routeDispatch
-  routeMiddleware
-    ( \admittedRequest admittedRespond ->
-        continueRoutedRequest
-          (routedRequestExecution {routedRequestWaiRequest = admittedRequest, routedRequestRespond = admittedRespond})
-          timingState
-          decodedRequestMethod
-          routeDispatch
-          middlewareResult
-    )
-    request
-    (routedRequestRespond routedRequestExecution)
+  case routeDispatchResult of
+    Left _ -> respondRouteLocationDecodeFailure routedRequestExecution
+    Right routeDispatch -> do
+      guardResult <- runEndpointGuards webApplication request (routedRequestPath routedRequestExecution) routeDispatch middlewareResult
+      case guardResult of
+        HaltEndpoint guardedResponse ->
+          continueRoutedResponse routedRequestExecution timingState routeDispatch guardedResponse
+        ContinueEndpoint guardedContext -> do
+          let guardedDispatch = setRouteDispatchContext guardedContext routeDispatch
+          routeMiddleware <- routeAdmissionMiddleware routedRequestExecution guardedDispatch
+          routeMiddleware
+            ( \admittedRequest admittedRespond ->
+                continueRoutedRequest
+                  (routedRequestExecution {routedRequestWaiRequest = admittedRequest, routedRequestRespond = admittedRespond})
+                  timingState
+                  decodedRequestMethod
+                  guardedDispatch
+            )
+            request
+            (routedRequestRespond routedRequestExecution)
+
+respondRouteLocationDecodeFailure :: RoutedRequestExecution route action context authorization -> IO Wai.ResponseReceived
+respondRouteLocationDecodeFailure routedRequestExecution =
+  routedRequestRespond routedRequestExecution routeLocationDecodeResponse
+
+-- | Apply the explicit post-match security selection to every declared route
+-- outcome.  A 404 has no endpoint declaration; a pre-route halt retains its
+-- older response-body contract and is not reinterpreted as endpoint policy.
+runEndpointGuards ::
+  Application route action context authorization ->
+  Wai.Request ->
+  Text ->
+  RouteDispatch route context ->
+  MiddlewareResult context ->
+  IO (EndpointGuardResult route context)
+runEndpointGuards webApplication request requestPath routeDispatch middlewareResult =
+  case middlewareResult of
+    HaltMiddleware _ responseBodyValue -> pure (HaltEndpoint (BodyResponse responseBodyValue))
+    ContinueMiddleware middlewareContext ->
+      case routeDispatch of
+        RouteNotFound _ -> pure (ContinueEndpoint middlewareContext)
+        RouteMethodNotAllowed _ _ -> runSelectedEndpointGuards EndpointMethodNotAllowed
+        RouteMatched _ -> runSelectedEndpointGuards EndpointMatched
+        RouteMatchedHead _ -> runSelectedEndpointGuards EndpointMatchedHead
+        RouteOptions _ _ -> runSelectedEndpointGuards EndpointOptions
+  where
+    routeRequest = routeDispatchRequest routeDispatch
+    isAction = isClientActionRequest request
+    selectedEndpointMetadata =
+      if isAction
+        then clientActionEndpointMetadata webApplication (requestMethodText request) requestPath (requestContext routeRequest)
+        else Just (routeEndpointMetadata webApplication (requestRoute routeRequest))
+    runSelectedEndpointGuards routeDispatchKind =
+      case selectedEndpointMetadata of
+        Nothing -> pure (ContinueEndpoint (requestContext routeRequest))
+        Just selectedMetadata ->
+          let observedRouteRequest =
+                routeRequest
+                  { requestContext =
+                      applicationAttachRouteObservation
+                        webApplication
+                        (requestRoute routeRequest)
+                        (routeEndpointMetadata webApplication (requestRoute routeRequest))
+                        (requestContext routeRequest)
+                  }
+              endpointRequest =
+                EndpointRequest
+                  { endpointWaiRequest = request,
+                    endpointRouteRequest = observedRouteRequest,
+                    endpointMetadata = selectedMetadata,
+                    endpointSecurityEventSink =
+                      fmap
+                        ( \eventRoot ->
+                            case applicationRouteModuleChain webApplication of
+                              Nothing -> rootSecurityEventSink eventRoot (endpointName selectedMetadata) (endpointRouteTemplate selectedMetadata) (requestContext observedRouteRequest)
+                              Just routeModuleChain -> rootSecurityEventSinkWithMountChain eventRoot (routeModuleChain (requestRoute routeRequest)) (endpointName selectedMetadata) (endpointRouteTemplate selectedMetadata) (requestContext observedRouteRequest)
+                        )
+                        (applicationSecurityEventRoot webApplication),
+                    endpointDispatchKind = if isAction then EndpointClientAction else routeDispatchKind
+                  }
+           in case applicationSecurity webApplication of
+                AuthenticationDisabled _ ->
+                  case endpointAccess (endpointMetadata endpointRequest) of
+                    AllowUnauthenticated -> runEndpointGuardPipeline (applicationEndpointGuards (applicationSecurity webApplication)) endpointRequest
+                    _ -> pure (HaltEndpoint (BodyResponse disabledSecurityResponse))
+                _ -> runEndpointGuardPipeline (applicationEndpointGuards (applicationSecurity webApplication)) endpointRequest
+
+-- | An explicitly public root cannot accidentally make a protected endpoint
+-- usable merely because its guard list is empty.  This is a server-side
+-- composition error, so it fails closed with a generic unavailable response
+-- rather than pretending that an identity challenge can be fulfilled.
+disabledSecurityResponse :: ResponseBody
+disabledSecurityResponse =
+  ResponseBody
+    { responseStatus = Http.status503,
+      responseContentType = "text/plain; charset=utf-8",
+      responseBody = "Authentication is unavailable.",
+      responseObservabilityAttributes = [],
+      responseLogEntries = ["endpoint security configuration rejected a protected endpoint"],
+      responseDatabaseOperations = []
+    }
+
+applicationEndpointGuards :: ApplicationSecurity route context authorization -> [EndpointGuard route context authorization]
+applicationEndpointGuards applicationSecurity =
+  case applicationSecurity of
+    AuthenticationDisabled guards -> guards
+    AuthenticationEnabled beforeGuards (AuthenticationGuard runAuthentication) afterGuards ->
+      beforeGuards <> [EndpointGuard runAuthentication] <> afterGuards
 
 -- | A route-local gate is available only for an already path-matched route.
 -- `RouteNotFound` deliberately has no route declaration whose policy it could
 -- claim; all other dispatch outcomes retain the selected route so their
 -- `HEAD`, `OPTIONS`, and 405 responses cannot bypass that route's gate.
-routeAdmissionMiddleware :: (Eq route) => RoutedRequestExecution route action context -> RouteDispatch route context -> IO Wai.Middleware
+routeAdmissionMiddleware :: (Eq route) => RoutedRequestExecution route action context authorization -> RouteDispatch route context -> IO Wai.Middleware
 routeAdmissionMiddleware routedRequestExecution routeDispatch =
   case routeDispatch of
     RouteNotFound _ -> pure id
@@ -321,16 +442,37 @@ routeAdmissionMiddleware routedRequestExecution routeDispatch =
 
 continueRoutedRequest ::
   (Eq route) =>
-  RoutedRequestExecution route action context ->
+  RoutedRequestExecution route action context authorization ->
   RequestExecutionTimingState ->
   Text ->
   RouteDispatch route context ->
-  MiddlewareResult context ->
   IO Wai.ResponseReceived
-continueRoutedRequest routedRequestExecution timingState decodedRequestMethod routeDispatch middlewareResult = do
-  let webApplication = routedRequestApplication routedRequestExecution
+continueRoutedRequest routedRequestExecution timingState decodedRequestMethod routeDispatch = do
   renderStartedAt <- getMonotonicTimeNSec
-  response <- dispatchRoutedRequest routedRequestExecution decodedRequestMethod routeDispatch middlewareResult
+  response <- dispatchRoutedRequest routedRequestExecution decodedRequestMethod routeDispatch
+  continueRoutedResponseAt routedRequestExecution timingState routeDispatch renderStartedAt response
+
+continueRoutedResponse ::
+  (Eq route) =>
+  RoutedRequestExecution route action context authorization ->
+  RequestExecutionTimingState ->
+  RouteDispatch route context ->
+  Response route context ->
+  IO Wai.ResponseReceived
+continueRoutedResponse routedRequestExecution timingState routeDispatch response = do
+  renderStartedAt <- getMonotonicTimeNSec
+  continueRoutedResponseAt routedRequestExecution timingState routeDispatch renderStartedAt response
+
+continueRoutedResponseAt ::
+  (Eq route) =>
+  RoutedRequestExecution route action context authorization ->
+  RequestExecutionTimingState ->
+  RouteDispatch route context ->
+  Word64 ->
+  Response route context ->
+  IO Wai.ResponseReceived
+continueRoutedResponseAt routedRequestExecution timingState routeDispatch renderStartedAt response = do
+  let webApplication = routedRequestApplication routedRequestExecution
   responseRenderedAt <- response `seq` getMonotonicTimeNSec
   pageSecurity <- responsePageSecurity webApplication response
   let executionTimings =
@@ -354,13 +496,25 @@ routeDispatchRequest routeDispatch =
     RouteMatchedHead routeRequest -> routeRequest
     RouteOptions routeRequest _ -> routeRequest
 
+setRouteDispatchContext :: context -> RouteDispatch route context -> RouteDispatch route context
+setRouteDispatchContext requestContext routeDispatch =
+  case routeDispatch of
+    RouteNotFound routeRequest -> RouteNotFound (setRouteRequestContext requestContext routeRequest)
+    RouteMethodNotAllowed routeRequest methods -> RouteMethodNotAllowed (setRouteRequestContext requestContext routeRequest) methods
+    RouteMatched routeRequest -> RouteMatched (setRouteRequestContext requestContext routeRequest)
+    RouteMatchedHead routeRequest -> RouteMatchedHead (setRouteRequestContext requestContext routeRequest)
+    RouteOptions routeRequest methods -> RouteOptions (setRouteRequestContext requestContext routeRequest) methods
+
+setRouteRequestContext :: context -> RouteRequest route context -> RouteRequest route context
+setRouteRequestContext requestContext routeRequest = routeRequest {requestContext = requestContext}
+
 isHeadDispatch :: RouteDispatch route context -> Bool
 isHeadDispatch routeDispatch =
   case routeDispatch of
     RouteMatchedHead _ -> True
     _ -> False
 
-middlewareTimingEntry :: Application route action context -> Word64 -> Word64 -> [(Text, Word64, Word64)]
+middlewareTimingEntry :: Application route action context authorization -> Word64 -> Word64 -> [(Text, Word64, Word64)]
 middlewareTimingEntry webApplication startedAt completedAt =
   case applicationRequestMiddleware webApplication of
     [] -> []
@@ -372,17 +526,14 @@ middlewareTimingEntry webApplication startedAt completedAt =
 -- appear in the page route table; however, a client-action header can never
 -- turn 'RouteMatchedHead' or 'RouteOptions' into a state-changing action.
 dispatchRoutedRequest ::
-  RoutedRequestExecution route action context ->
+  RoutedRequestExecution route action context authorization ->
   Text ->
   RouteDispatch route context ->
-  MiddlewareResult context ->
   IO (Response route context)
-dispatchRoutedRequest _ _ _ (HaltMiddleware _ responseBody) = pure (BodyResponse responseBody)
 dispatchRoutedRequest
   routedRequestExecution
   decodedRequestMethod
-  routeDispatch
-  (ContinueMiddleware _) =
+  routeDispatch =
     let webApplication = routedRequestApplication routedRequestExecution
         request = routedRequestWaiRequest routedRequestExecution
         RouteRequest {requestContext = routedRequestContext} = routeDispatchRequest routeDispatch
@@ -409,7 +560,7 @@ routeRenderDispatch routeDispatch =
     RouteMatchedHead routeRequest -> Right (RenderMatchedHead routeRequest)
     RouteOptions _ declaredMethods -> Left declaredMethods
 
-renderRouteDispatch :: Application route action context -> Wai.Request -> RouteRenderDispatch route context -> IO (Response route context)
+renderRouteDispatch :: Application route action context authorization -> Wai.Request -> RouteRenderDispatch route context -> IO (Response route context)
 renderRouteDispatch webApplication request renderDispatch =
   case renderDispatch of
     RenderNotFound routeRequest -> renderRequestResponse webApplication request routeRequest
@@ -462,7 +613,7 @@ routeOptionsResponse declaredMethods =
 -- web-api's bounded-queue 'WebApi.App' exporter, added alongside this fix).
 finalizeRoutedResponse ::
   (Eq route) =>
-  RoutedRequestExecution route action context ->
+  RoutedRequestExecution route action context authorization ->
   RequestExecutionTimings ->
   RouteDispatch route context ->
   Maybe (Document.RuntimeNonce, CsrfToken) ->

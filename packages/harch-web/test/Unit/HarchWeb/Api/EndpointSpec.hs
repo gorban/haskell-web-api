@@ -25,6 +25,14 @@ import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 import Numeric.Natural (Natural)
 
+routeLocationForTest :: Text -> HarchWeb.RouteLocation
+routeLocationForTest target =
+  case HarchWeb.decodeRouteLocation (HarchWeb.requestTarget (TextEncoding.encodeUtf8 path) (TextEncoding.encodeUtf8 query)) of
+    Left routeError -> error ("invalid test route target: " <> show routeError)
+    Right location -> location
+  where
+    (path, query) = Text.breakOn "?" target
+
 testEndpointTable :: [SomeApiRouteEndpoint]
 testEndpointTable =
   [ SomeApiRouteEndpoint (testEndpoint ApiGet (at "/api/status") "ReadStatus"),
@@ -33,6 +41,26 @@ testEndpointTable =
     SomeApiRouteEndpoint neverFailingEndpoint,
     SomeApiRouteEndpoint streamEndpoint
   ]
+
+testApiMetadata :: HarchWeb.EndpointMetadata ()
+testApiMetadata =
+  HarchWeb.mkEndpointMetadata
+    (requiredApiEndpointName "test.api")
+    (requiredApiRouteTemplate "/api/{endpoint}")
+    HarchWeb.ApiEndpoint
+    HarchWeb.RequireAuthenticated
+
+requiredApiEndpointName :: Text -> HarchWeb.EndpointName
+requiredApiEndpointName endpointNameValue =
+  case HarchWeb.mkEndpointName endpointNameValue of
+    Right parsedEndpointName -> parsedEndpointName
+    Left metadataError -> error ("invalid API endpoint test name: " <> show metadataError)
+
+requiredApiRouteTemplate :: Text -> HarchWeb.RouteTemplate
+requiredApiRouteTemplate routeTemplateValue =
+  case HarchWeb.mkRouteTemplate routeTemplateValue of
+    Right parsedRouteTemplate -> parsedRouteTemplate
+    Left metadataError -> error ("invalid API route-template test literal: " <> show metadataError)
 
 testEndpointFamily :: ApiEndpointFamily
 testEndpointFamily = requireApiEndpointFamily testEndpointTable
@@ -126,9 +154,9 @@ testApiRouteDefinitionWithContext ::
   NonEmpty (ApiResponseEncoder response) ->
   (context -> ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
   (domainFailure -> ApiResponse response) ->
-  RouteDefinition route context
+  RouteDefinition route context ()
 testApiRouteDefinitionWithContext method fields body encoders =
-  Api.apiRouteDefinitionWithContext (ApiEndpointContract method fields body encoders ApiUseGenericFieldFailure)
+  Api.apiRouteDefinitionWithContext (ApiEndpointContract method fields body encoders ApiUseGenericFieldFailure) testApiMetadata
 
 testApiRouteDefinitionWithContextWithFieldFailure ::
   (Typeable response) =>
@@ -139,9 +167,9 @@ testApiRouteDefinitionWithContextWithFieldFailure ::
   ([ApiRequestParseError] -> ApiResponse response) ->
   (context -> ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
   (domainFailure -> ApiResponse response) ->
-  RouteDefinition route context
+  RouteDefinition route context ()
 testApiRouteDefinitionWithContextWithFieldFailure method fields body encoders fieldFailure =
-  Api.apiRouteDefinitionWithContext (ApiEndpointContract method fields body encoders (ApiRenderFieldFailures fieldFailure))
+  Api.apiRouteDefinitionWithContext (ApiEndpointContract method fields body encoders (ApiRenderFieldFailures fieldFailure)) testApiMetadata
 
 testApiRouteDefinitionWithContextNeverFailing ::
   (Typeable response) =>
@@ -150,9 +178,9 @@ testApiRouteDefinitionWithContextNeverFailing ::
   ApiRequestBody body ->
   NonEmpty (ApiResponseEncoder response) ->
   (context -> ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
-  RouteDefinition route context
+  RouteDefinition route context ()
 testApiRouteDefinitionWithContextNeverFailing method fields body encoders =
-  Api.apiRouteDefinitionWithContextNeverFailing (ApiEndpointContract method fields body encoders ApiUseGenericFieldFailure)
+  Api.apiRouteDefinitionWithContextNeverFailing (ApiEndpointContract method fields body encoders ApiUseGenericFieldFailure) testApiMetadata
 
 testApiRouteDefinitionWithContextNeverFailingWithFieldFailure ::
   (Typeable response) =>
@@ -162,9 +190,9 @@ testApiRouteDefinitionWithContextNeverFailingWithFieldFailure ::
   NonEmpty (ApiResponseEncoder response) ->
   ([ApiRequestParseError] -> ApiResponse response) ->
   (context -> ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
-  RouteDefinition route context
+  RouteDefinition route context ()
 testApiRouteDefinitionWithContextNeverFailingWithFieldFailure method fields body encoders fieldFailure =
-  Api.apiRouteDefinitionWithContextNeverFailing (ApiEndpointContract method fields body encoders (ApiRenderFieldFailures fieldFailure))
+  Api.apiRouteDefinitionWithContextNeverFailing (ApiEndpointContract method fields body encoders (ApiRenderFieldFailures fieldFailure)) testApiMetadata
 
 testHeaderValue :: Text -> ApiHeaderValue
 testHeaderValue value = fromMaybe (error "expected test header value to be valid") (apiHeaderValue value)
@@ -206,6 +234,7 @@ apiRouteResponseBody response =
       case protocolResponseBody protocolResponse of
         ProtocolResponseBytes bodyBytes -> bodyBytes
         ProtocolResponseStream _ -> error "expected API route to render strict protocol bytes"
+        ProtocolResponseWai _ -> error "expected API route to render strict protocol bytes"
     _ -> error "expected API route to render a protocol response"
 
 apiRouteResponseHeaders :: Response route context -> HttpTypes.ResponseHeaders
@@ -225,15 +254,16 @@ apiRouteResponseStream response =
       case protocolResponseBody protocolResponse of
         ProtocolResponseBytes _ -> error "expected API route to render a protocol stream"
         ProtocolResponseStream stream -> stream
+        ProtocolResponseWai _ -> error "expected API route to render a protocol stream"
     _ -> error "expected API route to render a protocol response"
 
 runApiRoute :: ApiRouteEndpoint fields body domainFailure response -> Wai.Request -> IO (Response () ())
 runApiRoute endpoint request =
-  routeResponse (apiRouteDefinition endpoint) request (RouteRequest () ())
+  routeResponse (apiRouteDefinition testApiMetadata endpoint) request (RouteRequest () ())
 
 runApiRouteEndpointGroup :: ApiEndpointFamily -> ApiPath -> Wai.Request -> IO (Response ApiPath ())
 runApiRouteEndpointGroup family declaredPath request =
-  routeResponse (apiRouteEndpointFamilyDefinition family declaredPath) request (RouteRequest declaredPath ())
+  routeResponse (apiRouteEndpointFamilyDefinition (const testApiMetadata) family declaredPath) request (RouteRequest declaredPath ())
 
 -- | Pull every chunk from a streaming request body one at a time,
 -- concatenating them, until the body ends or a pull reports the running
@@ -300,19 +330,38 @@ spec =
               Right _ -> pure ()
 
       it "parses a declared path into its ApiPath route identity" $
-        HarchWeb.parseRoute (apiRouteEndpointFamilyCodec testEndpointFamily) () "/api/status"
-          `shouldBe` Just (RouteRequest (at "/api/status") ())
+        HarchWeb.parseRoute (apiRouteEndpointFamilyCodec testEndpointFamily) () (routeLocationForTest "/api/status")
+          `shouldBe` HarchWeb.RouteParsed (RouteRequest (at "/api/status") ())
 
       it "reports no match for an undeclared path" $
-        HarchWeb.parseRoute (apiRouteEndpointFamilyCodec testEndpointFamily) () "/api/unknown" `shouldBe` Nothing
+        HarchWeb.parseRoute (apiRouteEndpointFamilyCodec testEndpointFamily) () (routeLocationForTest "/api/unknown") `shouldBe` HarchWeb.RouteNotMatched
 
       it "renders the route identity back to its declared path" $
         HarchWeb.renderRoute (apiRouteEndpointFamilyCodec testEndpointFamily) (RouteRequest (at "/api/status") ())
-          `shouldBe` "/api/status"
+          `shouldBe` routeLocationForTest "/api/status"
 
       it "falls back to an empty path for the family's own not-found request" $
         HarchWeb.requestRoute (HarchWeb.notFoundRequest (apiRouteEndpointFamilyCodec testEndpointFamily) ())
           `shouldBe` at ""
+
+      it "renders the family's empty not-found route as the structured root location" $
+        HarchWeb.safeUrlText
+          ( HarchWeb.encodeRouteLocation
+              ( HarchWeb.renderRoute
+                  (apiRouteEndpointFamilyCodec testEndpointFamily)
+                  (HarchWeb.RouteRequest (at "") ())
+              )
+          )
+          `shouldBe` "/"
+
+      it "fails explicitly when an authored API route cannot be decoded as an absolute path" $
+        evaluate
+          ( HarchWeb.renderRoute
+              (apiRouteEndpointFamilyCodec testEndpointFamily)
+              (HarchWeb.RouteRequest (at "relative-path") ())
+          )
+          `shouldThrow` \(ErrorCall message) ->
+            message == "invalid authored API path: InvalidRouteTargetEncoding"
 
       it "renders the family's own not-found route as an ordinary 404 with no headers or body, instead of raising, when used standalone with no catch-all family" $ do
         notFoundResponse <-
@@ -335,7 +384,7 @@ spec =
         HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointFamily) (at "/api/unknown") `shouldBe` HarchWeb.RouteHidden
 
       it "agrees with the codec's routeMethods so the shared dispatcher and the definition never diverge" $
-        HarchWeb.routeMethodPolicy (routeMethods (apiRouteEndpointFamilyDefinition testEndpointFamily (at "/api/status")))
+        HarchWeb.routeMethodPolicy (routeMethods (apiRouteEndpointFamilyDefinition (const testApiMetadata) testEndpointFamily (at "/api/status")))
           `shouldBe` HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointFamily) (at "/api/status")
 
       it "leaves every generated endpoint route definition without additional execution admission" $ do
@@ -355,15 +404,23 @@ spec =
                 (textResponseEncoder :| [])
                 (\_ _ -> pure (apiResponse "total"))
         expectAll
-          ( (routeExecutionPolicy (apiRouteDefinition (testEndpoint ApiGet (at "/api/direct") "direct")) `shouldBe` HarchWeb.unboundedRouteExecutionPolicy)
+          ( (routeExecutionPolicy (apiRouteDefinition testApiMetadata (testEndpoint ApiGet (at "/api/direct") "direct")) `shouldBe` HarchWeb.unboundedRouteExecutionPolicy)
               :| [ routeExecutionPolicy contextDefinition `shouldBe` HarchWeb.unboundedRouteExecutionPolicy,
                    routeExecutionPolicy totalContextDefinition `shouldBe` HarchWeb.unboundedRouteExecutionPolicy,
-                   routeExecutionPolicy (apiRouteEndpointFamilyDefinition testEndpointFamily (at "/api/status")) `shouldBe` HarchWeb.unboundedRouteExecutionPolicy
+                   routeExecutionPolicy (apiRouteEndpointFamilyDefinition (const testApiMetadata) testEndpointFamily (at "/api/status")) `shouldBe` HarchWeb.unboundedRouteExecutionPolicy
                  ]
           )
 
       it "keeps the definition's navigation label unset like the single-endpoint adapter" $
-        routeNavigationLabel (apiRouteEndpointFamilyDefinition testEndpointFamily (at "/api/status")) `shouldBe` Nothing
+        routeNavigationLabel (apiRouteEndpointFamilyDefinition (const testApiMetadata) testEndpointFamily (at "/api/status")) `shouldBe` Nothing
+
+      it "keeps the selected path's endpoint metadata on the generated definition" $ do
+        let definition =
+              apiRouteEndpointFamilyDefinition
+                (\apiPath -> if apiPath == at "/api/status" then testApiMetadata else error "unexpected endpoint path")
+                testEndpointFamily
+                (at "/api/status")
+        routeMetadata definition `shouldBe` testApiMetadata
 
       it "runs the one endpoint matching the request's real method" $ do
         getResponse <- runApiRouteEndpointGroup testEndpointFamily (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/api/status"})
@@ -418,21 +475,21 @@ spec =
         let pageCodec :: HarchWeb.RouteCodec Text ()
             pageCodec =
               HarchWeb.RouteCodec
-                { HarchWeb.parseRoute = \requestContextValue path -> if path == "/home" then Just (RouteRequest "home" requestContextValue) else Nothing,
-                  HarchWeb.renderRoute = const "/home",
+                { HarchWeb.parseRoute = \requestContextValue location -> if location == routeLocationForTest "/home" then HarchWeb.RouteParsed (RouteRequest "home" requestContextValue) else HarchWeb.RouteNotMatched,
+                  HarchWeb.renderRoute = const (routeLocationForTest "/home"),
                   HarchWeb.notFoundRequest = RouteRequest "not-found",
                   HarchWeb.routeMethods = const (HarchWeb.routeMethodPolicy [HarchWeb.RouteGet])
                 }
             combined = HarchWeb.combineRouteCodecs (apiRouteEndpointFamilyCodec testEndpointFamily) pageCodec
         expectAll
-          ( ( HarchWeb.matchRouteMethod combined () (HarchWeb.requestMethod "GET") (HarchWeb.requestPath "/home")
-                `shouldBe` HarchWeb.RouteMatched (RouteRequest (HarchWeb.RouteFamilyB "home") ())
+          ( ( HarchWeb.matchRouteMethod combined () (HarchWeb.requestMethod "GET") (routeLocationForTest "/home")
+                `shouldBe` Right (HarchWeb.RouteMatched (RouteRequest (HarchWeb.RouteFamilyB "home") ()))
             )
-              :| [ HarchWeb.matchRouteMethod combined () (HarchWeb.requestMethod "GET") (HarchWeb.requestPath "/api/status")
-                     `shouldBe` HarchWeb.RouteMatched (RouteRequest (HarchWeb.RouteFamilyA (at "/api/status")) ()),
-                   HarchWeb.matchRouteMethod combined () (HarchWeb.requestMethod "DELETE") (HarchWeb.requestPath "/api/status")
-                     `shouldBe` HarchWeb.RouteMethodNotAllowed (RouteRequest (HarchWeb.RouteFamilyA (at "/api/status")) ()) (HarchWeb.RouteGet :| [HarchWeb.RoutePost]),
-                   HarchWeb.matchRouteMethod combined () (HarchWeb.requestMethod "GET") (HarchWeb.requestPath "/missing") `shouldBe` HarchWeb.RouteNotFound (RouteRequest (HarchWeb.RouteFamilyB "not-found") ())
+              :| [ HarchWeb.matchRouteMethod combined () (HarchWeb.requestMethod "GET") (routeLocationForTest "/api/status")
+                     `shouldBe` Right (HarchWeb.RouteMatched (RouteRequest (HarchWeb.RouteFamilyA (at "/api/status")) ())),
+                   HarchWeb.matchRouteMethod combined () (HarchWeb.requestMethod "DELETE") (routeLocationForTest "/api/status")
+                     `shouldBe` Right (HarchWeb.RouteMethodNotAllowed (RouteRequest (HarchWeb.RouteFamilyA (at "/api/status")) ()) (HarchWeb.RouteGet :| [HarchWeb.RoutePost])),
+                   HarchWeb.matchRouteMethod combined () (HarchWeb.requestMethod "GET") (routeLocationForTest "/missing") `shouldBe` Right (HarchWeb.RouteNotFound (RouteRequest (HarchWeb.RouteFamilyB "not-found") ()))
                  ]
           )
 
@@ -524,12 +581,13 @@ spec =
 
       it "declares its one method in the shared route table" $
         expectAll
-          ( (routeNavigationLabel (apiRouteDefinition successfulEndpoint) `shouldBe` Nothing)
-              :| [ routeMethods (apiRouteDefinition successfulEndpoint) `shouldBe` [HarchWeb.RoutePost],
-                   routeMethods (apiRouteDefinition domainFailureEndpoint) `shouldBe` [HarchWeb.RouteGet],
-                   routeMethods (apiRouteDefinition (testApiRouteEndpoint ApiPut (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) `shouldBe` [HarchWeb.RoutePut],
-                   routeMethods (apiRouteDefinition (testApiRouteEndpoint ApiPatch (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) `shouldBe` [HarchWeb.RoutePatch],
-                   routeMethods (apiRouteDefinition (testApiRouteEndpoint ApiDelete (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) `shouldBe` [HarchWeb.RouteDelete]
+          ( (routeNavigationLabel (apiRouteDefinition testApiMetadata successfulEndpoint) `shouldBe` Nothing)
+              :| [ routeMetadata (apiRouteDefinition testApiMetadata successfulEndpoint) `shouldBe` testApiMetadata,
+                   routeMethods (apiRouteDefinition testApiMetadata successfulEndpoint) `shouldBe` [HarchWeb.RoutePost],
+                   routeMethods (apiRouteDefinition testApiMetadata domainFailureEndpoint) `shouldBe` [HarchWeb.RouteGet],
+                   routeMethods (apiRouteDefinition testApiMetadata (testApiRouteEndpoint ApiPut (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) `shouldBe` [HarchWeb.RoutePut],
+                   routeMethods (apiRouteDefinition testApiMetadata (testApiRouteEndpoint ApiPatch (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) `shouldBe` [HarchWeb.RoutePatch],
+                   routeMethods (apiRouteDefinition testApiMetadata (testApiRouteEndpoint ApiDelete (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) `shouldBe` [HarchWeb.RouteDelete]
                  ]
           )
 
@@ -596,7 +654,7 @@ spec =
         response <- runApiRoute totalEndpoint Wai.defaultRequest
         expectAll
           ( (apiRouteEndpointPath totalEndpoint `shouldBe` at "/api/total-field-failure")
-              :| [ routeMethods (apiRouteDefinition totalEndpoint) `shouldBe` [HarchWeb.RouteGet],
+              :| [ routeMethods (apiRouteDefinition testApiMetadata totalEndpoint) `shouldBe` [HarchWeb.RouteGet],
                    apiRouteResponseStatus response `shouldBe` HttpTypes.status400,
                    apiRouteResponseBody response `shouldBe` "[MissingApiField ApiQuerySource \"query\"]"
                  ]
@@ -1154,7 +1212,9 @@ spec =
       it "declares its endpoint's own method and no navigation label, unaffected by context" $
         expectAll
           ( (routeMethods contextAwareEndpointDefinition `shouldBe` [HarchWeb.RouteGet])
-              :| [routeNavigationLabel contextAwareEndpointDefinition `shouldBe` Nothing]
+              :| [ routeNavigationLabel contextAwareEndpointDefinition `shouldBe` Nothing,
+                   routeMetadata contextAwareEndpointDefinition `shouldBe` testApiMetadata
+                 ]
           )
 
       it "passes the route's own resolved context to the handler instead of the template endpoint's" $ do
@@ -1227,7 +1287,9 @@ spec =
       it "declares its endpoint's own method and no navigation label, unaffected by context" $
         expectAll
           ( (routeMethods neverFailingContextAwareEndpointDefinition `shouldBe` [HarchWeb.RoutePost])
-              :| [routeNavigationLabel neverFailingContextAwareEndpointDefinition `shouldBe` Nothing]
+              :| [ routeNavigationLabel neverFailingContextAwareEndpointDefinition `shouldBe` Nothing,
+                   routeMetadata neverFailingContextAwareEndpointDefinition `shouldBe` testApiMetadata
+                 ]
           )
 
       it "passes the route's own resolved context and decoded fields and body straight to the handler's response, with no domain failure to interpret" $ do
@@ -1286,3 +1348,4 @@ spec =
         case protocolResponseBody (apiHttpResponseToProtocolResponse (ApiHttpResponse HttpTypes.status405 [("Allow", testHeaderValue "GET, HEAD, OPTIONS")] Nothing)) of
           ProtocolResponseBytes bodyBytes -> bodyBytes `shouldBe` ""
           ProtocolResponseStream _ -> expectationFailure "expected a strict protocol body"
+          ProtocolResponseWai _ -> expectationFailure "expected a strict protocol body"

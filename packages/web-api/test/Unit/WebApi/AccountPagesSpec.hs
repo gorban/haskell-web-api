@@ -35,7 +35,7 @@ import Network.HTTP.Types qualified as Http
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress, opaqueSession, sessionIdValue, testSessionId)
 import Unit.WebApi.TestSupport qualified as TestSupport (databaseConfig)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), VerificationResendAdmission (..), VerificationResendClaim (..), VerificationResendClaimSettlement (..), VerificationResendSuppression (..), defaultPendingRegistrationStoragePolicy, defaultVerificationResendPolicy, mkRegistrationDeliveryTimeout, pendingRegistrationClaimLeaseNanoseconds, pendingRegistrationMaximumAccounts)
-import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), FormFeedback (..), FormStatus (..), FormStatusKind (..), LoginForm (..), LoginProofChoice (..), LoginValidationError (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), RegistrationValidationError (..), VerificationForm (..), accountActions, authorizeAccountActionCsrf, emptyLoginForm, emptyRegistrationForm, handleAccountAction, initialPendingProfileForm, mfaEnrollmentFailureDiagnostics, pageCsrfTokenForAccountPage, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderPendingProfileRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
+import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), FormFeedback (..), FormStatus (..), FormStatusKind (..), LoginForm (..), LoginProofChoice (..), LoginValidationError (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), RegistrationValidationError (..), VerificationForm (..), accountActionEndpointMetadata, accountActions, authorizeAccountActionCsrf, emptyLoginForm, emptyRegistrationForm, handleAccountAction, initialPendingProfileForm, mfaEnrollmentFailureDiagnostics, pageCsrfTokenForAccountPage, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderPendingProfileRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buildActionCodecOrDie)
 import WebApi.AccountPages.Validation (Validation, invalid, valid, validate3, validate4, validationResult)
 import WebApi.App (buildRuntimeAppWithDatabaseBuilder, unavailableAccountWorkflow)
@@ -875,7 +875,7 @@ spec = do
       accountWorkflowVerificationUrl unavailableAccountWorkflow defaultRequestContext token `shouldBe` "https://invalid.example.test/verify"
 
     it "raises the codec-construction error for a duplicate endpoint declaration" $ do
-      let duplicateEndpoints :: [Action.ActionEndpoint AccountActionTarget () AccountAction]
+      let duplicateEndpoints :: [Action.ActionEndpoint AccountActionTarget () () AccountAction]
           duplicateEndpoints =
             [ Action.action RegisterAccountTarget (Action.postAt "/dup" (const "/dup")) (pure LogoutAccount),
               Action.action LoginAccountTarget (Action.postAt "/dup" (const "/dup")) (pure LogoutAccount)
@@ -883,6 +883,26 @@ spec = do
       evaluate (buildActionCodecOrDie duplicateEndpoints `seq` ())
         `shouldThrow` \case
           ErrorCall message -> "DuplicateActionEndpoint" `isInfixOf` message
+
+    it "declares every account action as an explicitly public action endpoint" $ do
+      let endpointDeclarationFields endpointMetadataValue =
+            ( HarchWeb.endpointNameText (HarchWeb.endpointName endpointMetadataValue),
+              HarchWeb.routeTemplateText (HarchWeb.endpointRouteTemplate endpointMetadataValue),
+              HarchWeb.endpointProtocol endpointMetadataValue,
+              HarchWeb.endpointAccess endpointMetadataValue
+            )
+          expectedMetadata =
+            [ ("/register", "account.register", "/{locale}/register"),
+              ("/verify", "account.verify-email", "/{locale}/verify"),
+              ("/mfa", "account.enroll-mfa", "/{locale}/mfa"),
+              ("/login", "account.login", "/{locale}/login"),
+              ("/profile", "account.update-profile", "/{locale}/profile"),
+              ("/logout", "account.logout", "/{locale}/logout")
+            ]
+      forM_ expectedMetadata $ \(path, expectedName, template) ->
+        fmap endpointDeclarationFields (accountActionEndpointMetadata "POST" path defaultRequestContext)
+          `shouldBe` Just (expectedName, template, HarchWeb.ActionEndpoint, HarchWeb.AllowUnauthenticated)
+      accountActionEndpointMetadata "GET" "/register" defaultRequestContext `shouldBe` Nothing
 
     it "derives comparable, printable representations for every account action target" $ do
       let targets =

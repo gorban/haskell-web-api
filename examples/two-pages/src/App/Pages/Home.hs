@@ -28,11 +28,13 @@ import App.Routes
     TwoPageNavigationTarget (NavigationPage),
     TwoPageRoute,
     twoPageActions,
+    twoPageEndpointMetadata,
   )
 import App.Routes qualified as Routes
 import Data.Text (Text)
 import HarchWeb
   ( CssClass (..),
+    EndpointProtocol (HtmlEndpoint),
     Html,
     Page (..),
     Region,
@@ -63,9 +65,9 @@ import HarchWeb.Controls qualified as Controls
 import HarchWeb.Site (RouteDefinition)
 import HarchWeb.Site qualified as Site
 
-pageDefinition :: RouteDefinition TwoPageRoute ()
+pageDefinition :: RouteDefinition TwoPageRoute () ()
 pageDefinition =
-  Site.pageRoute (Just "Home") homePage
+  Site.pageRoute (twoPageEndpointMetadata HtmlEndpoint (Routes.Page HomePage)) (Just "Home") homePage
 
 aboutAuthorName :: Text
 aboutAuthorName = "Harch Web team"

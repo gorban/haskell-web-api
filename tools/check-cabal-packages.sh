@@ -8,10 +8,13 @@ core_test_support_files=(
   src/TestCore/CustomAssertions.hs
 )
 package_directories=(
+  examples/catalog-domain
+  examples/composed-domains
   examples/custom-api
   examples/custom-db-adapter
   examples/localization
   examples/multipart-upload
+  examples/orders-domain
   examples/two-pages
   packages/core
   packages/harch-web
@@ -90,7 +93,10 @@ check_test_module_metadata packages/harch-web harch-web-tests test
 check_test_module_metadata packages/web-api haskell-web-api-tests test
 check_test_module_metadata packages/test-core test-core-tests test
 check_test_module_metadata packages/core core-tests test test-core-src/src
+check_test_module_metadata examples/catalog-domain catalog-domain-tests test
+check_test_module_metadata examples/composed-domains composed-domains-tests test
 check_test_module_metadata examples/multipart-upload multipart-upload-example-tests test
+check_test_module_metadata examples/orders-domain orders-domain-tests test
 check_test_module_metadata examples/two-pages two-pages-example-tests test
 
 web_api_manifest="$repo_root/packages/web-api/haskell-web-api.cabal"

@@ -2528,6 +2528,177 @@ The design-only route syntax is isolated in the
 [route-templates guide](../examples/route-templates/README.md). It must remain labeled as design
 direction until its path/query DSL is executable and tested.
 
+### Decision record — AHI-4A: typed endpoint admission rail (2026-09-01)
+
+**Decision: extend the existing post-match route dispatcher with one typed
+endpoint-admission rail; keep request middleware, route concurrency, action
+body decoding, and handler invocation in their established owners.**
+
+Endpoint metadata is a pure lower-level declaration shared by `RouteDefinition`
+and `ActionCodec`: a validated endpoint name, route template, protocol, and
+explicit access requirement. Separating that declaration module from the
+response-bearing guard result is deliberate: `ActionCodec` is below
+`Response`, and importing the full guard API there would form an import cycle.
+The pure split preserves typed metadata instead of replacing it with raw action
+paths or a string property bag.
+
+The one request executor first resolves a route/method (or a declared action
+method/path), then runs guards in declaration order, and only then performs
+route concurrency admission, action body intake/decoding, or a handler. A
+guard may enrich the typed context or halt with the existing `Response`; it is
+never given a handler continuation. `RouteNotFound` remains outside this rail,
+while HEAD, OPTIONS, and 405 retain the selected declaration. An explicitly
+public root fails closed when presented with a protected declaration, rather
+than treating an empty guard list as an authentication policy.
+
+`AuthenticationPipeline` keeps proof extraction, verification, current
+principal establishment, authorization, attachment, and challenge rendering
+as replaceable typed adapters. Expected outcomes run on `ExceptT
+AuthenticationFailure IO` and are interpreted once at the endpoint boundary.
+In particular, signature validity is not principal validity: a durable session
+or account resolver must still reject revoked/disabled principals. The JWT
+adapter uses `jose-0.12`, selected after the compatibility experiment because
+it supports the repository's current `crypton ^>=1.0.6` and GHC 9.14; it
+requires an explicit subset of HS256, HS512, RS256, and RS512 rather than the
+library default, and excludes `None`. This is the framework capability
+implemented by AHI-4A; the reference application's durable account/JWT
+configuration and typed login return navigation remain AHI-4C work.
+
+`HarchWeb.SecurityEvent` now owns validated root route observations, closed
+authentication/authorization/session event bodies, delivery requirements, and
+a deliberately narrow telemetry projection. It cannot carry a raw path,
+query, proof, JWT, claim, header, cookie, account/session ID, locale, or
+application audit payload into telemetry. Applications retain the only
+durable-audit conversion and transaction policy, so an undelivered
+`AuditRequired` event is explicit rather than reported as successful. AHI-4B
+extends the already-shipped root observation to a trusted module mount chain;
+it does not create a parallel event vocabulary or let a child forge route
+attribution.
+
+The root configures `SecurityEventRoot` once: its validated module name,
+context-to-locale function, application delivery adapter, and bounded
+undelivered-event health hook. After route/method selection, the shared
+matcher attaches the derived sink to `EndpointRequest` before any guard runs.
+The sink accepts only an `EventDeliveryRequirement` and closed `SecurityEvent`
+body, so neither an authentication adapter nor an application pre/post guard
+can replace the matched endpoint, declared template, root module, or locale
+with request text. Best-effort authentication and authorization facts still
+receive truthful delivery results and report failed delivery through that hook;
+an application choosing an audit-required operation owns its transactional
+interpretation. This keeps the AHI-4A framework boundary pluggable without
+pre-choosing the AHI-5 PostgreSQL audit schema or schedule.
+
+### Decision record — AHI-4B: structured route locations and modules (2026-09-02)
+
+**Decision: extend the existing `RouteCodec` and its one request executor with
+a structured `RouteLocation`; do not add a raw-text compatibility codec, a
+mounted WAI application, or another action dispatcher.** The audit confirmed
+that the current raw `Text` target is split and decoded again by application
+code (`WebApi.Route`) after the server has already selected its route boundary.
+That representation cannot truthfully distinguish an unmatched path from a
+malformed percent-encoded path, and makes a typed child mount impossible
+without each child re-parsing a prefix. `RouteCodec` already owns rendering,
+path recognition, method selection, and family precedence, so it is the
+correct sole owner of decoded path segments and query fields.
+
+The migration therefore makes the HTTP adapter decode one bounded request
+target into `RouteLocation`, then passes only that structured value to codecs.
+`RouteParseResult` preserves `RouteNotMatched` separately from a typed decode
+failure, so a malformed location cannot fall through to a later mount. Rendering
+encodes the same components once into `SafeUrl`. Route/action/form ownership
+stays disjoint: route locations own path/query values; `ActionCodec` continues
+to own action fields and bodies. The temporary source migration may adapt each
+existing route table while the worktree is incomplete, but no raw-text codec
+surface ships or is documented as a second supported API.
+
+Adapters use the shared `mapRouteParseResult` to map only a parsed route while
+leaving both an ordinary ownership miss and malformed location intact. This is
+the small extension of the existing route boundary that prevents each mount or
+static adapter from reimplementing a subtly partial-looking result mapper.
+
+`ApplicationModule` is deliberately disjoint from a server-owning
+`Application`. The landed foundation composes structured typed routes and maps
+actions, context, and authorization values under the root's one action
+interpreter; it does not create a child WAI application or a second dispatcher.
+Root security, runtime, listener, stores, and request policy remain root-owned.
+`inheritApplicationModuleGuards` now appends mapped module guards after every
+configured root security phase: a child cannot select
+`AuthenticationDisabled`, run before authentication, or replace a parent
+restriction. `installApplicationModule` now installs a fully composed module's
+route codec, definitions, action metadata/decoder/handler, and inherited
+security tail into the existing root `Site`; `buildSiteApplication` remains
+the only server application interpreter. `RequestContext` now supplies the
+shared safe core (validated origin, locale/fallbacks, correlation, route
+observation initialization state, and path prefix), plus a one-way projection
+into package-selected identity/client/local views. It deliberately has neither
+raw request/proof/header values nor application services. `ActionCodec` now
+also has a context-derived prefix adaptation for the root-owned locale
+namespace: this keeps local domain action paths mountable without having a
+Catalog or Orders package hard-code `/es` or its eventual public URL.
+
+When the module is the complete route table, `applicationModuleSite` creates
+that root directly instead of first constructing `apiOnlySite` route fields
+that `installApplicationModule` immediately replaces. This keeps both root
+adapters available: install for a pre-existing server root with its own route
+table, and direct construction for a pluggable composed root. In both cases
+there is still exactly one `Site` route/action interpreter and the root keeps
+the deployment-owned policies listed above.
+
+The `ActionMount` record exposes only the mappings that the one-way action
+decoder/handler consumes: child target/action embedding and parent-action
+projection for handler dispatch. An earlier reverse parent-target projection
+was removed rather than retained as speculative pluggability: no framework
+phase receives a parent target to use it, so a field with that shape would be
+a false capability and a source of untestable dead branches. If a later
+framework operation genuinely needs parent-target inspection, it must add the
+operation and its failure/ownership contract first, then extend this record.
+
+The new Catalog and Orders packages build independently with explicit
+query/command adapters, and the composed package uses the same module type at
+its outer root. Its allowlisted locale root makes an explicit URL prefix win;
+for unprefixed requests a durable preference, cookie, `Accept-Language`, then
+the default are selected once before child projection. The route/action tests
+prove `/es/catalog`, `/es/orders`, and their localized action declarations;
+the child modules only receive bounded locale/scope views. The canonical static
+interpreter is now exposed as a typed `StaticAssetRoute` definition and the
+composed root mounts it only under `/public/assets/*` (including its localized
+form), with `AssetEndpoint` and explicit `AllowUnauthenticated` metadata. It
+passes through the existing file-backed WAI response rather than duplicating
+traversal, range, conditional, or symlink handling. Early site static assets
+remain empty for that example, so the typed endpoint guard boundary owns the
+decision.
+
+`staticAssetRouteResponse` is the companion operation for a route already
+selected by that typed codec. It exposes only the existing protocol response,
+not a second static server; composed definitions use it when page context is
+irrelevant, instead of manufacturing a child context solely to call a uniform
+page-route callback. `staticAssetRouteDefinition` is layered on the same
+operation, keeping the ordinary route-table path and the composed adapter
+semantically identical.
+
+`ApplicationModule` also carries an immutable construction-owned mount chain.
+The root executor attaches it, alongside the declared endpoint/template and
+selected locale, to both its security-event sink and the `RequestContext`
+before guards run. Thus the composed Catalog observation is
+`root/root.catalog/catalog`, not a child-rendered label or request path.
+`composed-domains` now proves direct, reload, enhanced, and scripts-disabled
+Public/Catalog/Orders navigation in both default and Spanish locale paths; its
+browser-only authenticated fixture exercises the protected modules without
+claiming that it is an application sign-in flow. Catalog and Orders remain
+intentionally protected and their runnable authentication flow is supplied by
+AHI-4C.
+
+The composition root's catalog/order mounts, local combination, and localized
+action declarations are all fixed literals it owns. It resolves those
+declaration-time `Either` results with `requiredModuleConfiguration` instead
+of exporting an artificial root error rail: an invalid one is an authored
+startup defect, not a user-facing outcome. Its structured error already names
+the failing module or endpoint, so the helper accepts only that result rather
+than carrying an untyped diagnostic label through a successful construction.
+The helper is deliberately narrow; general-purpose module constructors retain
+their `Either` results so runtime and caller-provided declarations keep their
+typed failure paths.
+
 ## Example taxonomy
 
 The [examples index](../examples/README.md) uses four labels:

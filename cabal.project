@@ -1,8 +1,11 @@
 packages:
+  examples/catalog-domain/
+  examples/composed-domains/
   examples/custom-api/
   examples/custom-db-adapter/
   examples/localization/
   examples/multipart-upload/
+  examples/orders-domain/
   examples/two-pages/
   packages/core/
   packages/harch-web/

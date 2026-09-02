@@ -3,10 +3,41 @@
 {-# SPEC #-}
 
 import Control.Monad (forM_)
+import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
 import Unit.WebApi.TestSupport hiding (databaseConfig)
-import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), PageRoute, RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, renderRouteUrl, selectRoute)
+import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), PageRoute, RouteSelectionError (..), defaultRequestContext, renderRoutePath, renderRouteUrl)
 import WebApi.Route qualified
+
+-- | Tests enter the public route codec through the same raw-target decoder
+-- as WAI, while preserving concise table-driven assertions below.
+parseRoute :: AppRequestContext -> Text.Text -> Maybe (HarchWeb.RouteRequest AppRoute AppRequestContext)
+parseRoute requestContext target = do
+  location <- either (const Nothing) Just (routeLocationFromText target)
+  case WebApi.Route.parseRoute requestContext location of
+    HarchWeb.RouteParsed routeRequest -> Just routeRequest
+    HarchWeb.RouteNotMatched -> Nothing
+    HarchWeb.RouteMalformed _ -> Nothing
+
+selectRoute :: AppRequestContext -> Text.Text -> Either RouteSelectionError (HarchWeb.RouteRequest AppRoute AppRequestContext)
+selectRoute requestContext target =
+  case routeLocationFromText target of
+    Left _ -> Left (UnsupportedPath target)
+    Right location -> WebApi.Route.selectRoute requestContext location
+
+routeLocationFromText :: Text.Text -> Either HarchWeb.RouteDecodeError HarchWeb.RouteLocation
+routeLocationFromText target =
+  HarchWeb.decodeRouteLocation
+    (HarchWeb.requestTarget (TextEncoding.encodeUtf8 path) (TextEncoding.encodeUtf8 query))
+  where
+    (path, query) = Text.breakOn "?" target
+
+requiredRouteLocation :: Text.Text -> HarchWeb.RouteLocation
+requiredRouteLocation target =
+  case routeLocationFromText target of
+    Left routeError -> error ("invalid test route target: " <> show routeError)
+    Right location -> location
 
 spec = do
   describe "closed route families" $ do
@@ -110,11 +141,7 @@ spec = do
               HarchWeb.requestContext = defaultRequestContext {requestQueryParameters = [("token", "opaque-token"), ("flag", "")]}
             }
       parseRoute defaultRequestContext "/verify?to%6Ben=opaque%2Dtoken%2Btwo&flag&token=%FF&to%FFken=ignored"
-        `shouldBe` Just
-          HarchWeb.RouteRequest
-            { HarchWeb.requestRoute = EmailVerificationRoute,
-              HarchWeb.requestContext = defaultRequestContext {requestQueryParameters = [("token", "opaque-token+two"), ("flag", "")]}
-            }
+        `shouldBe` Nothing
 
     it "keeps supported path routes available when raw query strings are present" $
       parseRoute defaultRequestContext "/second?utm=demo"
@@ -199,10 +226,39 @@ spec = do
       renderRoutePath prefixedSpanishSecondRequest `shouldBe` "/app/es/second"
       renderRoutePath prefixedApiStatusRequest `shouldBe` "/app/api/status"
 
+  describe "endpointMetadata" $ do
+    it "gives every closed route a stable public endpoint identity" $ do
+      let endpointDeclarationFields endpointMetadataValue =
+            ( HarchWeb.endpointNameText (HarchWeb.endpointName endpointMetadataValue),
+              HarchWeb.routeTemplateText (HarchWeb.endpointRouteTemplate endpointMetadataValue),
+              HarchWeb.endpointProtocol endpointMetadataValue,
+              HarchWeb.endpointAccess endpointMetadataValue
+            )
+          expectedMetadata =
+            [ (HomeRoute, "web.home", "/{locale}", HarchWeb.HtmlEndpoint),
+              (SecondRoute, "web.second", "/{locale}/second", HarchWeb.HtmlEndpoint),
+              (SpacesRoute, "web.spaces", "/{locale}/spaces", HarchWeb.HtmlEndpoint),
+              (RegistrationRoute, "account.registration", "/{locale}/register", HarchWeb.HtmlEndpoint),
+              (EmailVerificationRoute, "account.email-verification", "/{locale}/verify", HarchWeb.HtmlEndpoint),
+              (MfaEnrollmentRoute, "account.mfa-enrollment", "/{locale}/mfa", HarchWeb.HtmlEndpoint),
+              (LoginRoute, "account.login", "/{locale}/login", HarchWeb.HtmlEndpoint),
+              (LogoutRoute, "account.logout", "/{locale}/logout", HarchWeb.HtmlEndpoint),
+              (ProfileRoute, "account.profile", "/{locale}/profile", HarchWeb.HtmlEndpoint),
+              (LanguageRoute, "web.language", "/{locale}/language", HarchWeb.HtmlEndpoint),
+              (HelpRoute, "web.help", "/{locale}/help", HarchWeb.HtmlEndpoint),
+              (NotFoundRoute, "web.not-found", "/{locale}/404", HarchWeb.HtmlEndpoint),
+              (StatusApiRoute, "api.status", "/api/status", HarchWeb.ApiEndpoint),
+              (SecondApiRoute, "api.second", "/api/second", HarchWeb.ApiEndpoint),
+              (ApiNotFoundRoute, "api.not-found", "/api/404", HarchWeb.ApiEndpoint)
+            ]
+      forM_ expectedMetadata $ \(route, expectedName, template, protocol) ->
+        endpointDeclarationFields (WebApi.Route.endpointMetadata route)
+          `shouldBe` (expectedName, template, protocol, HarchWeb.AllowUnauthenticated)
+
   describe "matchRoute" $ do
     it "remains available separately from HarchWeb.matchRoute" $
-      WebApi.Route.matchRoute WebApi.Route.defaultRequestContext "/second"
-        `shouldBe` HarchWeb.matchRoute WebApi.Route.routeCodec WebApi.Route.defaultRequestContext "/second"
+      WebApi.Route.matchRoute WebApi.Route.defaultRequestContext (requiredRouteLocation "/second")
+        `shouldBe` HarchWeb.matchRoute WebApi.Route.routeCodec WebApi.Route.defaultRequestContext (requiredRouteLocation "/second")
 
     -- Tabled per docs/design-guidance.md's CN decision record: one act
     -- ('pureRouteMatcher'), one comparison, differing only in the path and

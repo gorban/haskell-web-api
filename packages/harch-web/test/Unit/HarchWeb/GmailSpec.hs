@@ -4,7 +4,7 @@
 {-# SPEC #-}
 
 import Control.Concurrent (forkIO, killThread, threadDelay)
-import Control.Exception (SomeException, displayException, finally, try)
+import Control.Exception (SomeException, bracket, displayException, finally, try)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Text qualified as Text
 import HarchWeb.Email (EmailAddress, EmailMessage, EmailMessageInput (..), mkEmailAddress, mkEmailMessage)
@@ -106,7 +106,8 @@ requiredEmailMessage recipient subject body =
 
 withHttpServer :: (Text.Text -> IO a) -> IO a
 withHttpServer action =
-  withUnusedLoopbackPort $ \port -> do
+  bracket openListeningSocket Socket.close $ \listeningSocket -> do
+    port <- Socket.socketPort listeningSocket
     let baseUrl = Text.pack ("http://127.0.0.1:" <> show port)
         application request respond = do
           requestBody <- Wai.strictRequestBody request
@@ -114,16 +115,13 @@ withHttpServer action =
             ("POST", "/gmail-send", Just "Bearer test-token", "{\"raw\":\"abc\"}") ->
               respond (Wai.responseLBS Http.accepted202 [("Content-Type", "application/json")] "{\"accepted\":true}")
             _ -> respond (Wai.responseLBS Http.badRequest400 [] "unexpected request")
-    serverThreadId <- forkIO (Warp.run port application)
+    serverThreadId <- forkIO (Warp.runSettingsSocket Warp.defaultSettings listeningSocket application)
     threadDelay 50000
     action baseUrl `finally` killThread serverThreadId
 
-withUnusedLoopbackPort :: (Int -> IO a) -> IO a
-withUnusedLoopbackPort action = do
-  reservedSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
-  Socket.bind reservedSocket (Socket.SockAddrInet 0 (Socket.tupleToHostAddress (127, 0, 0, 1)))
-  socketAddress <- Socket.getSocketName reservedSocket
-  Socket.close reservedSocket
-  case socketAddress of
-    Socket.SockAddrInet port _ -> action (fromIntegral port)
-    _ -> error "Expected IPv4 loopback reservation socket"
+openListeningSocket :: IO Socket.Socket
+openListeningSocket = do
+  listeningSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
+  Socket.bind listeningSocket (Socket.SockAddrInet 0 (Socket.tupleToHostAddress (127, 0, 0, 1)))
+  Socket.listen listeningSocket Socket.maxListenQueue
+  pure listeningSocket

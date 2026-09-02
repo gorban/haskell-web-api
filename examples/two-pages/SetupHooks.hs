@@ -6,7 +6,8 @@ module SetupHooks (setupHooks) where
 import Control.Monad (filterM)
 import Control.Monad.IO.Class (liftIO)
 import Core.PageRoutes.Generator
-  ( defaultGeneratorConfig,
+  ( GeneratorConfig (authorizationTypeName),
+    defaultGeneratorConfig,
     generatePageModules,
   )
 import Data.List.NonEmpty (NonEmpty (..))
@@ -98,7 +99,11 @@ registerPageRouteRule
 runPageGeneration :: (FilePath, FilePath) -> IO ()
 runPageGeneration (pagesDirectory, generatedDirectory) = do
   generationResult <-
-    generatePageModules (defaultGeneratorConfig pagesDirectory generatedDirectory)
+    generatePageModules
+      ( (defaultGeneratorConfig pagesDirectory generatedDirectory)
+          { authorizationTypeName = "()"
+          }
+      )
   either (ioError . userError . show) (const (pure ())) generationResult
 
 discoverPageInputs :: FilePath -> IO ([FilePath], [FilePath])

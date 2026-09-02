@@ -27,6 +27,8 @@ module App.Api.Declarative
     declarativeApiApplication,
     declarativeApiSite,
     greetingRequestBodyDecoder,
+    requiredEndpointName,
+    requiredRouteTemplate,
   )
 where
 
@@ -55,13 +57,34 @@ declarativeApiEndpointFamily :: ApiEndpointFamily
 declarativeApiEndpointFamily =
   requireApiEndpointFamily declarativeApiEndpoints
 
-declarativeApiSite :: Site.Site ApiPath () ()
+declarativeApiSite :: Site.Site ApiPath () () ()
 declarativeApiSite =
   Site.apiOnlySite
     "custom-api"
     ()
     (apiRouteEndpointFamilyCodec declarativeApiEndpointFamily)
-    (apiRouteEndpointFamilyDefinition declarativeApiEndpointFamily)
+    (HarchWeb.AuthenticationDisabled [])
+    (apiRouteEndpointFamilyDefinition (const declarativeApiMetadata) declarativeApiEndpointFamily)
+
+declarativeApiMetadata :: HarchWeb.EndpointMetadata ()
+declarativeApiMetadata =
+  HarchWeb.mkEndpointMetadata
+    (requiredEndpointName "custom-api.endpoint")
+    (requiredRouteTemplate "/api/{endpoint}")
+    HarchWeb.ApiEndpoint
+    HarchWeb.AllowUnauthenticated
+
+requiredEndpointName :: Text -> HarchWeb.EndpointName
+requiredEndpointName endpointNameValue =
+  case HarchWeb.mkEndpointName endpointNameValue of
+    Right endpointName -> endpointName
+    Left metadataError -> error ("invalid custom-api endpoint name: " <> show metadataError)
+
+requiredRouteTemplate :: Text -> HarchWeb.RouteTemplate
+requiredRouteTemplate routeTemplateValue =
+  case HarchWeb.mkRouteTemplate routeTemplateValue of
+    Right routeTemplate -> routeTemplate
+    Left metadataError -> error ("invalid custom-api route template: " <> show metadataError)
 
 declarativeApiApplication :: IO Wai.Application
 declarativeApiApplication = HarchWeb.toWaiApplication (Site.buildSiteApplication declarativeApiSite)

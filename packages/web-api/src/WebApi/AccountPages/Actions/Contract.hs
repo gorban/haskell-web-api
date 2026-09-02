@@ -4,6 +4,7 @@ module WebApi.AccountPages.Actions.Contract
   ( AccountAction (..),
     AccountActionTarget (..),
     accountActions,
+    accountActionEndpointMetadata,
     buildActionCodecOrDie,
     LoginSubmission (..),
     MfaEnrollmentSubmission (..),
@@ -20,9 +21,11 @@ import HarchWeb.Action
   ( ActionCodec,
     ActionDecoder,
     ActionEndpoint,
+    ActionPath,
     FieldValue,
-    action,
     actionCodec,
+    actionEndpointMetadata,
+    actionWithMetadata,
     formField,
     parseField,
     postAt,
@@ -73,43 +76,72 @@ data LoginSubmission = LoginSubmission
 
 newtype ProfileSubmission = ProfileSubmission {profileIntentValue :: Text}
 
-accountActions :: ActionCodec AccountActionTarget AppRequestContext AccountAction
+accountActions :: ActionCodec AccountActionTarget AppRequestContext () AccountAction
 accountActions = buildActionCodecOrDie accountActionEndpoints
+
+accountActionEndpointMetadata :: Text -> Text -> AppRequestContext -> Maybe (HarchWeb.EndpointMetadata ())
+accountActionEndpointMetadata methodValue pathValue requestContext =
+  actionEndpointMetadata accountActions requestContext methodValue pathValue
 
 -- | Build a codec from a statically-known-duplicate-free endpoint list, or
 -- crash naming the offending declaration. @accountActionEndpoints@ is
 -- reviewed to never trigger the error branch, so it is exercised directly
 -- (with a deliberately duplicate list) by a dedicated unit test instead.
-buildActionCodecOrDie :: [ActionEndpoint target context action] -> ActionCodec target context action
+buildActionCodecOrDie :: [ActionEndpoint target context () action] -> ActionCodec target context () action
 buildActionCodecOrDie endpoints =
   case actionCodec endpoints of
     Left codecError -> error (show codecError)
     Right codec -> codec
 
-accountActionEndpoints :: [ActionEndpoint AccountActionTarget AppRequestContext AccountAction]
+accountActionEndpoints :: [ActionEndpoint AccountActionTarget AppRequestContext () AccountAction]
 accountActionEndpoints =
-  [ action
+  [ declaredAccountAction
       RegisterAccountTarget
       (postAt "/register" (`accountActionPath` RegistrationRoute))
       (RegisterAccount <$> registrationSubmission),
-    action
+    declaredAccountAction
       VerifyEmailTarget
       (postAt "/verify-email" (`accountActionPath` EmailVerificationRoute))
       (VerifyEmail . VerificationSubmission <$> singleOrDefault "" (formField "token" textValue)),
-    action
+    declaredAccountAction
       EnrollMfaTarget
       (postAt "/mfa" (`accountActionPath` MfaEnrollmentRoute))
       (EnrollMfa <$> mfaEnrollmentSubmission),
-    action
+    declaredAccountAction
       LoginAccountTarget
       (postAt "/login" (`accountActionPath` LoginRoute))
       (LoginAccount <$> loginSubmission),
-    action
+    declaredAccountAction
       UpdateProfileTarget
       (postAt "/profile" (`accountActionPath` ProfileRoute))
       (UpdateProfile . ProfileSubmission <$> textFormField "intent" textValue),
-    action LogoutAccountTarget (postAt "/logout" (`accountActionPath` LogoutRoute)) (pure LogoutAccount)
+    declaredAccountAction LogoutAccountTarget (postAt "/logout" (`accountActionPath` LogoutRoute)) (pure LogoutAccount)
   ]
+
+-- | AHI-4A stages the existing reference actions as explicitly public while
+-- preserving their separate CSRF/session checks. AHI-4C replaces these
+-- declarations with the account-backed authentication/authorization policy;
+-- none rely on an implicit public default.
+declaredAccountAction :: AccountActionTarget -> ActionPath AppRequestContext -> ActionDecoder action -> ActionEndpoint AccountActionTarget AppRequestContext () action
+declaredAccountAction target path =
+  actionWithMetadata target path (accountActionMetadata target)
+
+accountActionMetadata :: AccountActionTarget -> HarchWeb.EndpointMetadata ()
+accountActionMetadata target =
+  HarchWeb.mkEndpointMetadata
+    (HarchWeb.requiredEndpointNameOrDie name)
+    (HarchWeb.requiredRouteTemplateOrDie template)
+    HarchWeb.ActionEndpoint
+    HarchWeb.AllowUnauthenticated
+  where
+    (name, template) =
+      case target of
+        RegisterAccountTarget -> ("account.register", "/{locale}/register")
+        VerifyEmailTarget -> ("account.verify-email", "/{locale}/verify")
+        EnrollMfaTarget -> ("account.enroll-mfa", "/{locale}/mfa")
+        LoginAccountTarget -> ("account.login", "/{locale}/login")
+        UpdateProfileTarget -> ("account.update-profile", "/{locale}/profile")
+        LogoutAccountTarget -> ("account.logout", "/{locale}/logout")
 
 -- | The text-field convention is part of the action contract: missing fields
 -- decode to empty text while duplicate and malformed fields still carry their

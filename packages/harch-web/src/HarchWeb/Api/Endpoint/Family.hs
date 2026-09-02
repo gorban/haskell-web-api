@@ -39,6 +39,8 @@ import HarchWeb qualified
 import HarchWeb.Api.Endpoint.Internal
 import HarchWeb.Api.Endpoint.Runtime
 import HarchWeb.Api.Response
+import HarchWeb.EndpointSecurity (EndpointMetadata)
+import HarchWeb.Markup (safeUrlText)
 import HarchWeb.Server (unboundedRouteExecutionPolicy)
 import HarchWeb.Site (RouteDefinition (..))
 import Network.HTTP.Types qualified as HttpTypes
@@ -47,10 +49,11 @@ import Network.Wai qualified as Wai
 -- | Convert a declaration into one entry in a 'RouteDefinition' table. The
 -- server has already selected the route and method before this runs, so it
 -- cannot produce a competing 404/405/HEAD/OPTIONS policy.
-apiRouteDefinition :: ApiRouteEndpoint fields body domainFailure response -> RouteDefinition route context
-apiRouteDefinition endpoint =
+apiRouteDefinition :: EndpointMetadata authorization -> ApiRouteEndpoint fields body domainFailure response -> RouteDefinition route context authorization
+apiRouteDefinition metadata endpoint =
   RouteDefinition
     { routeNavigationLabel = Nothing,
+      routeMetadata = metadata,
       routeMethods = [toRouteMethod (apiRouteEndpointMethod endpoint)],
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeResponse = \request _ -> HarchWeb.ProtocolResponseResult <$> runApiRouteEndpoint endpoint request
@@ -63,12 +66,14 @@ apiRouteDefinition endpoint =
 apiRouteDefinitionWithContext ::
   (Typeable response) =>
   ApiEndpointContract fields body response ->
+  EndpointMetadata authorization ->
   (context -> ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
   (domainFailure -> ApiResponse response) ->
-  RouteDefinition route context
-apiRouteDefinitionWithContext contract contextAwareHandler failureResponse =
+  RouteDefinition route context authorization
+apiRouteDefinitionWithContext contract metadata contextAwareHandler failureResponse =
   RouteDefinition
     { routeNavigationLabel = Nothing,
+      routeMetadata = metadata,
       routeMethods = [toRouteMethod method],
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeResponse = \request routeRequest ->
@@ -86,11 +91,13 @@ apiRouteDefinitionWithContext contract contextAwareHandler failureResponse =
 apiRouteDefinitionWithContextNeverFailing ::
   (Typeable response) =>
   ApiEndpointContract fields body response ->
+  EndpointMetadata authorization ->
   (context -> ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
-  RouteDefinition route context
-apiRouteDefinitionWithContextNeverFailing contract contextAwareHandler =
+  RouteDefinition route context authorization
+apiRouteDefinitionWithContextNeverFailing contract metadata contextAwareHandler =
   RouteDefinition
     { routeNavigationLabel = Nothing,
+      routeMetadata = metadata,
       routeMethods = [toRouteMethod method],
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeResponse = \request routeRequest ->
@@ -169,16 +176,34 @@ endpointMethod (SomeApiRouteEndpoint endpoint) = apiRouteEndpointMethod endpoint
 apiRouteEndpointFamilyCodec :: ApiEndpointFamily -> HarchWeb.RouteCodec ApiPath context
 apiRouteEndpointFamilyCodec family =
   HarchWeb.RouteCodec
-    { HarchWeb.parseRoute = \context requestPath ->
-        if any (endpointAtPath requestPath) endpoints
-          then Just (HarchWeb.RouteRequest (ApiPath requestPath) context)
-          else Nothing,
-      HarchWeb.renderRoute = apiPathText . HarchWeb.requestRoute,
+    { HarchWeb.parseRoute = \context location ->
+        case apiPathAtLocation location of
+          Just apiPath -> HarchWeb.RouteParsed (HarchWeb.RouteRequest apiPath context)
+          Nothing -> HarchWeb.RouteNotMatched,
+      HarchWeb.renderRoute = apiPathLocation . HarchWeb.requestRoute,
       HarchWeb.notFoundRequest = HarchWeb.RouteRequest (ApiPath Text.empty),
       HarchWeb.routeMethods = \(ApiPath pathText) -> HarchWeb.routeMethodPolicy (apiPathRouteMethods family pathText)
     }
   where
     endpoints = endpointFamilyEndpoints family
+    apiPathAtLocation location =
+      case find (endpointAtLocation location) endpoints of
+        Nothing -> Nothing
+        Just endpoint -> Just (endpointPath endpoint)
+
+endpointAtLocation :: HarchWeb.RouteLocation -> SomeApiRouteEndpoint -> Bool
+endpointAtLocation location endpoint =
+  apiPathText (endpointPath endpoint)
+    == safeUrlText (HarchWeb.encodeRouteLocation (location {HarchWeb.routeQueryFields = []}))
+
+apiPathLocation :: ApiPath -> HarchWeb.RouteLocation
+apiPathLocation apiPath =
+  case apiPathText apiPath of
+    "" -> HarchWeb.RouteLocation [] []
+    authoredPath ->
+      case HarchWeb.decodeRouteLocation (HarchWeb.requestTarget (TextEncoding.encodeUtf8 authoredPath) "") of
+        Left routeError -> error ("invalid authored API path: " <> show routeError)
+        Right location -> location
 
 apiPathText :: ApiPath -> Text
 apiPathText (ApiPath pathText) = pathText
@@ -193,10 +218,11 @@ apiPathRouteMethods family pathText =
 -- | The 'RouteDefinition' for one path the family codec owns. A path with no
 -- declared endpoint is the family codec's ordinary not-found sentinel, so it
 -- renders a 404 before the defensive matcher is considered.
-apiRouteEndpointFamilyDefinition :: ApiEndpointFamily -> ApiPath -> RouteDefinition ApiPath context
-apiRouteEndpointFamilyDefinition family (ApiPath pathText) =
+apiRouteEndpointFamilyDefinition :: (ApiPath -> EndpointMetadata authorization) -> ApiEndpointFamily -> ApiPath -> RouteDefinition ApiPath context authorization
+apiRouteEndpointFamilyDefinition endpointMetadataForPath family apiPath@(ApiPath pathText) =
   RouteDefinition
     { routeNavigationLabel = Nothing,
+      routeMetadata = endpointMetadataForPath apiPath,
       routeMethods = apiPathRouteMethods family pathText,
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeResponse = \request _ ->

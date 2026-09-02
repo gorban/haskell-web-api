@@ -4,19 +4,20 @@
 module App.Pages.LiveData (pageDefinition, liveDataPage) where
 
 import App.Pages.Route.Generated (PageRoute (..))
-import App.Routes (TwoPageRoute)
+import App.Routes (TwoPageRoute, twoPageEndpointMetadata)
 import App.Routes qualified as Routes
 import HarchWeb
-  ( Page (..),
+  ( EndpointProtocol (HtmlEndpoint),
+    Page (..),
     RouteRequest (..),
     harch,
   )
 import HarchWeb.Site (RouteDefinition)
 import HarchWeb.Site qualified as Site
 
-pageDefinition :: RouteDefinition TwoPageRoute ()
+pageDefinition :: RouteDefinition TwoPageRoute () ()
 pageDefinition =
-  Site.pageRoute (Just "Live updates") liveDataPage
+  Site.pageRoute (twoPageEndpointMetadata HtmlEndpoint (Routes.Page LiveDataPage)) (Just "Live updates") liveDataPage
 
 liveDataPage :: RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
 liveDataPage routeRequest =

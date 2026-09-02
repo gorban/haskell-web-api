@@ -21,7 +21,7 @@ import HarchWeb.Server.RequestBody (RequestBodyReadFailure (..), readRequestBody
 import HarchWeb.Server.Response
 import Network.Wai qualified as Wai
 
-clientActionResponse :: Application route action context -> Wai.Request -> Text -> Text -> context -> IO (Response route context)
+clientActionResponse :: Application route action context authorization -> Wai.Request -> Text -> Text -> context -> IO (Response route context)
 clientActionResponse webApplication request requestMethod requestPath routedRequestContext = do
   result <- runExceptT $ do
     let requestPolicyConfig = applicationRequestPolicy webApplication

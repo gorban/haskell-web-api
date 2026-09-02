@@ -78,6 +78,7 @@ module HarchWeb.Markup.Implementation
     regionPatchId,
     replaceRegion,
     required,
+    requiredSafeUrl,
     requiredSafeUrlOrDie,
     role,
     safeUrlText,
@@ -297,6 +298,13 @@ instance IsString SafeUrl where
 -- call site's own coverage untouched by the branch it can never take.
 requiredSafeUrlOrDie :: Text -> Maybe SafeUrl -> SafeUrl
 requiredSafeUrlOrDie context = fromMaybe (error ("HarchWeb.Markup: " <> Text.unpack context))
+
+-- | Resolve a safe URL where the surrounding typed construction already
+-- proves a rejection is a framework defect and no extra diagnosis is useful.
+-- Callers that can identify their declaration should use
+-- 'requiredSafeUrlOrDie' instead.
+requiredSafeUrl :: Maybe SafeUrl -> SafeUrl
+requiredSafeUrl = requiredSafeUrlOrDie "a required URL was unsafe"
 
 href :: SafeUrl -> Attribute
 href = attribute (AttributeName "href") . safeUrlText

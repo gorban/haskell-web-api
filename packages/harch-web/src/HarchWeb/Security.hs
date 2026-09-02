@@ -72,6 +72,7 @@ import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Document (RuntimeNonce, runtimeNonceValue)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.PathPrefix qualified as PathPrefix
+import HarchWeb.Routing (RequestTarget, requestTarget)
 import HarchWeb.Security.ForwardedTrust
 import HarchWeb.Security.RequestLimits
 import Network.HTTP.Types qualified as Http
@@ -623,14 +624,11 @@ decodeUtf8OrEmpty bytes =
     Left _ -> Text.empty
     Right decodedText -> decodedText
 
-waiRequestRouteTarget :: RequestPolicyConfig -> Wai.Request -> Text
-waiRequestRouteTarget requestPolicyConfig request = appendRawQueryString (waiRequestPath requestPolicyConfig request) (Wai.rawQueryString request)
-
-appendRawQueryString :: Text -> ByteString.ByteString -> Text
-appendRawQueryString path rawQueryString =
-  if ByteString.null rawQueryString
-    then path
-    else either (const path) (path <>) (TextEncoding.decodeUtf8' rawQueryString)
+waiRequestRouteTarget :: RequestPolicyConfig -> Wai.Request -> RequestTarget
+waiRequestRouteTarget requestPolicyConfig request =
+  requestTarget
+    (TextEncoding.encodeUtf8 (waiRequestPath requestPolicyConfig request))
+    (Wai.rawQueryString request)
 
 externalRequestPath :: RequestPolicyConfig -> Wai.Request -> Text
 externalRequestPath requestPolicyConfig request =

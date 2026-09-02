@@ -11,6 +11,7 @@ module HarchWeb.Server.Response
     RegionPatch,
     RequestMiddleware (..),
     Response (..),
+    mapResponsePage,
     ResponseBody (..),
     ResponseDiagnostics (..),
     ProtocolResponse (..),
@@ -75,12 +76,14 @@ data ProtocolResponse = ProtocolResponse
     protocolResponseDatabaseOperations :: [DatabaseOperation]
   }
 
--- | A protocol response may be strict bytes or a one-shot WAI stream. A
--- stream stays inside the server interpreter and cannot be mistaken for an
--- application-owned lazy value that may outlive the request.
+-- | A protocol response may be strict bytes, a one-shot WAI stream, or a
+-- framework-owned WAI response. The latter preserves a file-backed response
+-- selected by the static-asset interpreter (including its conditional/range
+-- semantics) while the outer renderer still attaches root policy headers.
 data ProtocolResponseBody
   = ProtocolResponseBytes ByteString
   | ProtocolResponseStream Wai.StreamingBody
+  | ProtocolResponseWai Wai.Response
 
 instance Eq ProtocolResponse where
   left == right =
@@ -96,6 +99,7 @@ equalProtocolBodies left right =
   case (left, right) of
     (ProtocolResponseBytes leftBytes, ProtocolResponseBytes rightBytes) -> leftBytes == rightBytes
     (ProtocolResponseStream _, ProtocolResponseStream _) -> True
+    (ProtocolResponseWai _, ProtocolResponseWai _) -> True
     _ -> False
 
 instance Show ProtocolResponse where
@@ -115,6 +119,7 @@ protocolResponseBodySummary responseBodyValue =
   case responseBodyValue of
     ProtocolResponseBytes bytes -> "ProtocolResponseBytes " <> show bytes
     ProtocolResponseStream _ -> "ProtocolResponseStream <stream>"
+    ProtocolResponseWai _ -> "ProtocolResponseWai <framework-response>"
 
 -- | One event in a server-sent event stream. Event names and identifiers are
 -- rendered as single protocol fields; embedded line breaks are discarded so a
@@ -192,6 +197,20 @@ data Response route context
   | ClientActionBodyResponse ClientActionResponse
   | EventStreamResponse ResponseBody ServerSentEventSource
   | ProtocolResponseResult ProtocolResponse
+
+-- | Change the route and context carried by page responses while preserving
+-- every response that has no page.  Route composition uses this one total
+-- operation instead of each adapter repeating a partial-looking case split.
+mapResponsePage :: (Page route context -> Page mappedRoute mappedContext) -> Response route context -> Response mappedRoute mappedContext
+mapResponsePage mapPage response =
+  case response of
+    PageResponse page -> PageResponse (mapPage page)
+    PageResponseWithMetadata responseBodyValue page -> PageResponseWithMetadata responseBodyValue (mapPage page)
+    BodyResponse responseBodyValue -> BodyResponse responseBodyValue
+    RedirectResponse responseBodyValue location -> RedirectResponse responseBodyValue location
+    ClientActionBodyResponse actionResponse -> ClientActionBodyResponse actionResponse
+    EventStreamResponse responseBodyValue source -> EventStreamResponse responseBodyValue source
+    ProtocolResponseResult protocolResponse -> ProtocolResponseResult protocolResponse
 
 instance (Eq route, Eq context) => Eq (Response route context) where
   left == right =

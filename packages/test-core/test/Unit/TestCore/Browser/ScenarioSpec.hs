@@ -44,6 +44,11 @@ spec = do
           )
           `finally` interruptWorker
 
+    it "bounds an unresponsive browser-runner command and cleans up its process" $
+      withFakeRunner "unresponsive" $ \config -> do
+        result <- runBrowserScenario config (pure ())
+        result `shouldBe` Left (BrowserRunnerProtocolError "browser command initialize timed out after 1000ms")
+
     it "uses semantic locators and batches only composed observations" $
       withFakeRunner "normal" $ \config -> do
         let emailField = byLabel "Email address"
@@ -391,10 +396,12 @@ spec = do
           "  // terminate it for the interrupted worker to finish.",
           "  setInterval(() => {}, 60000);",
           "}",
+          "if (mode === 'unresponsive') { setInterval(() => {}, 60000); }",
           "(async () => {",
           "  for await (const line of lines) {",
           "    const request = JSON.parse(line);",
           "    if (mode === 'hang-initialize' && request.command === 'initialize') { fs.writeFileSync(enteredPath, 'entered'); continue; }",
+          "    if (mode === 'unresponsive' && request.command === 'initialize') { continue; }",
           "    if (mode === 'init-error' && request.command === 'initialize') { reply(request.id, 'error', null, 'initialization failed'); continue; }",
           "    if (mode === 'malformed' && request.command === 'visit') { process.stdout.write('{invalid\\n'); continue; }",
           "    if (mode === 'wrong-protocol' && request.command === 'visit') { rawReply({ protocol: 2, id: request.id, status: 'ok', value: null }); continue; }",

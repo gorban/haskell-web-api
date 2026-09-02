@@ -24,6 +24,7 @@ import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
 import HarchWeb.Observability qualified as Observability ()
+import HarchWeb.Routing (RouteDecodeError (InvalidRouteTargetEncoding), decodeRouteLocation)
 import HarchWeb.Security qualified as Security (RequestContextField (requestContextFieldName), requestContextFields, waiRequestPath, waiRequestRouteTarget)
 import Network.HTTP.Client qualified as HttpClient ()
 import Network.HTTP.Types qualified as Http (hContentLength, hContentType, status400, status414, status431)
@@ -215,10 +216,12 @@ spec = do
               (Wai.defaultRequest {Wai.rawPathInfo = "\255"})
               `shouldBe` ""
           )
-            :| [ Security.waiRequestRouteTarget
-                   defaultRequestPolicy
-                   (Wai.defaultRequest {Wai.rawPathInfo = "/known", Wai.rawQueryString = "?\255"})
-                   `shouldBe` "/known",
+            :| [ decodeRouteLocation
+                   ( Security.waiRequestRouteTarget
+                       defaultRequestPolicy
+                       (Wai.defaultRequest {Wai.rawPathInfo = "/known", Wai.rawQueryString = "?\255"})
+                   )
+                   `shouldBe` Left InvalidRouteTargetEncoding,
                  map
                    Security.requestContextFieldName
                    ( Security.requestContextFields

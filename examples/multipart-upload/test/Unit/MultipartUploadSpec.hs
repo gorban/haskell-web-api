@@ -3,8 +3,9 @@
 
 {-# SPEC #-}
 
-import App.App (multipartUploadApplication, multipartUploadSite, newMultipartUploadApplication)
+import App.App (multipartUploadApplication, multipartUploadSite, newMultipartUploadApplication, requiredEndpointName, requiredRouteTemplate)
 import App.MultipartUpload (NativeUploadState, nativeUploadDiscardCount, nativeUploadPath, newNativeUploadState)
+import Control.Exception (ErrorCall, displayException, evaluate, try)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as Builder
@@ -20,12 +21,40 @@ import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 import Network.Wai.Internal qualified as WaiInternal
 
+routeLocationForTest :: Text -> HarchWeb.RouteLocation
+routeLocationForTest target =
+  case HarchWeb.decodeRouteLocation (HarchWeb.requestTarget (TextEncoding.encodeUtf8 path) (TextEncoding.encodeUtf8 query)) of
+    Left routeError -> error ("invalid test route target: " <> show routeError)
+    Right location -> location
+  where
+    (path, query) = Text.breakOn "?" target
+
 spec =
   describe "Unit.App.MultipartUpload" $ do
     it "exposes an API-only site composition root with its declared name and empty context" $ do
       state <- newNativeUploadState
       Site.siteName (multipartUploadSite state) `shouldBe` "multipart-upload-example"
       Site.siteDefaultRequestContext (multipartUploadSite state) `shouldBe` ()
+
+    it "declares public API metadata and rejects invalid authored metadata" $ do
+      state <- newNativeUploadState
+      routeRequest <-
+        case HarchWeb.parseRoute (Site.siteRouteCodec (multipartUploadSite state)) () (routeLocationForTest "/native-upload") of
+          HarchWeb.RouteParsed matchedRoute -> pure matchedRoute
+          HarchWeb.RouteNotMatched -> expectationFailure "expected the declared upload route" >> error "unreachable"
+          HarchWeb.RouteMalformed routeError -> expectationFailure ("route was malformed: " <> show routeError) >> error "unreachable"
+      let endpointMetadata = Site.routeMetadata (Site.siteRouteDefinition (multipartUploadSite state) (HarchWeb.requestRoute routeRequest))
+      endpointNameFailure <- try (evaluate (requiredEndpointName "invalid/name")) :: IO (Either ErrorCall HarchWeb.EndpointName)
+      routeTemplateFailure <- try (evaluate (requiredRouteTemplate "not-a-route")) :: IO (Either ErrorCall HarchWeb.RouteTemplate)
+      expectAll
+        ( (HarchWeb.endpointNameText (HarchWeb.endpointName endpointMetadata) `shouldBe` "multipart-upload.endpoint")
+            :| [ HarchWeb.routeTemplateText (HarchWeb.endpointRouteTemplate endpointMetadata) `shouldBe` "/upload/{endpoint}",
+                 HarchWeb.endpointProtocol endpointMetadata `shouldBe` HarchWeb.ApiEndpoint,
+                 HarchWeb.endpointAccess endpointMetadata `shouldBe` HarchWeb.AllowUnauthenticated,
+                 either displayException (const "unexpectedly accepted endpoint name") endpointNameFailure `shouldBe` "invalid multipart endpoint name: InvalidEndpointName",
+                 either displayException (const "unexpectedly accepted route template") routeTemplateFailure `shouldBe` "invalid multipart route template: InvalidRouteTemplate"
+               ]
+        )
 
     it "renders the shared endpoint table's own 404 for a path it does not own, with the same response security headers as every other route" $ do
       application <- newMultipartUploadApplication

@@ -35,6 +35,39 @@ newtype SampleContext = SampleContext
   }
   deriving (Eq, Show)
 
+type SampleAuthorization = ()
+
+routeLocationForTest :: Text -> HarchWeb.RouteLocation
+routeLocationForTest target =
+  case HarchWeb.decodeRouteLocation (HarchWeb.requestTarget (TextEncoding.encodeUtf8 path) (TextEncoding.encodeUtf8 query)) of
+    Left routeError -> error ("invalid test route target: " <> show routeError)
+    Right location -> location
+  where
+    (path, query) = Text.breakOn "?" target
+
+sampleSecurity :: HarchWeb.ApplicationSecurity SampleRoute SampleContext SampleAuthorization
+sampleSecurity = HarchWeb.AuthenticationDisabled []
+
+sampleMetadata :: HarchWeb.EndpointProtocol -> SampleRoute -> HarchWeb.EndpointMetadata SampleAuthorization
+sampleMetadata endpointProtocolValue route =
+  HarchWeb.mkEndpointMetadata
+    (requiredSampleEndpointName route)
+    (requiredSampleRouteTemplate route)
+    endpointProtocolValue
+    HarchWeb.AllowUnauthenticated
+
+requiredSampleEndpointName :: SampleRoute -> HarchWeb.EndpointName
+requiredSampleEndpointName route =
+  case HarchWeb.mkEndpointName ("sample." <> Text.toLower (Text.pack (show route))) of
+    Right endpointName -> endpointName
+    Left metadataError -> error ("invalid sample endpoint name: " <> show metadataError)
+
+requiredSampleRouteTemplate :: SampleRoute -> HarchWeb.RouteTemplate
+requiredSampleRouteTemplate route =
+  case HarchWeb.mkRouteTemplate ("/{sample}/" <> Text.toLower (Text.pack (show route))) of
+    Right routeTemplate -> routeTemplate
+    Left metadataError -> error ("invalid sample route template: " <> show metadataError)
+
 spec = do
   describe "buildSiteApplication" $ do
     it "keeps the simpleSite defaults available when the composition root does not override them" $ do
@@ -91,6 +124,20 @@ spec = do
               }
       siteDecodeClientAction sampleSite actionPayload `shouldBe` HarchWeb.UnrecognizedClientAction
       HarchWeb.decodeClientAction siteApplication actionPayload `shouldBe` HarchWeb.UnrecognizedClientAction
+      case siteSecurityEventRoot sampleSite of
+        Nothing -> pure ()
+        Just _ -> expectationFailure "expected simpleSite to have no security-event root by default"
+      case HarchWeb.applicationSecurityEventRoot siteApplication of
+        Nothing -> pure ()
+        Just _ -> expectationFailure "expected built simpleSite application to have no security-event root by default"
+      case siteRouteModuleChain sampleSite of
+        Nothing -> pure ()
+        Just _ -> expectationFailure "expected simpleSite to have no route-module chain by default"
+      case HarchWeb.applicationRouteModuleChain siteApplication of
+        Nothing -> pure ()
+        Just _ -> expectationFailure "expected built simpleSite application to have no route-module chain by default"
+      siteClientActionEndpointMetadata sampleSite "POST" "/actions/sample" (SampleContext "") `shouldBe` Nothing
+      HarchWeb.clientActionEndpointMetadata siteApplication "POST" "/actions/sample" (SampleContext "") `shouldBe` Nothing
       HarchWeb.handleClientAction
         siteApplication
         ClientActionRequest
@@ -117,7 +164,7 @@ spec = do
       HarchWeb.reportApplicationLog siteApplication "sample-log" `shouldReturn` ()
 
     it "gives API-only sites a complete SSR fallback without page navigation runtime" $ do
-      let apiSite = apiOnlySite "sample-api" (SampleContext "") sampleRouteCodec sampleRouteDefinition
+      let apiSite = apiOnlySite "sample-api" (SampleContext "") sampleRouteCodec sampleSecurity sampleRouteDefinition
           apiApplication = buildSiteApplication apiSite
           fallbackPage =
             Page
@@ -135,8 +182,8 @@ spec = do
                  siteNavigationRoutes apiSite `shouldBe` [],
                  HarchWeb.appName apiApplication `shouldBe` "sample-api",
                  HarchWeb.defaultRequestContext apiApplication `shouldBe` SampleContext "",
-                 parseRoute (HarchWeb.routeCodec apiApplication) (SampleContext "") "/api/status"
-                   `shouldBe` Just (RouteRequest StatusApiRoute (SampleContext "")),
+                 parseRoute (HarchWeb.routeCodec apiApplication) (SampleContext "") (routeLocationForTest "/api/status")
+                   `shouldBe` HarchWeb.RouteParsed (RouteRequest StatusApiRoute (SampleContext "")),
                  HarchWeb.renderDocumentForTests document
                    `shouldBe` "<!DOCTYPE html><html><head><title>Fallback</title></head><body><nav data-navigation-region=\"primary\"></nav><main id=\"main\" data-navigation-content=\"true\">fallback</main></body></html>"
                ]
@@ -144,6 +191,8 @@ spec = do
       HarchWeb.renderResponse apiApplication (RouteRequest StatusApiRoute (SampleContext "")) >>= \case
         BodyResponse response -> HarchWeb.responseBody response `shouldBe` "{\"status\":\"ok\"}"
         _ -> expectationFailure "expected API-only site to render its protocol route"
+      waiResponse <- performWaiRequest (toWaiApplication apiApplication) (waiRequest ["api", "status"])
+      Wai.responseStatus waiResponse `shouldBe` Http.status200
 
     it "derives navigation items from labeled site routes and keeps route rendering prefix-aware" $ do
       let siteApplication = buildSiteApplication sampleSite
@@ -347,13 +396,14 @@ spec = do
                ]
         )
 
-sampleSite :: Site SampleRoute () SampleContext
+sampleSite :: Site SampleRoute () SampleContext SampleAuthorization
 sampleSite =
   simpleSite
     SimpleSiteConfiguration
       { simpleSiteName = "sample",
         simpleSiteDefaultRequestContext = SampleContext "",
         simpleSiteRouteCodec = sampleRouteCodec,
+        simpleSiteSecurity = sampleSecurity,
         simpleSitePageShell = samplePageShell,
         simpleSiteNavigationRoutes = [HomeRoute, SecondRoute],
         simpleSiteRouteDefinition = sampleRouteDefinition
@@ -365,7 +415,7 @@ sampleContextPathPrefix (SampleContext value) =
     Left parseError -> error ("invalid sample path prefix: " <> show parseError)
     Right pathPrefix -> pathPrefix
 
-sampleRouteDefinition :: SampleRoute -> RouteDefinition SampleRoute SampleContext
+sampleRouteDefinition :: SampleRoute -> RouteDefinition SampleRoute SampleContext SampleAuthorization
 sampleRouteDefinition route =
   case route of
     HomeRoute -> homeRouteDefinition
@@ -373,9 +423,9 @@ sampleRouteDefinition route =
     StatusApiRoute -> apiRouteDefinition
     NotFoundRoute -> notFoundRouteDefinition
 
-homeRouteDefinition :: RouteDefinition SampleRoute SampleContext
+homeRouteDefinition :: RouteDefinition SampleRoute SampleContext SampleAuthorization
 homeRouteDefinition =
-  Site.pageRoute (Just "Home") $ \routeRequest ->
+  Site.pageRoute (sampleMetadata HarchWeb.HtmlEndpoint HomeRoute) (Just "Home") $ \routeRequest ->
     pure
       Page
         { pageTitle = "Home",
@@ -385,9 +435,9 @@ homeRouteDefinition =
           pageBootstrapHooks = []
         }
 
-secondRouteDefinition :: RouteDefinition SampleRoute SampleContext
+secondRouteDefinition :: RouteDefinition SampleRoute SampleContext SampleAuthorization
 secondRouteDefinition =
-  Site.pageRoute (Just "Second") $ \routeRequest ->
+  Site.pageRoute (sampleMetadata HarchWeb.HtmlEndpoint SecondRoute) (Just "Second") $ \routeRequest ->
     pure
       Page
         { pageTitle = "Second",
@@ -397,10 +447,11 @@ secondRouteDefinition =
           pageBootstrapHooks = ["second-page"]
         }
 
-apiRouteDefinition :: RouteDefinition SampleRoute SampleContext
+apiRouteDefinition :: RouteDefinition SampleRoute SampleContext SampleAuthorization
 apiRouteDefinition =
   RouteDefinition
     { routeNavigationLabel = Nothing,
+      routeMetadata = sampleMetadata HarchWeb.ApiEndpoint StatusApiRoute,
       routeMethods = [HarchWeb.RouteGet],
       routeExecutionPolicy = HarchWeb.unboundedRouteExecutionPolicy,
       routeResponse =
@@ -418,9 +469,9 @@ apiRouteDefinition =
             )
     }
 
-notFoundRouteDefinition :: RouteDefinition SampleRoute SampleContext
+notFoundRouteDefinition :: RouteDefinition SampleRoute SampleContext SampleAuthorization
 notFoundRouteDefinition =
-  ( Site.pageRoute Nothing $ \routeRequest ->
+  ( Site.pageRoute (sampleMetadata HarchWeb.HtmlEndpoint NotFoundRoute) Nothing $ \routeRequest ->
       pure
         Page
           { pageTitle = "Not Found",
@@ -465,13 +516,13 @@ samplePageShell page =
 sampleRouteCodec :: RouteCodec SampleRoute SampleContext
 sampleRouteCodec =
   RouteCodec
-    { parseRoute = \requestContextValue path ->
-        case path of
-          "/" -> Just RouteRequest {requestRoute = HomeRoute, requestContext = requestContextValue}
-          "/second" -> Just RouteRequest {requestRoute = SecondRoute, requestContext = requestContextValue}
-          "/api/status" -> Just RouteRequest {requestRoute = StatusApiRoute, requestContext = requestContextValue}
-          _ -> Nothing,
-      renderRoute = \routeRequest -> renderRouteHref (requestContext routeRequest) (requestRoute routeRequest),
+    { parseRoute = \requestContextValue location ->
+        case HarchWeb.safeUrlText (HarchWeb.encodeRouteLocation location) of
+          "/" -> HarchWeb.RouteParsed RouteRequest {requestRoute = HomeRoute, requestContext = requestContextValue}
+          "/second" -> HarchWeb.RouteParsed RouteRequest {requestRoute = SecondRoute, requestContext = requestContextValue}
+          "/api/status" -> HarchWeb.RouteParsed RouteRequest {requestRoute = StatusApiRoute, requestContext = requestContextValue}
+          _ -> HarchWeb.RouteNotMatched,
+      renderRoute = \routeRequest -> routeLocationForTest (renderRouteHref (requestContext routeRequest) (requestRoute routeRequest)),
       notFoundRequest = \requestContextValue -> RouteRequest {requestRoute = NotFoundRoute, requestContext = requestContextValue},
       routeMethods =
         HarchWeb.routeMethodPolicy . \case

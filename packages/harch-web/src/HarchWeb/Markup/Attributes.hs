@@ -40,6 +40,7 @@ module HarchWeb.Markup.Attributes
     mkSafeUrl,
     name,
     required,
+    requiredSafeUrl,
     requiredSafeUrlOrDie,
     role,
     safeUrlText,

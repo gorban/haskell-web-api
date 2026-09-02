@@ -13,9 +13,14 @@ module App.Routes
     routeCodec,
     routeHref,
     twoPageActions,
+    twoPageActionEndpointMetadata,
     twoPageNavigationPath,
     twoPageNavigationHref,
     twoPageActionPath,
+    twoPageEndpointMetadata,
+    twoPagePreviewEndpointMetadata,
+    requiredEndpointName,
+    requiredRouteTemplate,
   )
 where
 
@@ -28,20 +33,35 @@ import Data.Char (isAsciiLower, isDigit)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb
-  ( RouteCodec (..),
+  ( AccessRequirement (AllowUnauthenticated),
+    EndpointMetadata,
+    EndpointName,
+    EndpointProtocol (ActionEndpoint, HtmlEndpoint),
+    PathSegment,
+    RouteCodec (..),
+    RouteLocation (..),
     RouteMethod (..),
+    RouteParseResult (..),
     RouteRequest (..),
+    RouteTemplate,
     SafeUrl,
+    encodeRouteLocation,
+    mkEndpointMetadata,
+    mkEndpointName,
+    mkRouteTemplate,
     mkSafeUrl,
+    requiredPathSegment,
     requiredSafeUrlOrDie,
     routeMethodPolicy,
+    safeUrlText,
   )
 import HarchWeb.Action
   ( ActionCodec,
     formField,
     post,
-    singleActionCodec,
+    singleActionCodecWithMetadata,
     singleOrDefault,
+    staticActionEndpointMetadata,
     staticActionPath,
     textValue,
   )
@@ -72,6 +92,59 @@ data TwoPageRoute
   | Custom CustomRoute
   deriving (Show)
 
+twoPageEndpointMetadata :: EndpointProtocol -> TwoPageRoute -> EndpointMetadata ()
+twoPageEndpointMetadata endpointProtocolValue route =
+  mkEndpointMetadata
+    (requiredEndpointName (endpointNameForRoute route))
+    (requiredRouteTemplate (routeTemplateForRoute route))
+    endpointProtocolValue
+    AllowUnauthenticated
+
+-- | The preview declaration has one dynamic slug but one static endpoint
+-- identity. Keep metadata independent of a rendered slug so the route table
+-- cannot accidentally depend on request-derived text.
+twoPagePreviewEndpointMetadata :: EndpointMetadata ()
+twoPagePreviewEndpointMetadata =
+  mkEndpointMetadata
+    (requiredEndpointName "two-pages.preview")
+    (requiredRouteTemplate "/preview/{slug}")
+    HtmlEndpoint
+    AllowUnauthenticated
+
+endpointNameForRoute :: TwoPageRoute -> Text
+endpointNameForRoute route =
+  case route of
+    Page HomePage -> "two-pages.home"
+    Page SecondPage -> "two-pages.second"
+    Page LiveDataPage -> "two-pages.live-data"
+    Page PageNotFound -> "two-pages.not-found"
+    Api LiveDataEvents -> "two-pages.live-data-events"
+    Custom (PreviewPage _) -> "two-pages.preview"
+    Custom NativeSubscriptionFallback -> "two-pages.native-subscription"
+
+routeTemplateForRoute :: TwoPageRoute -> Text
+routeTemplateForRoute route =
+  case route of
+    Page HomePage -> "/"
+    Page SecondPage -> "/second"
+    Page LiveDataPage -> "/live-data"
+    Page PageNotFound -> "/404"
+    Api LiveDataEvents -> "/live-data/events"
+    Custom (PreviewPage _) -> "/preview/{slug}"
+    Custom NativeSubscriptionFallback -> "/native-subscribe"
+
+requiredEndpointName :: Text -> EndpointName
+requiredEndpointName endpointNameValue =
+  case mkEndpointName endpointNameValue of
+    Right endpointName -> endpointName
+    Left metadataError -> error ("invalid two-pages endpoint name: " <> show metadataError)
+
+requiredRouteTemplate :: Text -> RouteTemplate
+requiredRouteTemplate routeTemplateValue =
+  case mkRouteTemplate routeTemplateValue of
+    Right routeTemplate -> routeTemplate
+    Left metadataError -> error ("invalid two-pages route template: " <> show metadataError)
+
 -- | Harch's route codec needs one route-identity operation. In this example a
 -- route's rendered internal path is unique, so equality deliberately stays at
 -- that public composition boundary rather than exposing equality for each
@@ -82,17 +155,17 @@ instance Eq TwoPageRoute where
 routeCodec :: RouteCodec TwoPageRoute ()
 routeCodec =
   RouteCodec
-    { parseRoute = \requestContext path ->
-        let normalizedPath = routePath path
+    { parseRoute = \requestContext location ->
+        let normalizedPath = safeUrlText (encodeRouteLocation (location {routeQueryFields = []}))
          in case normalizedPath of
               "/live-data/events" ->
-                Just
+                RouteParsed
                   RouteRequest
                     { requestRoute = Api LiveDataEvents,
                       requestContext = requestContext
                     }
               "/native-subscribe" ->
-                Just
+                RouteParsed
                   RouteRequest
                     { requestRoute = Custom NativeSubscriptionFallback,
                       requestContext = requestContext
@@ -100,15 +173,14 @@ routeCodec =
               _ ->
                 case parsePreviewPath normalizedPath of
                   Just previewSlug ->
-                    Just
+                    RouteParsed
                       RouteRequest
                         { requestRoute = Custom (PreviewPage previewSlug),
                           requestContext = requestContext
                         }
                   Nothing ->
-                    (\page -> RouteRequest {requestRoute = Page page, requestContext = requestContext})
-                      <$> parsePageRoute normalizedPath,
-      renderRoute = routeHref . requestRoute,
+                    maybe RouteNotMatched (RouteParsed . (\page -> RouteRequest {requestRoute = Page page, requestContext = requestContext})) (parsePageRoute normalizedPath),
+      renderRoute = routeLocation . requestRoute,
       notFoundRequest = \requestContext ->
         RouteRequest {requestRoute = Page PageNotFound, requestContext = requestContext},
       routeMethods = routeMethodPolicy . twoPageRouteMethods
@@ -131,15 +203,49 @@ routeHref route =
     Custom (PreviewPage previewSlug) -> "/preview/" <> previewSlugText previewSlug
     Custom NativeSubscriptionFallback -> "/native-subscribe"
 
+routeLocation :: TwoPageRoute -> RouteLocation
+routeLocation route =
+  RouteLocation
+    { routePathSegments = routeSegmentsFor route,
+      routeQueryFields = []
+    }
+
+-- | Rendering routes straight into structured segments avoids reparsing the
+-- application's own trusted route strings.  Each segment is either static or
+-- a 'PreviewSlug', whose smart constructor rules out path separators.
+routeSegmentsFor :: TwoPageRoute -> [PathSegment]
+routeSegmentsFor route =
+  case route of
+    Page HomePage -> []
+    Page SecondPage -> [requiredPathSegment "second"]
+    Page LiveDataPage -> [requiredPathSegment "live-data"]
+    Page PageNotFound -> [requiredPathSegment "404"]
+    Api LiveDataEvents -> [requiredPathSegment "live-data", requiredPathSegment "events"]
+    Custom (PreviewPage previewSlug) -> [requiredPathSegment "preview", requiredPathSegment (previewSlugText previewSlug)]
+    Custom NativeSubscriptionFallback -> [requiredPathSegment "native-subscribe"]
+
 twoPageActionPath :: TwoPageActionTarget -> Maybe Text
 twoPageActionPath = staticActionPath twoPageActions
 
-twoPageActions :: ActionCodec TwoPageActionTarget () TwoPageAction
+twoPageActions :: ActionCodec TwoPageActionTarget () () TwoPageAction
 twoPageActions =
-  singleActionCodec
+  singleActionCodecWithMetadata
     ()
     (post "/actions/subscribe")
+    subscribeActionMetadata
     (SubscribeAction <$> singleOrDefault "" (formField "email" textValue))
+
+twoPageActionEndpointMetadata :: Text -> Text -> () -> Maybe (EndpointMetadata ())
+twoPageActionEndpointMetadata methodValue pathValue _ =
+  staticActionEndpointMetadata twoPageActions methodValue pathValue
+
+subscribeActionMetadata :: EndpointMetadata ()
+subscribeActionMetadata =
+  mkEndpointMetadata
+    (requiredEndpointName "two-pages.subscribe")
+    (requiredRouteTemplate "/actions/subscribe")
+    ActionEndpoint
+    AllowUnauthenticated
 
 -- | Every branch renders a relative path built from this application's own
 -- fixed route structure, never from unvalidated caller text, so
@@ -181,7 +287,3 @@ previewSlugText (PreviewSlug value) = value
 parsePreviewPath :: Text -> Maybe PreviewSlug
 parsePreviewPath path =
   Text.stripPrefix "/preview/" path >>= mkPreviewSlug
-
-routePath :: Text -> Text
-routePath =
-  Text.takeWhile (/= '?')

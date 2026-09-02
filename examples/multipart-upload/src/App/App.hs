@@ -4,10 +4,13 @@ module App.App
   ( multipartUploadApplication,
     multipartUploadSite,
     newMultipartUploadApplication,
+    requiredEndpointName,
+    requiredRouteTemplate,
   )
 where
 
 import App.MultipartUpload (NativeUploadState, nativeUploadEndpoints, newNativeUploadState)
+import Data.Text (Text)
 import HarchWeb qualified
 import HarchWeb.Api (ApiPath, apiRouteEndpointFamilyCodec, apiRouteEndpointFamilyDefinition, requireApiEndpointFamily)
 import HarchWeb.Site qualified as Site
@@ -25,20 +28,41 @@ newMultipartUploadApplication = newNativeUploadState >>= multipartUploadWaiAppli
 -- policy metadata to an opaque 'Wai.Application'. A WAI function cannot
 -- carry a 'HarchWeb.RequestPolicyConfig'; 'HarchWeb.withLocalTestServer'
 -- already owns applying it consistently with deployed listeners.
-multipartUploadApplication :: NativeUploadState -> HarchWeb.Application ApiPath () ()
+multipartUploadApplication :: NativeUploadState -> HarchWeb.Application ApiPath () () ()
 multipartUploadApplication state =
   Site.buildSiteApplication (multipartUploadSite state)
 
 multipartUploadWaiApplication :: NativeUploadState -> IO Wai.Application
 multipartUploadWaiApplication = HarchWeb.toWaiApplication . multipartUploadApplication
 
-multipartUploadSite :: NativeUploadState -> Site.Site ApiPath () ()
+multipartUploadSite :: NativeUploadState -> Site.Site ApiPath () () ()
 multipartUploadSite state =
   Site.apiOnlySite
     "multipart-upload-example"
     ()
     (apiRouteEndpointFamilyCodec endpointFamily)
-    (apiRouteEndpointFamilyDefinition endpointFamily)
+    (HarchWeb.AuthenticationDisabled [])
+    (apiRouteEndpointFamilyDefinition (const multipartUploadMetadata) endpointFamily)
   where
     endpoints = nativeUploadEndpoints state
     endpointFamily = requireApiEndpointFamily endpoints
+
+multipartUploadMetadata :: HarchWeb.EndpointMetadata ()
+multipartUploadMetadata =
+  HarchWeb.mkEndpointMetadata
+    (requiredEndpointName "multipart-upload.endpoint")
+    (requiredRouteTemplate "/upload/{endpoint}")
+    HarchWeb.ApiEndpoint
+    HarchWeb.AllowUnauthenticated
+
+requiredEndpointName :: Text -> HarchWeb.EndpointName
+requiredEndpointName endpointNameValue =
+  case HarchWeb.mkEndpointName endpointNameValue of
+    Right endpointName -> endpointName
+    Left metadataError -> error ("invalid multipart endpoint name: " <> show metadataError)
+
+requiredRouteTemplate :: Text -> HarchWeb.RouteTemplate
+requiredRouteTemplate routeTemplateValue =
+  case HarchWeb.mkRouteTemplate routeTemplateValue of
+    Right routeTemplate -> routeTemplate
+    Left metadataError -> error ("invalid multipart route template: " <> show metadataError)

@@ -391,7 +391,7 @@ pageLink renderPageTarget target =
     anchorTag
     [href (renderPageTarget target), dataAttribute "page-link" "true"]
 
-actionForm :: (Eq target) => ActionCodec target context action -> context -> target -> ActionFormAttributes -> [Html] -> ActionFormRendering
+actionForm :: (Eq target) => ActionCodec target context authorization action -> context -> target -> ActionFormAttributes -> [Html] -> ActionFormRendering
 actionForm codec context target attributes children =
   case (actionPath codec context target, actionMethod codec target) of
     (Just targetPath, Just targetMethod) -> CapturingActionForm (renderCapturingActionForm targetPath targetMethod attributes children)
@@ -400,7 +400,7 @@ actionForm codec context target attributes children =
 -- | Render a form only for an action whose declaration proves that its path
 -- does not depend on request context. Dynamic action declarations remain
 -- available through 'actionForm'.
-staticActionForm :: (Eq target) => ActionCodec target context action -> target -> ActionFormAttributes -> [Html] -> ActionFormRendering
+staticActionForm :: (Eq target) => ActionCodec target context authorization action -> target -> ActionFormAttributes -> [Html] -> ActionFormRendering
 staticActionForm codec target attributes children =
   case (staticActionPath codec target, actionMethod codec target) of
     (Just targetPath, Just targetMethod) -> CapturingActionForm (renderCapturingActionForm targetPath targetMethod attributes children)

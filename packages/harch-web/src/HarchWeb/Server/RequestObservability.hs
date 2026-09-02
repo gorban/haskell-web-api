@@ -28,8 +28,9 @@ import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
 import Data.Word (Word64)
+import HarchWeb.Markup (safeUrlText)
 import HarchWeb.Observability qualified as Observability
-import HarchWeb.Routing (RouteRequest, renderRoute)
+import HarchWeb.Routing (RouteRequest, encodeRouteLocation, renderRoute)
 import HarchWeb.Security
   ( RequestPolicyConfig,
     prependRequestLogContext,
@@ -58,18 +59,18 @@ data RequestExecutionTimings = RequestExecutionTimings
 -- | Values fixed for every observability result emitted by one WAI request.
 -- Response-specific path, timing, route, and diagnostic values intentionally
 -- remain arguments to the reporting operations.
-data RequestObservabilityContext route action context = RequestObservabilityContext
-  { requestObservabilityApplication :: Application route action context,
+data RequestObservabilityContext route action context authorization = RequestObservabilityContext
+  { requestObservabilityApplication :: Application route action context authorization,
     requestObservabilityWaiRequest :: Wai.Request,
     requestObservabilityPolicyConfig :: RequestPolicyConfig
   }
 
-requestObservabilityContext :: Application route action context -> Wai.Request -> RequestPolicyConfig -> RequestObservabilityContext route action context
+requestObservabilityContext :: Application route action context authorization -> Wai.Request -> RequestPolicyConfig -> RequestObservabilityContext route action context authorization
 requestObservabilityContext = RequestObservabilityContext
 
 reportRoutedResponseObservability ::
   (Eq route) =>
-  RequestObservabilityContext route action context ->
+  RequestObservabilityContext route action context authorization ->
   Text ->
   RequestExecutionTimings ->
   RouteRequest route context ->
@@ -89,7 +90,7 @@ reportRoutedResponseObservability observabilityContext requestPath executionTimi
 
 buildRoutedRequestObservability ::
   (Eq route) =>
-  RequestObservabilityContext route action context ->
+  RequestObservabilityContext route action context authorization ->
   Text ->
   RequestExecutionTimings ->
   RouteRequest route context ->
@@ -104,7 +105,7 @@ buildRoutedRequestObservability observabilityContext requestPath executionTiming
           { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel (requestMethodText request),
             Observability.requestIdentityScheme = requestScheme requestPolicyConfig request,
             Observability.requestIdentityPath = requestPath,
-            Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath (renderRoute (routeCodec webApplication) routeRequest)
+            Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath (safeUrlText (encodeRouteLocation (renderRoute (routeCodec webApplication) routeRequest)))
           }
         (responseStatusCode webApplication response)
         (responseKind response)
@@ -126,7 +127,7 @@ buildRoutedRequestObservability observabilityContext requestPath executionTiming
     requestPolicyConfig = requestObservabilityPolicyConfig observabilityContext
 
 reportEarlyRequestObservability ::
-  RequestObservabilityContext route action context ->
+  RequestObservabilityContext route action context authorization ->
   Word64 ->
   Word64 ->
   Text ->

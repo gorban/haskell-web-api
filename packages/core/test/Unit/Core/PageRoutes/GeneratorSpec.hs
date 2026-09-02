@@ -179,7 +179,7 @@ spec =
                    thirdResult `shouldBe` Right (Generated expectedOutputs),
                    outputPresence `shouldBe` [True, True, True],
                    dispatcherSource
-                     `shouldSatisfy` Text.isInfixOf "RouteDefinition ExampleRoute ExampleContext",
+                     `shouldSatisfy` Text.isInfixOf "RouteDefinition ExampleRoute ExampleContext ()",
                    dispatcherSource
                      `shouldSatisfy` Text.isInfixOf "SecondPage -> App.Pages.Second.pageDefinition"
                  ]

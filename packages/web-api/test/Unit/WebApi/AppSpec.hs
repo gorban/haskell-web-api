@@ -34,9 +34,17 @@ import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResu
 import WebApi.Page (renderPage)
 import WebApi.Postgres.Testing (closePostgresPool, newPostgresPool, runPostgresMigrationsForRuntime, runPostgresSeed)
 import WebApi.Response (selectResponse)
-import WebApi.Route (AppRequestContext (..), AppRoute (..), defaultRequestContext, parseRoute, renderRoutePath)
+import WebApi.Route (AppRequestContext (..), AppRoute (..), defaultRequestContext, renderRoutePath)
 import WebApi.Route qualified
 import WebApi.SetupPlan (TcpEndpoint (..))
+
+routeLocationForTest :: Text.Text -> HarchWeb.RouteLocation
+routeLocationForTest target =
+  case HarchWeb.decodeRouteLocation (HarchWeb.requestTarget (TextEncoding.encodeUtf8 path) (TextEncoding.encodeUtf8 query)) of
+    Left routeError -> error ("invalid test route target: " <> show routeError)
+    Right location -> location
+  where
+    (path, query) = Text.breakOn "?" target
 
 spec = do
   describe "buildApp" $ do
@@ -217,19 +225,19 @@ spec = do
 
     it "stores the same route codec behavior used by direct route tests" $ do
       let codec = HarchWeb.routeCodec pureApplication
-      HarchWeb.parseRoute codec defaultRequestContext "/" `shouldBe` parseRoute defaultRequestContext "/"
-      HarchWeb.parseRoute codec defaultRequestContext "/es" `shouldBe` parseRoute defaultRequestContext "/es"
-      HarchWeb.parseRoute codec defaultRequestContext "/second" `shouldBe` parseRoute defaultRequestContext "/second"
-      HarchWeb.parseRoute codec defaultRequestContext "/api/status" `shouldBe` parseRoute defaultRequestContext "/api/status"
-      HarchWeb.parseRoute codec defaultRequestContext "/api/second" `shouldBe` parseRoute defaultRequestContext "/api/second"
-      HarchWeb.parseRoute codec defaultRequestContext "/missing" `shouldBe` Nothing
-      HarchWeb.renderRoute codec homeRequest `shouldBe` renderRoutePath homeRequest
-      HarchWeb.renderRoute codec spanishSecondRequest `shouldBe` renderRoutePath spanishSecondRequest
-      HarchWeb.renderRoute codec secondRequest `shouldBe` renderRoutePath secondRequest
-      HarchWeb.renderRoute codec apiStatusRequest `shouldBe` renderRoutePath apiStatusRequest
-      HarchWeb.renderRoute codec apiSecondRequest `shouldBe` renderRoutePath apiSecondRequest
-      HarchWeb.renderRoute codec apiNotFoundRequest `shouldBe` renderRoutePath apiNotFoundRequest
-      HarchWeb.renderRoute codec notFoundRequest `shouldBe` renderRoutePath notFoundRequest
+      HarchWeb.parseRoute codec defaultRequestContext (routeLocationForTest "/") `shouldBe` WebApi.Route.parseRoute defaultRequestContext (routeLocationForTest "/")
+      HarchWeb.parseRoute codec defaultRequestContext (routeLocationForTest "/es") `shouldBe` WebApi.Route.parseRoute defaultRequestContext (routeLocationForTest "/es")
+      HarchWeb.parseRoute codec defaultRequestContext (routeLocationForTest "/second") `shouldBe` WebApi.Route.parseRoute defaultRequestContext (routeLocationForTest "/second")
+      HarchWeb.parseRoute codec defaultRequestContext (routeLocationForTest "/api/status") `shouldBe` WebApi.Route.parseRoute defaultRequestContext (routeLocationForTest "/api/status")
+      HarchWeb.parseRoute codec defaultRequestContext (routeLocationForTest "/api/second") `shouldBe` WebApi.Route.parseRoute defaultRequestContext (routeLocationForTest "/api/second")
+      HarchWeb.parseRoute codec defaultRequestContext (routeLocationForTest "/missing") `shouldBe` HarchWeb.RouteNotMatched
+      HarchWeb.safeUrlText (HarchWeb.encodeRouteLocation (HarchWeb.renderRoute codec homeRequest)) `shouldBe` renderRoutePath homeRequest
+      HarchWeb.safeUrlText (HarchWeb.encodeRouteLocation (HarchWeb.renderRoute codec spanishSecondRequest)) `shouldBe` renderRoutePath spanishSecondRequest
+      HarchWeb.safeUrlText (HarchWeb.encodeRouteLocation (HarchWeb.renderRoute codec secondRequest)) `shouldBe` renderRoutePath secondRequest
+      HarchWeb.safeUrlText (HarchWeb.encodeRouteLocation (HarchWeb.renderRoute codec apiStatusRequest)) `shouldBe` renderRoutePath apiStatusRequest
+      HarchWeb.safeUrlText (HarchWeb.encodeRouteLocation (HarchWeb.renderRoute codec apiSecondRequest)) `shouldBe` renderRoutePath apiSecondRequest
+      HarchWeb.safeUrlText (HarchWeb.encodeRouteLocation (HarchWeb.renderRoute codec apiNotFoundRequest)) `shouldBe` renderRoutePath apiNotFoundRequest
+      HarchWeb.safeUrlText (HarchWeb.encodeRouteLocation (HarchWeb.renderRoute codec notFoundRequest)) `shouldBe` renderRoutePath notFoundRequest
       HarchWeb.notFoundRequest codec defaultRequestContext `shouldBe` notFoundRequest
       HarchWeb.routeMethods codec NotFoundRoute `shouldBe` HarchWeb.RouteHidden
       -- 'pureApplication's own codec (above) has its 'HarchWeb.routeMethods'

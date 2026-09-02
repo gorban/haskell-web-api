@@ -5,19 +5,20 @@ module App.Pages.NotFound (pageDefinition, notFoundPage) where
 
 import App.Components.Controls (pageLink)
 import App.Pages.Route.Generated (PageRoute (..))
-import App.Routes (TwoPageNavigationTarget (NavigationPage), TwoPageRoute)
+import App.Routes (TwoPageNavigationTarget (NavigationPage), TwoPageRoute, twoPageEndpointMetadata)
 import App.Routes qualified as Routes
 import HarchWeb
-  ( Page (..),
+  ( EndpointProtocol (HtmlEndpoint),
+    Page (..),
     RouteRequest (..),
     harch,
   )
 import HarchWeb.Site (RouteDefinition)
 import HarchWeb.Site qualified as Site
 
-pageDefinition :: RouteDefinition TwoPageRoute ()
+pageDefinition :: RouteDefinition TwoPageRoute () ()
 pageDefinition =
-  Site.pageRoute Nothing notFoundPage
+  Site.pageRoute (twoPageEndpointMetadata HtmlEndpoint (Routes.Page PageNotFound)) Nothing notFoundPage
 
 notFoundPage :: RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
 notFoundPage routeRequest =

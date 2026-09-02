@@ -43,7 +43,7 @@ import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
-import HarchWeb.Markup (ElementId, Html, elementIdText, renderHtml, text)
+import HarchWeb.Markup (ElementId, Html, elementIdText, renderHtml, safeUrlText, text)
 import HarchWeb.PathPrefix (PathPrefix, applyPathPrefix, mkUrlPath, urlPathText)
 import HarchWeb.Routing (RouteCodec, routeHref)
 import HarchWeb.StaticAssets (AssetPath (..), CssClass, Stylesheet (..), cssClassText)
@@ -884,7 +884,7 @@ buildNavigation codec page =
         ResolvedNavigationItem
           { navigationLabel = itemLabel,
             navigationRoute = itemRoute,
-            navigationHref = routeHref codec (pageContext page) itemRoute,
+            navigationHref = safeUrlText (routeHref codec (pageContext page) itemRoute),
             navigationIsActive = pageRoute page == itemRoute
           }
     )

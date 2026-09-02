@@ -10,6 +10,7 @@
 module WebApi.AccountPages.Actions
   ( AccountAction,
     AccountActionTarget (..),
+    accountActionEndpointMetadata,
     accountActions,
     authorizeAccountActionCsrf,
     handleAccountAction,

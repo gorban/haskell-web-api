@@ -46,7 +46,7 @@ data RunningLocalTestServer = RunningLocalTestServer
 -- gate, which 'toWaiApplication' now applies unconditionally — so a
 -- real-socket test observes the same admission behaviour a deployed
 -- runtime would, not a narrower test-only approximation of it.
-withLocalTestServer :: (Eq route) => Application route action context -> (LocalTestServer -> IO a) -> IO a
+withLocalTestServer :: (Eq route) => Application route action context authorization -> (LocalTestServer -> IO a) -> IO a
 withLocalTestServer webApplication useLocalServer = do
   gatedWaiApplication <- toWaiApplication webApplication
   withLocalTestServerWithRequestHeadLimits

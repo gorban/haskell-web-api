@@ -67,11 +67,16 @@ library
     HarchWeb.Api
     HarchWeb.Api.Multipart
     HarchWeb.Api.Multipart.Storage
+    HarchWeb.ApplicationModule
+    HarchWeb.Authentication
+    HarchWeb.Authentication.Jwt
     HarchWeb.Controls
     HarchWeb.Database
     HarchWeb.DevSmtp
     HarchWeb.Document
     HarchWeb.Email
+    HarchWeb.EndpointMetadata
+    HarchWeb.EndpointSecurity
     HarchWeb.Gmail
     HarchWeb.GoogleWorkspace
     HarchWeb.Localization
@@ -83,14 +88,17 @@ library
     HarchWeb.Observability
     HarchWeb.Password
     HarchWeb.RecoveryCode
+    HarchWeb.RequestContext
     HarchWeb.Routing
     HarchWeb.Secret
     HarchWeb.Security
+    HarchWeb.SecurityEvent
     HarchWeb.Server
     HarchWeb.Server.Transport.Internal
     HarchWeb.Session
     HarchWeb.Site
     HarchWeb.StaticAssets
+    HarchWeb.StaticAssets.Route
     HarchWeb.Time
     HarchWeb.Totp
     HarchWeb.Username
@@ -111,6 +119,9 @@ library
     HarchWeb.Api.Negotiation
     HarchWeb.Api.Request
     HarchWeb.Api.Response
+    HarchWeb.ApplicationModule.Composition
+    HarchWeb.ApplicationModule.Core
+    HarchWeb.ApplicationModule.Mount
     HarchWeb.Markup.Attributes
     HarchWeb.Markup.Elements
     HarchWeb.Markup.Implementation
@@ -131,6 +142,8 @@ library
     HarchWeb.Security.ConstantTime
     HarchWeb.Security.ForwardedTrust
     HarchWeb.Security.RequestLimits
+    HarchWeb.SecurityFailureCode
+    HarchWeb.SecurityFailureCode.Internal
     HarchWeb.Server.Application
     HarchWeb.Server.ClientAction
     HarchWeb.Server.ClientAction.Runtime
@@ -171,6 +184,8 @@ library
     http-client-tls ^>=0.3.6.4,
     http-date ^>=0.0.11,
     http-types ^>=0.12.5,
+    jose ^>=0.12,
+    lens ^>=5.3,
     memory ^>=0.18.0,
     mtl ^>=2.3.1,
     network ^>=3.2.8.0,
@@ -218,10 +233,14 @@ test-suite harch-web-tests
     Unit.HarchWeb.Api.NegotiationSpec
     Unit.HarchWeb.Api.RequestSpec
     Unit.HarchWeb.Api.ResponseSpec
+    Unit.HarchWeb.ApplicationModuleSpec
+    Unit.HarchWeb.Authentication.JwtSpec
+    Unit.HarchWeb.AuthenticationSpec
     Unit.HarchWeb.DatabaseSpec
     Unit.HarchWeb.DevSmtpSpec
     Unit.HarchWeb.DocumentSpec
     Unit.HarchWeb.EmailSpec
+    Unit.HarchWeb.EndpointSecuritySpec
     Unit.HarchWeb.FacadeSpec
     Unit.HarchWeb.GmailSpec
     Unit.HarchWeb.GoogleWorkspaceSpec
@@ -242,10 +261,12 @@ test-suite harch-web-tests
     Unit.HarchWeb.PasswordSpec
     Unit.HarchWeb.PathPrefixSpec
     Unit.HarchWeb.RecoveryCodeSpec
+    Unit.HarchWeb.RequestContextSpec
     Unit.HarchWeb.RoutingSpec
     Unit.HarchWeb.SecretSpec
     Unit.HarchWeb.Security.ForwardedTrustSpec
     Unit.HarchWeb.Security.RequestLimitsSpec
+    Unit.HarchWeb.SecurityEventSpec
     Unit.HarchWeb.SecuritySpec
     Unit.HarchWeb.Server.ApplicationSpec
     Unit.HarchWeb.Server.ConfigSpec
@@ -257,6 +278,7 @@ test-suite harch-web-tests
     Unit.HarchWeb.Server.TransportSpec
     Unit.HarchWeb.SessionSpec
     Unit.HarchWeb.SiteSpec
+    Unit.HarchWeb.StaticAssets.RouteSpec
     Unit.HarchWeb.StaticAssetsSpec
     Unit.HarchWeb.TestSupport
     Unit.HarchWeb.TimeSpec
@@ -298,6 +320,7 @@ test-suite harch-web-tests
     hspec ^>=2.11.17,
     http-client ^>=0.7.19,
     http-types ^>=0.12.5,
+    jose ^>=0.12,
     network ^>=3.2.8.0,
     pem ^>=0.2.4,
     process ^>=1.6.26.1,

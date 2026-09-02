@@ -47,7 +47,7 @@ runServer ::
   (Eq route, HasServerConfig config) =>
   Handle ->
   config ->
-  Application route action context ->
+  Application route action context authorization ->
   IO ()
 runServer = runServerWithWaiMiddleware id
 
@@ -61,7 +61,7 @@ runServerWithWaiMiddleware ::
   Wai.Middleware ->
   Handle ->
   config ->
-  Application route action context ->
+  Application route action context authorization ->
   IO ()
 runServerWithWaiMiddleware waiMiddleware outputHandle config webApplication =
   either
@@ -79,7 +79,7 @@ runServerWithStartupPlan ::
   Wai.Middleware ->
   Handle ->
   config ->
-  Application route action context ->
+  Application route action context authorization ->
   ServerStartupPlan ->
   IO ()
 runServerWithStartupPlan waiMiddleware outputHandle config webApplication startupPlan = do
@@ -142,14 +142,14 @@ runServerWithStartupPlan waiMiddleware outputHandle config webApplication startu
 -- server. They are deliberately separate from request-specific timing and
 -- responder values so the request adapter does not become another general
 -- dispatch abstraction.
-data RuntimeRequestEnvironment route action context = RuntimeRequestEnvironment
+data RuntimeRequestEnvironment route action context authorization = RuntimeRequestEnvironment
   { runtimeRenderedWaiApplication :: Wai.Application,
     runtimeChallengeStore :: AcmeChallengeStore,
     runtimeWebrootStore :: CertbotWebrootStore,
-    runtimeTypedApplication :: Application route action context
+    runtimeTypedApplication :: Application route action context authorization
   }
 
-toRuntimeWaiApplication :: RuntimeRequestEnvironment route action context -> Wai.Application
+toRuntimeWaiApplication :: RuntimeRequestEnvironment route action context authorization -> Wai.Application
 toRuntimeWaiApplication runtimeRequestEnvironment request respond = do
   requestStartedAt <- getMonotonicTimeNSec
   let webApplication = runtimeTypedApplication runtimeRequestEnvironment
@@ -161,7 +161,7 @@ toRuntimeWaiApplication runtimeRequestEnvironment request respond = do
     maybeChallengeResponse
 
 respondAcmeChallenge ::
-  RuntimeRequestEnvironment route action context ->
+  RuntimeRequestEnvironment route action context authorization ->
   Wai.Request ->
   Word64 ->
   (Wai.Response -> IO Wai.ResponseReceived) ->

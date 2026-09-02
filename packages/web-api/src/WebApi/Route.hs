@@ -28,6 +28,7 @@ module WebApi.Route
     RouteMetadata (..),
     RouteSelectionError (..),
     defaultRequestContext,
+    endpointMetadata,
     matchRoute,
     parseRoute,
     renderRoutePath,
@@ -41,11 +42,19 @@ module WebApi.Route
 where
 
 import Data.Char (isAsciiLower)
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.List.NonEmpty qualified as NonEmpty
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
+import HarchWeb.EndpointSecurity
+  ( AccessRequirement (AllowUnauthenticated),
+    EndpointMetadata,
+    EndpointProtocol (ApiEndpoint, HtmlEndpoint),
+    mkEndpointMetadata,
+    requiredEndpointNameOrDie,
+    requiredRouteTemplateOrDie,
+  )
 import HarchWeb.Session
   ( SessionId,
     defaultSessionCookiePolicy,
@@ -54,7 +63,6 @@ import HarchWeb.Session
     sessionCookieNameText,
   )
 import Network.HTTP.Types qualified as Http
-import Network.HTTP.Types.URI qualified as HttpUri
 import Network.Wai qualified as Wai
 import WebApi.Session (mfaEnrollmentSessionCookiePolicy)
 
@@ -212,7 +220,7 @@ routeCodec :: HarchWeb.RouteCodec AppRoute AppRequestContext
 routeCodec =
   HarchWeb.RouteCodec
     { HarchWeb.parseRoute = parseRoute,
-      HarchWeb.renderRoute = renderRoutePath,
+      HarchWeb.renderRoute = renderRouteLocation,
       HarchWeb.notFoundRequest = \requestContext ->
         HarchWeb.RouteRequest
           { HarchWeb.requestRoute = NotFoundRoute,
@@ -229,54 +237,73 @@ appRouteMethods route =
     Api ApiNotFound -> []
     Api _ -> [HarchWeb.RouteGet]
 
-parseRoute :: AppRequestContext -> Text -> Maybe (HarchWeb.RouteRequest AppRoute AppRequestContext)
-parseRoute requestContext target =
-  either (const Nothing) Just (selectRoute requestContext target)
+parseRoute :: AppRequestContext -> HarchWeb.RouteLocation -> HarchWeb.RouteParseResult AppRoute AppRequestContext
+parseRoute requestContext location =
+  case selectRoute requestContext location of
+    Left _ -> HarchWeb.RouteNotMatched
+    Right routeRequest -> HarchWeb.RouteParsed routeRequest
 
 selectRoute ::
   AppRequestContext ->
-  Text ->
+  HarchWeb.RouteLocation ->
   Either RouteSelectionError (HarchWeb.RouteRequest AppRoute AppRequestContext)
-selectRoute requestContext target = do
-  let path = routePath target
-  (pathLocale, route) <- parseRoutePath path
+selectRoute requestContext location = do
+  let segments = map HarchWeb.pathSegmentText (HarchWeb.routePathSegments location)
+      path = HarchWeb.safeUrlText (HarchWeb.encodeRouteLocation (location {HarchWeb.routeQueryFields = []}))
+  (pathLocale, route) <- parseRouteSegments path segments
   pure
     HarchWeb.RouteRequest
       { HarchWeb.requestRoute = route,
         HarchWeb.requestContext =
           (mergeRequestContext requestContext pathLocale)
-            { requestQueryParameters = routeQuery target
+            { requestQueryParameters = queryParameters (HarchWeb.routeQueryFields location)
             }
       }
+  where
+    queryFieldText (name, value) = (HarchWeb.queryNameText name, HarchWeb.queryValueText value)
+    -- The framework retains every syntactically valid query field.  This
+    -- application has always ignored unnamed fields, so keep that local
+    -- semantic policy at the typed application boundary rather than teaching
+    -- the shared request-target decoder to discard input facts.
+    queryParameters = filter (not . Text.null . fst) . map queryFieldText
 
 renderRoutePath :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Text
-renderRoutePath routeRequest =
-  HarchWeb.urlPathText
-    ( HarchWeb.applyRequestPathPrefix
-        (requestPathPrefix requestContext)
-        ( HarchWeb.mkUrlPath
-            ( case HarchWeb.requestRoute routeRequest of
-                Api apiRoute -> renderApiRoutePath apiRoute
-                Page pageRoute ->
-                  let renderedPath =
-                        Text.concat
-                          [ renderLocalePrefix
-                              (requestLocale requestContext)
-                              (requestLocaleIsExplicit requestContext),
-                            routePageSuffix (pageRouteMetadata pageRoute)
-                          ]
-                   in if Text.null renderedPath then "/" else renderedPath
-            )
-        )
-    )
+renderRoutePath = HarchWeb.safeUrlText . HarchWeb.encodeRouteLocation . renderRouteLocation
+
+renderRouteLocation :: HarchWeb.RouteRequest AppRoute AppRequestContext -> HarchWeb.RouteLocation
+renderRouteLocation routeRequest =
+  HarchWeb.prefixRouteLocation
+    (requestPathPrefix requestContext)
+    HarchWeb.RouteLocation
+      { HarchWeb.routePathSegments = renderedSegments,
+        HarchWeb.routeQueryFields = []
+      }
   where
     requestContext = HarchWeb.requestContext routeRequest
+    renderedSegments =
+      case HarchWeb.requestRoute routeRequest of
+        Api apiRoute -> NonEmpty.toList (apiRouteSegments apiRoute)
+        Page pageRoute -> localeSegments <> maybe [] (pure . HarchWeb.requiredPathSegment) (routePageSegment (pageRouteMetadata pageRoute))
+    localeSegments =
+      case (requestLocale requestContext, requestLocaleIsExplicit requestContext) of
+        (English, False) -> []
+        (English, True) -> [HarchWeb.requiredPathSegment "en"]
+        (Spanish, _) -> [HarchWeb.requiredPathSegment "es"]
+
+apiRouteSegments :: ApiRoute -> NonEmpty.NonEmpty HarchWeb.PathSegment
+apiRouteSegments apiRoute =
+  case apiRoute of
+    StatusApi -> pathSegment "api" NonEmpty.:| [pathSegment "status"]
+    SecondApi -> pathSegment "api" NonEmpty.:| [pathSegment "second"]
+    ApiNotFound -> pathSegment "api" NonEmpty.:| [pathSegment "404"]
+  where
+    pathSegment = HarchWeb.requiredPathSegment
 
 -- | Turn the closed application's typed route rendering into a safe link
 -- target. A rejection is an application route-table defect, not a request
 -- outcome; 'requiredRouteUrl' keeps that invariant directly testable.
 renderRouteUrl :: HarchWeb.RouteRequest AppRoute AppRequestContext -> HarchWeb.SafeUrl
-renderRouteUrl = requiredRouteUrl . renderRoutePath
+renderRouteUrl = HarchWeb.encodeRouteLocation . renderRouteLocation
 
 requiredRouteUrl :: Text -> HarchWeb.SafeUrl
 requiredRouteUrl renderedPath =
@@ -284,27 +311,8 @@ requiredRouteUrl renderedPath =
     ("WebApi.Route rendered an unsafe URL: " <> renderedPath)
     (HarchWeb.mkSafeUrl renderedPath)
 
-matchRoute :: AppRequestContext -> Text -> HarchWeb.RouteRequest AppRoute AppRequestContext
+matchRoute :: AppRequestContext -> HarchWeb.RouteLocation -> HarchWeb.RouteParseResult AppRoute AppRequestContext
 matchRoute = HarchWeb.matchRoute routeCodec
-
-routePath :: Text -> Text
-routePath =
-  Text.takeWhile (/= '?')
-
-routeQuery :: Text -> [(Text, Text)]
-routeQuery target =
-  case Text.breakOn "?" target of
-    (_, queryText) ->
-      case Text.uncons queryText of
-        Nothing -> []
-        Just _ -> mapMaybe parsePair (HttpUri.parseQuery (TextEncoding.encodeUtf8 (Text.drop 1 queryText)))
-  where
-    parsePair (rawKey, rawValue) = do
-      key <- either (const Nothing) Just (TextEncoding.decodeUtf8' rawKey)
-      value <- either (const Nothing) Just (TextEncoding.decodeUtf8' (fromMaybe "" rawValue))
-      case Text.null key of
-        True -> Nothing
-        False -> Just (key, value)
 
 mergeRequestContext :: AppRequestContext -> Maybe AppLocale -> AppRequestContext
 mergeRequestContext requestContext maybeLocale =
@@ -328,15 +336,6 @@ requestContextFromWaiRequest requestPolicyConfig request requestContext =
       requestSessionId = sessionIdFromCookieHeaders (sessionCookieNameText (sessionCookieName defaultSessionCookiePolicy)) (Wai.requestHeaders request),
       requestMfaEnrollmentSessionId = sessionIdFromCookieHeaders (sessionCookieNameText (sessionCookieName mfaEnrollmentSessionCookiePolicy)) (Wai.requestHeaders request)
     }
-
-parseRoutePath :: Text -> Either RouteSelectionError (Maybe AppLocale, AppRoute)
-parseRoutePath path = parseRouteSegments path =<< tokenizeRoutePath path
-
-tokenizeRoutePath :: Text -> Either RouteSelectionError [Text]
-tokenizeRoutePath path
-  | not (Text.isPrefixOf "/" path) = Left (UnsupportedPath path)
-  | path /= "/" && Text.isSuffixOf "/" path = Left (UnsupportedPath path)
-tokenizeRoutePath path = Right (drop 1 (Text.splitOn "/" path))
 
 parseRouteSegments :: Text -> [Text] -> Either RouteSelectionError (Maybe AppLocale, AppRoute)
 parseRouteSegments path segments =
@@ -406,17 +405,45 @@ looksLikeLocalePrefix :: Text -> Bool
 looksLikeLocalePrefix prefix =
   Text.length prefix == 2 && Text.all isAsciiLower prefix
 
-renderLocalePrefix :: AppLocale -> Bool -> Text
-renderLocalePrefix locale isExplicit =
-  case locale of
-    English -> if isExplicit then "/en" else Text.empty
-    Spanish -> "/es"
-
 routeMetadata :: AppRoute -> RouteMetadata
 routeMetadata route =
   case route of
     Page pageRoute -> pageRouteMetadata pageRoute
     Api _ -> RouteMetadata Nothing "/api/404" "Not Found" []
+
+-- | Stable, application-authored endpoint identities for the existing route
+-- table. The reference app deliberately chooses the explicitly public root
+-- configuration until AHI-4C supplies its account-backed authentication
+-- guard, so that choice is visible in every route declaration.
+endpointMetadata :: AppRoute -> EndpointMetadata ()
+endpointMetadata route =
+  case route of
+    HomeRoute -> html "web.home" "/{locale}"
+    SecondRoute -> html "web.second" "/{locale}/second"
+    SpacesRoute -> html "web.spaces" "/{locale}/spaces"
+    RegistrationRoute -> html "account.registration" "/{locale}/register"
+    EmailVerificationRoute -> html "account.email-verification" "/{locale}/verify"
+    MfaEnrollmentRoute -> html "account.mfa-enrollment" "/{locale}/mfa"
+    LoginRoute -> html "account.login" "/{locale}/login"
+    LogoutRoute -> html "account.logout" "/{locale}/logout"
+    ProfileRoute -> html "account.profile" "/{locale}/profile"
+    LanguageRoute -> html "web.language" "/{locale}/language"
+    HelpRoute -> html "web.help" "/{locale}/help"
+    NotFoundRoute -> html "web.not-found" "/{locale}/404"
+    StatusApiRoute -> api "api.status" "/api/status"
+    SecondApiRoute -> api "api.second" "/api/second"
+    ApiNotFoundRoute -> api "api.not-found" "/api/404"
+  where
+    html = declaredMetadata HtmlEndpoint
+    api = declaredMetadata ApiEndpoint
+
+declaredMetadata :: EndpointProtocol -> Text -> Text -> EndpointMetadata ()
+declaredMetadata protocol name template =
+  mkEndpointMetadata
+    (requiredEndpointNameOrDie name)
+    (requiredRouteTemplateOrDie template)
+    protocol
+    AllowUnauthenticated
 
 pageRouteMetadata :: PageRoute -> RouteMetadata
 pageRouteMetadata pageRoute =
@@ -433,13 +460,6 @@ pageRouteMetadata pageRoute =
     LanguagePage -> RouteMetadata (Just "language") "/language" "Language" []
     HelpPage -> RouteMetadata (Just "help") "/help" "Help and support" []
     PageNotFound -> RouteMetadata (Just "404") "/404" "Not Found" []
-
-renderApiRoutePath :: ApiRoute -> Text
-renderApiRoutePath apiRoute =
-  case apiRoute of
-    StatusApi -> "/api/status"
-    SecondApi -> "/api/second"
-    ApiNotFound -> "/api/404"
 
 sessionIdFromCookieHeaders :: Text -> Http.RequestHeaders -> Maybe SessionId
 sessionIdFromCookieHeaders cookieName headers = do

@@ -45,7 +45,7 @@ import System.Process ()
 import TestCore.CustomAssertions ()
 import TestCore.Wai ()
 import Text.Read ()
-import Unit.HarchWeb.TestSupport (TestContext, TestRoute (DataRoute, KnownRoute, MissingRoute), defaultContext, emptyStaticAssets, renderDocument, sampleApplication, samplePage, spanishContext, testPathPrefix, testRegionPatch, trustedMarkup)
+import Unit.HarchWeb.TestSupport (TestContext, TestRoute (DataRoute, KnownRoute, MissingRoute), defaultContext, emptyStaticAssets, renderDocument, routeLocationText, sampleApplication, samplePage, spanishContext, testPathPrefix, testRegionPatch, testRouteLocation, trustedMarkup)
 
 movedSpec :: Spec
 movedSpec = do
@@ -486,9 +486,9 @@ movedSpec = do
             clientActionContext = defaultContext
           }
         `shouldReturn` Nothing
-      parseRoute codec defaultContext "/known" `shouldBe` Just request
-      parseRoute codec defaultContext "/data" `shouldBe` Just RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}
-      renderRoute codec request `shouldBe` "/known"
+      parseRoute codec defaultContext (testRouteLocation "/known") `shouldBe` RouteParsed request
+      parseRoute codec defaultContext (testRouteLocation "/data") `shouldBe` RouteParsed RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}
+      routeLocationText (renderRoute codec request) `shouldBe` "/known"
       notFoundRequest codec defaultContext `shouldBe` RouteRequest {requestRoute = MissingRoute, requestContext = defaultContext}
       renderResponse sampleApplication request `shouldReturn` PageResponse (samplePage request)
       renderDocument (pageShell sampleApplication (samplePage request))

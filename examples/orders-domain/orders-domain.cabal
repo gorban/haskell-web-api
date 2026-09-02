@@ -1,0 +1,59 @@
+cabal-version: 3.14
+name: orders-domain
+version: 0.1.0.0
+synopsis: Independently mountable Orders application module example
+description: A typed Orders application module with explicit query and command dependencies for the composed-domains example.
+homepage: https://github.com/gorban/haskell-web-api
+license: BSD-2-Clause-Patent
+author: David Bruck
+maintainer: 1393236+gorban@users.noreply.github.com
+category: Web
+build-type: Simple
+
+common common
+  ghc-options:
+    -Wall
+    -Wcompat
+    -Wincomplete-uni-patterns
+    -Wincomplete-record-updates
+    -Wpartial-fields
+    -Wredundant-constraints
+    -Wunused-packages
+
+  default-language: GHC2024
+
+library
+  import: common
+  exposed-modules: Orders.Domain
+  hs-source-dirs: src
+  build-depends:
+    base ^>=4.22.0.0,
+    harch-web ^>=0.1.2.0,
+    http-types ^>=0.12.5,
+    text ^>=2.1.3,
+
+test-suite orders-domain-tests
+  import: common
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  hs-source-dirs: test
+  other-modules:
+    Unit.Orders.DomainSpec
+
+  ghc-options:
+    -F
+    -pgmF=spec-preprocessor
+    -rtsopts
+    -threaded
+    -with-rtsopts=-N
+
+  build-tool-depends:
+    test-spec-preprocessor:spec-preprocessor ^>=0.1.2.0
+
+  build-depends:
+    base ^>=4.22.0.0,
+    harch-web ^>=0.1.2.0,
+    hspec ^>=2.11.17,
+    http-types ^>=0.12.5,
+    orders-domain ^>=0.1.0.0,
+    wai ^>=3.2.5,

@@ -39,7 +39,7 @@ applyResponseHeaders additionalHeaders =
 responsePolicyHeaders :: RequestPolicyConfig -> Wai.Request -> Maybe Document.RuntimeNonce -> Http.ResponseHeaders
 responsePolicyHeaders = requestPolicyResponseHeadersWithNonce
 
-responsePageSecurity :: Application route action context -> Response route context -> IO (Maybe (Document.RuntimeNonce, CsrfToken))
+responsePageSecurity :: Application route action context authorization -> Response route context -> IO (Maybe (Document.RuntimeNonce, CsrfToken))
 responsePageSecurity webApplication response =
   case response of
     PageResponse page -> pageSecurity page
@@ -94,7 +94,7 @@ responseBodyDiagnostics responseBodyValue =
       diagnosticDatabaseOperations = responseDatabaseOperations responseBodyValue
     }
 
-responseStatusCode :: (Eq route) => Application route action context -> Response route context -> Int
+responseStatusCode :: (Eq route) => Application route action context authorization -> Response route context -> Int
 responseStatusCode webApplication response =
   case response of
     PageResponse page -> Http.statusCode (if isNotFoundPage webApplication page then Http.status404 else Http.status200)
@@ -120,7 +120,7 @@ toWaiResponse ::
   (Eq route) =>
   Http.ResponseHeaders ->
   Maybe (Document.RuntimeNonce, CsrfToken) ->
-  Application route action context ->
+  Application route action context authorization ->
   Response route context ->
   Wai.Response
 toWaiResponse additionalHeaders maybePageSecurity webApplication response =
@@ -177,6 +177,8 @@ toWaiProtocolResponse additionalHeaders protocolResponse =
         (protocolResponseStatus protocolResponse)
         (additionalHeaders <> protocolResponseHeaders protocolResponse)
         streamBody
+    ProtocolResponseWai waiResponse ->
+      applyResponseHeaders (additionalHeaders <> protocolResponseHeaders protocolResponse) waiResponse
 
 toWaiEventStreamResponse :: Http.ResponseHeaders -> ResponseBody -> ServerSentEventSource -> Wai.Response
 toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource =
@@ -197,7 +199,7 @@ toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource =
         flush
         streamEvents write flush
 
-isNotFoundPage :: (Eq route) => Application route action context -> Page route context -> Bool
+isNotFoundPage :: (Eq route) => Application route action context authorization -> Page route context -> Bool
 isNotFoundPage webApplication page =
   let pageRequestContext = Document.pageContext page
    in pageRequestContext `seq`

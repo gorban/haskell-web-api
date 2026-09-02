@@ -52,6 +52,9 @@ spec =
       evaluate (Markup.requiredSafeUrlOrDie "test failure" Nothing `seq` ())
         `shouldThrow` \case
           ErrorCall message -> "test failure" `Text.isInfixOf` Text.pack message
+      evaluate (Markup.requiredSafeUrl Nothing `seq` ())
+        `shouldThrow` \case
+          ErrorCall message -> "a required URL was unsafe" `Text.isInfixOf` Text.pack message
 
     it "exercises Eq and Show for DataAttributeSuffix and SafeUrl" $
       let suffixKind = fromMaybe (error "expected a valid suffix") (Markup.mkDataAttributeSuffix "kind")

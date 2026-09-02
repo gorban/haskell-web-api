@@ -20,7 +20,9 @@ import App.Routes
     TwoPageAction (..),
     TwoPageRoute (..),
     routeCodec,
+    twoPageActionEndpointMetadata,
     twoPageActions,
+    twoPageEndpointMetadata,
   )
 import Control.Monad (join)
 import Data.ByteString qualified as ByteString
@@ -28,8 +30,10 @@ import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Text qualified as Text
 import HarchWeb
   ( Application,
+    ApplicationSecurity (AuthenticationDisabled),
     ClientActionRequest (..),
     ClientActionResponse (..),
+    EndpointProtocol (ApiEndpoint, HtmlEndpoint),
     ForwardedHeaderTrust (..),
     ListenerConfig (..),
     ListenerScheme (..),
@@ -69,16 +73,17 @@ import Network.HTTP.Types qualified as Http
 import Network.HTTP.Types.URI qualified as HttpUri
 import Network.Wai qualified as Wai
 
-buildApplication :: Application TwoPageRoute TwoPageAction ()
+buildApplication :: Application TwoPageRoute TwoPageAction () ()
 buildApplication = buildSiteApplication twoPageSite
 
-twoPageSite :: Site TwoPageRoute TwoPageAction ()
+twoPageSite :: Site TwoPageRoute TwoPageAction () ()
 twoPageSite =
   ( simpleSite
       SimpleSiteConfiguration
         { simpleSiteName = "two-pages-example",
           simpleSiteDefaultRequestContext = (),
           simpleSiteRouteCodec = routeCodec,
+          simpleSiteSecurity = AuthenticationDisabled [],
           simpleSitePageShell = twoPageShell,
           simpleSiteNavigationRoutes = [Page HomePage, Page SecondPage, Page LiveDataPage],
           simpleSiteRouteDefinition = routeDefinition
@@ -88,10 +93,11 @@ twoPageSite =
       siteRequestPolicy = twoPageRequestPolicy,
       siteRequestMiddleware = [RequestMiddleware nativeFallbackCsrfMiddleware],
       siteDecodeClientAction = decodeAction twoPageActions,
+      siteClientActionEndpointMetadata = twoPageActionEndpointMetadata,
       siteHandleClientAction = twoPageClientAction
     }
 
-routeDefinition :: TwoPageRoute -> RouteDefinition TwoPageRoute ()
+routeDefinition :: TwoPageRoute -> RouteDefinition TwoPageRoute () ()
 routeDefinition route =
   case route of
     Page PageNotFound -> (pageRouteDefinition PageNotFound) {routeMethods = []}
@@ -99,14 +105,15 @@ routeDefinition route =
     Api LiveDataEvents -> liveDataEventsRouteDefinition
     Custom (PreviewPage previewSlug) -> previewPageDefinition previewSlug
     Custom NativeSubscriptionFallback ->
-      (Site.pageRoute Nothing nativeSubscriptionFallbackPage)
+      (Site.pageRoute (twoPageEndpointMetadata HtmlEndpoint (Custom NativeSubscriptionFallback)) Nothing nativeSubscriptionFallbackPage)
         { routeMethods = [RouteGet, RoutePost]
         }
 
-liveDataEventsRouteDefinition :: RouteDefinition TwoPageRoute ()
+liveDataEventsRouteDefinition :: RouteDefinition TwoPageRoute () ()
 liveDataEventsRouteDefinition =
   RouteDefinition
     { routeNavigationLabel = Nothing,
+      routeMetadata = twoPageEndpointMetadata ApiEndpoint (Api LiveDataEvents),
       routeMethods = [RouteGet],
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeResponse = \_ _ -> do
@@ -146,22 +153,27 @@ twoPageClientAction actionRequest =
           )
 
 nativeFallbackCsrfMiddleware :: Wai.Request -> () -> IO (MiddlewareResult ())
-nativeFallbackCsrfMiddleware request requestContext
-  | Wai.requestMethod request == "POST",
-    Wai.rawPathInfo request == "/native-subscribe" = do
+nativeFallbackCsrfMiddleware request requestContext =
+  if isNativeFallbackPost request
+    then do
       requestBodyResult <- readRequestBodyUpTo nativeFallbackBodyBytes request
       pure
         ( case requestBodyResult of
             Left RequestBodyLimitExceeded -> nativeFallbackBodyTooLarge requestContext
-            Right requestBody
-              | nativeFallbackFieldCountExceedsLimit requestBody -> nativeFallbackTooManyFields requestContext
-              | otherwise ->
-                  case (nativeFallbackCsrfToken request, nativeFallbackSubmittedToken requestBody) of
-                    (Just cookieToken, Just submittedToken)
-                      | cookieToken == submittedToken -> ContinueMiddleware requestContext
-                    _ -> nativeFallbackCsrfRejected requestContext
+            Right requestBody ->
+              if nativeFallbackFieldCountExceedsLimit requestBody
+                then nativeFallbackTooManyFields requestContext
+                else case (nativeFallbackCsrfToken request, nativeFallbackSubmittedToken requestBody) of
+                  (Just cookieToken, Just submittedToken)
+                    | cookieToken == submittedToken -> ContinueMiddleware requestContext
+                  _ -> nativeFallbackCsrfRejected requestContext
         )
-  | otherwise = pure (ContinueMiddleware requestContext)
+    else pure (ContinueMiddleware requestContext)
+
+isNativeFallbackPost :: Wai.Request -> Bool
+isNativeFallbackPost request =
+  Wai.requestMethod request == "POST"
+    && Wai.rawPathInfo request == "/native-subscribe"
 
 nativeFallbackBodyBytes :: Int
 nativeFallbackBodyBytes = 8192
@@ -225,9 +237,10 @@ nativeFallbackFieldCountExceedsLimit requestBody =
   nativeFallbackFieldCount requestBody > nativeFallbackFieldCountLimit
 
 nativeFallbackFieldCount :: LazyByteString.ByteString -> Int
-nativeFallbackFieldCount requestBody
-  | LazyByteString.null requestBody = 0
-  | otherwise = 1 + sum (map (ByteString.count 38) (LazyByteString.toChunks requestBody))
+nativeFallbackFieldCount requestBody =
+  if LazyByteString.null requestBody
+    then 0
+    else 1 + sum (map (ByteString.count 38) (LazyByteString.toChunks requestBody))
 
 requestCookies :: Wai.Request -> [(ByteString.ByteString, ByteString.ByteString)]
 requestCookies request =

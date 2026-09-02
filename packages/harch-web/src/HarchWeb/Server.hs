@@ -17,6 +17,7 @@ module HarchWeb.Server
     RegionPatch,
     RequestMiddleware (..),
     Response (..),
+    mapResponsePage,
     ResponseBody (..),
     ResponseDiagnostics (..),
     ProtocolResponse (..),

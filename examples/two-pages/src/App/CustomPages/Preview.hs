@@ -8,6 +8,7 @@ import App.Routes
     PreviewSlug,
     TwoPageRoute,
     previewSlugText,
+    twoPagePreviewEndpointMetadata,
   )
 import App.Routes qualified as Routes
 import HarchWeb
@@ -18,9 +19,9 @@ import HarchWeb
 import HarchWeb.Site (RouteDefinition)
 import HarchWeb.Site qualified as Site
 
-previewPageDefinition :: PreviewSlug -> RouteDefinition TwoPageRoute ()
+previewPageDefinition :: PreviewSlug -> RouteDefinition TwoPageRoute () ()
 previewPageDefinition previewSlug =
-  Site.pageRoute Nothing $ \routeRequest ->
+  Site.pageRoute twoPagePreviewEndpointMetadata Nothing $ \routeRequest ->
     pure
       Page
         { pageTitle = "Preview: " <> previewSlugText previewSlug,

@@ -38,17 +38,32 @@
 -- because it is observable in principle.
 module HarchWeb.Routing
   ( RouteCodec (..),
+    RequestTarget,
+    requestTarget,
+    RouteLocation (..),
+    RouteParseResult (..),
+    RouteDecodeError (..),
+    PathSegment,
+    pathSegmentText,
+    requiredPathSegment,
+    QueryName,
+    queryNameText,
+    requiredQueryName,
+    QueryValue,
+    queryValueText,
+    queryValue,
     RouteDispatch (..),
     RouteMethod (..),
     RouteMethodPolicy (..),
     RouteRequest (..),
     RouteFamily (..),
     RequestMethod,
-    RequestPath,
     requestMethod,
     requestMethodText,
-    requestPath,
-    requestPathText,
+    decodeRouteLocation,
+    encodeRouteLocation,
+    mapRouteParseResult,
+    prefixRouteLocation,
     routeMethodPolicy,
     routeMethodPolicyMethods,
     matchRouteMethod,
@@ -60,14 +75,231 @@ module HarchWeb.Routing
   )
 where
 
-import Control.Applicative ((<|>))
+import Data.Bits (shiftR, (.&.))
+import Data.ByteString (ByteString)
+import Data.ByteString qualified as ByteString
+import Data.Char (isAsciiLower, isAsciiUpper, isControl, isDigit, ord)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NonEmpty
-import Data.Maybe (fromMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
+import HarchWeb.Markup (SafeUrl, mkSafeUrl, requiredSafeUrl)
+import HarchWeb.PathPrefix (PathPrefix, pathPrefixText)
+
+-- | Raw HTTP target bytes held only between the server adapter and
+-- 'decodeRouteLocation'. A route codec never receives this representation.
+data RequestTarget = RequestTarget ByteString ByteString
+
+-- | Construct a target from the request adapter's already-bounded raw path
+-- and query bytes. The first component excludes the query delimiter; the
+-- second includes it when it was present in the HTTP request.
+requestTarget :: ByteString -> ByteString -> RequestTarget
+requestTarget = RequestTarget
+
+-- | One decoded path component. An empty component is retained for paths
+-- such as @/second/@, allowing the owning codec to keep its established
+-- trailing-slash policy without reconstructing raw input.
+newtype PathSegment = PathSegment Text
+  deriving (Eq, Ord, Show)
+
+pathSegmentText :: PathSegment -> Text
+pathSegmentText (PathSegment value) = value
+
+-- | Build a route-table-owned segment. A rejected value is an authored route
+-- definition error, not a request outcome.
+requiredPathSegment :: Text -> PathSegment
+requiredPathSegment value
+  | Text.any invalidPathCharacter value = error ("invalid route path segment: " <> show value)
+  | otherwise = PathSegment value
+
+-- | A decoded query-field name. It is distinct from a path component so a
+-- route codec cannot accidentally treat a query key as part of its ownership
+-- prefix.
+newtype QueryName = QueryName Text
+  deriving (Eq, Ord, Show)
+
+queryNameText :: QueryName -> Text
+queryNameText (QueryName value) = value
+
+requiredQueryName :: Text -> QueryName
+requiredQueryName value
+  | Text.any invalidQueryCharacter value = error ("invalid route query name: " <> show value)
+  | otherwise = QueryName value
+
+-- | A decoded query-field value. Repeated names deliberately remain a list in
+-- 'RouteLocation': multiplicity is an input fact for a route codec to model.
+newtype QueryValue = QueryValue Text
+  deriving (Eq, Ord, Show)
+
+queryValueText :: QueryValue -> Text
+queryValueText (QueryValue value) = value
+
+queryValue :: Text -> Maybe QueryValue
+queryValue value
+  | Text.any invalidQueryCharacter value = Nothing
+  | otherwise = Just (QueryValue value)
+
+-- | The sole structured representation passed between the HTTP request-target
+-- decoder and a typed route codec. Path and query parsing are deliberately
+-- separate from action/form-field parsing.
+data RouteLocation = RouteLocation
+  { routePathSegments :: [PathSegment],
+    routeQueryFields :: [(QueryName, QueryValue)]
+  }
+  deriving (Eq, Show)
+
+-- | Stable reasons the one request-target decoder can reject before a route
+-- family gets a chance to claim the location.
+data RouteDecodeError
+  = InvalidRouteTargetEncoding
+  | InvalidRoutePercentEncoding
+  | EncodedRouteSeparator
+  | AmbiguousRouteDotSegment
+  | InvalidRouteBackslash
+  | InvalidRouteControlCharacter
+  deriving (Eq, Show)
+
+-- | Route parsing distinguishes an ordinary ownership miss from malformed
+-- input. This prevents a malformed target from falling through to a later
+-- mounted module as if it had merely not matched an earlier one.
+data RouteParseResult route context
+  = RouteNotMatched
+  | RouteMalformed RouteDecodeError
+  | RouteParsed (RouteRequest route context)
+  deriving (Eq, Show)
+
+-- | Decode one bounded raw HTTP target. Percent decoding happens exactly once
+-- per structured component; a decoded separator, backslash, dot segment, or
+-- control character is rejected before a route family can claim it.
+decodeRouteLocation :: RequestTarget -> Either RouteDecodeError RouteLocation
+decodeRouteLocation (RequestTarget rawPath rawQuery) = do
+  pathSegments <- decodePath rawPath
+  queryFields <- decodeQuery rawQuery
+  pure RouteLocation {routePathSegments = pathSegments, routeQueryFields = queryFields}
+
+-- | Render a decoded location as one safe relative URL, escaping each path
+-- and query component exactly once.
+encodeRouteLocation :: RouteLocation -> SafeUrl
+encodeRouteLocation RouteLocation {routePathSegments, routeQueryFields} =
+  requiredSafeUrl (mkSafeUrl ("/" <> renderedPath <> renderedQuery))
+  where
+    renderedPath = Text.intercalate "/" (map (percentEncode . pathSegmentText) routePathSegments)
+    renderedQuery =
+      case routeQueryFields of
+        [] -> Text.empty
+        fields -> "?" <> Text.intercalate "&" (map renderQueryField fields)
+    renderQueryField (name, value) = percentEncode (queryNameText name) <> "=" <> percentEncode (queryValueText value)
+
+-- | Add the already-validated, browser-visible forwarding prefix to a route
+-- location without sending it back through the raw request-target decoder.
+prefixRouteLocation :: PathPrefix -> RouteLocation -> RouteLocation
+prefixRouteLocation pathPrefix location =
+  location {routePathSegments = prefixSegments <> routePathSegments location}
+  where
+    prefixSegments =
+      case pathPrefixText pathPrefix of
+        "" -> []
+        prefixText -> map PathSegment (Text.splitOn "/" (Text.drop 1 prefixText))
+
+decodePath :: ByteString -> Either RouteDecodeError [PathSegment]
+decodePath rawPath =
+  case ByteString.uncons rawPath of
+    Just (47, pathWithoutLeadingSlash) -> traverse decodePathSegment (rawPathSegments pathWithoutLeadingSlash)
+    _ -> Left InvalidRouteTargetEncoding
+  where
+    -- 'ByteString.split' represents an empty input as no components.  At the
+    -- HTTP boundary, however, @/@ is one empty path component: preserving it
+    -- lets an owning codec distinguish its root route from a path which was
+    -- never a valid absolute request target.
+    rawPathSegments pathWithoutLeadingSlash =
+      case ByteString.split 47 pathWithoutLeadingSlash of
+        [] -> [ByteString.empty]
+        segments -> segments
+    decodePathSegment rawSegment = do
+      decoded <- decodeComponent rawSegment
+      if decoded == "." || decoded == ".."
+        then Left AmbiguousRouteDotSegment
+        else
+          if Text.any invalidPathCharacter decoded
+            then Left (routeCharacterError decoded)
+            else Right (PathSegment decoded)
+
+decodeQuery :: ByteString -> Either RouteDecodeError [(QueryName, QueryValue)]
+decodeQuery rawQuery =
+  case ByteString.uncons rawQuery of
+    Nothing -> Right []
+    Just (63, queryWithoutDelimiter) -> traverse decodeQueryField (ByteString.split 38 queryWithoutDelimiter)
+    _ -> Left InvalidRouteTargetEncoding
+  where
+    decodeQueryField rawField = do
+      let (rawName, rawValueWithDelimiter) = ByteString.break (== 61) rawField
+          rawValue = maybe ByteString.empty snd (ByteString.uncons rawValueWithDelimiter)
+      name <- decodeComponent rawName
+      value <- decodeComponent rawValue
+      if Text.any invalidQueryCharacter name || Text.any invalidQueryCharacter value
+        then Left (routeCharacterError (name <> value))
+        else Right (QueryName name, QueryValue value)
+
+decodeComponent :: ByteString -> Either RouteDecodeError Text
+decodeComponent rawComponent = do
+  decodedBytes <- percentDecode rawComponent
+  case TextEncoding.decodeUtf8' decodedBytes of
+    Left _ -> Left InvalidRouteTargetEncoding
+    Right decoded -> Right decoded
+
+percentDecode :: ByteString -> Either RouteDecodeError ByteString
+percentDecode = fmap ByteString.pack . go . ByteString.unpack
+  where
+    go [] = Right []
+    go (37 : high : low : remaining) = do
+      highValue <- hexValue high
+      lowValue <- hexValue low
+      decodedRemaining <- go remaining
+      pure ((highValue * 16 + lowValue) : decodedRemaining)
+    go (37 : _) = Left InvalidRoutePercentEncoding
+    go (byte : remaining) = (byte :) <$> go remaining
+
+    hexValue byte
+      | byte >= 48 && byte <= 57 = Right (byte - 48)
+      | byte >= 65 && byte <= 70 = Right (byte - 55)
+      | byte >= 97 && byte <= 102 = Right (byte - 87)
+      | otherwise = Left InvalidRoutePercentEncoding
+
+percentEncode :: Text -> Text
+percentEncode = Text.concatMap encodeCharacter
+  where
+    encodeCharacter character
+      | isUnreserved character = Text.singleton character
+      | otherwise = Text.concat (map encodeByte (ByteString.unpack (TextEncoding.encodeUtf8 (Text.singleton character))))
+    encodeByte byte =
+      "%"
+        <> Text.singleton (hexDigit (byte `shiftR` 4))
+        <> Text.singleton (hexDigit (byte .&. 15))
+    hexDigit value
+      | value < 10 = toEnum (ord '0' + fromIntegral value)
+      | otherwise = toEnum (ord 'A' + fromIntegral value - 10)
+
+isUnreserved :: Char -> Bool
+isUnreserved character =
+  isAsciiLower character
+    || isAsciiUpper character
+    || isDigit character
+    || character `elem` ['-', '.', '_', '~']
+
+invalidPathCharacter :: Char -> Bool
+invalidPathCharacter character = character == '/' || character == '\\' || isControl character
+
+invalidQueryCharacter :: Char -> Bool
+invalidQueryCharacter character = character == '\\' || isControl character
+
+routeCharacterError :: Text -> RouteDecodeError
+routeCharacterError value
+  | Text.any (== '/') value = EncodedRouteSeparator
+  | Text.any (== '\\') value = InvalidRouteBackslash
+  | otherwise = InvalidRouteControlCharacter
 
 -- | HTTP methods the shared route boundary understands. @HEAD@ and @OPTIONS@
 -- are derived from a route's declared methods rather than declared separately.
@@ -99,17 +331,6 @@ requestMethod = RequestMethod
 
 requestMethodText :: RequestMethod -> Text
 requestMethodText (RequestMethod value) = value
-
--- | An incoming request's target path, kept distinct from 'RequestMethod' so
--- 'matchRouteMethod' cannot compile with the two swapped.
-newtype RequestPath = RequestPath Text
-  deriving (Eq, Show)
-
-requestPath :: Text -> RequestPath
-requestPath = RequestPath
-
-requestPathText :: RequestPath -> Text
-requestPathText (RequestPath value) = value
 
 -- | A route's declared method policy. 'RouteHidden' is its own case instead
 -- of overloading an empty method list, and 'RouteAllows' holds a 'Set' so a
@@ -154,15 +375,15 @@ data RouteRequest route context = RouteRequest
   deriving (Eq, Show)
 
 data RouteCodec route context = RouteCodec
-  { parseRoute :: context -> Text -> Maybe (RouteRequest route context),
-    renderRoute :: RouteRequest route context -> Text,
+  { parseRoute :: context -> RouteLocation -> RouteParseResult route context,
+    renderRoute :: RouteRequest route context -> RouteLocation,
     notFoundRequest :: context -> RouteRequest route context,
     routeMethods :: route -> RouteMethodPolicy
   }
 
-routeHref :: RouteCodec route context -> context -> route -> Text
+routeHref :: RouteCodec route context -> context -> route -> SafeUrl
 routeHref codec context route =
-  renderRoute codec RouteRequest {requestRoute = route, requestContext = context}
+  encodeRouteLocation (renderRoute codec RouteRequest {requestRoute = route, requestContext = context})
 
 -- | A closed choice between two route families sharing one 'RouteCodec', so
 -- their combined table is the sole 404\/405\/'Allow'\/@HEAD@\/@OPTIONS@
@@ -195,9 +416,10 @@ data RouteFamily routeA routeB
 combineRouteCodecs :: RouteCodec routeA context -> RouteCodec routeB context -> RouteCodec (RouteFamily routeA routeB) context
 combineRouteCodecs codecA codecB =
   RouteCodec
-    { parseRoute = \context path ->
-        (mapRouteRequest RouteFamilyA <$> parseRoute codecA context path)
-          <|> (mapRouteRequest RouteFamilyB <$> parseRoute codecB context path),
+    { parseRoute = \context location ->
+        case parseRoute codecA context location of
+          RouteNotMatched -> mapRouteParseResult RouteFamilyB (parseRoute codecB context location)
+          parsed -> mapRouteParseResult RouteFamilyA parsed,
       renderRoute = \routeRequest ->
         case requestRoute routeRequest of
           RouteFamilyA routeA -> renderRoute codecA (routeRequest {requestRoute = routeA})
@@ -210,9 +432,20 @@ combineRouteCodecs codecA codecB =
   where
     mapRouteRequest embed routeRequest = routeRequest {requestRoute = embed (requestRoute routeRequest)}
 
-matchRoute :: RouteCodec route context -> context -> Text -> RouteRequest route context
-matchRoute codec context path =
-  fromMaybe (notFoundRequest codec context) (parseRoute codec context path)
+-- | Map only a successfully parsed route while preserving the two results
+-- whose meaning belongs to the shared route boundary: an ordinary ownership
+-- miss and a malformed request location.  Mounts and route adapters use this
+-- instead of recreating a partial-looking case split that could accidentally
+-- turn malformed input into a fallthrough.
+mapRouteParseResult :: (route -> mappedRoute) -> RouteParseResult route context -> RouteParseResult mappedRoute context
+mapRouteParseResult embed parseResult =
+  case parseResult of
+    RouteNotMatched -> RouteNotMatched
+    RouteMalformed routeError -> RouteMalformed routeError
+    RouteParsed routeRequest -> RouteParsed (routeRequest {requestRoute = embed (requestRoute routeRequest)})
+
+matchRoute :: RouteCodec route context -> context -> RouteLocation -> RouteParseResult route context
+matchRoute = parseRoute
 
 -- | Match a route's path before evaluating its declared method policy. A
 -- 'RouteHidden' policy is an explicit typed not-found route. It retains its
@@ -221,18 +454,19 @@ matchRoute codec context path =
 -- The request's method and path are distinct types (not two adjacent 'Text'
 -- values), so passing them in the wrong order is a compile error rather than
 -- a silently-swapped runtime bug.
-matchRouteMethod :: RouteCodec route context -> context -> RequestMethod -> RequestPath -> RouteDispatch route context
-matchRouteMethod codec context incomingMethod incomingPath =
-  case parseRoute codec context (requestPathText incomingPath) of
-    Nothing -> RouteNotFound (notFoundRequest codec context)
-    Just routeRequest ->
+matchRouteMethod :: RouteCodec route context -> context -> RequestMethod -> RouteLocation -> Either RouteDecodeError (RouteDispatch route context)
+matchRouteMethod codec context incomingMethod location =
+  case parseRoute codec context location of
+    RouteNotMatched -> Right (RouteNotFound (notFoundRequest codec context))
+    RouteMalformed routeError -> Left routeError
+    RouteParsed routeRequest ->
       case routeMethods codec (requestRoute routeRequest) of
-        RouteHidden -> RouteNotFound routeRequest
+        RouteHidden -> Right (RouteNotFound routeRequest)
         RouteAllows declaredMethods ->
           case NonEmpty.nonEmpty (Set.toList declaredMethods) of
-            Nothing -> RouteNotFound routeRequest
+            Nothing -> Right (RouteNotFound routeRequest)
             Just nonEmptyDeclaredMethods ->
-              matchDeclaredMethods routeRequest (requestMethodText incomingMethod) nonEmptyDeclaredMethods
+              Right (matchDeclaredMethods routeRequest (requestMethodText incomingMethod) nonEmptyDeclaredMethods)
 
 matchDeclaredMethods :: RouteRequest route context -> Text -> NonEmpty RouteMethod -> RouteDispatch route context
 matchDeclaredMethods routeRequest incomingMethodText declaredMethods

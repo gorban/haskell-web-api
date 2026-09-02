@@ -17,7 +17,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Data.Text.Encoding qualified as TextEncoding (decodeUtf8)
+import Data.Text.Encoding qualified as TextEncoding (decodeUtf8, encodeUtf8)
 import HarchWeb
 import HarchWeb.Action qualified as Action (ActionCodec, action, actionCodec, formField, getAt, postAt, required, textValue)
 import HarchWeb.Database qualified as Database ()
@@ -55,6 +55,31 @@ data TestRoute
   | MissingRoute
   deriving (Eq, Show)
 
+type TestAuthorization = ()
+
+testApplicationSecurity :: ApplicationSecurity TestRoute TestContext TestAuthorization
+testApplicationSecurity = AuthenticationDisabled []
+
+testEndpointMetadata :: TestRoute -> EndpointMetadata TestAuthorization
+testEndpointMetadata _ =
+  mkEndpointMetadata
+    (requiredTestEndpointName "test.route")
+    (requiredTestRouteTemplate "/{testRoute}")
+    HtmlEndpoint
+    AllowUnauthenticated
+
+requiredTestEndpointName :: Text -> EndpointName
+requiredTestEndpointName endpointNameValue =
+  case mkEndpointName endpointNameValue of
+    Right endpointName -> endpointName
+    Left metadataError -> error ("invalid test endpoint name: " <> show metadataError)
+
+requiredTestRouteTemplate :: Text -> RouteTemplate
+requiredTestRouteTemplate routeTemplateValue =
+  case mkRouteTemplate routeTemplateValue of
+    Right routeTemplate -> routeTemplate
+    Left metadataError -> error ("invalid test route template: " <> show metadataError)
+
 testPathPrefix :: Text -> PathPrefix
 testPathPrefix rawPrefix =
   case parseRequestPathPrefix rawPrefix of
@@ -83,7 +108,7 @@ defaultContext = TestContext {requestLanguage = "en", testContextPathPrefix = ""
 spanishContext :: TestContext
 spanishContext = TestContext {requestLanguage = "es", testContextPathPrefix = ""}
 
-testActionCodec :: Action.ActionCodec Text TestContext Text
+testActionCodec :: Action.ActionCodec Text TestContext () Text
 testActionCodec =
   case Action.actionCodec
     [ Action.action
@@ -116,33 +141,51 @@ sampleRouteMethods route =
     DataRoute -> [RouteGet, RoutePost]
     EventStreamRoute -> [RouteGet]
 
-parseSampleRoute :: TestContext -> Text -> Maybe (RouteRequest TestRoute TestContext)
-parseSampleRoute routeContext path
-  | path == "/known" =
-      Just RouteRequest {requestRoute = KnownRoute, requestContext = routeContext}
-  | path == "/es/known" =
-      Just RouteRequest {requestRoute = KnownRoute, requestContext = spanishContext}
-  | Just queryString <- Text.stripPrefix "/query?" path =
-      Just RouteRequest {requestRoute = QueryRoute queryString, requestContext = routeContext}
-  | path == "/data" =
-      Just RouteRequest {requestRoute = DataRoute, requestContext = routeContext}
-  | path == "/events" =
-      Just RouteRequest {requestRoute = EventStreamRoute, requestContext = routeContext}
-  | otherwise = Nothing
+parseSampleRoute :: TestContext -> RouteLocation -> RouteParseResult TestRoute TestContext
+parseSampleRoute routeContext location =
+  case routeLocationText location of
+    path -> parseSampleRouteText routeContext path
 
-renderSampleRoute :: RouteRequest TestRoute TestContext -> Text
+parseSampleRouteText :: TestContext -> Text -> RouteParseResult TestRoute TestContext
+parseSampleRouteText routeContext path
+  | path == "/known" =
+      RouteParsed RouteRequest {requestRoute = KnownRoute, requestContext = routeContext}
+  | path == "/es/known" =
+      RouteParsed RouteRequest {requestRoute = KnownRoute, requestContext = spanishContext}
+  | Just queryString <- Text.stripPrefix "/query?" path =
+      RouteParsed RouteRequest {requestRoute = QueryRoute queryString, requestContext = routeContext}
+  | path == "/data" =
+      RouteParsed RouteRequest {requestRoute = DataRoute, requestContext = routeContext}
+  | path == "/events" =
+      RouteParsed RouteRequest {requestRoute = EventStreamRoute, requestContext = routeContext}
+  | otherwise = RouteNotMatched
+
+renderSampleRoute :: RouteRequest TestRoute TestContext -> RouteLocation
 renderSampleRoute request =
-  applyTestPathPrefix
-    (testContextPathPrefix (requestContext request))
-    ( case (requestLanguage (requestContext request), requestRoute request) of
-        (language, KnownRoute)
-          | language == "es" -> "/es/known"
-          | otherwise -> "/known"
-        (_, QueryRoute queryString) -> "/query?" <> queryString
-        (_, DataRoute) -> "/data"
-        (_, EventStreamRoute) -> "/events"
-        (_, MissingRoute) -> "/404"
+  testRouteLocation
+    ( applyTestPathPrefix
+        (testContextPathPrefix (requestContext request))
+        ( case (requestLanguage (requestContext request), requestRoute request) of
+            (language, KnownRoute)
+              | language == "es" -> "/es/known"
+              | otherwise -> "/known"
+            (_, QueryRoute queryString) -> "/query?" <> queryString
+            (_, DataRoute) -> "/data"
+            (_, EventStreamRoute) -> "/events"
+            (_, MissingRoute) -> "/404"
+        )
     )
+
+testRouteLocation :: Text -> RouteLocation
+testRouteLocation rawTarget =
+  case Text.breakOn "?" rawTarget of
+    (path, rawQuery) ->
+      case decodeRouteLocation (requestTarget (TextEncoding.encodeUtf8 path) (TextEncoding.encodeUtf8 rawQuery)) of
+        Left routeError -> error ("invalid test route location: " <> show routeError)
+        Right location -> location
+
+routeLocationText :: RouteLocation -> Text
+routeLocationText = safeUrlText . encodeRouteLocation
 
 applyTestPathPrefix :: Text -> Text -> Text
 applyTestPathPrefix pathPrefix path
@@ -247,14 +290,14 @@ testTrustedForwardedProxy =
     Just cidrBlock -> TrustForwardedFrom (cidrBlock :| [])
     Nothing -> error "invalid test CIDR block"
 
-sampleApplicationWithStaticAssets :: StaticAssetsConfig -> Application TestRoute Text TestContext
+sampleApplicationWithStaticAssets :: StaticAssetsConfig -> Application TestRoute Text TestContext TestAuthorization
 sampleApplicationWithStaticAssets staticAssetsConfig =
   sampleApplicationWithConfig staticAssetsConfig defaultRequestPolicy
 
 sampleApplicationWithConfig ::
   StaticAssetsConfig ->
   RequestPolicyConfig ->
-  Application TestRoute Text TestContext
+  Application TestRoute Text TestContext TestAuthorization
 sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
   Application
     { appName = "sample",
@@ -266,6 +309,12 @@ sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
       applicationRequestPolicy = requestPolicyConfig,
       applicationRequestMiddleware = [],
       routeCodec = sampleCodec,
+      applicationSecurity = testApplicationSecurity,
+      applicationSecurityEventRoot = Nothing,
+      applicationRouteModuleChain = Nothing,
+      applicationAttachRouteObservation = \_ _ requestContext -> requestContext,
+      routeEndpointMetadata = testEndpointMetadata,
+      clientActionEndpointMetadata = \_ _ _ -> Nothing,
       routeExecutionPolicy = const unboundedRouteExecutionPolicy,
       renderRequestResponse = \_ -> pure . renderSampleResponse,
       decodeClientAction = DecodedClientAction . clientActionPath,
@@ -278,11 +327,11 @@ sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
       reportApplicationLog = const (pure ())
     }
 
-sampleApplication :: Application TestRoute Text TestContext
+sampleApplication :: Application TestRoute Text TestContext TestAuthorization
 sampleApplication =
   sampleApplicationWithStaticAssets emptyStaticAssets
 
-trustedForwardedApplication :: Application TestRoute Text TestContext
+trustedForwardedApplication :: Application TestRoute Text TestContext TestAuthorization
 trustedForwardedApplication =
   sampleApplicationWithConfig
     emptyStaticAssets
@@ -479,7 +528,7 @@ fakeCertbotScriptPreamble =
     "fi"
   ]
 
-rootPathApplication :: Application TestRoute Text TestContext
+rootPathApplication :: Application TestRoute Text TestContext TestAuthorization
 rootPathApplication =
   Application
     { appName = "root-path",
@@ -491,6 +540,12 @@ rootPathApplication =
       applicationRequestPolicy = defaultRequestPolicy {forwardedHeaderTrust = testTrustedForwardedProxy},
       applicationRequestMiddleware = [],
       routeCodec = rootPathCodec,
+      applicationSecurity = testApplicationSecurity,
+      applicationSecurityEventRoot = Nothing,
+      applicationRouteModuleChain = Nothing,
+      applicationAttachRouteObservation = \_ _ requestContext -> requestContext,
+      routeEndpointMetadata = testEndpointMetadata,
+      clientActionEndpointMetadata = \_ _ _ -> Nothing,
       routeExecutionPolicy = const unboundedRouteExecutionPolicy,
       renderRequestResponse = \_ -> pure . PageResponse . samplePage,
       decodeClientAction = DecodedClientAction . clientActionPath,
@@ -506,17 +561,18 @@ rootPathApplication =
 rootPathCodec :: RouteCodec TestRoute TestContext
 rootPathCodec =
   RouteCodec
-    { parseRoute = \routeContext path ->
-        if path == "/"
-          then Just RouteRequest {requestRoute = KnownRoute, requestContext = routeContext}
-          else Nothing,
+    { parseRoute = \routeContext location ->
+        if routeLocationText location == "/"
+          then RouteParsed RouteRequest {requestRoute = KnownRoute, requestContext = routeContext}
+          else RouteNotMatched,
       renderRoute = \request ->
-        case requestRoute request of
-          KnownRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/"
-          QueryRoute queryString -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) ("/query?" <> queryString)
-          DataRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/data"
-          EventStreamRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/events"
-          MissingRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/404",
+        testRouteLocation $
+          case requestRoute request of
+            KnownRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/"
+            QueryRoute queryString -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) ("/query?" <> queryString)
+            DataRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/data"
+            EventStreamRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/events"
+            MissingRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/404",
       notFoundRequest = \routeContext -> routeContext `seq` RouteRequest {requestRoute = MissingRoute, requestContext = routeContext},
       routeMethods = routeMethodPolicy . sampleRouteMethods
     }

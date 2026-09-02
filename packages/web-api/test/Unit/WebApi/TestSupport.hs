@@ -234,7 +234,7 @@ opaqueSession =
         }
     Nothing -> error "expected a valid csrf token"
 
-pureApplication :: HarchWeb.Application AppRoute AccountAction AppRequestContext
+pureApplication :: HarchWeb.Application AppRoute AccountAction AppRequestContext ()
 pureApplication = buildApp defaultAppConfig
 
 type AccountActionRequest = HarchWeb.ClientActionRequest AccountAction AppRequestContext
@@ -297,7 +297,7 @@ requiredTestCidrBlock cidrText =
     Just cidrBlock -> cidrBlock
     Nothing -> error ("invalid test CIDR block: " <> Text.unpack cidrText)
 
-trustedForwardedApplication :: HarchWeb.Application AppRoute AccountAction AppRequestContext
+trustedForwardedApplication :: HarchWeb.Application AppRoute AccountAction AppRequestContext ()
 trustedForwardedApplication =
   buildApp
     defaultAppConfig
@@ -434,7 +434,19 @@ expectedApiJsonProtocolResponse jsonBody =
     }
 
 pureRouteMatcher :: Text -> HarchWeb.RouteRequest AppRoute AppRequestContext
-pureRouteMatcher = WebApi.Route.matchRoute WebApi.Route.defaultRequestContext
+pureRouteMatcher target =
+  case WebApi.Route.matchRoute WebApi.Route.defaultRequestContext (testRouteLocation target) of
+    HarchWeb.RouteParsed routeRequest -> routeRequest
+    HarchWeb.RouteNotMatched -> HarchWeb.notFoundRequest WebApi.Route.routeCodec WebApi.Route.defaultRequestContext
+    HarchWeb.RouteMalformed routeError -> error ("test route was malformed: " <> show routeError)
+
+testRouteLocation :: Text -> HarchWeb.RouteLocation
+testRouteLocation target =
+  case HarchWeb.decodeRouteLocation (HarchWeb.requestTarget (TextEncoding.encodeUtf8 path) (TextEncoding.encodeUtf8 query)) of
+    Left routeError -> error ("invalid test route target: " <> show routeError)
+    Right location -> location
+  where
+    (path, query) = Text.breakOn "?" target
 
 renderedShell :: AppConfig -> AppRoute -> IO Text
 renderedShell config route = do
@@ -1190,6 +1202,7 @@ protocolResponseStrictBody protocolResponse =
   case HarchWeb.protocolResponseBody protocolResponse of
     HarchWeb.ProtocolResponseBytes bodyBytes -> bodyBytes
     HarchWeb.ProtocolResponseStream _ -> error "expected a strict protocol response body"
+    HarchWeb.ProtocolResponseWai _ -> error "expected a strict protocol response body"
 
 stripVolatileDatabaseTimingResponse :: HarchWeb.Response route context -> HarchWeb.Response route context
 stripVolatileDatabaseTimingResponse response =

@@ -12,6 +12,8 @@
 -- backend.
 module HarchWeb.Server.StaticAssets
   ( serveStaticAssetResponse,
+    serveStaticAssetPathResponse,
+    staticAssetRouteOwnsPath,
   )
 where
 
@@ -25,6 +27,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Word (Word8)
+import HarchWeb.Routing (PathSegment, pathSegmentText)
 import HarchWeb.StaticAssets (StaticAssetRoot (..), StaticAssetsConfig (..))
 import Network.HTTP.Date (formatHTTPDate, httpDateToUTC, parseHTTPDate, utcToHTTPDate)
 import Network.HTTP.Types qualified as Http
@@ -56,6 +59,21 @@ serveStaticAssetResponse staticAssetsConfig request requestPath =
                         )
                     )
                 Nothing -> pure (Just (staticAssetRoutePath matchedRoot, missingStaticAssetResponse))
+
+-- | The typed route adapter supplies already-decoded path segments; query
+-- fields never select a filesystem object, so this boundary deliberately does
+-- not accept a complete route location.
+serveStaticAssetPathResponse :: StaticAssetsConfig -> Wai.Request -> [PathSegment] -> IO (Maybe (Text, Wai.Response))
+serveStaticAssetPathResponse staticAssetsConfig request =
+  serveStaticAssetResponse staticAssetsConfig request . staticAssetPath
+
+staticAssetRouteOwnsPath :: StaticAssetsConfig -> [PathSegment] -> Bool
+staticAssetRouteOwnsPath staticAssetsConfig =
+  isJust . matchStaticAssetRoot staticAssetsConfig . staticAssetPath
+
+staticAssetPath :: [PathSegment] -> Text
+staticAssetPath pathSegments =
+  "/" <> Text.intercalate "/" (map pathSegmentText pathSegments)
 
 data StaticAssetFile = StaticAssetFile
   { staticAssetFilePath :: FilePath,

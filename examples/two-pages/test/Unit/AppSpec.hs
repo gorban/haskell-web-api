@@ -5,11 +5,13 @@
 
 import App.App (TwoPageAction (..), buildApplication, twoPageServerConfig, twoPageSite)
 import App.Components.Controls qualified as ExampleControls
+import App.CustomPages.Preview (previewPageDefinition)
 import App.Pages.Home (nativeSubscriptionFallbackPage)
 import App.Pages.Route.Generated (PageRoute (..), allPageRoutes, pageRoutePath, parsePageRoute)
-import App.Routes (ApiRoute (..), CustomRoute (..), TwoPageNavigationTarget (..), TwoPageRoute (..), mkPreviewSlug, routeHref, twoPageNavigationPath)
+import App.Routes (ApiRoute (..), CustomRoute (..), TwoPageNavigationTarget (..), TwoPageRoute (..), mkPreviewSlug, requiredEndpointName, requiredRouteTemplate, routeHref, twoPageActionEndpointMetadata, twoPageEndpointMetadata, twoPageNavigationPath)
 import App.Routes qualified as ExampleRoutes
-import Control.Exception (ErrorCall (..), evaluate)
+import Control.Exception (ErrorCall (..), displayException, evaluate, try)
+import Control.Monad (forM_)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as LazyByteString
@@ -19,13 +21,31 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
-import HarchWeb (ClientActionPayload (..), ClientActionRequest (..), ForwardedHeaderTrust (..), ListenerConfig (..), RouteMethod (..), RouteRequest (..), appName, applicationStaticAssets, corsPolicy, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, forwardedHeaderTrust, httpsRedirectAuthority, httpsRedirectPort, listenerConfigs, metricsExporter, notFoundRequest, observability, parseRoute, redirectHttpToHttps, renderRoute, requestConcurrencyLimit, requestPolicy, requestTransportLimits, responseSecurityHeaders, staticAssetContentTypes, staticAssetRoots, staticAssets, staticCacheControlSeconds, strictTransportSecurity, toWaiApplication, tracingExporter, warpDefaultRequestTransportLimits)
+import HarchWeb (ClientActionPayload (..), ClientActionRequest (..), ForwardedHeaderTrust (..), ListenerConfig (..), RouteMethod (..), RouteRequest (..), appName, applicationStaticAssets, corsPolicy, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, forwardedHeaderTrust, httpsRedirectAuthority, httpsRedirectPort, listenerConfigs, metricsExporter, notFoundRequest, observability, redirectHttpToHttps, requestConcurrencyLimit, requestPolicy, requestTransportLimits, responseSecurityHeaders, staticAssetContentTypes, staticAssetRoots, staticAssets, staticCacheControlSeconds, strictTransportSecurity, toWaiApplication, tracingExporter, warpDefaultRequestTransportLimits)
 import HarchWeb qualified
 import HarchWeb.Site (routeNavigationLabel, siteName, siteNavigationRoutes, siteRequestPolicy, siteRouteDefinition, siteStaticAssets)
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import Network.Wai.Internal qualified as WaiInternal
+
+parseRoute :: HarchWeb.RouteCodec TwoPageRoute () -> () -> Text.Text -> Maybe (RouteRequest TwoPageRoute ())
+parseRoute codec requestContext target = do
+  location <- either (const Nothing) Just (routeLocationFromText target)
+  case HarchWeb.parseRoute codec requestContext location of
+    HarchWeb.RouteParsed routeRequest -> Just routeRequest
+    HarchWeb.RouteNotMatched -> Nothing
+    HarchWeb.RouteMalformed _ -> Nothing
+
+renderRoute :: HarchWeb.RouteCodec TwoPageRoute () -> RouteRequest TwoPageRoute () -> Text.Text
+renderRoute codec = HarchWeb.safeUrlText . HarchWeb.encodeRouteLocation . HarchWeb.renderRoute codec
+
+routeLocationFromText :: Text.Text -> Either HarchWeb.RouteDecodeError HarchWeb.RouteLocation
+routeLocationFromText target =
+  HarchWeb.decodeRouteLocation
+    (HarchWeb.requestTarget (TextEncoding.encodeUtf8 path) (TextEncoding.encodeUtf8 query))
+  where
+    (path, query) = Text.breakOn "?" target
 
 spec =
   describe "Unit.App" $ do
@@ -102,6 +122,54 @@ spec =
                  ]
           )
 
+      it "maps every route and client action to explicit public endpoint metadata" $ do
+        let previewSlug = fromMaybe (error "expected valid test preview slug") (mkPreviewSlug "summer-release")
+            endpointCases =
+              [ (HarchWeb.HtmlEndpoint, Page HomePage, "two-pages.home", "/"),
+                (HarchWeb.HtmlEndpoint, Page SecondPage, "two-pages.second", "/second"),
+                (HarchWeb.HtmlEndpoint, Page LiveDataPage, "two-pages.live-data", "/live-data"),
+                (HarchWeb.HtmlEndpoint, Page PageNotFound, "two-pages.not-found", "/404"),
+                (HarchWeb.ApiEndpoint, Api LiveDataEvents, "two-pages.live-data-events", "/live-data/events"),
+                (HarchWeb.HtmlEndpoint, Custom (PreviewPage previewSlug), "two-pages.preview", "/preview/{slug}"),
+                (HarchWeb.HtmlEndpoint, Custom NativeSubscriptionFallback, "two-pages.native-subscription", "/native-subscribe")
+              ]
+        forM_ endpointCases $ \(endpointProtocol, route, expectedName, expectedTemplate) -> do
+          let endpointMetadata = twoPageEndpointMetadata endpointProtocol route
+          expectAll
+            ( (HarchWeb.endpointNameText (HarchWeb.endpointName endpointMetadata) `shouldBe` expectedName)
+                :| [ HarchWeb.routeTemplateText (HarchWeb.endpointRouteTemplate endpointMetadata) `shouldBe` expectedTemplate,
+                     HarchWeb.endpointProtocol endpointMetadata `shouldBe` endpointProtocol,
+                     HarchWeb.endpointAccess endpointMetadata `shouldBe` HarchWeb.AllowUnauthenticated
+                   ]
+            )
+        forM_ endpointCases $ \(expectedProtocol, route, expectedName, expectedTemplate) -> do
+          let endpointMetadata = Site.routeMetadata (siteRouteDefinition twoPageSite route)
+          expectAll
+            ( (HarchWeb.endpointNameText (HarchWeb.endpointName endpointMetadata) `shouldBe` expectedName)
+                :| [ HarchWeb.routeTemplateText (HarchWeb.endpointRouteTemplate endpointMetadata) `shouldBe` expectedTemplate,
+                     HarchWeb.endpointProtocol endpointMetadata `shouldBe` expectedProtocol,
+                     HarchWeb.endpointAccess endpointMetadata `shouldBe` HarchWeb.AllowUnauthenticated
+                   ]
+            )
+        case twoPageActionEndpointMetadata "POST" "/actions/subscribe" () of
+          Just endpointMetadata ->
+            expectAll
+              ( (HarchWeb.endpointNameText (HarchWeb.endpointName endpointMetadata) `shouldBe` "two-pages.subscribe")
+                  :| [ HarchWeb.routeTemplateText (HarchWeb.endpointRouteTemplate endpointMetadata) `shouldBe` "/actions/subscribe",
+                       HarchWeb.endpointProtocol endpointMetadata `shouldBe` HarchWeb.ActionEndpoint,
+                       HarchWeb.endpointAccess endpointMetadata `shouldBe` HarchWeb.AllowUnauthenticated
+                     ]
+              )
+          Nothing -> expectationFailure "expected the declared subscription action metadata"
+        Site.siteClientActionEndpointMetadata twoPageSite "POST" "/actions/subscribe" () `shouldSatisfy` (/= Nothing)
+        twoPageActionEndpointMetadata "GET" "/actions/subscribe" () `shouldBe` Nothing
+        endpointNameFailure <- try (evaluate (requiredEndpointName "invalid/name")) :: IO (Either ErrorCall HarchWeb.EndpointName)
+        routeTemplateFailure <- try (evaluate (requiredRouteTemplate "not-a-route")) :: IO (Either ErrorCall HarchWeb.RouteTemplate)
+        expectAll
+          ( (either displayException (const "unexpectedly accepted endpoint name") endpointNameFailure `shouldBe` "invalid two-pages endpoint name: InvalidEndpointName")
+              :| [either displayException (const "unexpectedly accepted route template") routeTemplateFailure `shouldBe` "invalid two-pages route template: InvalidRouteTemplate"]
+          )
+
     describe "routeCodec" $ do
       it "parses and renders the supported two-page routes" $ do
         let previewSlug =
@@ -168,6 +236,7 @@ spec =
                    twoPageNavigationPath (NavigationPage HomePage) `shouldBe` "/",
                    twoPageNavigationPath (NavigationPreview previewSlug) `shouldBe` "/preview/summer-release",
                    renderRoute ExampleRoutes.routeCodec (notFoundRequest ExampleRoutes.routeCodec ()) `shouldBe` "/404",
+                   requestContext (notFoundRequest ExampleRoutes.routeCodec ()) `shouldBe` (),
                    map (parsePageRoute . pageRoutePath) allPageRoutes
                      `shouldBe` map Just allPageRoutes,
                    parseRoute ExampleRoutes.routeCodec () "/assets/navigation.js" `shouldBe` Nothing
@@ -327,6 +396,11 @@ spec =
           HarchWeb.renderResponse
             buildApplication
             RouteRequest {requestRoute = previewRoute, requestContext = ()}
+        directlyDefinedResponse <-
+          Site.routeResponse
+            (previewPageDefinition previewSlug)
+            Wai.defaultRequest
+            RouteRequest {requestRoute = previewRoute, requestContext = ()}
         expectAll
           ( (Wai.responseStatus response `shouldBe` Http.status200)
               :| [ Text.isInfixOf "<title>Preview: summer-release</title>" responseBody
@@ -338,7 +412,8 @@ spec =
                    Text.isInfixOf "<p>summer-release</p>" responseBody `shouldBe` True,
                    routeNavigationLabel (siteRouteDefinition twoPageSite previewRoute)
                      `shouldBe` Nothing,
-                   renderedResponse `shouldSatisfy` hasPageRoute previewRoute
+                   renderedResponse `shouldSatisfy` hasPageRoute previewRoute,
+                   directlyDefinedResponse `shouldSatisfy` hasPageRoute previewRoute
                  ]
           )
 
@@ -514,15 +589,20 @@ spec =
             (ByteString.intercalate "&" (replicate 33 "x"))
             "harch-native-fallback-csrf=two-pages-native-fallback"
         rejectedCsrfRequest <- nativeFallbackRequest "_harch_csrf=wrong-token" "harch-native-fallback-csrf=two-pages-native-fallback"
+        emptyRequest <- nativeFallbackRequest "" "harch-native-fallback-csrf=two-pages-native-fallback"
         case HarchWeb.applicationRequestMiddleware buildApplication of
           [HarchWeb.RequestMiddleware nativeFallbackMiddleware] -> do
             oversizedResult <- nativeFallbackMiddleware oversizedRequest ()
             tooManyFieldsResult <- nativeFallbackMiddleware tooManyFieldsRequest ()
             rejectedCsrfResult <- nativeFallbackMiddleware rejectedCsrfRequest ()
+            emptyResult <- nativeFallbackMiddleware emptyRequest ()
+            unrelatedResult <- nativeFallbackMiddleware (waiRequest ["known"]) ()
             expectAll
               ( (haltedMiddlewareContext oversizedResult `shouldBe` Just ())
                   :| [ haltedMiddlewareContext tooManyFieldsResult `shouldBe` Just (),
-                       haltedMiddlewareContext rejectedCsrfResult `shouldBe` Just ()
+                       haltedMiddlewareContext rejectedCsrfResult `shouldBe` Just (),
+                       haltedMiddlewareContext emptyResult `shouldBe` Just (),
+                       unrelatedResult `shouldBe` HarchWeb.ContinueMiddleware ()
                      ]
               )
           _ -> expectationFailure "expected the configured native-fallback middleware"

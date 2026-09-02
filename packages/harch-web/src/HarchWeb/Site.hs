@@ -18,15 +18,18 @@ module HarchWeb.Site
   )
 where
 
+import Data.List.NonEmpty (NonEmpty)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import HarchWeb
   ( Application (..),
+    ApplicationSecurity,
     ClientActionDecodeResult,
     ClientActionPayload,
     ClientActionRequest,
     ClientActionResponse,
     Document,
+    EndpointMetadata,
     ForwardedHeaderTrust (..),
     NavigationItem (..),
     NavigationRuntime,
@@ -62,8 +65,12 @@ import HarchWeb.Observability qualified as Observability
 import HarchWeb.Session (CsrfToken, generateCsrfToken)
 import Network.Wai qualified as Wai
 
-data RouteDefinition route context = RouteDefinition
+data RouteDefinition route context authorization = RouteDefinition
   { routeNavigationLabel :: Maybe Text,
+    -- | Required typed endpoint metadata. Ordinary page/API/action builders
+    -- supply authenticated metadata; a public endpoint must name
+    -- 'AllowUnauthenticated' explicitly.
+    routeMetadata :: EndpointMetadata authorization,
     -- | The methods this route owns. 'buildSiteApplication' installs this
     -- declaration into the shared route codec, making the site table the
     -- authoritative source for ordinary page and protocol dispatch alike.
@@ -75,7 +82,7 @@ data RouteDefinition route context = RouteDefinition
     routeResponse :: Wai.Request -> RouteRequest route context -> IO (Response route context)
   }
 
-data Site route action context = Site
+data Site route action context authorization = Site
   { siteName :: Text,
     siteDefaultRequestContext :: context,
     siteRequestContextFromRequest :: Wai.Request -> context -> context,
@@ -87,9 +94,14 @@ data Site route action context = Site
     siteNavigationRuntimePathPrefix :: context -> PathPrefix,
     siteRequestPolicy :: RequestPolicyConfig,
     siteRequestMiddleware :: [RequestMiddleware context],
+    siteSecurity :: ApplicationSecurity route context authorization,
+    siteSecurityEventRoot :: Maybe (HarchWeb.SecurityEventRoot context),
+    siteRouteModuleChain :: Maybe (route -> NonEmpty HarchWeb.ModuleName),
+    siteAttachRouteObservation :: route -> EndpointMetadata authorization -> context -> context,
     siteRouteCodec :: RouteCodec route context,
     siteNavigationRoutes :: [route],
-    siteRouteDefinition :: route -> RouteDefinition route context,
+    siteRouteDefinition :: route -> RouteDefinition route context authorization,
+    siteClientActionEndpointMetadata :: Text -> Text -> context -> Maybe (EndpointMetadata authorization),
     siteDecodeClientAction :: ClientActionPayload context -> ClientActionDecodeResult action,
     sitePageCsrfToken :: Page route context -> IO CsrfToken,
     siteAuthorizeClientActionCsrf :: ClientActionRequest action context -> CsrfToken -> IO Bool,
@@ -105,18 +117,19 @@ data Site route action context = Site
 -- subsequent 'Site' customizations; grouping only the route-table and shell
 -- declaration prevents those six values being transposed at every simple
 -- composition root.
-data SimpleSiteConfiguration route context = SimpleSiteConfiguration
+data SimpleSiteConfiguration route context authorization = SimpleSiteConfiguration
   { simpleSiteName :: Text,
     simpleSiteDefaultRequestContext :: context,
     simpleSiteRouteCodec :: RouteCodec route context,
+    simpleSiteSecurity :: ApplicationSecurity route context authorization,
     simpleSitePageShell :: Page route context -> PageShell route context,
     simpleSiteNavigationRoutes :: [route],
-    simpleSiteRouteDefinition :: route -> RouteDefinition route context
+    simpleSiteRouteDefinition :: route -> RouteDefinition route context authorization
   }
 
 simpleSite ::
-  SimpleSiteConfiguration route context ->
-  Site route action context
+  SimpleSiteConfiguration route context authorization ->
+  Site route action context authorization
 simpleSite configuration =
   Site
     { siteName = simpleSiteName configuration,
@@ -128,9 +141,14 @@ simpleSite configuration =
       siteNavigationRuntimePathPrefix = const emptyPathPrefix,
       siteRequestPolicy = defaultSiteRequestPolicy,
       siteRequestMiddleware = [],
+      siteSecurity = simpleSiteSecurity configuration,
+      siteSecurityEventRoot = Nothing,
+      siteRouteModuleChain = Nothing,
+      siteAttachRouteObservation = \_ _ requestContext -> requestContext,
       siteRouteCodec = simpleSiteRouteCodec configuration,
       siteNavigationRoutes = simpleSiteNavigationRoutes configuration,
       siteRouteDefinition = simpleSiteRouteDefinition configuration,
+      siteClientActionEndpointMetadata = \_ _ _ -> Nothing,
       siteDecodeClientAction = const HarchWeb.UnrecognizedClientAction,
       sitePageCsrfToken = const generateCsrfToken,
       siteAuthorizeClientActionCsrf = \_ _ -> pure True,
@@ -151,14 +169,16 @@ apiOnlySite ::
   Text ->
   context ->
   RouteCodec route context ->
-  (route -> RouteDefinition route context) ->
-  Site route action context
-apiOnlySite name defaultContext codec routeDefinition =
+  ApplicationSecurity route context authorization ->
+  (route -> RouteDefinition route context authorization) ->
+  Site route action context authorization
+apiOnlySite name defaultContext codec siteSecurityValue routeDefinition =
   ( simpleSite
       SimpleSiteConfiguration
         { simpleSiteName = name,
           simpleSiteDefaultRequestContext = defaultContext,
           simpleSiteRouteCodec = codec,
+          simpleSiteSecurity = siteSecurityValue,
           simpleSitePageShell = const apiOnlyFallbackPageShell,
           simpleSiteNavigationRoutes = [],
           simpleSiteRouteDefinition = routeDefinition
@@ -181,18 +201,20 @@ apiOnlyFallbackPageShell =
     }
 
 pageRoute ::
+  EndpointMetadata authorization ->
   Maybe Text ->
   (RouteRequest route context -> IO (Page route context)) ->
-  RouteDefinition route context
-pageRoute navigationLabel renderPage =
+  RouteDefinition route context authorization
+pageRoute metadata navigationLabel renderPage =
   RouteDefinition
     { routeNavigationLabel = navigationLabel,
+      routeMetadata = metadata,
       routeMethods = [HarchWeb.RouteGet],
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeResponse = \_ -> fmap PageResponse . renderPage
     }
 
-buildSiteApplication :: (Eq route) => Site route action context -> Application route action context
+buildSiteApplication :: (Eq route) => Site route action context authorization -> Application route action context authorization
 buildSiteApplication site =
   HarchWeb.application
     Application
@@ -205,6 +227,12 @@ buildSiteApplication site =
         applicationRequestPolicy = siteRequestPolicy site,
         applicationRequestMiddleware = siteRequestMiddleware site,
         routeCodec = (siteRouteCodec site) {HarchWeb.routeMethods = HarchWeb.routeMethodPolicy . routeMethods . siteRouteDefinition site},
+        applicationSecurity = siteSecurity site,
+        applicationSecurityEventRoot = siteSecurityEventRoot site,
+        applicationRouteModuleChain = siteRouteModuleChain site,
+        applicationAttachRouteObservation = siteAttachRouteObservation site,
+        routeEndpointMetadata = routeMetadata . siteRouteDefinition site,
+        clientActionEndpointMetadata = siteClientActionEndpointMetadata site,
         HarchWeb.routeExecutionPolicy = routeDefinitionExecutionPolicy . siteRouteDefinition site,
         renderRequestResponse = renderSiteResponse site,
         decodeClientAction = siteDecodeClientAction site,
@@ -217,17 +245,17 @@ buildSiteApplication site =
         reportApplicationLog = siteReportApplicationLog site
       }
 
-renderSiteResponse :: Site route action context -> Wai.Request -> RouteRequest route context -> IO (Response route context)
+renderSiteResponse :: Site route action context authorization -> Wai.Request -> RouteRequest route context -> IO (Response route context)
 renderSiteResponse site request routeRequest =
   routeResponse
     (siteRouteDefinition site (HarchWeb.requestRoute routeRequest))
     request
     routeRequest
 
-routeDefinitionExecutionPolicy :: RouteDefinition route context -> RouteExecutionPolicy
-routeDefinitionExecutionPolicy (RouteDefinition _ _ executionPolicy _) = executionPolicy
+routeDefinitionExecutionPolicy :: RouteDefinition route context authorization -> RouteExecutionPolicy
+routeDefinitionExecutionPolicy RouteDefinition {routeExecutionPolicy = executionPolicy} = executionPolicy
 
-renderSitePageShell :: (Eq route) => Site route action context -> Page route context -> Document route
+renderSitePageShell :: (Eq route) => Site route action context authorization -> Page route context -> Document route
 renderSitePageShell site page =
   buildPageShell
     (siteRouteCodec site)
@@ -241,7 +269,7 @@ renderSitePageShell site page =
     )
     page
 
-siteNavigationItems :: Site route action context -> [NavigationItem route]
+siteNavigationItems :: Site route action context authorization -> [NavigationItem route]
 siteNavigationItems site =
   mapMaybe
     ( \routeValue ->
@@ -264,7 +292,7 @@ addRouteNavigation generatedNavigation shell =
     }
 
 addFrameworkShellConventions ::
-  Site route action context ->
+  Site route action context authorization ->
   Page route context ->
   PageShell route context ->
   PageShell route context

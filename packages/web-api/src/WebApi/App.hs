@@ -37,7 +37,7 @@ import HarchWeb.Observability qualified as Observability
 import HarchWeb.Site qualified as Site
 import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush)
-import WebApi.AccountPages (AccountAction, accountActions, authorizeAccountActionCsrf, handleAccountAction, pageCsrfTokenForAccountPage)
+import WebApi.AccountPages (AccountAction, accountActionEndpointMetadata, accountActions, authorizeAccountActionCsrf, handleAccountAction, pageCsrfTokenForAccountPage)
 import WebApi.Api.Endpoints (secondApiRouteDefinition, statusApiRouteDefinition)
 import WebApi.App.AccountWorkflow (buildRuntimeAccountWorkflow, unavailableAccountWorkflow)
 import WebApi.App.Observability
@@ -67,6 +67,7 @@ import WebApi.Route
   ( AppRequestContext (..),
     AppRoute (..),
     defaultRequestContext,
+    endpointMetadata,
     requestContextFromWaiRequest,
     routeCodec,
   )
@@ -74,7 +75,7 @@ import WebApi.Route
 buildAppWithDatabase ::
   AppConfig ->
   PageRepository ->
-  HarchWeb.Application AppRoute AccountAction AppRequestContext
+  HarchWeb.Application AppRoute AccountAction AppRequestContext ()
 buildAppWithDatabase config pageRepository =
   buildAppWithDatabaseAndAccountWorkflow config pageRepository unavailableAccountWorkflow
 
@@ -82,7 +83,7 @@ buildAppWithDatabaseAndAccountWorkflow ::
   AppConfig ->
   PageRepository ->
   AccountWorkflow ->
-  HarchWeb.Application AppRoute AccountAction AppRequestContext
+  HarchWeb.Application AppRoute AccountAction AppRequestContext ()
 buildAppWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow =
   buildAppWithDatabaseAndOptionalReporters config pageRepository accountWorkflow Nothing
 
@@ -91,7 +92,7 @@ buildAppWithDatabaseAndReporters ::
   PageRepository ->
   AccountWorkflow ->
   RuntimeApplicationReporters ->
-  HarchWeb.Application AppRoute AccountAction AppRequestContext
+  HarchWeb.Application AppRoute AccountAction AppRequestContext ()
 buildAppWithDatabaseAndReporters config pageRepository !accountWorkflow reporters =
   buildAppWithDatabaseAndOptionalReporters
     config
@@ -113,7 +114,7 @@ buildAppWithDatabaseAndOptionalReporters ::
   PageRepository ->
   AccountWorkflow ->
   Maybe RuntimeApplicationReporters ->
-  HarchWeb.Application AppRoute AccountAction AppRequestContext
+  HarchWeb.Application AppRoute AccountAction AppRequestContext ()
 buildAppWithDatabaseAndOptionalReporters config pageRepository !accountWorkflow maybeReporters =
   Site.buildSiteApplication
     ( configureReporters
@@ -122,6 +123,7 @@ buildAppWithDatabaseAndOptionalReporters config pageRepository !accountWorkflow 
                 { Site.simpleSiteName = "web-api",
                   Site.simpleSiteDefaultRequestContext = defaultRequestContext,
                   Site.simpleSiteRouteCodec = routeCodec,
+                  Site.simpleSiteSecurity = HarchWeb.AuthenticationDisabled [],
                   Site.simpleSitePageShell = buildAppPageShellConfig config . HarchWeb.pageContext,
                   Site.simpleSiteNavigationRoutes = appNavigationRoutes,
                   Site.simpleSiteRouteDefinition = buildAppRouteDefinition config pageRepository accountWorkflow
@@ -134,6 +136,7 @@ buildAppWithDatabaseAndOptionalReporters config pageRepository !accountWorkflow 
               Site.siteNavigationRuntimePathPrefix = requestPathPrefix,
               Site.siteRequestPolicy = requestPolicy config,
               Site.siteDecodeClientAction = decodeAction accountActions,
+              Site.siteClientActionEndpointMetadata = accountActionEndpointMetadata,
               Site.sitePageCsrfToken = pageCsrfTokenForAccountPage accountWorkflow,
               Site.siteAuthorizeClientActionCsrf = authorizeAccountActionCsrf accountWorkflow,
               Site.siteHandleClientAction = handleAccountAction accountWorkflow
@@ -151,7 +154,7 @@ buildAppWithDatabaseAndOptionalReporters config pageRepository !accountWorkflow 
               Site.siteReportApplicationLog = runtimeApplicationReporterLog reporters
             }
 
-buildApp :: AppConfig -> HarchWeb.Application AppRoute AccountAction AppRequestContext
+buildApp :: AppConfig -> HarchWeb.Application AppRoute AccountAction AppRequestContext ()
 buildApp config =
   buildAppWithDatabase config defaultPageRepository
 
@@ -164,7 +167,7 @@ buildAppRouteDefinition ::
   PageRepository ->
   AccountWorkflow ->
   AppRoute ->
-  Site.RouteDefinition AppRoute AppRequestContext
+  Site.RouteDefinition AppRoute AppRequestContext ()
 buildAppRouteDefinition config pageRepository accountWorkflow route =
   case route of
     StatusApiRoute -> statusApiRouteDefinition
@@ -172,6 +175,7 @@ buildAppRouteDefinition config pageRepository accountWorkflow route =
     _ ->
       Site.RouteDefinition
         { Site.routeNavigationLabel = routeNavigationLabel route,
+          Site.routeMetadata = endpointMetadata route,
           Site.routeMethods = HarchWeb.routeMethodPolicyMethods (HarchWeb.routeMethods routeCodec route),
           Site.routeExecutionPolicy = HarchWeb.unboundedRouteExecutionPolicy,
           Site.routeResponse =
@@ -194,7 +198,7 @@ buildRuntimeApp ::
   PostgresPool ->
   AppConfig ->
   AppEnvironmentConfig ->
-  HarchWeb.Application AppRoute AccountAction AppRequestContext
+  HarchWeb.Application AppRoute AccountAction AppRequestContext ()
 buildRuntimeApp pool config environmentConfig =
   buildAppWithDatabaseAndReporters
     (withPublicBaseUrlRedirectAuthority environmentConfig config)
@@ -206,7 +210,7 @@ buildRuntimeAppWithDatabaseBuilder ::
   AppConfig ->
   (DatabaseConfig -> PageRepository) ->
   AppEnvironmentConfig ->
-  HarchWeb.Application AppRoute AccountAction AppRequestContext
+  HarchWeb.Application AppRoute AccountAction AppRequestContext ()
 buildRuntimeAppWithDatabaseBuilder config buildPageRepository environmentConfig =
   let pageRepository = buildPageRepository (databaseConfig environmentConfig)
    in buildAppWithDatabaseAndReporters

@@ -71,7 +71,7 @@ typedActionForm TypedActionFormProps {action, ariaLabel} children =
         children
     )
 
-typedActionCodec :: Action.ActionCodec Text () Text
+typedActionCodec :: Action.ActionCodec Text () () Text
 typedActionCodec =
   case Action.actionCodec [Action.action "/actions/subscribe" (Action.post "/actions/subscribe") (pure "/actions/subscribe")] of
     Left codecError -> error (show codecError)

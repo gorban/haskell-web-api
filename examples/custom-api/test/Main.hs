@@ -3,6 +3,7 @@
 module Main (main) where
 
 import App.Api.Declarative
+import Control.Exception (ErrorCall, displayException, evaluate, try)
 import Control.Monad (forM_)
 import Data.Aeson qualified as Aeson
 import Data.ByteString qualified as ByteString
@@ -12,6 +13,8 @@ import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
+import HarchWeb qualified
 import HarchWeb.Api (ApiBodyDecoder (apiBodyDecoderParse))
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as HttpTypes
@@ -54,6 +57,14 @@ jsonRequestChunks requestMethod requestPath bodyChunks = do
           }
     )
 
+routeLocationForTest :: Text -> HarchWeb.RouteLocation
+routeLocationForTest target =
+  case HarchWeb.decodeRouteLocation (HarchWeb.requestTarget (TextEncoding.encodeUtf8 path) (TextEncoding.encodeUtf8 query)) of
+    Left routeError -> error ("invalid test route target: " <> show routeError)
+    Right location -> location
+  where
+    (path, query) = Text.breakOn "?" target
+
 main :: IO ()
 main = do
   application <- declarativeApiApplication
@@ -64,6 +75,24 @@ mainSpec application = describe "Unit.App.Api.Declarative" $ do
   it "exposes an API-only site composition root with its declared name and empty context" $ do
     Site.siteName declarativeApiSite `shouldBe` "custom-api"
     Site.siteDefaultRequestContext declarativeApiSite `shouldBe` ()
+
+  it "uses an explicit anonymous endpoint declaration for the public API family" $ do
+    routeRequest <-
+      case HarchWeb.parseRoute (Site.siteRouteCodec declarativeApiSite) () (routeLocationForTest "/api/greeting") of
+        HarchWeb.RouteParsed matchedRoute -> pure matchedRoute
+        HarchWeb.RouteNotMatched -> expectationFailure "expected the declared greeting route" >> error "unreachable"
+        HarchWeb.RouteMalformed routeError -> expectationFailure ("route was malformed: " <> show routeError) >> error "unreachable"
+    let endpointMetadata = Site.routeMetadata (Site.siteRouteDefinition declarativeApiSite (HarchWeb.requestRoute routeRequest))
+    HarchWeb.endpointNameText (HarchWeb.endpointName endpointMetadata) `shouldBe` "custom-api.endpoint"
+    HarchWeb.routeTemplateText (HarchWeb.endpointRouteTemplate endpointMetadata) `shouldBe` "/api/{endpoint}"
+    HarchWeb.endpointProtocol endpointMetadata `shouldBe` HarchWeb.ApiEndpoint
+    HarchWeb.endpointAccess endpointMetadata `shouldBe` HarchWeb.AllowUnauthenticated
+
+  it "rejects invalid authored endpoint metadata during startup construction" $ do
+    endpointNameFailure <- try (evaluate (requiredEndpointName "invalid/name")) :: IO (Either ErrorCall HarchWeb.EndpointName)
+    routeTemplateFailure <- try (evaluate (requiredRouteTemplate "not-a-route")) :: IO (Either ErrorCall HarchWeb.RouteTemplate)
+    either displayException (const "unexpectedly accepted endpoint name") endpointNameFailure `shouldBe` "invalid custom-api endpoint name: InvalidEndpointName"
+    either displayException (const "unexpectedly accepted route template") routeTemplateFailure `shouldBe` "invalid custom-api route template: InvalidRouteTemplate"
 
   describe "GET /api/greeting" $ do
     it "renders JSON by default" $ do

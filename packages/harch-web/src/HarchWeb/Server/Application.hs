@@ -22,11 +22,14 @@ module HarchWeb.Server.Application
   )
 where
 
+import Data.List.NonEmpty (NonEmpty)
 import Data.Text (Text)
 import HarchWeb.Document (Document, NavigationRuntime, Page, RuntimeAsset)
+import HarchWeb.EndpointSecurity (ApplicationSecurity, EndpointMetadata)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Routing (RouteCodec, RouteRequest)
 import HarchWeb.Security (RequestConcurrencyLimit, RequestPolicyConfig)
+import HarchWeb.SecurityEvent (ModuleName, SecurityEventRoot)
 import HarchWeb.Server.Response
   ( ClientActionDecodeResult,
     ClientActionPayload,
@@ -56,7 +59,7 @@ newtype RouteExecutionPolicy = RouteExecutionPolicy
 unboundedRouteExecutionPolicy :: RouteExecutionPolicy
 unboundedRouteExecutionPolicy = RouteExecutionPolicy {routeExecutionConcurrencyLimit = Nothing}
 
-data Application route action context = Application
+data Application route action context authorization = Application
   { appName :: Text,
     defaultRequestContext :: context,
     requestContextFromRequest :: Wai.Request -> context -> context,
@@ -70,6 +73,29 @@ data Application route action context = Application
     applicationRequestPolicy :: RequestPolicyConfig,
     applicationRequestMiddleware :: [RequestMiddleware context],
     routeCodec :: RouteCodec route context,
+    -- | The root's explicit authentication choice.  There is no implicit
+    -- disabled default: an application either selects public operation or
+    -- supplies the configured authentication guard pipeline.
+    applicationSecurity :: ApplicationSecurity route context authorization,
+    -- | Optional root-owned security-event attachment. When present, the
+    -- shared matcher builds route attribution from declared metadata before
+    -- any guard runs; guards can emit only a typed event body through it.
+    applicationSecurityEventRoot :: Maybe (SecurityEventRoot context),
+    -- | A construction-owned chain for the selected route.  It is optional
+    -- so applications which do not configure security events need not invent
+    -- module identity; when present it is consumed only by the root matcher.
+    applicationRouteModuleChain :: Maybe (route -> NonEmpty ModuleName),
+    -- | Root-owned post-match context enrichment.  Composition roots that use
+    -- 'RequestContext' install the declared route observation here; the
+    -- shared executor applies it before any endpoint guard or handler.
+    applicationAttachRouteObservation :: route -> EndpointMetadata authorization -> context -> context,
+    -- | Metadata for the typed route selected by the one route codec.
+    routeEndpointMetadata :: route -> EndpointMetadata authorization,
+    -- | Selects declared client-action metadata by its already captured
+    -- method/path and route-resolved context.  The request executor consults
+    -- this before it reads an action body, so an action POST has an admission
+    -- policy independent of the page GET at the same path.
+    clientActionEndpointMetadata :: Text -> Text -> context -> Maybe (EndpointMetadata authorization),
     -- | Selects the route-local policy only after the shared dispatcher has
     -- matched a route and method. It is not a second request-policy parser.
     routeExecutionPolicy :: route -> RouteExecutionPolicy,
@@ -92,13 +118,13 @@ data Application route action context = Application
     reportApplicationLog :: Text -> IO ()
   }
 
-application :: Application route action context -> Application route action context
+application :: Application route action context authorization -> Application route action context authorization
 application = id
 
 -- | Render a route directly with an empty request. The server uses
 -- 'renderRequestResponse' so an endpoint route can own the real request's
 -- decoding and body consumption without a second WAI dispatcher.
-renderResponse :: Application route action context -> RouteRequest route context -> IO (Response route context)
+renderResponse :: Application route action context authorization -> RouteRequest route context -> IO (Response route context)
 renderResponse webApplication = renderRequestResponse webApplication Wai.defaultRequest
 
 middlewareResultContext :: MiddlewareResult context -> context

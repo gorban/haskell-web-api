@@ -23,6 +23,7 @@ import Data.Text.IO qualified as TextIO
 import System.Exit (ExitCode (..))
 import System.IO (BufferMode (LineBuffering), Handle, hClose, hFlush, hSetBuffering)
 import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, proc, terminateProcess, waitForProcess)
+import System.Timeout (timeout)
 import TestCore.Browser.Types (BrowserConfig (..), BrowserRunnerError (..))
 
 data BrowserSession = BrowserSession
@@ -150,16 +151,39 @@ sendCommand :: BrowserSession -> Text -> [Pair] -> IO (Either BrowserRunnerError
 sendCommand session commandName fields = do
   commandId <- atomicModifyIORef' (sessionNextCommandId session) (\current -> let next = current + 1 in (next, next))
   let request = object (["protocol" .= (1 :: Int), "id" .= commandId, "command" .= commandName] <> fields)
-  writeAttempt <- try $ do
-    LazyByteStringChar8.hPutStrLn (sessionInput session) (encode request)
-    hFlush (sessionInput session)
-    TextIO.hGetLine (sessionOutput session)
-  case writeAttempt of
-    Left ioException -> pure (Left (BrowserRunnerProtocolError (displayException (ioException :: IOException))))
-    Right responseLine ->
+      timeoutMilliseconds = commandTimeoutMilliseconds commandName (sessionConfig session)
+  responseAttempt <-
+    timeout (timeoutMilliseconds * 1000) $
+      try $ do
+        LazyByteStringChar8.hPutStrLn (sessionInput session) (encode request)
+        hFlush (sessionInput session)
+        TextIO.hGetLine (sessionOutput session)
+  case responseAttempt of
+    Nothing ->
+      pure
+        ( Left
+            ( BrowserRunnerProtocolError
+                ( "browser command "
+                    <> Text.unpack commandName
+                    <> " timed out after "
+                    <> show timeoutMilliseconds
+                    <> "ms"
+                )
+            )
+        )
+    Just (Left ioException) -> pure (Left (BrowserRunnerProtocolError (displayException (ioException :: IOException))))
+    Just (Right responseLine) ->
       pure $ do
         responseValue <- mapLeft BrowserRunnerProtocolError (eitherDecodeStrict' (TextEncoding.encodeUtf8 responseLine))
         parseCommandResponse commandId responseValue
+
+-- | Runner startup includes spawning Node and a browser process, so it has a
+-- small lower bound independent of an intentionally tiny assertion-polling
+-- timeout. Every normal command still uses the configured bound exactly.
+commandTimeoutMilliseconds :: Text -> BrowserConfig -> Int
+commandTimeoutMilliseconds commandName config
+  | commandName == "initialize" = max 1000 (browserTimeoutMilliseconds config)
+  | otherwise = browserTimeoutMilliseconds config
 
 parseCommandResponse :: Int -> Value -> Either BrowserRunnerError Value
 parseCommandResponse expectedCommandId responseValue =

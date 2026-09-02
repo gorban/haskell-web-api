@@ -74,7 +74,7 @@ import WebApi.Response
     statusApiBody,
     toHarchDatabaseOperation,
   )
-import WebApi.Route (AppRequestContext, AppRoute, requestLocale)
+import WebApi.Route (AppRequestContext, AppRoute (SecondApiRoute, StatusApiRoute), endpointMetadata, requestLocale)
 import WebApi.RouteData (SecondRouteData (..))
 
 -- | Neither @\/api\/status@ nor @\/api\/second@ decodes any query, header, or
@@ -90,7 +90,7 @@ import WebApi.RouteData (SecondRouteData (..))
 noApiRequestFields :: RequestCodec ()
 noApiRequestFields = pure ()
 
-statusApiRouteDefinition :: RouteDefinition AppRoute AppRequestContext
+statusApiRouteDefinition :: RouteDefinition AppRoute AppRequestContext ()
 statusApiRouteDefinition =
   apiRouteDefinitionWithContextNeverFailing
     ( ApiEndpointContract
@@ -100,9 +100,10 @@ statusApiRouteDefinition =
         (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
         ApiUseGenericFieldFailure
     )
+    (endpointMetadata StatusApiRoute)
     (\requestContext _endpointRequest -> pure (apiResponse (jsonBytes (statusApiBody (requestLocale requestContext)))))
 
-secondApiRouteDefinition :: PageRepository -> RouteDefinition AppRoute AppRequestContext
+secondApiRouteDefinition :: PageRepository -> RouteDefinition AppRoute AppRequestContext ()
 secondApiRouteDefinition pageRepository =
   apiRouteDefinitionWithContext
     ( ApiEndpointContract
@@ -112,6 +113,7 @@ secondApiRouteDefinition pageRepository =
         (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
         ApiUseGenericFieldFailure
     )
+    (endpointMetadata SecondApiRoute)
     ( \requestContext _endpointRequest -> do
         secondPageResult <- loadSecondPage pageRepository (requestLocale requestContext)
         let databaseOperations = databaseResultOperations secondPageResult
