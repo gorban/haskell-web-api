@@ -15,7 +15,13 @@ data BrowserConfig = BrowserConfig
     browserRunnerArguments :: [String],
     browserHeadless :: Bool,
     browserPauseOnFailure :: Bool,
+    -- | Playwright operation and assertion bound, passed to the runner.
     browserTimeoutMilliseconds :: Int,
+    -- | Upper bound for a single request/response exchange with the runner.
+    -- This is intentionally independent of 'browserTimeoutMilliseconds': a
+    -- responsive runner can be delayed briefly by host scheduling, while a
+    -- missing response must still terminate the scenario.
+    browserProtocolTimeoutMilliseconds :: Int,
     browserArtifactDirectory :: FilePath
   }
   deriving (Eq, Show)

@@ -177,13 +177,15 @@ sendCommand session commandName fields = do
         responseValue <- mapLeft BrowserRunnerProtocolError (eitherDecodeStrict' (TextEncoding.encodeUtf8 responseLine))
         parseCommandResponse commandId responseValue
 
--- | Runner startup includes spawning Node and a browser process, so it has a
--- small lower bound independent of an intentionally tiny assertion-polling
--- timeout. Every normal command still uses the configured bound exactly.
+-- | Browser operations use 'browserTimeoutMilliseconds' inside the runner;
+-- protocol transport has its own, normally longer bound.  This keeps a dead
+-- runner finite without treating temporary host scheduling pressure as an
+-- assertion failure.  Runner startup additionally has a small lower bound
+-- independent of an intentionally tiny assertion-polling timeout.
 commandTimeoutMilliseconds :: Text -> BrowserConfig -> Int
 commandTimeoutMilliseconds commandName config
-  | commandName == "initialize" = max 1000 (browserTimeoutMilliseconds config)
-  | otherwise = browserTimeoutMilliseconds config
+  | commandName == "initialize" = max 1000 (browserProtocolTimeoutMilliseconds config)
+  | otherwise = browserProtocolTimeoutMilliseconds config
 
 parseCommandResponse :: Int -> Value -> Either BrowserRunnerError Value
 parseCommandResponse expectedCommandId responseValue =

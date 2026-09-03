@@ -21,6 +21,7 @@ spec = do
                  browserHeadless defaultPlaywrightBrowserConfig `shouldBe` True,
                  browserPauseOnFailure defaultPlaywrightBrowserConfig `shouldBe` False,
                  browserTimeoutMilliseconds defaultPlaywrightBrowserConfig `shouldBe` 10000,
+                 browserProtocolTimeoutMilliseconds defaultPlaywrightBrowserConfig `shouldBe` 30000,
                  browserArtifactDirectory defaultPlaywrightBrowserConfig `shouldBe` "test-results/playwright"
                ]
         )
@@ -32,6 +33,7 @@ spec = do
           ("TEST_CORE_BROWSER_HEADLESS", "false"),
           ("TEST_CORE_BROWSER_PAUSE_ON_FAILURE", "yes"),
           ("TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS", "2500"),
+          ("TEST_CORE_BROWSER_PROTOCOL_TIMEOUT_MILLISECONDS", "7500"),
           ("TEST_CORE_BROWSER_ARTIFACT_DIRECTORY", "artifacts/browser")
         ]
         `shouldBe` Right
@@ -41,6 +43,7 @@ spec = do
               browserHeadless = False,
               browserPauseOnFailure = True,
               browserTimeoutMilliseconds = 2500,
+              browserProtocolTimeoutMilliseconds = 7500,
               browserArtifactDirectory = "artifacts/browser"
             }
 
@@ -55,14 +58,17 @@ spec = do
                  parseBrowserConfig [("TEST_CORE_BROWSER_HEADLESS", "maybe")] `shouldBe` Left "Invalid boolean for TEST_CORE_BROWSER_HEADLESS: maybe",
                  parseBrowserConfig [("TEST_CORE_BROWSER_PAUSE_ON_FAILURE", "sometimes")] `shouldBe` Left "Invalid boolean for TEST_CORE_BROWSER_PAUSE_ON_FAILURE: sometimes",
                  parseBrowserConfig [("TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS", "0")] `shouldBe` Left "Invalid positive integer for TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS: 0",
-                 parseBrowserConfig [("TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS", "later")] `shouldBe` Left "Invalid positive integer for TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS: later"
+                 parseBrowserConfig [("TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS", "later")] `shouldBe` Left "Invalid positive integer for TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS: later",
+                 parseBrowserConfig [("TEST_CORE_BROWSER_PROTOCOL_TIMEOUT_MILLISECONDS", "0")] `shouldBe` Left "Invalid positive integer for TEST_CORE_BROWSER_PROTOCOL_TIMEOUT_MILLISECONDS: 0",
+                 parseBrowserConfig [("TEST_CORE_BROWSER_PROTOCOL_TIMEOUT_MILLISECONDS", "later")] `shouldBe` Left "Invalid positive integer for TEST_CORE_BROWSER_PROTOCOL_TIMEOUT_MILLISECONDS: later"
                ]
         )
 
     it "resolves the bundled runner and applies environment overrides"
       $ withEnvironment
         [ ("TEST_CORE_BROWSER_HEADLESS", Just "false"),
-          ("TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS", Just "3210")
+          ("TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS", Just "3210"),
+          ("TEST_CORE_BROWSER_PROTOCOL_TIMEOUT_MILLISECONDS", Just "6543")
         ]
       $ do
         loaded <- loadPlaywrightBrowserConfig
@@ -76,7 +82,8 @@ spec = do
                      [runnerArgument] -> "runner.cjs" `Text.isSuffixOf` Text.pack runnerArgument
                      _ -> False,
                    browserHeadless config `shouldBe` False,
-                   browserTimeoutMilliseconds config `shouldBe` 3210
+                   browserTimeoutMilliseconds config `shouldBe` 3210,
+                   browserProtocolTimeoutMilliseconds config `shouldBe` 6543
                  ]
           )
 

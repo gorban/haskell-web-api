@@ -49,6 +49,16 @@ spec = do
         result <- runBrowserScenario config (pure ())
         result `shouldBe` Left (BrowserRunnerProtocolError "browser command initialize timed out after 1000ms")
 
+    it "keeps protocol transport bounded separately from browser operations" $
+      withFakeRunner "delayed-observe" $ \config ->
+        runBrowserScenario
+          config
+            { browserTimeoutMilliseconds = 1,
+              browserProtocolTimeoutMilliseconds = 1000
+            }
+          (assertText (byRole Heading) (`shouldBe` "Home"))
+          `shouldReturn` Right ()
+
     it "uses semantic locators and batches only composed observations" $
       withFakeRunner "normal" $ \config -> do
         let emailField = byLabel "Email address"
@@ -336,7 +346,8 @@ spec = do
             config =
               defaultPlaywrightBrowserConfig
                 { browserRunnerArguments = [runnerPath, mode],
-                  browserTimeoutMilliseconds = 250
+                  browserTimeoutMilliseconds = 250,
+                  browserProtocolTimeoutMilliseconds = 250
                 }
         writeFile runnerPath fakeRunnerSource
         action config
@@ -348,7 +359,8 @@ spec = do
             config =
               defaultPlaywrightBrowserConfig
                 { browserRunnerArguments = [runnerPath, "hang-initialize", enteredPath],
-                  browserTimeoutMilliseconds = 250
+                  browserTimeoutMilliseconds = 250,
+                  browserProtocolTimeoutMilliseconds = 250
                 }
         writeFile runnerPath fakeRunnerSource
         action config enteredPath
@@ -416,6 +428,7 @@ spec = do
           "    if (mode === 'scenario-error-finish-no-artifacts' && request.command === 'click') { reply(request.id, 'error', null, 'missing element'); continue; }",
           "    if (mode === 'command-error-no-artifacts' && request.command === 'click') { rawReply({ protocol: 1, id: request.id, status: 'error', message: 'missing element' }); continue; }",
           "    if (request.command === 'observeMany') {",
+          "      if (mode === 'delayed-observe') { await new Promise((resolve) => setTimeout(resolve, 500)); }",
           "      if (mode === 'observe-not-array') { reply(request.id, 'ok', { value: 'Home' }); continue; }",
           "      if (mode === 'observe-no-value') { rawReply({ protocol: 1, id: request.id, status: 'ok' }); continue; }",
           "      if (mode === 'observe-missing') { reply(request.id, 'ok', []); continue; }",

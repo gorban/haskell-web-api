@@ -24,6 +24,7 @@ defaultPlaywrightBrowserConfig =
       browserHeadless = True,
       browserPauseOnFailure = False,
       browserTimeoutMilliseconds = 10000,
+      browserProtocolTimeoutMilliseconds = 30000,
       browserArtifactDirectory = "test-results" </> "playwright"
     }
 
@@ -60,6 +61,7 @@ parseBrowserConfigWithDefault baseConfig environment = do
   headless <- parseOptionalBoolean "TEST_CORE_BROWSER_HEADLESS" (browserHeadless baseConfig) (lookup "TEST_CORE_BROWSER_HEADLESS" environment)
   pauseOnFailure <- parseOptionalBoolean "TEST_CORE_BROWSER_PAUSE_ON_FAILURE" (browserPauseOnFailure baseConfig) (lookup "TEST_CORE_BROWSER_PAUSE_ON_FAILURE" environment)
   timeoutMilliseconds <- parseOptionalPositiveInt "TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS" (browserTimeoutMilliseconds baseConfig) (lookup "TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS" environment)
+  protocolTimeoutMilliseconds <- parseOptionalPositiveInt "TEST_CORE_BROWSER_PROTOCOL_TIMEOUT_MILLISECONDS" (browserProtocolTimeoutMilliseconds baseConfig) (lookup "TEST_CORE_BROWSER_PROTOCOL_TIMEOUT_MILLISECONDS" environment)
   pure
     baseConfig
       { browserRunnerCommand = fromMaybe (browserRunnerCommand baseConfig) (lookup "TEST_CORE_BROWSER_RUNNER" environment),
@@ -67,6 +69,7 @@ parseBrowserConfigWithDefault baseConfig environment = do
         browserHeadless = headless,
         browserPauseOnFailure = pauseOnFailure,
         browserTimeoutMilliseconds = timeoutMilliseconds,
+        browserProtocolTimeoutMilliseconds = protocolTimeoutMilliseconds,
         browserArtifactDirectory = fromMaybe (browserArtifactDirectory baseConfig) (lookup "TEST_CORE_BROWSER_ARTIFACT_DIRECTORY" environment)
       }
 
