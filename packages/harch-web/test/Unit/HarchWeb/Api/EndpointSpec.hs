@@ -20,7 +20,7 @@ import HarchWeb.Api.Multipart (MultipartConsumeError (..), MultipartScopedPart (
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Routing (RouteRequest (..))
 import HarchWeb.Server (ProtocolResponse (..), ProtocolResponseBody (..), Response (..))
-import HarchWeb.Site (RouteDefinition (..))
+import HarchWeb.Site (RouteDefinition (..), routeResponse)
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 import Numeric.Natural (Natural)

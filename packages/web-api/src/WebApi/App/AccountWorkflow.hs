@@ -7,6 +7,7 @@
 -- ambient service.
 module WebApi.App.AccountWorkflow
   ( buildRuntimeAccountWorkflow,
+    buildRuntimeAccountWorkflowWithJwt,
     unavailableAccountWorkflow,
   )
 where
@@ -19,6 +20,7 @@ import HarchWeb.Password qualified as Password
 import HarchWeb.Time qualified as HarchWebTime
 import System.IO.Unsafe (unsafePerformIO)
 import WebApi.Account (AccountProfileStore (..), AccountStore (..), AccountStoreError (..), defaultRegistrationDeliveryTimeout)
+import WebApi.AccountJwt (AccountJwtIssuer, unavailableAccountJwtIssuer)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppEnvironmentConfig (..), AppMode (..), SmtpDeliveryConfig (..), defaultAppEnvironmentConfig)
 import WebApi.Login (AccountCredentialStore (..), AccountCredentialStoreError (..), LoginAttemptStore (..), LoginAttemptStoreError (..))
@@ -37,7 +39,15 @@ import WebApi.Route (AppRequestContext, AppRoute (EmailVerificationRoute), rende
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..), MfaEnrollmentSessionStore (..), MfaEnrollmentSessionStoreError (..))
 
 buildRuntimeAccountWorkflow :: PostgresPool -> AppEnvironmentConfig -> AccountWorkflow
-buildRuntimeAccountWorkflow pool !environmentConfig =
+buildRuntimeAccountWorkflow pool environmentConfig =
+  buildRuntimeAccountWorkflowWithJwt pool environmentConfig unavailableAccountJwtIssuer
+
+-- | Runtime server construction supplies the startup-validated issuer. The
+-- two-argument builder remains useful to storage/SMTP tests, where login
+-- issuance is intentionally unavailable rather than silently generating a
+-- development key.
+buildRuntimeAccountWorkflowWithJwt :: PostgresPool -> AppEnvironmentConfig -> AccountJwtIssuer -> AccountWorkflow
+buildRuntimeAccountWorkflowWithJwt pool !environmentConfig jwtIssuer =
   AccountWorkflow
     { accountWorkflowStore = buildRuntimePostgresAccountStore pool,
       accountWorkflowEmailDelivery = runtimeEmailDelivery (appMode environmentConfig) (smtpDeliveryConfig environmentConfig),
@@ -52,6 +62,8 @@ buildRuntimeAccountWorkflow pool !environmentConfig =
       accountWorkflowMfaEnrollmentSessionStore = buildRuntimePostgresMfaEnrollmentSessionStore pool,
       accountWorkflowProfileStore = buildRuntimePostgresAccountProfileStore pool,
       accountWorkflowTotpEncryptionKey = totpEncryptionKey environmentConfig,
+      accountWorkflowCsrfSigningKeyring = csrfSigningKeyring environmentConfig,
+      accountWorkflowJwtIssuer = jwtIssuer,
       accountWorkflowTotpClock = HarchWebTime.unixTimeSecondsFromNanoseconds,
       accountWorkflowVerificationUrl = runtimeVerificationUrl (publicBaseUrl environmentConfig)
     }
@@ -120,6 +132,8 @@ unavailableAccountWorkflow =
       accountWorkflowMfaEnrollmentSessionStore = unavailableMfaEnrollmentSessionStore,
       accountWorkflowProfileStore = unavailableAccountProfileStore,
       accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
+      accountWorkflowCsrfSigningKeyring = csrfSigningKeyring defaultAppEnvironmentConfig,
+      accountWorkflowJwtIssuer = unavailableAccountJwtIssuer,
       accountWorkflowTotpClock = const 0,
       accountWorkflowVerificationUrl = \_ _ -> "https://invalid.example.test/verify"
     }

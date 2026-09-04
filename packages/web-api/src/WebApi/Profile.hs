@@ -3,24 +3,18 @@
 module WebApi.Profile
   ( ProfileLoadError (..),
     ProfileState (..),
-    loadProfile,
+    loadProfileForPrincipal,
   )
 where
 
-import Control.Monad.Except (ExceptT, runExceptT, throwError)
+import Control.Monad.Except (runExceptT, throwError)
 import Core.Control.Error (liftEitherWith)
-import HarchWeb.Account (AccountId)
-import HarchWeb.Session (OpaqueSession (..), SessionId)
-import HarchWeb.Time (UnixTimeNanoseconds)
 import WebApi.Account
   ( AccountProfile (..),
     AccountProfileStore (..),
     AccountStoreError (..),
   )
-import WebApi.Session
-  ( AccountSessionStore (..),
-    AccountSessionStoreError (..),
-  )
+import WebApi.AccountPrincipal (AccountPrincipal, accountPrincipalAccountId)
 
 -- | The authenticated state available to a profile page. A pending account has
 -- a valid session but still needs email verification.
@@ -29,35 +23,25 @@ data ProfileState
   | ProfilePending AccountProfile
   | ProfileAuthenticated AccountProfile
 
--- | Operational failures stay distinct from an absent, expired, or revoked
--- session, all of which are ordinary unauthenticated outcomes.
-data ProfileLoadError
-  = ProfileSessionStoreError AccountSessionStoreError
-  | ProfileAccountStoreError AccountStoreError
+-- | An unavailable account-profile store remains distinct from a principal
+-- with no profile, which is an ordinary unauthenticated outcome.
+newtype ProfileLoadError
+  = ProfileAccountStoreError AccountStoreError
 
-loadProfile :: AccountSessionStore -> AccountProfileStore -> UnixTimeNanoseconds -> Maybe SessionId -> IO (Either ProfileLoadError ProfileState)
-loadProfile sessionStore profileStore nowNanoseconds maybeSessionId =
-  runExceptT (maybe (pure ProfileUnauthenticated) loadProfileForSessionId maybeSessionId)
+-- | Authentication already resolved and compared the durable session before
+-- this page/action workflow starts. The profile layer therefore consumes only
+-- the attached principal instead of parsing or re-looking-up a bearer cookie.
+loadProfileForPrincipal :: AccountProfileStore -> Maybe AccountPrincipal -> IO (Either ProfileLoadError ProfileState)
+loadProfileForPrincipal profileStore maybePrincipal =
+  runExceptT $
+    case maybePrincipal of
+      Nothing -> pure ProfileUnauthenticated
+      Just principal -> do
+        maybeProfile <- liftEitherWith ProfileAccountStoreError (findAccountProfile profileStore (accountPrincipalAccountId principal))
+        maybe (pure ProfileUnauthenticated) (classifyProfile principal) maybeProfile
   where
-    loadProfileForSessionId :: SessionId -> ExceptT ProfileLoadError IO ProfileState
-    loadProfileForSessionId sessionIdValue = do
-      maybeSession <- liftEitherWith ProfileSessionStoreError (loadAccountSession sessionStore sessionIdValue)
-      maybe (pure ProfileUnauthenticated) loadActiveSession maybeSession
-
-    loadActiveSession :: OpaqueSession AccountId -> ExceptT ProfileLoadError IO ProfileState
-    loadActiveSession opaqueSession =
-      if sessionExpiresAtNanoseconds opaqueSession <= nowNanoseconds
-        then pure ProfileUnauthenticated
-        else loadProfileForSession opaqueSession
-
-    loadProfileForSession :: OpaqueSession AccountId -> ExceptT ProfileLoadError IO ProfileState
-    loadProfileForSession opaqueSession = do
-      maybeProfile <- liftEitherWith ProfileAccountStoreError (findAccountProfile profileStore (sessionPrincipal opaqueSession))
-      maybe (pure ProfileUnauthenticated) (classifyProfile opaqueSession) maybeProfile
-
-    classifyProfile :: OpaqueSession AccountId -> AccountProfile -> ExceptT ProfileLoadError IO ProfileState
-    classifyProfile opaqueSession profile =
-      if accountProfileId profile /= sessionPrincipal opaqueSession
+    classifyProfile principal profile =
+      if accountProfileId profile /= accountPrincipalAccountId principal
         then throwError (ProfileAccountStoreError (AccountStoreCorruptData "account profile lookup returned a different account id"))
         else
           pure $

@@ -8,7 +8,7 @@ import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Text qualified as Text
 import HarchWeb.Session (generateSessionId)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
-import Unit.WebApi.TestSupport (csrfTokenValue, databaseConfig, opaqueSession, sessionIdValue, shouldReturnEqual, testSessionId)
+import Unit.WebApi.TestSupport (databaseConfig, opaqueSession, sessionIdValue, shouldReturnEqual, testSessionId)
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Postgres.Testing (buildRuntimePostgresAccountSessionStore, buildRuntimePostgresAccountSessionStoreWithRunner, newPostgresPool, runPostgresMigrationsForRuntime)
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..))
@@ -24,8 +24,8 @@ spec = do
               if "INSERT INTO web_api.account_sessions" `Text.isInfixOf` query
                 then Right [[sessionIdValue]]
                 else
-                  if "SELECT account_id, csrf_token" `Text.isInfixOf` query
-                    then Right [["account_01", csrfTokenValue, "100", "200"]]
+                  if "SELECT account_id, issued_at_nanoseconds" `Text.isInfixOf` query
+                    then Right [["account_01", "100", "200"]]
                     else
                       if "UPDATE web_api.account_sessions" `Text.isInfixOf` query
                         then Right [[sessionIdValue]]
@@ -36,10 +36,10 @@ spec = do
       invalidateAccountSession store testSessionId 300 `shouldReturnEqual` Right True
       recordedQueries <- reverse <$> readIORef queriesReference
       recordedQueries
-        `shouldBe` [ ( "INSERT INTO web_api.account_sessions (session_id, account_id, csrf_token, issued_at_nanoseconds, expires_at_nanoseconds) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (session_id) DO NOTHING RETURNING session_id;",
-                       [sessionIdValue, "account_01", csrfTokenValue, "100", "200"]
+        `shouldBe` [ ( "INSERT INTO web_api.account_sessions (session_id, account_id, issued_at_nanoseconds, expires_at_nanoseconds) VALUES ($1, $2, $3, $4) ON CONFLICT (session_id) DO NOTHING RETURNING session_id;",
+                       [sessionIdValue, "account_01", "100", "200"]
                      ),
-                     ( "SELECT account_id, csrf_token, issued_at_nanoseconds::TEXT, expires_at_nanoseconds::TEXT FROM web_api.account_sessions WHERE session_id = $1 AND invalidated_at_nanoseconds IS NULL;",
+                     ( "SELECT account_id, issued_at_nanoseconds::TEXT, expires_at_nanoseconds::TEXT FROM web_api.account_sessions WHERE session_id = $1 AND invalidated_at_nanoseconds IS NULL;",
                        [sessionIdValue]
                      ),
                      ( "UPDATE web_api.account_sessions SET invalidated_at_nanoseconds = $2 WHERE session_id = $1 AND invalidated_at_nanoseconds IS NULL RETURNING session_id;",
@@ -50,7 +50,7 @@ spec = do
     it "preserves unavailable, declined, and corrupt database outcomes" $ do
       let unavailableStore = buildRuntimePostgresAccountSessionStoreWithRunner (\_ _ _ -> pure (Left "database unavailable")) databaseConfig
           declinedStore = buildRuntimePostgresAccountSessionStoreWithRunner (\_ _ _ -> pure (Right [])) databaseConfig
-          malformedStore = buildRuntimePostgresAccountSessionStoreWithRunner (\_ _ _ -> pure (Right [["account_01", csrfTokenValue, "not-a-time", "200"]])) databaseConfig
+          malformedStore = buildRuntimePostgresAccountSessionStoreWithRunner (\_ _ _ -> pure (Right [["account_01", "not-a-time", "200"]])) databaseConfig
           wrongSessionStore = buildRuntimePostgresAccountSessionStoreWithRunner (\_ _ _ -> pure (Right [["other-session"]])) databaseConfig
       saveAccountSession unavailableStore opaqueSession `shouldReturnEqual` Left AccountSessionStoreUnavailable
       saveAccountSession declinedStore opaqueSession `shouldReturnEqual` Right False
@@ -58,11 +58,11 @@ spec = do
       loadAccountSession unavailableStore testSessionId `shouldReturnEqual` Left AccountSessionStoreUnavailable
       loadAccountSession declinedStore testSessionId `shouldReturnEqual` Right Nothing
       loadAccountSession malformedStore testSessionId `shouldReturnEqual` Left AccountSessionStoreCorruptData
-      loadAccountSession (buildRuntimePostgresAccountSessionStoreWithRunner (\_ _ _ -> pure (Right [["invalid account", csrfTokenValue, "100", "200"]])) databaseConfig) testSessionId
+      loadAccountSession (buildRuntimePostgresAccountSessionStoreWithRunner (\_ _ _ -> pure (Right [["invalid account", "100", "200"]])) databaseConfig) testSessionId
         `shouldReturnEqual` Left AccountSessionStoreCorruptData
-      loadAccountSession (buildRuntimePostgresAccountSessionStoreWithRunner (\_ _ _ -> pure (Right [["account_01", "invalid-csrf", "100", "200"]])) databaseConfig) testSessionId
+      loadAccountSession (buildRuntimePostgresAccountSessionStoreWithRunner (\_ _ _ -> pure (Right [["account_01", "invalid-time", "200"]])) databaseConfig) testSessionId
         `shouldReturnEqual` Left AccountSessionStoreCorruptData
-      loadAccountSession (buildRuntimePostgresAccountSessionStoreWithRunner (\_ _ _ -> pure (Right [["account_01", csrfTokenValue, "100"]])) databaseConfig) testSessionId
+      loadAccountSession (buildRuntimePostgresAccountSessionStoreWithRunner (\_ _ _ -> pure (Right [["account_01", "100"]])) databaseConfig) testSessionId
         `shouldReturnEqual` Left AccountSessionStoreCorruptData
       invalidateAccountSession unavailableStore testSessionId 300 `shouldReturnEqual` Left AccountSessionStoreUnavailable
       invalidateAccountSession declinedStore testSessionId 300 `shouldReturnEqual` Right False

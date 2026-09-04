@@ -1,19 +1,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module HarchWeb.Session
-  ( CsrfToken,
-    OpaqueSession (..),
+  ( OpaqueSession (..),
     SafeReturnPath,
     SessionCookieName,
+    SessionCookieExtraction (..),
     SessionCookiePolicy (..),
     SessionId,
     SessionLookup (..),
     SessionValidation (..),
-    csrfTokenText,
     defaultSessionCookiePolicy,
-    generateCsrfToken,
+    extractSessionCookieId,
     generateSessionId,
-    mkCsrfToken,
     mkSafeReturnPath,
     mkSessionCookieName,
     mkSessionId,
@@ -21,20 +19,20 @@ module HarchWeb.Session
     renderSessionCookie,
     sessionCookieNameText,
     sessionIdText,
-    validateCsrfToken,
     validateSession,
   )
 where
 
 import Crypto.Random.Entropy (getEntropy)
+import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.Char (isAscii, isAsciiLower, isAsciiUpper, isDigit)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
-import HarchWeb.Security.ConstantTime (constantWorkEquals)
 import HarchWeb.Time (UnixTimeNanoseconds)
+import Network.HTTP.Types qualified as Http
 
 newtype SessionId = SessionId Text
   deriving (Eq)
@@ -45,26 +43,37 @@ newtype SessionId = SessionId Text
 instance Show SessionId where
   show _ = "SessionId <redacted>"
 
-newtype CsrfToken = CsrfToken Text
-  deriving (Eq)
-
--- | Redacted for the same reason as 'SessionId': a valid CSRF token is a
--- bearer credential for the client action boundary.
-instance Show CsrfToken where
-  show _ = "CsrfToken <redacted>"
-
 newtype SessionCookieName = SessionCookieName Text
   deriving (Eq, Show)
+
+-- | The only outcomes of parsing an application-selected opaque-session
+-- cookie.  A duplicate or malformed matching cookie is not resolved by
+-- browser/header order; callers can fail its guarded route closed without
+-- making a raw bearer value observable.
+data SessionCookieExtraction
+  = SessionCookieMissing
+  | SessionCookieMalformed
+  | SessionCookieAmbiguous
+  | SessionCookieFound SessionId
+  deriving (Eq)
+
+instance Show SessionCookieExtraction where
+  show extraction =
+    case extraction of
+      SessionCookieMissing -> "SessionCookieMissing"
+      SessionCookieMalformed -> "SessionCookieMalformed"
+      SessionCookieAmbiguous -> "SessionCookieAmbiguous"
+      SessionCookieFound _ -> "SessionCookieFound <redacted>"
 
 newtype SafeReturnPath = SafeReturnPath Text
   deriving (Eq, Show)
 
 -- | Server-side session state. The cookie contains only 'sessionId'; the
--- principal and CSRF token never appear in it.
+-- principal and any CSRF material never appear in it. AHI-4C keeps CSRF
+-- binding in 'HarchWeb.Csrf', so a durable session records only grant facts.
 data OpaqueSession principal = OpaqueSession
   { sessionId :: SessionId,
     sessionPrincipal :: principal,
-    sessionCsrfToken :: CsrfToken,
     sessionIssuedAtNanoseconds :: UnixTimeNanoseconds,
     sessionExpiresAtNanoseconds :: UnixTimeNanoseconds
   }
@@ -99,14 +108,8 @@ defaultSessionCookiePolicy =
 generateSessionId :: IO SessionId
 generateSessionId = SessionId <$> generateOpaqueToken
 
-generateCsrfToken :: IO CsrfToken
-generateCsrfToken = CsrfToken <$> generateOpaqueToken
-
 mkSessionId :: Text -> Maybe SessionId
 mkSessionId token = SessionId <$> opaqueTokenText token
-
-mkCsrfToken :: Text -> Maybe CsrfToken
-mkCsrfToken token = CsrfToken <$> opaqueTokenText token
 
 mkSessionCookieName :: Text -> Maybe SessionCookieName
 mkSessionCookieName name =
@@ -126,9 +129,6 @@ mkSafeReturnPath path =
 sessionIdText :: SessionId -> Text
 sessionIdText (SessionId token) = token
 
-csrfTokenText :: CsrfToken -> Text
-csrfTokenText (CsrfToken token) = token
-
 sessionCookieNameText :: SessionCookieName -> Text
 sessionCookieNameText (SessionCookieName name) = name
 
@@ -144,20 +144,47 @@ renderSessionCookie policy sessionToken =
     <> Text.pack (show (sessionCookieMaxAgeSeconds policy))
     <> "; HttpOnly; Secure; SameSite=Strict"
 
+-- | Extract exactly one syntactically valid session identifier from all
+-- @Cookie@ headers.  Request-head limits bound the raw headers before this
+-- application-independent parser runs; this function owns only name matching,
+-- duplicate detection, and the opaque-session grammar.  It deliberately does
+-- not select a first duplicate cookie.
+extractSessionCookieId :: SessionCookieName -> Http.RequestHeaders -> SessionCookieExtraction
+extractSessionCookieId (SessionCookieName cookieName) headers =
+  case traverse matchingCookieValue cookieFragments of
+    Left () -> SessionCookieMalformed
+    Right matchingValues ->
+      case concat matchingValues of
+        [] -> SessionCookieMissing
+        [value] ->
+          case TextEncoding.decodeUtf8' value of
+            Left _ -> SessionCookieMalformed
+            Right textValue ->
+              maybe SessionCookieMalformed SessionCookieFound (mkSessionId textValue)
+        _ -> SessionCookieAmbiguous
+  where
+    encodedCookieName = TextEncoding.encodeUtf8 cookieName
+    cookieFragments =
+      concat
+        [ ByteString.split 59 rawHeader
+        | (headerName, rawHeader) <- headers,
+          headerName == Http.hCookie
+        ]
+    matchingCookieValue rawCookie =
+      let strippedCookie = ByteString.dropWhile (== 32) rawCookie
+          (cookieKey, cookieValueWithSeparator) = ByteString.break (== 61) strippedCookie
+       in if cookieKey /= encodedCookieName
+            then Right []
+            else case ByteString.uncons cookieValueWithSeparator of
+              Nothing -> Left ()
+              Just (_, cookieValue) -> Right [cookieValue]
+
 validateSession :: UnixTimeNanoseconds -> Maybe (OpaqueSession principal) -> SessionValidation principal
 validateSession _ Nothing = MissingSession
 validateSession now (Just session) =
   case now >= sessionExpiresAtNanoseconds session of
     True -> ExpiredSession
     False -> ActiveSession session
-
--- | Constant-work comparison for synchronizer tokens. Length is public; token
--- bytes are compared without an early mismatch exit.
-validateCsrfToken :: CsrfToken -> CsrfToken -> Bool
-validateCsrfToken expected supplied =
-  constantWorkEquals
-    (TextEncoding.encodeUtf8 (csrfTokenText expected))
-    (TextEncoding.encodeUtf8 (csrfTokenText supplied))
 
 opaqueTokenText :: Text -> Maybe Text
 opaqueTokenText token =

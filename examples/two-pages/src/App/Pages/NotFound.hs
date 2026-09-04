@@ -10,6 +10,7 @@ import App.Routes qualified as Routes
 import HarchWeb
   ( EndpointProtocol (HtmlEndpoint),
     Page (..),
+    PageSecurity,
     RouteRequest (..),
     harch,
   )
@@ -20,8 +21,8 @@ pageDefinition :: RouteDefinition TwoPageRoute () ()
 pageDefinition =
   Site.pageRoute (twoPageEndpointMetadata HtmlEndpoint (Routes.Page PageNotFound)) Nothing notFoundPage
 
-notFoundPage :: RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
-notFoundPage routeRequest =
+notFoundPage :: PageSecurity -> RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
+notFoundPage _ routeRequest =
   pure
     Page
       { pageTitle = "Not Found",

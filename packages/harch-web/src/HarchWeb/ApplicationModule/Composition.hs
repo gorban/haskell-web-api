@@ -7,7 +7,7 @@ where
 
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
-import Data.Maybe (catMaybes, listToMaybe)
+import Data.Maybe (catMaybes, listToMaybe, mapMaybe)
 import HarchWeb.Action (ActionCodecError, combineActionCodecs, declaredActionEndpointMetadata)
 import HarchWeb.ApplicationModule.Core (ApplicationModule (..))
 import HarchWeb.EndpointMetadata (EndpointName, endpointName)
@@ -50,6 +50,7 @@ combineApplicationModules modules =
                 moduleDeclaredRoutes = concatMap moduleDeclaredRoutes moduleList,
                 moduleEndpoints = \routeValue -> moduleEndpoints (selectModule id routeValue) routeValue,
                 moduleActionCodec = combinedActions,
+                moduleActionRoute = \requestContext actionTarget -> listToMaybe (mapMaybe (\applicationModule -> moduleActionRoute applicationModule requestContext actionTarget) moduleList),
                 moduleHandleAction = handleAction,
                 moduleGuards = concatMap moduleGuards moduleList
               }

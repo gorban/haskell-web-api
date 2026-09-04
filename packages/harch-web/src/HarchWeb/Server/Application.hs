@@ -24,6 +24,7 @@ where
 
 import Data.List.NonEmpty (NonEmpty)
 import Data.Text (Text)
+import HarchWeb.Csrf (CsrfProtection)
 import HarchWeb.Document (Document, NavigationRuntime, Page, RuntimeAsset)
 import HarchWeb.EndpointSecurity (ApplicationSecurity, EndpointMetadata)
 import HarchWeb.Observability qualified as Observability
@@ -39,7 +40,6 @@ import HarchWeb.Server.Response
     RequestMiddleware (..),
     Response,
   )
-import HarchWeb.Session (CsrfToken)
 import HarchWeb.StaticAssets (StaticAssetsConfig)
 import Network.Wai qualified as Wai
 
@@ -96,22 +96,20 @@ data Application route action context authorization = Application
     -- this before it reads an action body, so an action POST has an admission
     -- policy independent of the page GET at the same path.
     clientActionEndpointMetadata :: Text -> Text -> context -> Maybe (EndpointMetadata authorization),
+    -- | The typed owning route for a matched client action. Unlike ordinary
+    -- route matching, action URLs need not name a page route, so this declared
+    -- bridge lets pre-decode guards apply route-family policy.
+    clientActionRoute :: Text -> Text -> context -> Maybe route,
     -- | Selects the route-local policy only after the shared dispatcher has
     -- matched a route and method. It is not a second request-policy parser.
     routeExecutionPolicy :: route -> RouteExecutionPolicy,
     renderRequestResponse :: Wai.Request -> RouteRequest route context -> IO (Response route context),
     decodeClientAction :: ClientActionPayload context -> ClientActionDecodeResult action,
-    -- | Supplies the token rendered in a page response's strict host cookie.
-    -- The complete page is deliberate: application policy can select the
-    -- appropriate live session when distinct page routes use distinct session
-    -- capabilities.
-    pageCsrfToken :: Page route context -> IO CsrfToken,
-    -- | Authorizes a successfully decoded action against its typed CSRF token
-    -- before the handler starts. Framework transport validation has already
-    -- established a strict host-cookie double-submit match; applications use
-    -- this hook to bind protected actions to their live session state.
-    authorizeClientActionCsrf :: ClientActionRequest action context -> CsrfToken -> IO Bool,
-    handleClientAction :: ClientActionRequest action context -> IO (Maybe ClientActionResponse),
+    -- | The one CSRF authority used for pre-render page issuance and decoded
+    -- client-action verification. Harch owns strict cookie/form transport;
+    -- the application-selected capability binds tokens to current state.
+    csrfProtection :: CsrfProtection context,
+    handleClientAction :: ClientActionRequest action context -> IO (Maybe (ClientActionResponse route context)),
     pageShell :: Page route context -> Document route,
     reportRequestObservability :: Observability.RequestObservability -> IO (),
     reportConnectionObservability :: Observability.ConnectionObservability -> IO (),

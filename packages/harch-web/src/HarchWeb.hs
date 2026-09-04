@@ -1,8 +1,10 @@
 module HarchWeb
   ( module HarchWeb.Acme,
     module HarchWeb.Authentication,
+    module HarchWeb.Authentication.Attempt,
     module HarchWeb.Authentication.Jwt,
     module HarchWeb.Controls,
+    module HarchWeb.Csrf,
     module HarchWeb.Document,
     module HarchWeb.EndpointSecurity,
     module HarchWeb.Markup,
@@ -18,8 +20,10 @@ where
 
 import HarchWeb.Acme
 import HarchWeb.Authentication
+import HarchWeb.Authentication.Attempt
 import HarchWeb.Authentication.Jwt
 import HarchWeb.Controls
+import HarchWeb.Csrf
 import HarchWeb.Document
 import HarchWeb.EndpointSecurity
 import HarchWeb.Localization

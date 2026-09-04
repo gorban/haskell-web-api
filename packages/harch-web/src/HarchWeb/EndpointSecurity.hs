@@ -38,7 +38,7 @@ where
 import HarchWeb.EndpointMetadata
 import HarchWeb.Routing (RouteRequest (..))
 import HarchWeb.SecurityEvent (SecurityEventSink)
-import HarchWeb.Server.Response (Response)
+import HarchWeb.Server.Response (NonPageResponse)
 import Network.Wai qualified as Wai
 
 -- | The dispatcher-selected protocol form.  These variants retain the same
@@ -68,7 +68,7 @@ data EndpointRequest route context authorization = EndpointRequest
 -- intentionally cannot suggest otherwise.
 data EndpointGuardResult route context
   = ContinueEndpoint context
-  | HaltEndpoint (Response route context)
+  | HaltEndpoint (NonPageResponse route context)
   deriving (Eq, Show)
 
 -- | A post-match guard can enrich context or halt but never receives a

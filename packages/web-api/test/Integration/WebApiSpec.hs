@@ -22,6 +22,7 @@ import System.IO (hClose)
 import System.IO.Error (tryIOError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (ProcessHandle, StdStream (UseHandle), createProcess, cwd, env, getProcessExitCode, proc, readCreateProcessWithExitCode, readProcessWithExitCode, std_out, terminateProcess, waitForProcess)
+import TestSupport.AccountJwt (withTestAccountJwtFixture)
 import TestSupport.RealPostgres (databaseSetupEnvironment, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, supportedPostgresMajorVersions, withContainerizedPsqlOnPath)
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Database (DatabaseError (..), DatabaseResult (..), PageRepository (..), SecondPageData (..))
@@ -34,14 +35,15 @@ loadSecondPageValueForRequest pageRepository requestContext =
 
 spec = do
   describe "main" $ do
-    it "stays running while idle, serves real HTTP traffic, and only stops when terminated" $ do
+    it "stays running while idle, serves real HTTP traffic, and only stops when terminated" $ withTestAccountJwtFixture $ \_ jwtConfigLines -> do
       withUnusedLoopbackPort $ \unusedPort ->
         withSystemTempDirectory "haskell-web-api-run" $ \workingDirectory -> do
           writeFile
             (workingDirectory <> "/.env")
             ( "LISTENER_0_PORT="
                 <> show unusedPort
-                <> "\nDATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+                <> "\nDATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nCSRF_SIGNING_ACTIVE_KEY_ID=development-v1\nCSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+                <> unlines jwtConfigLines
             )
           webApiExecutable <- testBuildToolPath "haskell-web-api"
           withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
@@ -79,7 +81,7 @@ spec = do
                      ]
               )
 
-    it "defaults plain HTTP traffic to HTTPS redirects when both HTTP and manual TLS listeners are configured" $
+    it "defaults plain HTTP traffic to HTTPS redirects when both HTTP and manual TLS listeners are configured" $ withTestAccountJwtFixture $ \_ jwtConfigLines ->
       withUnusedLoopbackPort $ \httpPort ->
         withUnusedLoopbackPort $ \httpsPort ->
           withManualTlsFiles $ \certificatePath privateKeyPath ->
@@ -87,19 +89,23 @@ spec = do
               writeFile
                 (workingDirectory <> "/.env")
                 ( unlines
-                    [ "LISTENER_0_HOST=127.0.0.1",
-                      "LISTENER_0_PORT=" <> show httpPort,
-                      "LISTENER_0_SCHEME=http",
-                      "LISTENER_1_HOST=127.0.0.1",
-                      "LISTENER_1_PORT=" <> show httpsPort,
-                      "LISTENER_1_SCHEME=https",
-                      "LISTENER_1_TLS_SOURCE=manual",
-                      "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
-                      "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath,
-                      "DATABASE_PASSWORD=web_api",
-                      "SMTP_PASSWORD=password",
-                      "TOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-                    ]
+                    ( [ "LISTENER_0_HOST=127.0.0.1",
+                        "LISTENER_0_PORT=" <> show httpPort,
+                        "LISTENER_0_SCHEME=http",
+                        "LISTENER_1_HOST=127.0.0.1",
+                        "LISTENER_1_PORT=" <> show httpsPort,
+                        "LISTENER_1_SCHEME=https",
+                        "LISTENER_1_TLS_SOURCE=manual",
+                        "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
+                        "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath,
+                        "DATABASE_PASSWORD=web_api",
+                        "SMTP_PASSWORD=password",
+                        "TOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                        "CSRF_SIGNING_ACTIVE_KEY_ID=development-v1",
+                        "CSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                      ]
+                        <> jwtConfigLines
+                    )
                 )
               webApiExecutable <- testBuildToolPath "haskell-web-api"
               withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
@@ -139,7 +145,7 @@ spec = do
                          ]
                   )
 
-    it "lets REDIRECT_HTTP_TO_HTTPS=false keep both HTTP and HTTPS listeners serving traffic" $
+    it "lets REDIRECT_HTTP_TO_HTTPS=false keep both HTTP and HTTPS listeners serving traffic" $ withTestAccountJwtFixture $ \_ jwtConfigLines ->
       withUnusedLoopbackPort $ \httpPort ->
         withUnusedLoopbackPort $ \httpsPort ->
           withManualTlsFiles $ \certificatePath privateKeyPath ->
@@ -147,20 +153,24 @@ spec = do
               writeFile
                 (workingDirectory <> "/.env")
                 ( unlines
-                    [ "LISTENER_0_HOST=127.0.0.1",
-                      "LISTENER_0_PORT=" <> show httpPort,
-                      "LISTENER_0_SCHEME=http",
-                      "LISTENER_1_HOST=127.0.0.1",
-                      "LISTENER_1_PORT=" <> show httpsPort,
-                      "LISTENER_1_SCHEME=https",
-                      "LISTENER_1_TLS_SOURCE=manual",
-                      "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
-                      "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath,
-                      "REDIRECT_HTTP_TO_HTTPS=false",
-                      "DATABASE_PASSWORD=web_api",
-                      "SMTP_PASSWORD=password",
-                      "TOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-                    ]
+                    ( [ "LISTENER_0_HOST=127.0.0.1",
+                        "LISTENER_0_PORT=" <> show httpPort,
+                        "LISTENER_0_SCHEME=http",
+                        "LISTENER_1_HOST=127.0.0.1",
+                        "LISTENER_1_PORT=" <> show httpsPort,
+                        "LISTENER_1_SCHEME=https",
+                        "LISTENER_1_TLS_SOURCE=manual",
+                        "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
+                        "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath,
+                        "REDIRECT_HTTP_TO_HTTPS=false",
+                        "DATABASE_PASSWORD=web_api",
+                        "SMTP_PASSWORD=password",
+                        "TOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                        "CSRF_SIGNING_ACTIVE_KEY_ID=development-v1",
+                        "CSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                      ]
+                        <> jwtConfigLines
+                    )
                 )
               webApiExecutable <- testBuildToolPath "haskell-web-api"
               withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do

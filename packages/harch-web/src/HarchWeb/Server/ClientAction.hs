@@ -5,11 +5,14 @@ module HarchWeb.Server.ClientAction
   ( ClientActionProtocolError (..),
     clientActionProtocolErrorResponse,
     clientActionMethodNotAllowedResponse,
+    clientActionReauthenticationRequiredResponse,
     clientActionResponseBody,
     isClientActionRequest,
     maxClientActionBodyBytes,
     maxClientActionFieldCount,
     parseClientActionFields,
+    csrfCookieFromRequest,
+    validateActionCsrfTransport,
     validateClientActionCsrf,
     validateClientActionRequest,
   )
@@ -25,10 +28,11 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Action (ActionMethod, actionMethodText)
-import HarchWeb.Markup (elementIdText, regionPatchHtml, regionPatchId)
+import HarchWeb.Csrf (CsrfToken, mkCsrfToken, validateCsrfToken)
+import HarchWeb.Markup (elementIdText, regionPatchHtml, regionPatchId, safeUrlText)
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.Routing (RouteCodec (..), encodeRouteLocation)
 import HarchWeb.Server.Response
-import HarchWeb.Session (CsrfToken, mkCsrfToken, validateCsrfToken)
 import Network.HTTP.Types qualified as Http
 import Network.HTTP.Types.URI qualified as HttpUri
 import Network.Wai qualified as Wai
@@ -40,6 +44,7 @@ data ClientActionProtocolError
   | ClientActionUnsupportedMediaType
   | ClientActionOriginRejected
   | ClientActionCsrfRejected
+  | ClientActionCsrfUnavailable
   | ClientActionPayloadMalformed
   | ClientActionDecoderInvalid
   | ClientActionNotFound
@@ -65,8 +70,15 @@ validateClientActionRequest expectedOrigin request
   | otherwise = Left ClientActionOriginRejected
 
 validateClientActionCsrf :: Wai.Request -> [(Text, Text)] -> Either ClientActionProtocolError CsrfToken
-validateClientActionCsrf request actionFields
-  | Just cookieToken <- requestCsrfCookie request,
+validateClientActionCsrf = validateActionCsrfTransport
+
+-- | Validate the framework-owned double-submit transport proof for any
+-- URL-encoded mutation, including an explicit native fallback. The selected
+-- backend verification remains a separate operation because only the routed
+-- application context can resolve current grants.
+validateActionCsrfTransport :: Wai.Request -> [(Text, Text)] -> Either ClientActionProtocolError CsrfToken
+validateActionCsrfTransport request actionFields
+  | Just cookieToken <- csrfCookieFromRequest request,
     Just submittedToken <- submittedCsrfToken actionFields,
     validateCsrfToken cookieToken submittedToken =
       Right submittedToken
@@ -85,8 +97,12 @@ formUrlEncodedRequest request =
 requestOrigin :: Wai.Request -> Maybe Text
 requestOrigin request = lookup "Origin" (Wai.requestHeaders request) >>= either (const Nothing) Just . TextEncoding.decodeUtf8'
 
-requestCsrfCookie :: Wai.Request -> Maybe CsrfToken
-requestCsrfCookie request =
+-- | Extract exactly one syntactically valid host CSRF cookie. Both page
+-- preparation and action verification use this framework-owned parser, so a
+-- duplicate or malformed cookie is never silently selected on one path but
+-- rejected on the other.
+csrfCookieFromRequest :: Wai.Request -> Maybe CsrfToken
+csrfCookieFromRequest request =
   case [value | (name, value) <- requestCookies request, name == "__Host-harch-csrf"] of
     [rawToken] -> either (const Nothing) mkCsrfToken (TextEncoding.decodeUtf8' rawToken)
     _ -> Nothing
@@ -130,7 +146,7 @@ clientActionProtocolErrorResponse protocolError =
    in ResponseBody
         { responseStatus = clientActionErrorStatus details,
           responseContentType = "application/json; charset=utf-8",
-          responseBody = "{\"patches\":[],\"focusId\":null}",
+          responseBody = "{\"patches\":[],\"focusId\":null,\"navigation\":null}",
           responseObservabilityAttributes = clientActionErrorObservabilityAttributes details,
           responseLogEntries = clientActionErrorLogEntries details,
           responseDatabaseOperations = []
@@ -151,6 +167,7 @@ clientActionProtocolErrorDetails protocolError =
     ClientActionUnsupportedMediaType -> ordinaryClientActionError Http.status415
     ClientActionOriginRejected -> ordinaryClientActionError Http.status403
     ClientActionCsrfRejected -> ordinaryClientActionError Http.status403
+    ClientActionCsrfUnavailable -> ordinaryClientActionError Http.status503
     ClientActionPayloadMalformed ->
       ClientActionProtocolErrorDetails
         { clientActionErrorStatus = Http.status400,
@@ -183,12 +200,13 @@ ordinaryClientActionError status =
       clientActionErrorLogEntries = []
     }
 
-clientActionMethodNotAllowedResponse :: NonEmpty.NonEmpty ActionMethod -> ClientActionResponse
+clientActionMethodNotAllowedResponse :: NonEmpty.NonEmpty ActionMethod -> ClientActionResponse route context
 clientActionMethodNotAllowedResponse allowedMethods =
   ClientActionResponse
     { clientActionStatus = Http.status405,
       clientActionPatches = [],
       clientActionFocusId = Nothing,
+      clientActionNavigation = StayOnCurrentRoute,
       clientActionHeaders =
         [ ("Allow", TextEncoding.encodeUtf8 (Text.intercalate ", " (map actionMethodText (NonEmpty.toList allowedMethods))))
         ],
@@ -196,23 +214,40 @@ clientActionMethodNotAllowedResponse allowedMethods =
       clientActionLogEntries = []
     }
 
-clientActionResponseBody :: ClientActionResponse -> ResponseBody
-clientActionResponseBody actionResponse =
+-- | The only action response recognized by the deferred runtime as a
+-- pre-handler authentication challenge.  Its constant marker is owned by
+-- Harch rather than application-authored JSON, so a regular handler's 401
+-- cannot accidentally retain and replay a mutation.
+clientActionReauthenticationRequiredResponse :: ClientActionResponse route context
+clientActionReauthenticationRequiredResponse =
+  ClientActionResponse
+    { clientActionStatus = Http.status401,
+      clientActionPatches = [],
+      clientActionFocusId = Nothing,
+      clientActionNavigation = StayOnCurrentRoute,
+      clientActionHeaders = [("X-Harch-Action-Reauthenticate", "required")],
+      clientActionObservabilityAttributes = [],
+      clientActionLogEntries = []
+    }
+
+clientActionResponseBody :: RouteCodec route context -> ClientActionResponse route context -> ResponseBody
+clientActionResponseBody routeCodec actionResponse =
   ResponseBody
     { responseStatus = clientActionStatus actionResponse,
       responseContentType = "application/json; charset=utf-8",
-      responseBody = renderClientActionResponse actionResponse,
+      responseBody = renderClientActionResponse routeCodec actionResponse,
       responseObservabilityAttributes = clientActionObservabilityAttributes actionResponse,
       responseLogEntries = clientActionLogEntries actionResponse,
       responseDatabaseOperations = []
     }
 
-renderClientActionResponse :: ClientActionResponse -> Text
-renderClientActionResponse actionResponse =
+renderClientActionResponse :: RouteCodec route context -> ClientActionResponse route context -> Text
+renderClientActionResponse routeCodec actionResponse =
   jsonText
     ( JsonEncoding.pairs
         ( JsonEncoding.pair "patches" (JsonEncoding.list renderPatch (clientActionPatches actionResponse))
             <> JsonEncoding.pair "focusId" (Aeson.toEncoding (elementIdText <$> clientActionFocusId actionResponse))
+            <> JsonEncoding.pair "navigation" (renderNavigation (clientActionNavigation actionResponse))
         )
     )
   where
@@ -221,6 +256,20 @@ renderClientActionResponse actionResponse =
         ( JsonEncoding.pair "id" (Aeson.toEncoding (regionPatchId patch))
             <> JsonEncoding.pair "html" (Aeson.toEncoding (regionPatchHtml patch))
         )
+    renderNavigation navigation =
+      case navigation of
+        StayOnCurrentRoute -> JsonEncoding.null_
+        NavigateInternal historyMode routeRequest ->
+          JsonEncoding.pairs
+            ( JsonEncoding.pair "historyMode" (Aeson.toEncoding (historyModeText historyMode))
+                <> JsonEncoding.pair "href" (Aeson.toEncoding (safeUrlText (encodeRouteLocation (renderRoute routeCodec routeRequest))))
+            )
+
+historyModeText :: HistoryMode -> Text
+historyModeText historyMode =
+  case historyMode of
+    PushHistory -> "push"
+    ReplaceHistory -> "replace"
 
 jsonText :: JsonEncoding.Encoding -> Text
 jsonText = TextEncoding.decodeUtf8 . LazyByteString.toStrict . JsonEncoding.encodingToLazyByteString

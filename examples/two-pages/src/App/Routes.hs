@@ -84,6 +84,7 @@ newtype PreviewSlug = PreviewSlug Text
 data CustomRoute
   = PreviewPage PreviewSlug
   | NativeSubscriptionFallback
+  | NativeSubscriptionResult
   deriving (Show)
 
 data TwoPageRoute
@@ -121,6 +122,7 @@ endpointNameForRoute route =
     Api LiveDataEvents -> "two-pages.live-data-events"
     Custom (PreviewPage _) -> "two-pages.preview"
     Custom NativeSubscriptionFallback -> "two-pages.native-subscription"
+    Custom NativeSubscriptionResult -> "two-pages.native-subscription-result"
 
 routeTemplateForRoute :: TwoPageRoute -> Text
 routeTemplateForRoute route =
@@ -132,6 +134,7 @@ routeTemplateForRoute route =
     Api LiveDataEvents -> "/live-data/events"
     Custom (PreviewPage _) -> "/preview/{slug}"
     Custom NativeSubscriptionFallback -> "/native-subscribe"
+    Custom NativeSubscriptionResult -> "/subscription-received"
 
 requiredEndpointName :: Text -> EndpointName
 requiredEndpointName endpointNameValue =
@@ -170,6 +173,12 @@ routeCodec =
                     { requestRoute = Custom NativeSubscriptionFallback,
                       requestContext = requestContext
                     }
+              "/subscription-received" ->
+                RouteParsed
+                  RouteRequest
+                    { requestRoute = Custom NativeSubscriptionResult,
+                      requestContext = requestContext
+                    }
               _ ->
                 case parsePreviewPath normalizedPath of
                   Just previewSlug ->
@@ -193,7 +202,8 @@ twoPageRouteMethods route =
     Page _ -> [RouteGet]
     Api LiveDataEvents -> [RouteGet]
     Custom (PreviewPage _) -> [RouteGet]
-    Custom NativeSubscriptionFallback -> [RouteGet, RoutePost]
+    Custom NativeSubscriptionFallback -> [RoutePost]
+    Custom NativeSubscriptionResult -> [RouteGet]
 
 routeHref :: TwoPageRoute -> Text
 routeHref route =
@@ -202,6 +212,7 @@ routeHref route =
     Api LiveDataEvents -> "/live-data/events"
     Custom (PreviewPage previewSlug) -> "/preview/" <> previewSlugText previewSlug
     Custom NativeSubscriptionFallback -> "/native-subscribe"
+    Custom NativeSubscriptionResult -> "/subscription-received"
 
 routeLocation :: TwoPageRoute -> RouteLocation
 routeLocation route =
@@ -223,6 +234,7 @@ routeSegmentsFor route =
     Api LiveDataEvents -> [requiredPathSegment "live-data", requiredPathSegment "events"]
     Custom (PreviewPage previewSlug) -> [requiredPathSegment "preview", requiredPathSegment (previewSlugText previewSlug)]
     Custom NativeSubscriptionFallback -> [requiredPathSegment "native-subscribe"]
+    Custom NativeSubscriptionResult -> [requiredPathSegment "subscription-received"]
 
 twoPageActionPath :: TwoPageActionTarget -> Maybe Text
 twoPageActionPath = staticActionPath twoPageActions

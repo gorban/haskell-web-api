@@ -39,12 +39,13 @@ import HarchWeb.Routing
   )
 import HarchWeb.SecurityEvent (requiredModuleNameOrDie)
 import HarchWeb.Server
-  ( ClientActionRequest (..),
+  ( ActionNavigation (StayOnCurrentRoute),
+    ClientActionRequest (..),
     ClientActionResponse (..),
-    Response (PageResponse),
+    PageResult (RenderedPage),
     unboundedRouteExecutionPolicy,
   )
-import HarchWeb.Site (RouteDefinition (..))
+import HarchWeb.Site (RouteDefinition (..), RouteHandler (PageRouteHandler))
 import Network.HTTP.Types qualified as Http
 
 newtype OrderId = OrderId Text
@@ -88,6 +89,7 @@ buildOrdersModule queries commands =
       moduleDeclaredRoutes = [OrdersIndex],
       moduleEndpoints = ordersRouteDefinition queries,
       moduleActionCodec = ordersActionCodec,
+      moduleActionRoute = \_ SubmitOrderTarget -> Just OrdersIndex,
       moduleHandleAction = ordersActionHandler commands,
       moduleGuards = []
     }
@@ -116,10 +118,10 @@ ordersRouteDefinition queries OrdersIndex =
           (RequireAuthorized MayReadOrders),
       routeMethods = [RouteGet],
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
-      routeResponse = \_ request -> do
+      routeHandler = PageRouteHandler $ \_ request -> do
         summary <- loadOrdersSummary queries (requestContext request)
         pure
-          ( PageResponse
+          ( RenderedPage
               Page
                 { pageTitle = "Orders",
                   pageRoute = OrdersIndex,
@@ -143,7 +145,7 @@ ordersActionCodec =
     )
     (pure SubmitOrder)
 
-ordersActionHandler :: OrdersCommands -> ClientActionRequest OrdersAction OrdersContext -> IO (Maybe ClientActionResponse)
+ordersActionHandler :: OrdersCommands -> ClientActionRequest OrdersAction OrdersContext -> IO (Maybe (ClientActionResponse OrdersRoute OrdersContext))
 ordersActionHandler commands actionRequest =
   case clientAction actionRequest of
     SubmitOrder -> do
@@ -154,6 +156,7 @@ ordersActionHandler commands actionRequest =
               { clientActionStatus = Http.status202,
                 clientActionPatches = [],
                 clientActionFocusId = Nothing,
+                clientActionNavigation = StayOnCurrentRoute,
                 clientActionHeaders = [],
                 clientActionObservabilityAttributes = [],
                 clientActionLogEntries = []

@@ -22,8 +22,9 @@ import System.IO.Temp (withSystemTempDirectory)
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi.Account qualified as Account
 import WebApi.AccountPages (AccountWorkflow (..))
-import WebApi.App (buildRuntimeAccountWorkflow, buildRuntimeApp, runtimeRequestObservabilityReporter)
+import WebApi.App (buildAppWithDatabaseAndAccountWorkflow, buildRuntimeAccountWorkflow, runtimeRequestObservabilityReporter)
 import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), DatabaseSslMode (..), DatabaseTransportSecurity (..), ForwardedHeaderTrust (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SharedTlsCertificateFiles (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsCipherSuite (..), TlsConfig (..), TlsPolicy (..), TlsProtocolVersion (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, databasePoolCapacityValue, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, defaultTlsPolicy, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, mkDatabasePoolCapacity, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
+import WebApi.Database (defaultPageRepository)
 import WebApi.Login qualified as Login
 import WebApi.Mfa qualified as Mfa
 import WebApi.Postgres.Testing (newPostgresPool)
@@ -36,8 +37,19 @@ developmentEnvironmentSecrets :: [(Text.Text, Text.Text)]
 developmentEnvironmentSecrets =
   [ ("DATABASE_PASSWORD", "web_api"),
     ("SMTP_PASSWORD", "password"),
-    ("TOTP_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+    ("TOTP_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+    ("CSRF_SIGNING_ACTIVE_KEY_ID", "development-v1"),
+    ("CSRF_SIGNING_VERIFICATION_KEYS", "development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
   ]
+
+productionCsrfSigningKeyring :: HarchWeb.SignedCsrfKeyring
+productionCsrfSigningKeyring =
+  case (HarchWeb.mkCsrfKeyId "production-v1", HarchWeb.mkCsrfSigningKey "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI") of
+    (Just keyId, Just signingKey) ->
+      case HarchWeb.mkSignedCsrfKeyring keyId ((keyId, signingKey) :| []) of
+        Just keyring -> keyring
+        Nothing -> error "expected a valid production CSRF signing keyring"
+    _ -> error "expected valid production CSRF signing material"
 
 spec = do
   describe "DatabasePoolCapacity" $ do
@@ -1661,7 +1673,7 @@ spec = do
           parseRuntimeAppConfig envPairs listenerPairs otherPairs `shouldBe` Left expectedError
 
   describe "defaultAppEnvironmentConfig" $ do
-    it "keeps committed .env defaults free of credentials and encryption keys" $ do
+    it "keeps committed .env defaults free of credentials and encryption keys while documenting JWT selectors" $ do
       committedEnvDefaults
         `shouldBe` [ ("APP_MODE", "development"),
                      ("DATABASE_HOST", "127.0.0.1"),
@@ -1675,7 +1687,14 @@ spec = do
                      ("SMTP_HELO_NAME", "localhost"),
                      ("SMTP_USER", "test@localhost"),
                      ("EMAIL_FROM", "noreply@localhost"),
-                     ("PUBLIC_BASE_URL", "http://127.0.0.1:5001")
+                     ("PUBLIC_BASE_URL", "http://127.0.0.1:5001"),
+                     ("ACCOUNT_JWT_ISSUER", "http://127.0.0.1:5001"),
+                     ("ACCOUNT_JWT_AUDIENCE", "web-api-account"),
+                     ("ACCOUNT_JWT_ACTIVE_KEY_ID", "development-v1"),
+                     ("ACCOUNT_JWT_SIGNING_JWK_FILE", "account-jwt-private.jwk"),
+                     ("ACCOUNT_JWT_VERIFICATION_JWK_SET_FILE", "account-jwt-verification.jwks"),
+                     ("ACCOUNT_JWT_COOKIE_NAME", "__Host-harch-session"),
+                     ("ACCOUNT_JWT_COOKIE_MAX_AGE_SECONDS", "28800")
                    ]
       smtpDeliveryHost (smtpDeliveryConfig defaultAppEnvironmentConfig) `shouldBe` "127.0.0.1"
       smtpDeliveryPort (smtpDeliveryConfig defaultAppEnvironmentConfig) `shouldBe` 5025
@@ -1695,7 +1714,7 @@ spec = do
       show dynamicEnvironmentConfig
         `shouldBe` ( "AppEnvironmentConfig {appMode = Development, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10, databasePoolCapacity = 10, databaseTransportSecurity = DatabaseTransportLibpqDefault}, smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = "
                        <> show dynamicSmtpPort
-                       <> ", smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = <redacted>}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>}"
+                       <> ", smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = <redacted>}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>, csrfSigningKeyring = SignedCsrfKeyring {signedCsrfActiveKey = CsrfKeyId \"development-v1\", signedCsrfVerificationKeys = <redacted>}, accountJwtConfiguration = AccountJwtConfiguration {accountJwtIssuerText = \"http://127.0.0.1:5001\", accountJwtAudienceText = \"web-api-account\", accountJwtActiveKeyId = \"development-v1\", accountJwtSigningJwkFile = \"account-jwt-private.jwk\", accountJwtVerificationJwkSetFile = \"account-jwt-verification.jwks\", accountJwtCookiePolicy = AuthenticationCookiePolicy {authenticationCookieName = AuthenticationCookieName \"__Host-harch-session\", authenticationCookieMaxAgeSeconds = 28800}}}"
                    )
       show dynamicEnvironmentConfig `shouldNotContain` "databasePassword = \""
       show dynamicEnvironmentConfig `shouldNotContain` "smtpDeliveryPassword = \""
@@ -1727,7 +1746,7 @@ spec = do
           <> "/verify?token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         accountWorkflowClock workflow >>= (`shouldSatisfy` (> 0))
         accountWorkflowTotpClock workflow 100000000000 `shouldSatisfy` (> 0)
-        let runtimeApplication = buildRuntimeApp pool defaultAppConfig environmentConfig
+        let runtimeApplication = buildAppWithDatabaseAndAccountWorkflow defaultAppConfig defaultPageRepository workflow
         HarchWeb.handleClientAction
           runtimeApplication
           (typedAccountActionRequest "POST" "/register" [("username", registrationUsername), ("email", registrationEmail), ("password", "correct horse battery staple")] defaultRequestContext)
@@ -1793,7 +1812,11 @@ spec = do
           runtimeApplication
           (HarchWeb.RouteRequest StatusApiRoute defaultRequestContext)
           >>= (`shouldSatisfy` \case HarchWeb.ProtocolResponseResult _ -> True; _ -> False)
-        let productionRuntimeApplication = buildRuntimeApp pool defaultAppConfig (environmentConfig {appMode = Production})
+        let productionRuntimeApplication =
+              buildAppWithDatabaseAndAccountWorkflow
+                defaultAppConfig
+                defaultPageRepository
+                (buildRuntimeAccountWorkflow pool (environmentConfig {appMode = Production}))
         HarchWeb.renderResponse
           productionRuntimeApplication
           (HarchWeb.RouteRequest StatusApiRoute defaultRequestContext)
@@ -1844,6 +1867,7 @@ spec = do
           productionEnvironmentConfig =
             defaultAppEnvironmentConfig
               { appMode = Production,
+                csrfSigningKeyring = productionCsrfSigningKeyring,
                 databaseConfig = productionDatabaseConfig
               }
       appMode productionEnvironmentConfig `shouldBe` Production
@@ -1875,9 +1899,9 @@ spec = do
         `shouldBe` "[DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10, databasePoolCapacity = 10, databaseTransportSecurity = DatabaseTransportLibpqDefault}]"
       show productionDatabaseConfig `shouldNotContain` "super-secret"
       show productionEnvironmentConfig
-        `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = <redacted>}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>}"
+        `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = <redacted>}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>, csrfSigningKeyring = SignedCsrfKeyring {signedCsrfActiveKey = CsrfKeyId \"production-v1\", signedCsrfVerificationKeys = <redacted>}, accountJwtConfiguration = AccountJwtConfiguration {accountJwtIssuerText = \"http://127.0.0.1:5001\", accountJwtAudienceText = \"web-api-account\", accountJwtActiveKeyId = \"development-v1\", accountJwtSigningJwkFile = \"account-jwt-private.jwk\", accountJwtVerificationJwkSetFile = \"account-jwt-verification.jwks\", accountJwtCookiePolicy = AuthenticationCookiePolicy {authenticationCookieName = AuthenticationCookieName \"__Host-harch-session\", authenticationCookieMaxAgeSeconds = 28800}}}"
       show [productionEnvironmentConfig]
-        `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = <redacted>}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>}]"
+        `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = <redacted>}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>, csrfSigningKeyring = SignedCsrfKeyring {signedCsrfActiveKey = CsrfKeyId \"production-v1\", signedCsrfVerificationKeys = <redacted>}, accountJwtConfiguration = AccountJwtConfiguration {accountJwtIssuerText = \"http://127.0.0.1:5001\", accountJwtAudienceText = \"web-api-account\", accountJwtActiveKeyId = \"development-v1\", accountJwtSigningJwkFile = \"account-jwt-private.jwk\", accountJwtVerificationJwkSetFile = \"account-jwt-verification.jwks\", accountJwtCookiePolicy = AuthenticationCookiePolicy {authenticationCookieName = AuthenticationCookieName \"__Host-harch-session\", authenticationCookieMaxAgeSeconds = 28800}}}]"
       show productionEnvironmentConfig `shouldNotContain` "super-secret"
       show (MissingConfigValue "DATABASE_PASSWORD") `shouldBe` "MissingConfigValue \"DATABASE_PASSWORD\""
       show (InvalidConfigValue "APP_MODE" "staging") `shouldBe` "InvalidConfigValue \"APP_MODE\" \"staging\""
@@ -2036,17 +2060,27 @@ spec = do
         `shouldBe` Left (InvalidConfigValue "SMTP_PORT" "65536")
       parseAppEnvironmentConfig (committedEnvDefaults <> developmentEnvironmentSecrets) [] [("SMTP_PORT", "not-a-port")]
         `shouldBe` Left (InvalidConfigValue "SMTP_PORT" "not-a-port")
+      parseAppEnvironmentConfig (committedEnvDefaults <> developmentEnvironmentSecrets) [] [("ACCOUNT_JWT_COOKIE_NAME", "harch-session")]
+        `shouldBe` Left (InvalidConfigValue "ACCOUNT_JWT_COOKIE_NAME" "harch-session")
       parseAppEnvironmentConfig (committedEnvDefaults <> developmentEnvironmentSecrets) [] [("TOTP_ENCRYPTION_KEY", "not-a-key")]
         `shouldBe` Left (InvalidConfigValue "TOTP_ENCRYPTION_KEY" "<redacted>")
       parseAppEnvironmentConfig (committedEnvDefaults <> developmentEnvironmentSecrets) [("APP_MODE", "production")] []
         `shouldBe` Left (InvalidConfigValue "TOTP_ENCRYPTION_KEY" "development-default")
-      parseAppEnvironmentConfig
-        (committedEnvDefaults <> developmentEnvironmentSecrets)
-        [ ("APP_MODE", "production"),
-          ("TOTP_ENCRYPTION_KEY", "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI")
-        ]
-        []
-        `shouldBe` Right defaultAppEnvironmentConfig {appMode = Production, totpEncryptionKey = productionTotpEncryptionKey}
+      let productionConfig =
+            parseAppEnvironmentConfig
+              (committedEnvDefaults <> developmentEnvironmentSecrets)
+              [ ("APP_MODE", "production"),
+                ("TOTP_ENCRYPTION_KEY", "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI"),
+                ("CSRF_SIGNING_ACTIVE_KEY_ID", "production-v1"),
+                ("CSRF_SIGNING_VERIFICATION_KEYS", "production-v1:QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI")
+              ]
+              []
+      productionConfig `shouldSatisfy` \case
+        Right configured ->
+          appMode configured == Production
+            && totpEncryptionKey configured == productionTotpEncryptionKey
+            && "production-v1" `Text.isInfixOf` Text.pack (show (csrfSigningKeyring configured))
+        Left _ -> False
 
   describe "loadAppEnvironmentConfigWithFiles" $ do
     it "loads the documented .env then .env.local layers" $
@@ -2055,7 +2089,7 @@ spec = do
           let envPath = tempDirectory <> "/.env"
               envLocalPath = tempDirectory <> "/.env.local"
           writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nDATABASE_NAME=shared_db\nDATABASE_USER=shared_user\nDATABASE_PASSWORD=shared_password\n"
-          writeFile envLocalPath "APP_MODE=test\nDATABASE_PORT=7432\nDATABASE_PASSWORD=local_password\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+          writeFile envLocalPath "APP_MODE=test\nDATABASE_PORT=7432\nDATABASE_PASSWORD=local_password\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nCSRF_SIGNING_ACTIVE_KEY_ID=development-v1\nCSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
           loadAppEnvironmentConfigWithFiles envPath envLocalPath
             `shouldReturn` Right
               defaultAppEnvironmentConfig
@@ -2082,12 +2116,13 @@ spec = do
                 let envPath = tempDirectory <> "/.env"
                     envLocalPath = tempDirectory <> "/.env.local"
                 writeFile envPath "APP_MODE=development\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nDATABASE_NAME=shared_db\nDATABASE_USER=shared_user\nDATABASE_PASSWORD=shared_password\n"
-                writeFile envLocalPath "APP_MODE=test\nDATABASE_PORT=7432\nDATABASE_PASSWORD=local_password\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\n"
+                writeFile envLocalPath "APP_MODE=test\nDATABASE_PORT=7432\nDATABASE_PASSWORD=local_password\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\nCSRF_SIGNING_ACTIVE_KEY_ID=production-v1\nCSRF_SIGNING_VERIFICATION_KEYS=production-v1:QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\n"
                 loadAppEnvironmentConfigWithFiles envPath envLocalPath
                   `shouldReturn` Right
                     defaultAppEnvironmentConfig
                       { appMode = Production,
                         totpEncryptionKey = productionTotpEncryptionKey,
+                        csrfSigningKeyring = productionCsrfSigningKeyring,
                         databaseConfig =
                           DatabaseConfig
                             { databaseHost = "db.shared",
@@ -2141,7 +2176,7 @@ spec = do
       withSystemTempDirectory "app-environment-config-current-directory" $ \tempDirectory ->
         withClearedAppEnvironment $ do
           writeFile (tempDirectory <> "/.env") "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nDATABASE_NAME=shared_db\nDATABASE_USER=shared_user\nDATABASE_PASSWORD=shared_password\n"
-          writeFile (tempDirectory <> "/.env.local") "APP_MODE=test\nDATABASE_PASSWORD=local_password\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+          writeFile (tempDirectory <> "/.env.local") "APP_MODE=test\nDATABASE_PASSWORD=local_password\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nCSRF_SIGNING_ACTIVE_KEY_ID=development-v1\nCSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
           withCurrentDirectory tempDirectory $
             loadAppEnvironmentConfig
               `shouldReturn` Right
@@ -2191,7 +2226,7 @@ spec = do
           withClearedRuntimeEnvironment $ do
             let envPath = tempDirectory <> "/.env"
                 envLocalPath = tempDirectory <> "/.env.local"
-            writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nTOTP_ENCRYPTION_KEY=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\nAPP_TITLE_PREFIX=web-api-shared\nLISTENER_0_PORT=5443\n"
+            writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nTOTP_ENCRYPTION_KEY=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\nCSRF_SIGNING_ACTIVE_KEY_ID=production-v1\nCSRF_SIGNING_VERIFICATION_KEYS=production-v1:QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\nAPP_TITLE_PREFIX=web-api-shared\nLISTENER_0_PORT=5443\n"
             writeFile envLocalPath "DATABASE_PASSWORD=local_password\nSMTP_PASSWORD=password\nAPP_TITLE_PREFIX=web-api-local\nLISTENER_0_PORT=7443\n"
             loadAppStartupConfigWithFiles envPath envLocalPath
               `shouldReturn` Right
@@ -2200,6 +2235,7 @@ spec = do
                       defaultAppEnvironmentConfig
                         { appMode = Production,
                           totpEncryptionKey = productionTotpEncryptionKey,
+                          csrfSigningKeyring = productionCsrfSigningKeyring,
                           databaseConfig =
                             DatabaseConfig
                               { databaseHost = "db.shared",
@@ -2236,7 +2272,7 @@ spec = do
                 withTemporaryEnvironment "LISTENER_0_PORT" (Just "80") $ do
                   let envPath = tempDirectory <> "/.env"
                       envLocalPath = tempDirectory <> "/.env.local"
-                  writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nTOTP_ENCRYPTION_KEY=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\nAPP_TITLE_PREFIX=web-api-shared\nLISTENER_0_HOST=127.0.0.1\nLISTENER_0_PORT=5443\n"
+                  writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nTOTP_ENCRYPTION_KEY=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\nCSRF_SIGNING_ACTIVE_KEY_ID=production-v1\nCSRF_SIGNING_VERIFICATION_KEYS=production-v1:QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\nAPP_TITLE_PREFIX=web-api-shared\nLISTENER_0_HOST=127.0.0.1\nLISTENER_0_PORT=5443\n"
                   writeFile envLocalPath "DATABASE_PASSWORD=local_password\nSMTP_PASSWORD=password\nAPP_TITLE_PREFIX=web-api-local\nLISTENER_0_PORT=7443\n"
                   loadAppStartupConfigWithFiles envPath envLocalPath
                     `shouldReturn` Right
@@ -2245,6 +2281,7 @@ spec = do
                             defaultAppEnvironmentConfig
                               { appMode = Production,
                                 totpEncryptionKey = productionTotpEncryptionKey,
+                                csrfSigningKeyring = productionCsrfSigningKeyring,
                                 databaseConfig =
                                   DatabaseConfig
                                     { databaseHost = "db.shared",
@@ -2283,7 +2320,7 @@ spec = do
             loadAppStartupConfigWithFiles brokenEnvPath envLocalPath
               `shouldReturn` Left
                 (AppStartupOverridesFileError brokenEnvPath (InvalidConfigOverridesLine 1 "APP_TITLE_PREFIX"))
-            writeFile envLocalPath "DATABASE_PASSWORD=local_password\nSMTP_PASSWORD=local_password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+            writeFile envLocalPath "DATABASE_PASSWORD=local_password\nSMTP_PASSWORD=local_password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nCSRF_SIGNING_ACTIVE_KEY_ID=development-v1\nCSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
             writeFile invalidEnvPath "LISTENER_0_PORT=0\n"
             loadAppStartupConfigWithFiles invalidEnvPath envLocalPath
               `shouldReturn` Left
@@ -2311,7 +2348,7 @@ spec = do
         withClearedAppEnvironment $
           withClearedRuntimeEnvironment $ do
             writeFile (tempDirectory <> "/.env") "APP_MODE=production\nAPP_TITLE_PREFIX=web-api-shared\n"
-            writeFile (tempDirectory <> "/.env.local") "APP_MODE=test\nDATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nLISTENER_0_PORT=6001\n"
+            writeFile (tempDirectory <> "/.env.local") "APP_MODE=test\nDATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nCSRF_SIGNING_ACTIVE_KEY_ID=development-v1\nCSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nLISTENER_0_PORT=6001\n"
             withCurrentDirectory tempDirectory $
               loadAppStartupConfig
                 `shouldReturn` Right

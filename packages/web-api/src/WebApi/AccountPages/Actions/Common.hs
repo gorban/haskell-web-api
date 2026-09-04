@@ -9,6 +9,7 @@
 -- request context.
 module WebApi.AccountPages.Actions.Common
   ( AccountActionRequest,
+    AccountActionResponse,
     AccountActionWorkflow,
     accountWorkflow,
     AccountActionResponseContext,
@@ -75,7 +76,7 @@ import WebApi.Login (AccountCredentialStoreError (..), LoginAttemptStoreError (.
 import WebApi.Mfa (MfaStoreError (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Profile (ProfileLoadError (..))
-import WebApi.Route (AppLocale (..), AppRequestContext (..))
+import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute)
 import WebApi.Session
   ( AccountSessionStoreError (..),
     MfaEnrollmentSessionStoreError (..),
@@ -84,10 +85,12 @@ import WebApi.Session
 
 type AccountActionRequest = HarchWeb.ClientActionRequest AccountAction AppRequestContext
 
+type AccountActionResponse = HarchWeb.ClientActionResponse AppRoute AppRequestContext
+
 -- | The account action effect exposes one public client-action response on
 -- both its success and failure rails. Focused workflow modules use this
 -- shared boundary instead of inventing per-action effect stacks.
-type AccountActionWorkflow = AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+type AccountActionWorkflow = AppM AccountActionResponse AccountActionResponse
 
 accountWorkflow :: AppM publicFailure AccountWorkflow
 accountWorkflow = appAccountWorkflow <$> askAppServices
@@ -116,13 +119,11 @@ resendLabel actionRequest = localized actionRequest ResendVerificationEmail
 profileLoadErrorType :: ProfileLoadError -> Text
 profileLoadErrorType loadError =
   case loadError of
-    ProfileSessionStoreError _ -> "AccountSessionStoreError"
     ProfileAccountStoreError _ -> "AccountStoreError"
 
 profileLoadErrorDetail :: ProfileLoadError -> Text
 profileLoadErrorDetail loadError =
   case loadError of
-    ProfileSessionStoreError storeError -> sessionStoreErrorMessage storeError
     ProfileAccountStoreError storeError -> accountStoreErrorDetail storeError
 
 localized :: AccountActionRequest -> AppMessage -> Text
@@ -140,7 +141,7 @@ mfaErrorMessage actionRequest errorValue =
     MfaEnrollmentConfirmationRejected -> localized actionRequest EnrollmentConfirmationUnavailable
     _ -> localized actionRequest AuthenticatorEnrollmentUnavailable
 
-throwClientActionFailure :: HarchWeb.ClientActionResponse -> FailureCode -> Text -> Text -> AppM HarchWeb.ClientActionResponse value
+throwClientActionFailure :: AccountActionResponse -> FailureCode -> Text -> Text -> AppM AccountActionResponse value
 throwClientActionFailure publicResponse code typeName detail =
   throwAppFailure
     AppFailure
@@ -156,7 +157,7 @@ buildFailureDiagnostics code typeName detail =
       failureLogEntries = ["ERROR [" <> renderFailureCode code <> "] " <> detail]
     }
 
-attachClientActionFailure :: AppFailure HarchWeb.ClientActionResponse -> HarchWeb.ClientActionResponse
+attachClientActionFailure :: AppFailure AccountActionResponse -> AccountActionResponse
 attachClientActionFailure failure =
   let publicResponse = appFailurePublic failure
       diagnostics = appFailureDiagnostics failure
@@ -230,12 +231,13 @@ accountActionResponseContext actionRequest status focusId headers =
       accountActionResponseHeaders = headers
     }
 
-registrationResponse :: AccountActionResponseContext -> RegistrationForm -> HarchWeb.ClientActionResponse
+registrationResponse :: AccountActionResponseContext -> RegistrationForm -> AccountActionResponse
 registrationResponse responseContext form =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = replaceRegionPatch (registrationRegion requestContext locale form),
       HarchWeb.clientActionFocusId = focusId,
+      HarchWeb.clientActionNavigation = HarchWeb.StayOnCurrentRoute,
       HarchWeb.clientActionHeaders = headers,
       HarchWeb.clientActionObservabilityAttributes = [],
       HarchWeb.clientActionLogEntries = []
@@ -247,12 +249,13 @@ registrationResponse responseContext form =
     focusId = accountActionResponseFocusId responseContext
     headers = accountActionResponseHeaders responseContext
 
-verificationResponse :: AccountActionResponseContext -> VerificationForm -> HarchWeb.ClientActionResponse
+verificationResponse :: AccountActionResponseContext -> VerificationForm -> AccountActionResponse
 verificationResponse responseContext form =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = replaceRegionPatch (verificationRegion requestContext locale form),
       HarchWeb.clientActionFocusId = focusId,
+      HarchWeb.clientActionNavigation = HarchWeb.StayOnCurrentRoute,
       HarchWeb.clientActionHeaders = headers,
       HarchWeb.clientActionObservabilityAttributes = [],
       HarchWeb.clientActionLogEntries = []
@@ -264,12 +267,13 @@ verificationResponse responseContext form =
     focusId = accountActionResponseFocusId responseContext
     headers = accountActionResponseHeaders responseContext
 
-mfaEnrollmentResponse :: AccountActionResponseContext -> MfaEnrollmentForm -> HarchWeb.ClientActionResponse
+mfaEnrollmentResponse :: AccountActionResponseContext -> MfaEnrollmentForm -> AccountActionResponse
 mfaEnrollmentResponse responseContext form =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = replaceRegionPatch (mfaEnrollmentRegion requestContext locale form),
       HarchWeb.clientActionFocusId = focusId,
+      HarchWeb.clientActionNavigation = HarchWeb.StayOnCurrentRoute,
       HarchWeb.clientActionHeaders = headers,
       HarchWeb.clientActionObservabilityAttributes = [],
       HarchWeb.clientActionLogEntries = []
@@ -281,12 +285,13 @@ mfaEnrollmentResponse responseContext form =
     focusId = accountActionResponseFocusId responseContext
     headers = accountActionResponseHeaders responseContext
 
-loginResponse :: AccountActionResponseContext -> LoginForm -> HarchWeb.ClientActionResponse
+loginResponse :: AccountActionResponseContext -> LoginForm -> AccountActionResponse
 loginResponse responseContext form =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = replaceRegionPatch (loginRegion requestContext locale form),
       HarchWeb.clientActionFocusId = focusId,
+      HarchWeb.clientActionNavigation = HarchWeb.StayOnCurrentRoute,
       HarchWeb.clientActionHeaders = headers,
       HarchWeb.clientActionObservabilityAttributes = [],
       HarchWeb.clientActionLogEntries = []
@@ -298,12 +303,13 @@ loginResponse responseContext form =
     focusId = accountActionResponseFocusId responseContext
     headers = accountActionResponseHeaders responseContext
 
-logoutResponse :: AccountActionResponseContext -> Maybe (Text, Bool) -> HarchWeb.ClientActionResponse
+logoutResponse :: AccountActionResponseContext -> Maybe (Text, Bool) -> AccountActionResponse
 logoutResponse responseContext message =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = replaceRegionPatch (logoutRegion requestContext locale message),
       HarchWeb.clientActionFocusId = accountActionResponseFocusId responseContext,
+      HarchWeb.clientActionNavigation = HarchWeb.StayOnCurrentRoute,
       HarchWeb.clientActionHeaders = headers,
       HarchWeb.clientActionObservabilityAttributes = [],
       HarchWeb.clientActionLogEntries = []
@@ -314,12 +320,13 @@ logoutResponse responseContext message =
     status = accountActionResponseStatus responseContext
     headers = accountActionResponseHeaders responseContext
 
-profileResponse :: AccountActionRequest -> Http.Status -> PendingProfileForm -> HarchWeb.ClientActionResponse
+profileResponse :: AccountActionRequest -> Http.Status -> PendingProfileForm -> AccountActionResponse
 profileResponse actionRequest status form =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = replaceRegionPatch (pendingProfileRegion (HarchWeb.clientActionContext actionRequest) UpdateProfileTarget form),
       HarchWeb.clientActionFocusId = Nothing,
+      HarchWeb.clientActionNavigation = HarchWeb.StayOnCurrentRoute,
       HarchWeb.clientActionHeaders = [],
       HarchWeb.clientActionObservabilityAttributes = [],
       HarchWeb.clientActionLogEntries = []

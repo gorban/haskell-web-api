@@ -3,6 +3,7 @@
 
 {-# E2E_SPEC #-}
 
+import Data.Aeson qualified as Aeson
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -11,15 +12,20 @@ import HarchWeb.Account qualified as Account
 import HarchWeb.Email qualified as Email
 import HarchWeb.Password qualified as Password
 import HarchWeb.Session qualified as Session
+import Network.HTTP.Types qualified as Http
 import System.Directory (copyFile, createDirectory, doesFileExist, getCurrentDirectory)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..), VerificationResendAdmission (..), VerificationResendClaim (..), VerificationResendClaimSettlement (..))
-import WebApi.App (buildApp, buildAppWithDatabaseAndAccountWorkflow, unavailableAccountWorkflow)
+import WebApi.AccountPages (AccountAction)
+import WebApi.AccountPrincipal (mkAccountPrincipal)
+import WebApi.App (buildApp, buildAppWithDatabaseAndAccountWorkflow, buildAppWithDatabaseAndAccountWorkflowAndSecurity, unavailableAccountWorkflow)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
 import WebApi.Database (defaultPageRepository)
 import WebApi.Mfa (MfaStore (..))
+import WebApi.Route (AppRoute (LoginRoute))
+import WebApi.Route qualified
 import WebApi.Session (AccountSessionStore (..), MfaEnrollmentSessionStore (..), mfaEnrollmentSessionCookiePolicy)
 
 spec =
@@ -102,8 +108,9 @@ spec =
 
     it "serves the app-home profile landing through SSR and enhanced navigation" $
       withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+        HarchWeb.withLocalTestServer (challengedBrowserApp appConfig) $ \server -> do
           let secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
+              loginUrl = HarchWeb.localServerBaseUrl server <> "/login"
               profileUrl = HarchWeb.localServerBaseUrl server <> "/profile"
               spanishProfileUrl = HarchWeb.localServerBaseUrl server <> "/es/profile"
           runBrowserScenario
@@ -116,22 +123,17 @@ spec =
                 assertAttribute (byRole Link `named` "Home") "data-test-focus-visible-style" (`shouldBe` Just "true")
                 click (byRole Link `named` "Profile")
                 assertAll
-                  ((,,,) <$> currentUrl <*> textContent (byRole Heading) <*> textContent (byText "Sign in to view and manage your profile.") <*> browserMetrics)
-                  ( \(url, heading, body, metrics) ->
-                      (url `shouldBe` profileUrl)
-                        :| [ heading `shouldBe` "Profile",
-                             body `shouldBe` "Sign in to view and manage your profile.",
+                  ((,,) <$> currentUrl <*> textContent (byRole Heading) <*> browserMetrics)
+                  ( \(url, heading, metrics) ->
+                      (url `shouldBe` loginUrl)
+                        :| [ heading `shouldBe` "Sign in",
                              $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
                            ]
                   )
                 visitWithoutScripts profileUrl
-                assertAll
-                  ((,) <$> textContent (byRole Heading) <*> textContent (within (css "#app-main") (byText "Create account")))
-                  (\(heading, createAccount) -> (heading `shouldBe` "Profile") :| [createAccount `shouldBe` "Create account"])
+                assertText (byRole Heading) (`shouldBe` "Sign in")
                 visitWithoutScripts spanishProfileUrl
-                assertAll
-                  ((,) <$> textContent (byRole Heading) <*> textContent (byText "Inicia sesión para ver y administrar tu perfil."))
-                  (\(heading, body) -> (heading `shouldBe` "Perfil") :| [body `shouldBe` "Inicia sesión para ver y administrar tu perfil."])
+                assertText (byRole Heading) (`shouldBe` "Iniciar sesion")
             )
             `shouldReturn` Right ()
 
@@ -181,7 +183,7 @@ spec =
 
     it "keeps language selection and dialog startup failure complete without enhanced behavior" $
       withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+        HarchWeb.withLocalTestServer (challengedBrowserApp appConfig) $ \server -> do
           let baseUrl = HarchWeb.localServerBaseUrl server
               secondUrl = baseUrl <> "/second"
               languageUrl = baseUrl <> "/language"
@@ -253,7 +255,7 @@ spec =
               secondUrl = baseUrl <> "/second"
               spacesUrl = baseUrl <> "/spaces"
               mainContent = css "#app-main"
-              routeStatus = byRole Status
+              routeStatus = css "[data-navigation-route-status]"
           runBrowserScenario
             browser
             ( do
@@ -330,11 +332,11 @@ spec =
 
     it "keeps only the newest overlapping enhanced navigation lifecycle" $
       withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+        HarchWeb.withLocalTestServer (challengedBrowserApp appConfig) $ \server -> do
           let baseUrl = HarchWeb.localServerBaseUrl server
               spacesUrl = baseUrl <> "/spaces"
-              profileUrl = baseUrl <> "/profile"
-              routeStatus = byRole Status
+              loginUrl = baseUrl <> "/login"
+              routeStatus = css "[data-navigation-route-status]"
           runBrowserScenario
             browser
             ( do
@@ -349,9 +351,9 @@ spec =
                 assertAll
                   ((,,,,) <$> currentUrl <*> textContent (byRole Heading) <*> textContent routeStatus <*> attributeValue routeStatus "data-test-mutation-count" <*> browserMetrics)
                   ( \(url, heading, announcement, mutationCount, metrics) ->
-                      (url `shouldBe` profileUrl)
-                        :| [ heading `shouldBe` "Profile",
-                             announcement `shouldBe` "web-api: Profile",
+                      (url `shouldBe` loginUrl)
+                        :| [ heading `shouldBe` "Sign in",
+                             announcement `shouldBe` "web-api: Sign in",
                              mutationCount `shouldBe` Just "1",
                              $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 2, hardNavigationCount = 0}|])
                            ]
@@ -589,6 +591,8 @@ spec =
             ( do
                 setCookie mfaUrl mfaEnrollmentCookieName sessionToken
                 visit mfaUrl
+                csrfToken <- documentCsrfToken
+                setCookie mfaUrl "__Host-harch-csrf" csrfToken
                 click (byRole Button `named` "Start authenticator enrollment")
                 assertFocused codeField (`shouldBe` True)
                 press codeField "Tab"
@@ -640,13 +644,15 @@ spec =
 
     it "resends a pending-profile verification email through the immediate capture path" $
       withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultPageRepository pendingProfileWorkflow) $ \server -> do
+        HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository pendingProfileWorkflow pendingProfileE2eSecurity) $ \server -> do
           let profileUrl = HarchWeb.localServerBaseUrl server <> "/profile"
           runBrowserScenario
             browser
             ( do
                 setCookie profileUrl sessionCookieName sessionToken
                 visit profileUrl
+                csrfToken <- documentCsrfToken
+                setCookie profileUrl "__Host-harch-csrf" csrfToken
                 assertAll
                   ((,) <$> textContent (byRole Heading) <*> textContent (byText "person@example.test"))
                   (\(heading, email) -> (heading `shouldBe` "Profile") :| [email `shouldBe` "person@example.test"])
@@ -688,6 +694,36 @@ withBrowserApp action = do
                   staticCacheControlSeconds = Nothing
                 }
           }
+
+challengedBrowserApp :: AppConfig -> HarchWeb.Application AppRoute AccountAction WebApi.Route.AppRequestContext ()
+challengedBrowserApp appConfig =
+  buildAppWithDatabaseAndAccountWorkflowAndSecurity
+    appConfig
+    defaultPageRepository
+    unavailableAccountWorkflow
+    unauthenticatedProfileChallengeSecurity
+
+unauthenticatedProfileChallengeSecurity :: HarchWeb.ApplicationSecurity AppRoute WebApi.Route.AppRequestContext ()
+unauthenticatedProfileChallengeSecurity =
+  HarchWeb.AuthenticationEnabled
+    []
+    ( HarchWeb.AuthenticationGuard
+        ( \endpointRequest ->
+            let routeRequest = HarchWeb.endpointRouteRequest endpointRequest
+             in pure $
+                  case HarchWeb.endpointAccess (HarchWeb.endpointMetadata endpointRequest) of
+                    HarchWeb.AllowUnauthenticated -> HarchWeb.ContinueEndpoint (HarchWeb.requestContext routeRequest)
+                    _ -> HarchWeb.HaltEndpoint (HarchWeb.nonPageInternalRedirectResponse Http.status303 (HarchWeb.RouteRequest LoginRoute (HarchWeb.requestContext routeRequest)))
+        )
+    )
+    []
+
+documentCsrfToken :: BrowserScenario Text
+documentCsrfToken = do
+  value <- runPageScript "document.body.dataset.harchCsrfToken"
+  case Aeson.fromJSON value of
+    Aeson.Success token -> pure token
+    Aeson.Error _ -> error "browser fixture expected a CSRF token string"
 
 -- | Cabal can execute this suite from either the package directory, the
 -- workspace root, or a build directory.  Locate the checked-in stylesheet
@@ -751,6 +787,33 @@ pendingProfileWorkflow =
       accountWorkflowVerificationUrl = \_ _ -> "https://account.example.test/verify"
     }
 
+-- The account-JWT unit/integration tests prove proof verification and durable
+-- revocation. This browser fixture starts after that admission boundary with a
+-- known principal so it can exercise the protected profile action's capture
+-- and patch behavior without putting test signing keys in browser state.
+pendingProfileE2eSecurity :: HarchWeb.ApplicationSecurity AppRoute WebApi.Route.AppRequestContext ()
+pendingProfileE2eSecurity =
+  HarchWeb.AuthenticationEnabled
+    []
+    ( HarchWeb.AuthenticationGuard
+        ( \endpointRequest ->
+            pure
+              ( HarchWeb.ContinueEndpoint
+                  ( (HarchWeb.requestContext (HarchWeb.endpointRouteRequest endpointRequest))
+                      { WebApi.Route.requestAccountPrincipal =
+                          Just
+                            ( mkAccountPrincipal
+                                pendingProfileAccountId
+                                pendingProfileSessionId
+                                (Session.sessionExpiresAtNanoseconds pendingProfileSession)
+                            )
+                      }
+                  )
+              )
+        )
+    )
+    []
+
 localizedRegistrationWorkflow :: AccountWorkflow
 localizedRegistrationWorkflow =
   unavailableAccountWorkflow
@@ -789,7 +852,6 @@ mfaEnrollmentBrowserSession =
   Session.OpaqueSession
     { Session.sessionId = pendingProfileSessionId,
       Session.sessionPrincipal = pendingProfileAccountId,
-      Session.sessionCsrfToken = requiredCsrfToken "abcdefghijklmnopqrstuvwxyz0123456789-_",
       Session.sessionIssuedAtNanoseconds = 0,
       Session.sessionExpiresAtNanoseconds = 1000
     }
@@ -802,7 +864,6 @@ pendingProfileSession =
   Session.OpaqueSession
     { Session.sessionId = pendingProfileSessionId,
       Session.sessionPrincipal = pendingProfileAccountId,
-      Session.sessionCsrfToken = requiredCsrfToken "abcdefghijklmnopqrstuvwxyz0123456789-_",
       Session.sessionIssuedAtNanoseconds = 0,
       Session.sessionExpiresAtNanoseconds = 200
     }
@@ -842,9 +903,3 @@ requiredSessionId value =
   case Session.mkSessionId value of
     Just sessionIdValue -> sessionIdValue
     Nothing -> error "expected a valid session id"
-
-requiredCsrfToken :: Text -> Session.CsrfToken
-requiredCsrfToken value =
-  case Session.mkCsrfToken value of
-    Just csrfToken -> csrfToken
-    Nothing -> error "expected a valid CSRF token"

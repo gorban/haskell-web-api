@@ -10,6 +10,7 @@ import App.Routes qualified as Routes
 import HarchWeb
   ( EndpointProtocol (HtmlEndpoint),
     Page (..),
+    PageSecurity,
     RouteRequest (..),
     harch,
   )
@@ -20,8 +21,8 @@ pageDefinition :: RouteDefinition TwoPageRoute () ()
 pageDefinition =
   Site.pageRoute (twoPageEndpointMetadata HtmlEndpoint (Routes.Page SecondPage)) (Just "Second") secondPage
 
-secondPage :: RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
-secondPage routeRequest =
+secondPage :: PageSecurity -> RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
+secondPage _ routeRequest =
   pure
     Page
       { pageTitle = "Second",

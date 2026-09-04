@@ -19,6 +19,7 @@ import HarchWeb qualified
 import HarchWeb.Account (AccountId, emailVerificationTokenText, mkAccountId, storedVerificationTokenDigest)
 import HarchWeb.Account qualified as Account
 import HarchWeb.Action qualified as Action
+import HarchWeb.Csrf qualified as Csrf
 import HarchWeb.Email (EmailAddress, EmailDelivery (..), mkEmailAddress)
 import HarchWeb.Email qualified as Email
 import HarchWeb.LoginProtection qualified as LoginProtection
@@ -26,7 +27,7 @@ import HarchWeb.Observability qualified as Observability
 import HarchWeb.Password qualified as Password
 import HarchWeb.RecoveryCode qualified as RecoveryCode
 import HarchWeb.Secret qualified as Secret
-import HarchWeb.Session (OpaqueSession (..), SessionId, mkCsrfToken, mkSessionId)
+import HarchWeb.Session (OpaqueSession (..), SessionId, mkSessionId)
 import HarchWeb.Session qualified as Session
 import HarchWeb.Time (UnixTimeNanoseconds, unixTimeSecondsFromNanoseconds)
 import HarchWeb.Totp qualified as Totp
@@ -35,9 +36,11 @@ import Network.HTTP.Types qualified as Http
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress, opaqueSession, sessionIdValue, testSessionId)
 import Unit.WebApi.TestSupport qualified as TestSupport (databaseConfig)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), VerificationResendAdmission (..), VerificationResendClaim (..), VerificationResendClaimSettlement (..), VerificationResendSuppression (..), defaultPendingRegistrationStoragePolicy, defaultVerificationResendPolicy, mkRegistrationDeliveryTimeout, pendingRegistrationClaimLeaseNanoseconds, pendingRegistrationMaximumAccounts)
-import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), FormFeedback (..), FormStatus (..), FormStatusKind (..), LoginForm (..), LoginProofChoice (..), LoginValidationError (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), RegistrationValidationError (..), VerificationForm (..), accountActionEndpointMetadata, accountActions, authorizeAccountActionCsrf, emptyLoginForm, emptyRegistrationForm, handleAccountAction, initialPendingProfileForm, mfaEnrollmentFailureDiagnostics, pageCsrfTokenForAccountPage, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderPendingProfileRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
+import WebApi.AccountJwt (AccountJwtIssueError (AccountJwtIssueFailed), AccountJwtIssuer (..))
+import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), FormFeedback (..), FormStatus (..), FormStatusKind (..), LoginForm (..), LoginProofChoice (..), LoginValidationError (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), RegistrationValidationError (..), VerificationForm (..), accountActionEndpointMetadata, accountActions, accountCsrfProtection, emptyLoginForm, emptyRegistrationForm, handleAccountAction, initialPendingProfileForm, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderPendingProfileRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buildActionCodecOrDie)
 import WebApi.AccountPages.Validation (Validation, invalid, valid, validate3, validate4, validationResult)
+import WebApi.AccountPrincipal (mkAccountPrincipal)
 import WebApi.App (buildRuntimeAppWithDatabaseBuilder, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.AppEffect qualified as AppEffect
@@ -48,9 +51,16 @@ import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), ProfilePageModel (..), SignedOutProfilePageDetails (..), buildPageModelFromRouteData, renderPageFromRouteData)
 import WebApi.Postgres.Testing (buildRuntimePostgresAccountCredentialStoreWithRunner, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStoreWithRunner)
-import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), defaultRequestContext, renderRoutePath)
+import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), defaultRequestContext, renderRoutePath, routeCodec)
 import WebApi.RouteData (RouteDataResult (..), RouteDataSelection (..), selectRouteData, selectRouteDataSelectionWithDatabase)
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..), MfaEnrollmentSessionStore (..), MfaEnrollmentSessionStoreError (..))
+
+issuedCsrfToken :: AccountWorkflow -> AppRequestContext -> IO Csrf.CsrfToken
+issuedCsrfToken workflow requestContext = do
+  issuance <- HarchWeb.issueCsrfToken (accountCsrfProtection workflow) requestContext
+  case issuance of
+    HarchWeb.CsrfTokenIssued csrfToken _ -> pure csrfToken
+    HarchWeb.CsrfProtectionUnavailable -> expectationFailure "expected CSRF issuance to succeed" >> error "unreachable"
 
 existingSpec :: SpecWith ()
 existingSpec = do
@@ -71,7 +81,7 @@ existingSpec = do
       validationResult ((valid "left" :: Validation Text.Text Text.Text) <* (valid "right" :: Validation Text.Text Text.Text)) `shouldBe` Right ("left" :: Text.Text)
       validationResult (("replacement" :: Text.Text) <$ (valid "value" :: Validation Text.Text Text.Text)) `shouldBe` Right ("replacement" :: Text.Text)
 
-    it "binds protected actions to the matching live account or MFA session token" $ do
+    it "binds signed CSRF tokens to the established account principal and live MFA grant" $ do
       let activeWorkflow =
             unavailableAccountWorkflow
               { accountWorkflowClock = pure 150,
@@ -102,7 +112,6 @@ existingSpec = do
                                   Session.OpaqueSession
                                     { Session.sessionId = enrollmentSessionIdValue,
                                       Session.sessionPrincipal = existingAccountId,
-                                      Session.sessionCsrfToken = enrollmentCsrfTokenValue,
                                       Session.sessionIssuedAtNanoseconds = 0,
                                       Session.sessionExpiresAtNanoseconds = 150
                                     }
@@ -120,47 +129,32 @@ existingSpec = do
                       invalidateMfaEnrollmentSession = \_ _ -> pure (error "unexpected MFA-enrollment session invalidation")
                     }
               }
-          profileActionRequest = typedAccountActionRequest "POST" "/profile" [("intent", "resend-verification")] sessionRequestContext
-          logoutRequest = typedAccountActionRequest "POST" "/logout" [] sessionRequestContext
-          mfaRequest =
-            typedAccountActionRequest
-              "POST"
-              "/mfa"
-              [("intent", "start")]
-              (defaultRequestContext {WebApi.Route.requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue})
-          anonymousRequest = typedAccountActionRequest "POST" "/register" [] defaultRequestContext
-          verificationRequest = typedAccountActionRequest "POST" "/verify" [] defaultRequestContext
-          loginRequest = typedAccountActionRequest "POST" "/login" [] defaultRequestContext
-          anonymousProfileRequest = typedAccountActionRequest "POST" "/profile" [("intent", "resend-verification")] defaultRequestContext
-          anonymousMfaRequest = typedAccountActionRequest "POST" "/mfa" [("intent", "start")] defaultRequestContext
-          sessionToken = Session.sessionCsrfToken activeSession
-          wrongToken = fromMaybe (error "expected a valid wrong CSRF token") (Session.mkCsrfToken "0123456789abcdefghijklmnopqrstuvwxyz-_ABCDE")
-          accountPage route requestContext =
-            HarchWeb.Page
-              { HarchWeb.pageTitle = "",
-                HarchWeb.pageRoute = route,
-                HarchWeb.pageContext = requestContext,
-                HarchWeb.pageBody = HarchWeb.text "",
-                HarchWeb.pageBootstrapHooks = []
+          accountAndEnrollmentContext =
+            sessionRequestContext
+              { WebApi.Route.requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue
               }
-      authorizeAccountActionCsrf activeWorkflow profileActionRequest sessionToken `shouldReturn` True
-      authorizeAccountActionCsrf activeWorkflow profileActionRequest wrongToken `shouldReturn` False
-      authorizeAccountActionCsrf expiredWorkflow profileActionRequest sessionToken `shouldReturn` False
-      authorizeAccountActionCsrf revokedWorkflow profileActionRequest sessionToken `shouldReturn` False
-      authorizeAccountActionCsrf unavailableWorkflow profileActionRequest sessionToken `shouldReturn` False
-      authorizeAccountActionCsrf activeWorkflow anonymousProfileRequest sessionToken `shouldReturn` False
-      authorizeAccountActionCsrf activeWorkflow logoutRequest sessionToken `shouldReturn` True
-      authorizeAccountActionCsrf activeWorkflow mfaRequest enrollmentCsrfTokenValue `shouldReturn` True
-      authorizeAccountActionCsrf activeWorkflow mfaRequest wrongToken `shouldReturn` False
-      authorizeAccountActionCsrf expiredMfaWorkflow mfaRequest enrollmentCsrfTokenValue `shouldReturn` False
-      authorizeAccountActionCsrf unavailableMfaWorkflow mfaRequest enrollmentCsrfTokenValue `shouldReturn` False
-      authorizeAccountActionCsrf activeWorkflow anonymousMfaRequest enrollmentCsrfTokenValue `shouldReturn` False
-      authorizeAccountActionCsrf activeWorkflow anonymousRequest wrongToken `shouldReturn` True
-      authorizeAccountActionCsrf activeWorkflow verificationRequest wrongToken `shouldReturn` True
-      authorizeAccountActionCsrf activeWorkflow loginRequest wrongToken `shouldReturn` True
-      pageCsrfTokenForAccountPage activeWorkflow (accountPage ProfileRoute sessionRequestContext) `shouldReturn` sessionToken
-      pageCsrfTokenForAccountPage activeWorkflow (accountPage LogoutRoute sessionRequestContext) `shouldReturn` sessionToken
-      pageCsrfTokenForAccountPage activeWorkflow (accountPage MfaEnrollmentRoute (defaultRequestContext {WebApi.Route.requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue})) `shouldReturn` enrollmentCsrfTokenValue
+          enrollmentContext =
+            defaultRequestContext
+              { WebApi.Route.requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue
+              }
+      accountAndEnrollmentToken <- issuedCsrfToken activeWorkflow accountAndEnrollmentContext
+      HarchWeb.verifyCsrfToken (accountCsrfProtection activeWorkflow) accountAndEnrollmentContext accountAndEnrollmentToken
+        `shouldReturn` HarchWeb.CsrfVerified
+      HarchWeb.verifyCsrfToken (accountCsrfProtection activeWorkflow) sessionRequestContext accountAndEnrollmentToken
+        `shouldReturn` HarchWeb.CsrfRejected
+      HarchWeb.verifyCsrfToken (accountCsrfProtection expiredWorkflow) accountAndEnrollmentContext accountAndEnrollmentToken
+        `shouldReturn` HarchWeb.CsrfVerified
+      HarchWeb.verifyCsrfToken (accountCsrfProtection revokedWorkflow) accountAndEnrollmentContext accountAndEnrollmentToken
+        `shouldReturn` HarchWeb.CsrfVerified
+      HarchWeb.verifyCsrfToken (accountCsrfProtection unavailableWorkflow) accountAndEnrollmentContext accountAndEnrollmentToken
+        `shouldReturn` HarchWeb.CsrfVerified
+      enrollmentToken <- issuedCsrfToken activeWorkflow enrollmentContext
+      HarchWeb.verifyCsrfToken (accountCsrfProtection activeWorkflow) enrollmentContext enrollmentToken
+        `shouldReturn` HarchWeb.CsrfVerified
+      HarchWeb.verifyCsrfToken (accountCsrfProtection expiredMfaWorkflow) enrollmentContext enrollmentToken
+        `shouldReturn` HarchWeb.CsrfRejected
+      HarchWeb.verifyCsrfToken (accountCsrfProtection unavailableMfaWorkflow) enrollmentContext enrollmentToken
+        `shouldReturn` HarchWeb.CsrfVerificationUnavailable
 
     it "resends pending-profile verification through a localized client-action patch" $ do
       let actionRequest requestContext fields =
@@ -249,8 +243,8 @@ existingSpec = do
       expect (workflow (Left (AccountStoreUnavailable "database unavailable")) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 503 "Tu perfil no esta disponible"
       expect (workflow (Right True) (EmailDelivery (\_ -> ioError (userError "SMTP unavailable"))) (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 502 "could not send"
       expect (workflow (Right True) (EmailDelivery (\_ -> ioError (userError "SMTP unavailable"))) (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 502 "No pudimos enviar"
-      expect (workflow (Right True) delivery (Left AccountSessionStoreUnavailable) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
-      expect (workflow (Right True) delivery (Left AccountSessionStoreUnavailable) (Right (Just pendingProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 503 "Tu perfil no esta disponible"
+      expect (workflow (Right True) delivery (Left AccountSessionStoreUnavailable) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 202 "Check your inbox"
+      expect (workflow (Right True) delivery (Left AccountSessionStoreUnavailable) (Right (Just pendingProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 202 "Revisa tu bandeja"
       expect (workflow (Right True) delivery (Right (Just activeSession)) (Left (AccountStoreUnavailable "database unavailable")) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
       expect (workflow (Right True) delivery (Right (Just activeSession)) (Left (AccountStoreUnavailable "database unavailable")) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 503 "Tu perfil no esta disponible"
       expect (workflow (Right True) delivery (Right (Just (opaqueSession maxBound))) (Right (Just pendingProfile)) (maxBound - 1)) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
@@ -287,7 +281,7 @@ profileStore :: Either AccountStoreError (Maybe AccountProfile) -> AccountProfil
 profileStore result = AccountProfileStore (\accountIdValue -> accountIdValue `seq` pure result)
 
 sessionRequestContext :: AppRequestContext
-sessionRequestContext = defaultRequestContext {WebApi.Route.requestSessionId = Just testSessionId}
+sessionRequestContext = defaultRequestContext {WebApi.Route.requestAccountPrincipal = Just (mkAccountPrincipal existingAccountId testSessionId 200)}
 
 spanishSessionRequestContext :: AppRequestContext
 spanishSessionRequestContext = sessionRequestContext {WebApi.Route.requestLocale = WebApi.Route.Spanish, WebApi.Route.requestLocaleIsExplicit = True}
@@ -297,16 +291,12 @@ activeSession = opaqueSession 200
 
 opaqueSession :: UnixTimeNanoseconds -> OpaqueSession AccountId
 opaqueSession expiresAtNanoseconds =
-  case mkCsrfToken "abcdefghijklmnopqrstuvwxyz0123456789-_" of
-    Just csrfToken ->
-      OpaqueSession
-        { sessionId = testSessionId,
-          sessionPrincipal = existingAccountId,
-          sessionCsrfToken = csrfToken,
-          sessionIssuedAtNanoseconds = 100,
-          sessionExpiresAtNanoseconds = expiresAtNanoseconds
-        }
-    Nothing -> error "expected a valid CSRF token"
+  OpaqueSession
+    { sessionId = testSessionId,
+      sessionPrincipal = existingAccountId,
+      sessionIssuedAtNanoseconds = 100,
+      sessionExpiresAtNanoseconds = expiresAtNanoseconds
+    }
 
 pendingProfile :: AccountProfile
 pendingProfile = AccountProfile existingAccountId existingEmailAddress (Username.mkUsername "person_01") (Just "Person Example") False
@@ -325,6 +315,18 @@ existingEmailAddress =
   case mkEmailAddress "person@example.test" of
     Just value -> value
     Nothing -> error "expected a valid email address"
+
+-- The account-action unit specs verify workflow branching and cookie rendering;
+-- cryptographic issuance is covered by 'Unit.WebApi.AccountJwtSpec'.
+testAccountJwtIssuer :: AccountJwtIssuer
+testAccountJwtIssuer =
+  AccountJwtIssuer
+    { accountJwtCookie =
+        case HarchWeb.mkAuthenticationCookiePolicy "__Host-harch-session" 28800 of
+          Right policy -> policy
+          Left _ -> error "expected a valid test authentication-cookie policy",
+      issueAccountSessionJwt = \_ -> pure (Right (HarchWeb.encodedJwtFromBytes "header.payload.signature"))
+    }
 
 testSessionId :: SessionId
 testSessionId =
@@ -439,27 +441,27 @@ spec = do
             && "href=\"/register\"" `Text.isInfixOf` HarchWeb.renderHtml (HarchWeb.pageBody page)
       HarchWeb.renderResponse pureApplication registrationRequest
         >>= \case
-          HarchWeb.PageResponse page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"registration\""
+          HarchWeb.PageResponse _ page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"registration\""
           _ -> expectationFailure "expected a registration page response"
       HarchWeb.renderResponse pureApplication verificationRequest
         >>= \case
-          HarchWeb.PageResponse page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"email-verification\""
+          HarchWeb.PageResponse _ page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"email-verification\""
           _ -> expectationFailure "expected an email-verification page response"
       HarchWeb.renderResponse pureApplication mfaRequest
         >>= \case
-          HarchWeb.PageResponse page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"mfa-enrollment\""
+          HarchWeb.PageResponse _ page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"mfa-enrollment\""
           _ -> expectationFailure "expected an MFA-enrollment page response"
       HarchWeb.renderResponse pureApplication loginRequest
         >>= \case
-          HarchWeb.PageResponse page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"login\""
+          HarchWeb.PageResponse _ page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"login\""
           _ -> expectationFailure "expected a login page response"
       HarchWeb.renderResponse pureApplication logoutRequest
         >>= \case
-          HarchWeb.PageResponse page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"logout\""
+          HarchWeb.PageResponse _ page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"logout\""
           _ -> expectationFailure "expected a logout page response"
       HarchWeb.renderResponse pureApplication profileRequestValue
         >>= \case
-          HarchWeb.PageResponse page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"profile\""
+          HarchWeb.PageResponse _ page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"profile\""
           _ -> expectationFailure "expected a profile page response"
       let runtimeApplication = buildRuntimeAppWithDatabaseBuilder defaultAppConfig (const defaultPageRepository) defaultAppEnvironmentConfig
       HarchWeb.handleClientAction
@@ -657,6 +659,8 @@ spec = do
                 accountWorkflowMfaEnrollmentSessionStore = accountWorkflowMfaEnrollmentSessionStore unavailableAccountWorkflow,
                 accountWorkflowProfileStore = accountWorkflowProfileStore unavailableAccountWorkflow,
                 accountWorkflowTotpEncryptionKey = accountWorkflowTotpEncryptionKey unavailableAccountWorkflow,
+                accountWorkflowCsrfSigningKeyring = accountWorkflowCsrfSigningKeyring unavailableAccountWorkflow,
+                accountWorkflowJwtIssuer = accountWorkflowJwtIssuer unavailableAccountWorkflow,
                 accountWorkflowTotpClock = const 0,
                 accountWorkflowVerificationUrl = \requestContext verificationToken ->
                   "https://account.example.test"
@@ -884,7 +888,7 @@ spec = do
         `shouldThrow` \case
           ErrorCall message -> "DuplicateActionEndpoint" `isInfixOf` message
 
-    it "declares every account action as an explicitly public action endpoint" $ do
+    it "declares account action access requirements explicitly" $ do
       let endpointDeclarationFields endpointMetadataValue =
             ( HarchWeb.endpointNameText (HarchWeb.endpointName endpointMetadataValue),
               HarchWeb.routeTemplateText (HarchWeb.endpointRouteTemplate endpointMetadataValue),
@@ -899,9 +903,12 @@ spec = do
               ("/profile", "account.update-profile", "/{locale}/profile"),
               ("/logout", "account.logout", "/{locale}/logout")
             ]
+          expectedAccess path
+            | path `elem` ["/profile", "/logout"] = HarchWeb.RequireAuthenticated
+            | otherwise = HarchWeb.AllowUnauthenticated
       forM_ expectedMetadata $ \(path, expectedName, template) ->
         fmap endpointDeclarationFields (accountActionEndpointMetadata "POST" path defaultRequestContext)
-          `shouldBe` Just (expectedName, template, HarchWeb.ActionEndpoint, HarchWeb.AllowUnauthenticated)
+          `shouldBe` Just (expectedName, template, HarchWeb.ActionEndpoint, expectedAccess path)
       accountActionEndpointMetadata "GET" "/register" defaultRequestContext `shouldBe` Nothing
 
     it "derives comparable, printable representations for every account action target" $ do
@@ -941,6 +948,8 @@ spec = do
                 accountWorkflowMfaEnrollmentSessionStore = accountWorkflowMfaEnrollmentSessionStore unavailableAccountWorkflow,
                 accountWorkflowProfileStore = accountWorkflowProfileStore unavailableAccountWorkflow,
                 accountWorkflowTotpEncryptionKey = accountWorkflowTotpEncryptionKey unavailableAccountWorkflow,
+                accountWorkflowCsrfSigningKeyring = accountWorkflowCsrfSigningKeyring unavailableAccountWorkflow,
+                accountWorkflowJwtIssuer = accountWorkflowJwtIssuer unavailableAccountWorkflow,
                 accountWorkflowTotpClock = const 0,
                 accountWorkflowVerificationUrl = \_ verificationToken -> "https://account.example.test/verify?token=" <> Account.emailVerificationTokenText verificationToken
               }
@@ -984,7 +993,7 @@ spec = do
       -- status, headers, and encoded client-action bytes remain identical.
       fmap HarchWeb.clientActionStatus alreadyRegistered `shouldBe` fmap HarchWeb.clientActionStatus createdEnglish
       fmap HarchWeb.clientActionHeaders alreadyRegistered `shouldBe` fmap HarchWeb.clientActionHeaders createdEnglish
-      fmap (HarchWeb.responseBody . HarchWeb.clientActionResponseBody) alreadyRegistered `shouldBe` fmap (HarchWeb.responseBody . HarchWeb.clientActionResponseBody) createdEnglish
+      fmap (HarchWeb.responseBody . HarchWeb.clientActionResponseBody routeCodec) alreadyRegistered `shouldBe` fmap (HarchWeb.responseBody . HarchWeb.clientActionResponseBody routeCodec) createdEnglish
       usernameTaken <- handleAccountAction (workflowFor (store (Right PendingAccountUsernameTaken) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
       usernameTaken `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-username") "That username is already taken"
       spanishUsernameTaken <- handleAccountAction (workflowFor (store (Right PendingAccountUsernameTaken) (Right Nothing) (Right Nothing)) 100 delivery) (spanishAction "/register" validRegistration)
@@ -1141,6 +1150,7 @@ spec = do
           response `shouldSatisfy` actionResponseHasValidClientActionTransport
           Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` 200
           HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
+          HarchWeb.clientActionHeaders response `shouldContain` [HarchWeb.csrfClearCookieHeader]
         Nothing -> expectationFailure "expected a verification action response"
       savedEnrollmentSession <- readIORef acceptedVerificationSessionReference
       case savedEnrollmentSession of
@@ -1196,6 +1206,7 @@ spec = do
                 accountWorkflowMfaStore = mfaStore,
                 accountWorkflowSessionStore = sessionStore,
                 accountWorkflowLoginAttemptStore = permissiveLoginAttemptStore,
+                accountWorkflowJwtIssuer = testAccountJwtIssuer,
                 accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
                 accountWorkflowClock = atomicModifyIORef' clockReference (\value -> (value + 1, value)),
                 accountWorkflowTotpClock = unixTimeSecondsFromNanoseconds
@@ -1211,7 +1222,10 @@ spec = do
           response `shouldSatisfy` actionResponseHasValidClientActionTransport
           Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` 200
           HarchWeb.clientActionFocusId response `shouldBe` Nothing
+          HarchWeb.clientActionNavigation response
+            `shouldBe` HarchWeb.NavigateInternal HarchWeb.ReplaceHistory (HarchWeb.RouteRequest ProfileRoute defaultRequestContext)
           HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
+          HarchWeb.clientActionHeaders response `shouldContain` [HarchWeb.csrfClearCookieHeader]
       savedSessions <- readIORef savedSessionsReference
       length savedSessions `shouldBe` 1
       loggedInSession <-
@@ -1220,7 +1234,7 @@ spec = do
           _ -> expectationFailure "expected exactly one saved session" >> pure (error "unreachable")
       Session.sessionPrincipal loggedInSession `shouldBe` accountId
       Session.sessionIssuedAtNanoseconds loggedInSession `shouldBe` 123456000000000
-      let logoutRequest = typedAccountActionRequest "POST" "/logout" [] (defaultRequestContext {requestSessionId = Just (Session.sessionId loggedInSession)})
+      let logoutRequest = typedAccountActionRequest "POST" "/logout" [] (defaultRequestContext {requestAccountPrincipal = Just (mkAccountPrincipal (Session.sessionPrincipal loggedInSession) (Session.sessionId loggedInSession) (Session.sessionExpiresAtNanoseconds loggedInSession))})
       logoutResult <- handleAccountAction workflow logoutRequest
       case logoutResult of
         Nothing -> expectationFailure "expected logout action response"
@@ -1273,6 +1287,7 @@ spec = do
                       invalidateAccountSession = \_ _ -> pure invalidationResult
                     },
                 accountWorkflowLoginAttemptStore = permissiveLoginAttemptStore,
+                accountWorkflowJwtIssuer = testAccountJwtIssuer,
                 accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
                 accountWorkflowClock = pure 500,
                 accountWorkflowTotpClock = const 123456
@@ -1396,6 +1411,7 @@ spec = do
           response `shouldSatisfy` actionResponseHasValidClientActionTransport
           Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` 403
           HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
+          HarchWeb.clientActionHeaders response `shouldContain` [HarchWeb.csrfClearCookieHeader]
         Nothing -> expectationFailure "expected a login action response"
       savedLoginEnrollmentSession <- readIORef loginEnrollmentSessionReference
       case savedLoginEnrollmentSession of
@@ -1486,6 +1502,24 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
       handleAccountAction unavailableSession (spanishLoginRequest validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "no esta disponible")
+      let issuerFailureWorkflow =
+            validWorkflow
+              { accountWorkflowJwtIssuer =
+                  testAccountJwtIssuer
+                    { issueAccountSessionJwt = \_ -> pure (Left AccountJwtIssueFailed)
+                    }
+              }
+          unrenderableJwtWorkflow =
+            validWorkflow
+              { accountWorkflowJwtIssuer =
+                  testAccountJwtIssuer
+                    { issueAccountSessionJwt = \_ -> pure (Right (HarchWeb.encodedJwtFromBytes (ByteString.singleton 255)))
+                    }
+              }
+      handleAccountAction issuerFailureWorkflow (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
+      handleAccountAction unrenderableJwtWorkflow (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
       handleAccountAction validWorkflow (spanishLoginRequest validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "Has iniciado sesion")
       exhaustedLoginBudget <- Password.newPasswordWorkGate (fromMaybe (error "expected a positive password-work budget") (Password.mkPasswordWorkBudget 8))
@@ -1498,22 +1532,23 @@ spec = do
       handleAccountAction validWorkflow (typedAccountActionRequest "POST" "/es/logout" [] spanishRequestContext)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "Has cerrado sesion")
       let sessionId = fromMaybe (error "expected valid session id") (Session.mkSessionId "0123456789ABCDEF0123456789ABCDEF0123456789ABC")
-          sessionContext = defaultRequestContext {requestSessionId = Just sessionId}
+          sessionContext = defaultRequestContext {requestAccountPrincipal = Just (mkAccountPrincipal existingAccountId sessionId 200)}
       handleAccountAction (workflowFor (Right Nothing) (Right Nothing) (Right True) (Left AccountSessionStoreUnavailable)) (logoutRequest sessionContext)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 Nothing "Sign-out is temporarily unavailable")
       handleAccountAction (workflowFor (Right Nothing) (Right Nothing) (Right True) (Left AccountSessionStoreCorruptData)) (logoutRequest sessionContext)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 Nothing "Sign-out is temporarily unavailable")
       handleAccountAction
         (workflowFor (Right Nothing) (Right Nothing) (Right True) (Left AccountSessionStoreUnavailable))
-        (typedAccountActionRequest "POST" "/es/logout" [] (spanishRequestContext {requestSessionId = Just sessionId}))
+        (typedAccountActionRequest "POST" "/es/logout" [] (spanishRequestContext {requestAccountPrincipal = Just (mkAccountPrincipal existingAccountId sessionId 200)}))
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 Nothing "no esta disponible")
       logoutSuccess <- handleAccountAction validWorkflow (logoutRequest sessionContext)
       case logoutSuccess of
         Just response -> do
           response `shouldSatisfy` actionResponseHasValidClientActionTransport
           HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
+          HarchWeb.clientActionHeaders response `shouldContain` [HarchWeb.csrfClearCookieHeader]
         Nothing -> expectationFailure "expected a logout action response"
-      spanishLogoutSuccess <- handleAccountAction validWorkflow (typedAccountActionRequest "POST" "/es/logout" [] (spanishRequestContext {requestSessionId = Just sessionId}))
+      spanishLogoutSuccess <- handleAccountAction validWorkflow (typedAccountActionRequest "POST" "/es/logout" [] (spanishRequestContext {requestAccountPrincipal = Just (mkAccountPrincipal existingAccountId sessionId 200)}))
       spanishLogoutSuccess `shouldSatisfy` actionHasStatusAndFocus 200 Nothing "Has cerrado sesion"
 
     it "captures a complete authenticator enrollment and returns recovery codes in one patch" $ do
@@ -1672,7 +1707,6 @@ spec = do
                             Session.OpaqueSession
                               { Session.sessionId = enrollmentSessionIdValue,
                                 Session.sessionPrincipal = accountId,
-                                Session.sessionCsrfToken = enrollmentCsrfTokenValue,
                                 Session.sessionIssuedAtNanoseconds = 0,
                                 Session.sessionExpiresAtNanoseconds = 500
                               }

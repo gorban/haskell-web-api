@@ -6,10 +6,11 @@
 
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
-import Control.Monad (replicateM)
+import Control.Exception (bracket_)
+import Control.Monad (replicateM, void)
 import Data.ByteString qualified as ByteString
 import Data.Foldable (for_)
-import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text qualified as Text
@@ -21,6 +22,7 @@ import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
 import HarchWeb.Password qualified as Password
 import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
+import Postgres.DatabaseChange qualified as DatabaseChanges
 import System.Exit (ExitCode (..))
 import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath, withPostgresTlsFixtures)
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress)
@@ -31,7 +33,7 @@ import WebApi.Config (DatabaseConfig (..), DatabaseSslMode (..), DatabaseTranspo
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), SecondPageData (..))
 import WebApi.Mfa (MfaStore (..), StoredTotpEnrollment (..))
 import WebApi.Postgres (buildPostgresPageRepository)
-import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresMigrationExecutor (..), PostgresMigrationResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStore, buildRuntimePostgresPageRepositoryWithRunner, databaseTransportEnvironment, decodeRuntimeQueryValue, libpqConnectionValue, migrationStatementsFor, newPostgresPool, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithExecutor, runPostgresSeed, runPostgresSeedWithRunner, runRequiredScalarCommand, runRowsCommand, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, runtimeConnectionString, seedStatements)
+import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStore, buildRuntimePostgresPageRepositoryWithRunner, databaseTransportEnvironment, decodeRuntimeQueryValue, libpqConnectionValue, migrationStatementsFor, newPostgresPool, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRequiredScalarCommand, runRowsCommand, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, runtimeConnectionString, seedStatements)
 import WebApi.Route (AppRoute (..), defaultRequestContext)
 import WebApi.SetupPlan (TcpEndpoint (..))
 
@@ -881,219 +883,64 @@ spec = do
     it "records same-identity schema versions and safely handles libpq migration failures" $ do
       ensureDefaultPostgresAvailable
       runPostgresMigrations defaultMigrationPostgresConfig `shouldReturn` Right ()
-      runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
-        `shouldReturn` Right ["epoch-security-time-v1", "initial-schema", "keyed-login-attempt-groups-v1", "login-attempt-reservation-function-v1", "login-attempt-reservations-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1"]
+      runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT change_id FROM web_api.database_changes ORDER BY change_order ASC;"
+        `shouldReturn` Right ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1", "keyed-login-attempt-groups-v1", "remove-session-csrf-v1"]
+      runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT column_name FROM information_schema.columns WHERE table_schema = 'web_api' AND table_name IN ('account_sessions', 'mfa_enrollment_sessions') AND column_name = 'csrf_token';"
+        `shouldReturn` Right []
       withUnusedTcpEndpoint $ \unusedEndpoint -> do
         runPostgresMigrations
           defaultMigrationPostgresConfig
             { databasePort = tcpEndpointPort unusedEndpoint
             }
-          `shouldReturn` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
+          `shouldReturn` Left (PostgresMigrationFailed "PostgreSQL database change command failed")
       runPostgresMigrationsForRuntime
         defaultMigrationPostgresConfig
         defaultRealPostgresConfig {databaseName = "missing_ax_reconciliation_database"}
-        `shouldReturn` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
+        `shouldReturn` Left (PostgresMigrationFailed "PostgreSQL database change command failed")
 
-    it "runs every pending migration and its version record in one locked transaction" $ do
-      recordedSqlReference <- newIORef []
-      let executor =
-            PostgresMigrationExecutor $ \sql -> do
-              modifyIORef' recordedSqlReference (<> [sql])
-              pure . Right $
-                if sql == "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;" || sql == "SELECT pg_advisory_xact_lock(782476311);"
-                  then Just (PostgresMigrationRows [])
-                  else Just PostgresMigrationCommandSucceeded
-      runPostgresMigrationsWithExecutor executor migrationPostgresTestConfig postgresTestConfig `shouldReturn` Right ()
-      recordedSql <- readIORef recordedSqlReference
-      let versionedTransactionSql =
-            [ "BEGIN;",
-              "SELECT pg_advisory_xact_lock(782476311);",
-              "CREATE SCHEMA IF NOT EXISTS web_api;",
-              "CREATE TABLE IF NOT EXISTS web_api.schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);",
-              "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
-            ]
-              <> migrationStatementsFor
-              <> ["INSERT INTO web_api.schema_migrations (version) VALUES ('initial-schema');"]
-      take (length versionedTransactionSql) recordedSql `shouldBe` versionedTransactionSql
-      all
-        (`elem` recordedSql)
-        [ "ALTER SCHEMA web_api OWNER TO \"web_api_owner\";",
-          "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE web_api.accounts TO \"web_api_app\";"
-        ]
-        `shouldBe` True
-      last recordedSql `shouldBe` "COMMIT;"
-
-    it "invalidates legacy monotonic security state before recording the epoch-time migration" $ do
-      recordedSqlReference <- newIORef []
-      let executor =
-            PostgresMigrationExecutor $ \sql -> do
-              modifyIORef' recordedSqlReference (<> [sql])
-              pure . Right $
-                if sql == "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;" || sql == "SELECT pg_advisory_xact_lock(782476311);"
-                  then Just (PostgresMigrationRows [Just (TextEncoding.encodeUtf8 "initial-schema")])
-                  else Just PostgresMigrationCommandSucceeded
-      runPostgresMigrationsWithExecutor executor migrationPostgresTestConfig postgresTestConfig `shouldReturn` Right ()
-      recordedSql <- readIORef recordedSqlReference
-      all
-        (`elem` recordedSql)
-        [ "DELETE FROM web_api.account_sessions;",
-          "DELETE FROM web_api.mfa_enrollment_sessions;",
-          "DELETE FROM web_api.email_verifications;",
-          "DELETE FROM web_api.login_attempts;",
-          "INSERT INTO web_api.schema_migrations (version) VALUES ('epoch-security-time-v1');"
-        ]
-        `shouldBe` True
-
-    it "skips recorded migrations, rejects an unknown recorded version, and rolls back failed transactions" $ do
-      recordedSqlReference <- newIORef []
-      let executor appliedVersions failingSql =
-            PostgresMigrationExecutor $ \sql -> do
-              modifyIORef' recordedSqlReference (<> [sql])
-              pure . Right $
-                if sql == "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;" || sql == "SELECT pg_advisory_xact_lock(782476311);"
-                  then Just (PostgresMigrationRows (fmap (Just . TextEncoding.encodeUtf8) appliedVersions))
-                  else
-                    if sql == failingSql
-                      then Nothing
-                      else Just PostgresMigrationCommandSucceeded
+    it "cuts a legacy ledger over atomically without changing its applied timestamp" $ do
+      ensureDefaultPostgresAvailable
+      let schemaName = "ahi4c_database_change_cutover"
+          legacyChange = DatabaseChanges.DatabaseChange (DatabaseChanges.DatabaseChangeId "legacy-v1") ("CREATE TABLE \"ahi4c_database_change_cutover\".\"legacy_marker\" (id INTEGER);" :| [])
+          addedChange = DatabaseChanges.DatabaseChange (DatabaseChanges.DatabaseChangeId "new-v2") ("CREATE TABLE \"ahi4c_database_change_cutover\".\"new_marker\" (id INTEGER);" :| [])
+          ledger =
+            DatabaseChanges.DatabaseChangeLedger
+              { DatabaseChanges.databaseChangeLedgerSchema = schemaName,
+                DatabaseChanges.databaseChangeLedgerTable = "database_changes",
+                DatabaseChanges.databaseChangeLegacyTable = Just "schema_migrations",
+                DatabaseChanges.databaseChangeLedgerLockId = 782476312
+              }
           setupSql =
-            [ "BEGIN;",
-              "SELECT pg_advisory_xact_lock(782476311);",
-              "CREATE SCHEMA IF NOT EXISTS web_api;",
-              "CREATE TABLE IF NOT EXISTS web_api.schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);",
-              "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
-            ]
-      runPostgresMigrationsWithExecutor (executor ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "keyed-login-attempt-groups-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1"] "never") migrationPostgresTestConfig postgresTestConfig `shouldReturn` Right ()
-      skippedRecordedSql <- readIORef recordedSqlReference
-      take (length setupSql) skippedRecordedSql `shouldBe` setupSql
-      skippedRecordedSql `shouldContain` ["ALTER SCHEMA web_api OWNER TO \"web_api_owner\";"]
-      skippedRecordedSql `shouldNotContain` ["INSERT INTO web_api.schema_migrations (version) VALUES ('initial-schema');"]
-      last skippedRecordedSql `shouldBe` "COMMIT;"
-      writeIORef recordedSqlReference []
-      runPostgresMigrationsWithExecutor (executor ["removed-version"] "never") migrationPostgresTestConfig postgresTestConfig
-        `shouldReturn` Left (PostgresMigrationFailed "Unknown PostgreSQL schema migration version: removed-version")
-      readIORef recordedSqlReference `shouldReturn` (setupSql <> ["ROLLBACK;"])
-      writeIORef recordedSqlReference []
-      case filter (/= "CREATE SCHEMA IF NOT EXISTS web_api;") migrationStatementsFor of
-        failingSql : _ -> do
-          runPostgresMigrationsWithExecutor (executor [] failingSql) migrationPostgresTestConfig postgresTestConfig
-            `shouldReturn` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
-          readIORef recordedSqlReference
-            `shouldReturn` (setupSql <> takeWhile (/= failingSql) migrationStatementsFor <> [failingSql, "ROLLBACK;"])
-        [] -> expectationFailure "expected initial schema migration statements"
+            "DROP SCHEMA IF EXISTS \"ahi4c_database_change_cutover\" CASCADE; "
+              <> "CREATE SCHEMA \"ahi4c_database_change_cutover\"; "
+              <> "CREATE TABLE \"ahi4c_database_change_cutover\".\"schema_migrations\" (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL); "
+              <> "INSERT INTO \"ahi4c_database_change_cutover\".\"schema_migrations\" (version, applied_at) VALUES ('legacy-v1', TIMESTAMPTZ '2001-02-03 04:05:06+00'); "
+              <> "SELECT 'ready';"
+          cleanupSql = "DROP SCHEMA IF EXISTS \"ahi4c_database_change_cutover\" CASCADE; SELECT 'removed';"
+          connection = DatabaseChanges.DatabaseChangeConnectionString (runtimeConnectionString defaultMigrationPostgresConfig)
+      bracket_
+        (runRuntimeRowsQuery defaultMigrationPostgresConfig setupSql `shouldReturn` Right ["ready"])
+        (void (runRuntimeRowsQuery defaultMigrationPostgresConfig cleanupSql))
+        $ do
+          DatabaseChanges.runDatabaseChanges connection ledger [legacyChange, addedChange] [] `shouldReturn` Right ()
+          runRuntimeRowsQuery
+            defaultMigrationPostgresConfig
+            ( "SELECT change_id || '|' || change_order::TEXT || '|' || sql_digest || '|' || to_char(applied_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') "
+                <> "FROM \"ahi4c_database_change_cutover\".\"database_changes\" WHERE change_id = 'legacy-v1';"
+            )
+            `shouldReturn` Right ["legacy-v1|1|" <> DatabaseChanges.databaseChangeDigest legacyChange <> "|2001-02-03T04:05:06Z"]
+          runRuntimeRowsQuery
+            defaultMigrationPostgresConfig
+            "SELECT change_id || '|' || change_order::TEXT || '|' || sql_digest FROM \"ahi4c_database_change_cutover\".\"database_changes\" WHERE change_id = 'new-v2';"
+            `shouldReturn` Right ["new-v2|2|" <> DatabaseChanges.databaseChangeDigest addedChange]
 
-    it "rejects malformed migration protocol results and rolls back every post-BEGIN failure" $ do
-      let setupSql =
-            [ "BEGIN;",
-              "SELECT pg_advisory_xact_lock(782476311);",
-              "CREATE SCHEMA IF NOT EXISTS web_api;",
-              "CREATE TABLE IF NOT EXISTS web_api.schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);",
-              "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
-            ]
-          runWith migrationConfig runtimeConfig resultFor = do
-            recordedSqlReference <- newIORef []
-            let executor =
-                  PostgresMigrationExecutor $ \sql -> do
-                    modifyIORef' recordedSqlReference (<> [sql])
-                    pure (Right (resultFor sql))
-            result <- runPostgresMigrationsWithExecutor executor migrationConfig runtimeConfig
-            recordedSql <- readIORef recordedSqlReference
-            pure (result, recordedSql)
-          migrationFailure = Nothing
-          commandSuccess sql
-            | sql == "SELECT pg_advisory_xact_lock(782476311);" = Just (PostgresMigrationRows [])
-            | otherwise = Just PostgresMigrationCommandSucceeded
-          versionRows versions sql
-            | sql == "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;" || sql == "SELECT pg_advisory_xact_lock(782476311);" = Just (PostgresMigrationRows (fmap (Just . TextEncoding.encodeUtf8) versions))
-            | otherwise = commandSuccess sql
-          runWithExecutorFailure failingSql = do
-            recordedSqlReference <- newIORef []
-            let executor =
-                  PostgresMigrationExecutor $ \sql -> do
-                    modifyIORef' recordedSqlReference (<> [sql])
-                    pure $
-                      if sql == failingSql
-                        then Left (PostgresMigrationFailed "PostgreSQL migration executor failed")
-                        else Right (versionRows [] sql)
-            result <- runPostgresMigrationsWithExecutor executor migrationPostgresTestConfig postgresTestConfig
-            recordedSql <- readIORef recordedSqlReference
-            pure (result, recordedSql)
-      (beginResult, beginSql) <-
-        runWith migrationPostgresTestConfig postgresTestConfig (const migrationFailure)
-      beginResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
-      beginSql `shouldBe` ["BEGIN;"]
-
-      (lockResult, lockSql) <-
-        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "SELECT pg_advisory_xact_lock(782476311);" then migrationFailure else commandSuccess sql)
-      lockResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
-      lockSql `shouldBe` ["BEGIN;", "SELECT pg_advisory_xact_lock(782476311);", "ROLLBACK;"]
-
-      (bootstrapResult, bootstrapSql) <-
-        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "CREATE TABLE IF NOT EXISTS web_api.schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);" then migrationFailure else commandSuccess sql)
-      bootstrapResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
-      bootstrapSql `shouldBe` take 4 setupSql <> ["ROLLBACK;"]
-
-      (versionResult, versionSql) <-
-        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;" then migrationFailure else commandSuccess sql)
-      versionResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
-      versionSql `shouldBe` setupSql <> ["ROLLBACK;"]
-
-      (rowlessVersionResult, rowlessVersionSql) <-
-        runWith migrationPostgresTestConfig postgresTestConfig commandSuccess
-      rowlessVersionResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration version query returned no rows")
-      rowlessVersionSql `shouldBe` setupSql <> ["ROLLBACK;"]
-
-      (nullVersionResult, nullVersionSql) <-
-        runWith
-          migrationPostgresTestConfig
-          postgresTestConfig
-          (\sql -> if sql == "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;" then Just (PostgresMigrationRows [Nothing]) else versionRows [] sql)
-      nullVersionResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration version row was NULL")
-      nullVersionSql `shouldBe` setupSql <> ["ROLLBACK;"]
-
-      (invalidUtf8VersionResult, invalidUtf8VersionSql) <-
-        runWith
-          migrationPostgresTestConfig
-          postgresTestConfig
-          (\sql -> if sql == "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;" then Just (PostgresMigrationRows [Just (ByteString.pack [0xC3, 0x28])]) else versionRows [] sql)
-      invalidUtf8VersionResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration version row contained invalid UTF-8")
-      invalidUtf8VersionSql `shouldBe` setupSql <> ["ROLLBACK;"]
-
-      (beginAdapterFailureResult, beginAdapterFailureSql) <-
-        runWithExecutorFailure "BEGIN;"
-      beginAdapterFailureResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration executor failed")
-      beginAdapterFailureSql `shouldBe` ["BEGIN;"]
-
-      (versionAdapterFailureResult, versionAdapterFailureSql) <-
-        runWithExecutorFailure "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
-      versionAdapterFailureResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration executor failed")
-      versionAdapterFailureSql `shouldBe` setupSql <> ["ROLLBACK;"]
-
-      (rowCommandResult, rowCommandSql) <-
-        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "BEGIN;" then Just (PostgresMigrationRows []) else versionRows [] sql)
-      rowCommandResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command returned rows")
-      rowCommandSql `shouldBe` ["BEGIN;"]
-
-      (recordResult, recordSql) <-
-        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "INSERT INTO web_api.schema_migrations (version) VALUES ('initial-schema');" then migrationFailure else versionRows [] sql)
-      recordResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
-      recordSql `shouldBe` setupSql <> migrationStatementsFor <> ["INSERT INTO web_api.schema_migrations (version) VALUES ('initial-schema');", "ROLLBACK;"]
-
-      (reconciliationResult, reconciliationSql) <-
-        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "ALTER SCHEMA web_api OWNER TO \"web_api_owner\";" then migrationFailure else versionRows ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "keyed-login-attempt-groups-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1"] sql)
-      reconciliationResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
-      reconciliationSql `shouldBe` setupSql <> ["ALTER SCHEMA web_api OWNER TO \"web_api_owner\";", "ROLLBACK;"]
-
-      (commitResult, commitSql) <-
-        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "COMMIT;" then migrationFailure else versionRows ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "keyed-login-attempt-groups-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1"] sql)
-      commitResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
-      take (length setupSql) commitSql `shouldBe` setupSql
-      drop (length commitSql - 2) commitSql `shouldBe` ["COMMIT;", "ROLLBACK;"]
-
-      (sameIdentityResult, sameIdentitySql) <-
-        runWith migrationPostgresTestConfig migrationPostgresTestConfig (versionRows ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "keyed-login-attempt-groups-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1"])
-      sameIdentityResult `shouldBe` Right ()
-      sameIdentitySql `shouldNotContain` ["DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'web_api_owner') THEN EXECUTE 'ALTER ROLE \"web_api_owner\" WITH LOGIN PASSWORD ''owner-secret'' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION INHERIT'; ELSE EXECUTE 'CREATE ROLE \"web_api_owner\" WITH LOGIN PASSWORD ''owner-secret'' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION INHERIT'; END IF; END $$;"]
+    it "uses the durable database-change ledger and keeps application migration SQL out of a legacy ledger" $ do
+      ensureDefaultPostgresAvailable
+      runPostgresMigrations defaultMigrationPostgresConfig `shouldReturn` Right ()
+      runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT change_id FROM web_api.database_changes ORDER BY change_order ASC;"
+        `shouldReturn` Right ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1", "keyed-login-attempt-groups-v1", "remove-session-csrf-v1"]
+      runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT table_name FROM information_schema.tables WHERE table_schema = 'web_api' AND table_name = 'schema_migrations';"
+        `shouldReturn` Right []
 
     it "creates account verification, MFA, and opaque-session storage without persisting raw bearer secrets" $ do
       migrationStatementsFor
@@ -1249,6 +1096,7 @@ spec = do
         let application = buildAppWithDatabase defaultAppConfig (buildPostgresPageRepository postgresTestConfig)
         fmap stripVolatileDatabaseTimingResponse (HarchWeb.renderResponse application secondRequest)
           `shouldReturn` HarchWeb.PageResponseWithMetadata
+            testPageSecurity
             HarchWeb.ResponseBody
               { HarchWeb.responseStatus = Http.status200,
                 HarchWeb.responseContentType = "text/html; charset=utf-8",

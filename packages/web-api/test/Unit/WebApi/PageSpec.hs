@@ -224,7 +224,7 @@ spec = do
               }
       show config
         `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
-      show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}"
+      show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestAccountPrincipal = Nothing, requestMfaEnrollmentSessionId = Nothing}"
       let renderedPage = renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []})))
       show renderedPage `shouldContain` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute"
       show renderedPage `shouldContain` "data-harch-dialog-control"

@@ -88,6 +88,7 @@ import Data.Maybe (fromJust, fromMaybe, isJust, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import Data.Word (Word64)
 import HarchWeb
   ( AcmeConfig (..),
     CertbotConfig (..),
@@ -135,9 +136,17 @@ import HarchWeb
     unboundedRequestHeadLimits,
     warpDefaultRequestTransportLimits,
   )
+import HarchWeb.Csrf
+  ( CsrfKeyId,
+    SignedCsrfKeyring,
+    mkCsrfKeyId,
+    mkCsrfSigningKey,
+    mkSignedCsrfKeyring,
+  )
 import HarchWeb.Secret (SecretEncryptionKey, mkSecretEncryptionKey)
 import System.Environment (getEnvironment)
 import Text.Read (readMaybe)
+import WebApi.AccountJwt (AccountJwtConfiguration, AccountJwtConfigurationError (..), mkAccountJwtConfiguration)
 
 data AppMode
   = Development
@@ -234,7 +243,9 @@ data AppEnvironmentConfig = AppEnvironmentConfig
     databaseConfig :: DatabaseConfig,
     smtpDeliveryConfig :: SmtpDeliveryConfig,
     publicBaseUrl :: Text,
-    totpEncryptionKey :: SecretEncryptionKey
+    totpEncryptionKey :: SecretEncryptionKey,
+    csrfSigningKeyring :: SignedCsrfKeyring,
+    accountJwtConfiguration :: AccountJwtConfiguration
   }
   deriving (Eq)
 
@@ -244,7 +255,9 @@ instance Show AppEnvironmentConfig where
       { appMode,
         databaseConfig,
         smtpDeliveryConfig,
-        publicBaseUrl
+        publicBaseUrl,
+        csrfSigningKeyring,
+        accountJwtConfiguration
       } =
       "AppEnvironmentConfig {appMode = "
         <> show appMode
@@ -255,6 +268,10 @@ instance Show AppEnvironmentConfig where
         <> ", publicBaseUrl = "
         <> show publicBaseUrl
         <> ", totpEncryptionKey = <redacted>"
+        <> ", csrfSigningKeyring = "
+        <> show csrfSigningKeyring
+        <> ", accountJwtConfiguration = "
+        <> show accountJwtConfiguration
         <> "}"
 
 data SmtpDeliveryConfig = SmtpDeliveryConfig
@@ -349,7 +366,14 @@ committedEnvDefaults =
     ("SMTP_HELO_NAME", "localhost"),
     ("SMTP_USER", "test@localhost"),
     ("EMAIL_FROM", "noreply@localhost"),
-    ("PUBLIC_BASE_URL", "http://127.0.0.1:5001")
+    ("PUBLIC_BASE_URL", "http://127.0.0.1:5001"),
+    ("ACCOUNT_JWT_ISSUER", "http://127.0.0.1:5001"),
+    ("ACCOUNT_JWT_AUDIENCE", "web-api-account"),
+    ("ACCOUNT_JWT_ACTIVE_KEY_ID", "development-v1"),
+    ("ACCOUNT_JWT_SIGNING_JWK_FILE", "account-jwt-private.jwk"),
+    ("ACCOUNT_JWT_VERIFICATION_JWK_SET_FILE", "account-jwt-verification.jwks"),
+    ("ACCOUNT_JWT_COOKIE_NAME", "__Host-harch-session"),
+    ("ACCOUNT_JWT_COOKIE_MAX_AGE_SECONDS", "28800")
   ]
 
 committedRuntimeDefaults :: [(Text, Text)]
@@ -387,6 +411,23 @@ defaultDatabaseConnectTimeoutSeconds = 10
 defaultDatabasePoolCapacity :: DatabasePoolCapacity
 defaultDatabasePoolCapacity = DatabasePoolCapacity 10
 
+-- | These non-secret development paths deliberately identify no key material.
+-- Runtime startup reads and validates the files before it binds a listener;
+-- an unprovisioned development checkout therefore fails closed instead of
+-- manufacturing an account-signing key in process.
+defaultAccountJwtConfiguration :: AccountJwtConfiguration
+defaultAccountJwtConfiguration =
+  case mkAccountJwtConfiguration
+    "http://127.0.0.1:5001"
+    "web-api-account"
+    "development-v1"
+    "account-jwt-private.jwk"
+    "account-jwt-verification.jwks"
+    "__Host-harch-session"
+    28800 of
+    Right configuration -> configuration
+    Left _ -> error "default account JWT configuration is invalid"
+
 defaultAppEnvironmentConfig :: AppEnvironmentConfig
 defaultAppEnvironmentConfig =
   AppEnvironmentConfig
@@ -412,7 +453,9 @@ defaultAppEnvironmentConfig =
             smtpDeliveryPassword = "password"
           },
       publicBaseUrl = "http://127.0.0.1:5001",
-      totpEncryptionKey = defaultTotpEncryptionKey
+      totpEncryptionKey = defaultTotpEncryptionKey,
+      csrfSigningKeyring = defaultCsrfSigningKeyring,
+      accountJwtConfiguration = defaultAccountJwtConfiguration
     }
 
 defaultAppConfig :: AppConfig
@@ -520,6 +563,36 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
   parsedPublicBaseUrl <- requiredConfigValue "PUBLIC_BASE_URL"
   parsedTotpEncryptionKey <- parseTotpEncryptionKey =<< requiredConfigValue "TOTP_ENCRYPTION_KEY"
   () <- validateProductionTotpEncryptionKey parsedMode parsedTotpEncryptionKey
+  csrfActiveKeyId <- requiredConfigValue "CSRF_SIGNING_ACTIVE_KEY_ID"
+  csrfVerificationKeys <- requiredConfigValue "CSRF_SIGNING_VERIFICATION_KEYS"
+  parsedCsrfSigningKeyring <- parseCsrfSigningKeyring csrfActiveKeyId csrfVerificationKeys
+  () <- validateProductionCsrfSigningKeyring parsedMode parsedCsrfSigningKeyring
+  jwtIssuer <- requiredConfigValue "ACCOUNT_JWT_ISSUER"
+  jwtAudience <- requiredConfigValue "ACCOUNT_JWT_AUDIENCE"
+  jwtActiveKeyId <- requiredConfigValue "ACCOUNT_JWT_ACTIVE_KEY_ID"
+  jwtSigningJwkFile <- requiredConfigValue "ACCOUNT_JWT_SIGNING_JWK_FILE"
+  jwtVerificationJwkSetFile <- requiredConfigValue "ACCOUNT_JWT_VERIFICATION_JWK_SET_FILE"
+  jwtCookieName <- requiredConfigValue "ACCOUNT_JWT_COOKIE_NAME"
+  jwtCookieMaxAgeSeconds <- parsePositiveWord64 "ACCOUNT_JWT_COOKIE_MAX_AGE_SECONDS" =<< requiredConfigValue "ACCOUNT_JWT_COOKIE_MAX_AGE_SECONDS"
+  parsedAccountJwtConfiguration <-
+    first
+      ( accountJwtConfigurationError
+          jwtIssuer
+          jwtAudience
+          jwtActiveKeyId
+          jwtSigningJwkFile
+          jwtVerificationJwkSetFile
+          jwtCookieName
+      )
+      ( mkAccountJwtConfiguration
+          jwtIssuer
+          jwtAudience
+          jwtActiveKeyId
+          (Text.unpack jwtSigningJwkFile)
+          (Text.unpack jwtVerificationJwkSetFile)
+          jwtCookieName
+          jwtCookieMaxAgeSeconds
+      )
   pure
     AppEnvironmentConfig
       { appMode = parsedMode,
@@ -534,9 +607,20 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
               smtpDeliveryPassword = parsedSmtpPassword
             },
         publicBaseUrl = parsedPublicBaseUrl,
-        totpEncryptionKey = parsedTotpEncryptionKey
+        totpEncryptionKey = parsedTotpEncryptionKey,
+        csrfSigningKeyring = parsedCsrfSigningKeyring,
+        accountJwtConfiguration = parsedAccountJwtConfiguration
       }
   where
+    accountJwtConfigurationError issuer audience activeKeyId signingJwkFile verificationJwkSetFile cookieName configurationError =
+      case configurationError of
+        AccountJwtIssuerInvalid -> InvalidConfigValue "ACCOUNT_JWT_ISSUER" issuer
+        AccountJwtAudienceInvalid -> InvalidConfigValue "ACCOUNT_JWT_AUDIENCE" audience
+        AccountJwtActiveKeyIdInvalid -> InvalidConfigValue "ACCOUNT_JWT_ACTIVE_KEY_ID" activeKeyId
+        AccountJwtSigningJwkFileInvalid -> InvalidConfigValue "ACCOUNT_JWT_SIGNING_JWK_FILE" signingJwkFile
+        AccountJwtVerificationJwkSetFileInvalid -> InvalidConfigValue "ACCOUNT_JWT_VERIFICATION_JWK_SET_FILE" verificationJwkSetFile
+        AccountJwtCookiePolicyInvalid -> InvalidConfigValue "ACCOUNT_JWT_COOKIE_NAME" cookieName
+
     requiredConfigValue key =
       case lookupConfigValue key configLayers of
         Just value -> Right value
@@ -659,6 +743,13 @@ parseSmtpPort value = do
     then Right parsedPort
     else Left (InvalidConfigValue "SMTP_PORT" value)
 
+parsePositiveWord64 :: Text -> Text -> Either ConfigParseError Word64
+parsePositiveWord64 key value =
+  case readMaybe (Text.unpack value) of
+    Just parsedValue
+      | parsedValue > 0 -> Right parsedValue
+    _ -> Left (InvalidConfigValue key value)
+
 parseTotpEncryptionKey :: Text -> Either ConfigParseError SecretEncryptionKey
 parseTotpEncryptionKey value =
   maybe
@@ -673,6 +764,56 @@ validateProductionTotpEncryptionKey :: AppMode -> SecretEncryptionKey -> Either 
 validateProductionTotpEncryptionKey appMode encryptionKey =
   if appMode == Production && encryptionKey == defaultTotpEncryptionKey
     then Left (InvalidConfigValue "TOTP_ENCRYPTION_KEY" "development-default")
+    else Right ()
+
+-- | Parse an immutable active-plus-verification ring instead of accepting one
+-- interchangeable secret.  The key IDs are deployment metadata; the encoded
+-- HMAC material is never included in a configuration diagnostic.  A comma
+-- separates entries and the first colon separates a bounded ID from its
+-- base64url key, whose alphabet deliberately cannot contain that delimiter.
+parseCsrfSigningKeyring :: Text -> Text -> Either ConfigParseError SignedCsrfKeyring
+parseCsrfSigningKeyring activeKeyIdText encodedVerificationKeys = do
+  activeKeyId <- parseCsrfKeyId "CSRF_SIGNING_ACTIVE_KEY_ID" activeKeyIdText
+  verificationEntries <- parseDelimitedTexts "CSRF_SIGNING_VERIFICATION_KEYS" encodedVerificationKeys
+  verificationKeys <- traverse parseVerificationKey verificationEntries
+  maybe
+    (Left (InvalidConfigValue "CSRF_SIGNING_VERIFICATION_KEYS" "<redacted>"))
+    Right
+    (mkSignedCsrfKeyring activeKeyId verificationKeys)
+  where
+    parseVerificationKey entry =
+      case Text.breakOn ":" entry of
+        (keyIdText, separatorAndKey)
+          | Text.count ":" entry == 1 -> do
+              keyId <- parseCsrfKeyId "CSRF_SIGNING_VERIFICATION_KEYS" keyIdText
+              signingKey <-
+                maybe
+                  (Left (InvalidConfigValue "CSRF_SIGNING_VERIFICATION_KEYS" "<redacted>"))
+                  Right
+                  (mkCsrfSigningKey (Text.drop 1 separatorAndKey))
+              pure (keyId, signingKey)
+        _ -> Left (InvalidConfigValue "CSRF_SIGNING_VERIFICATION_KEYS" "<redacted>")
+
+parseCsrfKeyId :: Text -> Text -> Either ConfigParseError CsrfKeyId
+parseCsrfKeyId configurationKey value =
+  maybe
+    (Left (InvalidConfigValue configurationKey value))
+    Right
+    (mkCsrfKeyId value)
+
+defaultCsrfSigningKeyring :: SignedCsrfKeyring
+defaultCsrfSigningKeyring =
+  case (mkCsrfKeyId "development-v1", mkCsrfSigningKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA") of
+    (Just keyId, Just signingKey) ->
+      case mkSignedCsrfKeyring keyId ((keyId, signingKey) :| []) of
+        Just keyring -> keyring
+        Nothing -> error "default CSRF signing keyring is invalid"
+    _ -> error "default CSRF signing configuration is invalid"
+
+validateProductionCsrfSigningKeyring :: AppMode -> SignedCsrfKeyring -> Either ConfigParseError ()
+validateProductionCsrfSigningKeyring appMode keyring =
+  if appMode == Production && keyring == defaultCsrfSigningKeyring
+    then Left (InvalidConfigValue "CSRF_SIGNING_VERIFICATION_KEYS" "development-default")
     else Right ()
 
 parseAppStartupConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError AppStartupConfig
@@ -1132,7 +1273,7 @@ defaultHttpsRedirectPort parsedListeners =
 -- the host of this app's own HTTPS listener, when exactly one distinct host
 -- is declared. This only covers a deployment that terminates TLS itself; a
 -- deployment behind a TLS-offloading proxy declares no HTTPS listener at
--- all, so 'WebApi.App.buildRuntimeApp' overrides this with the host parsed
+-- all, so 'WebApi.App.buildRuntimeAppWithAccountJwt' overrides this with the host parsed
 -- from @PUBLIC_BASE_URL@, which is required in every deployment shape.
 defaultHttpsRedirectAuthority :: [ListenerConfig] -> Maybe ByteString.ByteString
 defaultHttpsRedirectAuthority parsedListeners =

@@ -72,8 +72,8 @@ import HarchWeb.Api.Multipart
     rejectMultipartPart,
     untrustedFilenameText,
   )
+import HarchWeb.Csrf (CsrfToken, csrfTokenText, generateCsrfToken, mkCsrfToken, validateCsrfToken)
 import HarchWeb.Markup qualified as Markup
-import HarchWeb.Session (CsrfToken, csrfTokenText, generateCsrfToken, mkCsrfToken, validateCsrfToken)
 import Network.HTTP.Types qualified as HttpTypes
 
 data NativeUploadTarget

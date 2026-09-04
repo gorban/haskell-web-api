@@ -19,6 +19,7 @@ module Unit.WebApi.TestSupport
     testSessionId,
     sessionIdValue,
     csrfTokenValue,
+    testPageSecurity,
     opaqueSession,
     pureApplication,
     typedAccountActionRequest,
@@ -69,7 +70,6 @@ module Unit.WebApi.TestSupport
     requiredSecretNonce,
     requiredSecretEnvelope,
     enrollmentSessionIdValue,
-    enrollmentCsrfTokenValue,
     enrollmentSessionStoreFor,
     isUnavailable,
     isCorrupt,
@@ -109,6 +109,7 @@ module Unit.WebApi.TestSupport
     decodeChunkedBody,
     protocolResponseStrictBody,
     stripVolatileDatabaseTimingResponse,
+    stripVolatileDatabaseTimingResponseBody,
     expectedSecondDatabaseOperations,
     expectedDatabaseOperation,
     lookupTextObservabilityAttribute,
@@ -134,6 +135,7 @@ import HarchWeb qualified
 import HarchWeb.Account (AccountId, mkAccountId)
 import HarchWeb.Account qualified as Account
 import HarchWeb.Action qualified as Action
+import HarchWeb.Csrf (mkCsrfToken)
 import HarchWeb.Database qualified as HarchDatabase
 import HarchWeb.DevSmtp qualified as DevSmtp
 import HarchWeb.Email (EmailAddress, mkEmailAddress)
@@ -142,7 +144,7 @@ import HarchWeb.LoginProtection qualified as LoginProtection
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Password qualified as Password
 import HarchWeb.Secret qualified as Secret
-import HarchWeb.Session (OpaqueSession (..), SessionId, mkCsrfToken, mkSessionId)
+import HarchWeb.Session (OpaqueSession (..), SessionId, mkSessionId)
 import HarchWeb.Session qualified as Session
 import HarchWeb.Time (UnixTimeNanoseconds)
 import Network.HTTP.Types qualified as Http
@@ -167,7 +169,7 @@ import WebApi.Database (DatabaseError (..), DatabaseResult (..), PageRepository 
 import WebApi.Login (LoginAttemptAdmission (..), LoginAttemptReservation (..), LoginAttemptStore (..), LoginThrottleContext (..))
 import WebApi.Page (AppPageModel (..), ProfilePageModel (..), renderPage)
 import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..))
-import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RouteMetadata (..), defaultRequestContext)
+import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RouteMetadata (..), defaultRequestContext, routeCodec)
 import WebApi.Route qualified
 import WebApi.Session (MfaEnrollmentSessionStore (..))
 import WebApi.SetupPlan (TcpEndpoint (..))
@@ -218,21 +220,23 @@ testSessionId =
 csrfTokenValue :: Text
 csrfTokenValue = "abcdefghijklmnopqrstuvwxyz0123456789-_"
 
+testPageSecurity :: HarchWeb.PageSecurity
+testPageSecurity =
+  case mkCsrfToken csrfTokenValue of
+    Just csrfToken -> HarchWeb.mkPageSecurity HarchWeb.testRuntimeNonce (HarchWeb.mkPageCsrf csrfToken "web-api-test")
+    Nothing -> error "expected a valid CSRF token"
+
 sessionIdValue :: Text
 sessionIdValue = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
 
 opaqueSession :: OpaqueSession AccountId
 opaqueSession =
-  case mkCsrfToken csrfTokenValue of
-    Just csrfToken ->
-      OpaqueSession
-        { sessionId = testSessionId,
-          sessionPrincipal = accountId,
-          sessionCsrfToken = csrfToken,
-          sessionIssuedAtNanoseconds = 100,
-          sessionExpiresAtNanoseconds = 200
-        }
-    Nothing -> error "expected a valid csrf token"
+  OpaqueSession
+    { sessionId = testSessionId,
+      sessionPrincipal = accountId,
+      sessionIssuedAtNanoseconds = 100,
+      sessionExpiresAtNanoseconds = 200
+    }
 
 pureApplication :: HarchWeb.Application AppRoute AccountAction AppRequestContext ()
 pureApplication = buildApp defaultAppConfig
@@ -601,10 +605,6 @@ enrollmentSessionIdValue :: Session.SessionId
 enrollmentSessionIdValue =
   fromMaybe (error "Expected a valid MFA enrollment session id") (Session.mkSessionId "MFAENROLL0123456789ABCDEF0123456789ABCDEF01")
 
-enrollmentCsrfTokenValue :: Session.CsrfToken
-enrollmentCsrfTokenValue =
-  fromMaybe (error "Expected a valid MFA enrollment CSRF token") (Session.mkCsrfToken "MFACSRF0123456789ABCDEF0123456789ABCDEF01234")
-
 -- | A store whose only valid session binds 'enrollmentSessionIdValue' to the
 -- given account, matching how 'issueMfaEnrollmentSession' would have issued
 -- it. Any other session id is treated as absent.
@@ -621,7 +621,6 @@ enrollmentSessionStoreFor enrollmentAccountId =
                   Session.OpaqueSession
                     { Session.sessionId = enrollmentSessionIdValue,
                       Session.sessionPrincipal = enrollmentAccountId,
-                      Session.sessionCsrfToken = enrollmentCsrfTokenValue,
                       Session.sessionIssuedAtNanoseconds = 0,
                       Session.sessionExpiresAtNanoseconds = maxBound
                     }
@@ -667,7 +666,7 @@ assertRegistrationResult action matchesResult = do
     then pure ()
     else expectationFailure "unexpected registration result"
 
-actionHasStatusAndFocus :: Int -> Maybe Text -> Text -> Maybe HarchWeb.ClientActionResponse -> Bool
+actionHasStatusAndFocus :: Int -> Maybe Text -> Text -> Maybe (HarchWeb.ClientActionResponse AppRoute AppRequestContext) -> Bool
 actionHasStatusAndFocus expectedStatus expectedFocus expectedMessage = \case
   Just actionResponse ->
     actionResponseHasValidClientActionTransport actionResponse
@@ -683,7 +682,7 @@ actionHasStatusAndFocus expectedStatus expectedFocus expectedMessage = \case
 -- | Check the observable HTTP action contract rather than forcing its derived
 -- 'Show' instance.  An action response must render as the public JSON payload,
 -- carry only well-formed headers, and expose well-formed structured diagnostics.
-actionResponseHasValidClientActionTransport :: HarchWeb.ClientActionResponse -> Bool
+actionResponseHasValidClientActionTransport :: HarchWeb.ClientActionResponse AppRoute AppRequestContext -> Bool
 actionResponseHasValidClientActionTransport actionResponse =
   HarchWeb.responseStatus transportResponse == HarchWeb.clientActionStatus actionResponse
     && HarchWeb.responseContentType transportResponse == "application/json; charset=utf-8"
@@ -693,7 +692,7 @@ actionResponseHasValidClientActionTransport actionResponse =
     && all wellFormedAttribute (HarchWeb.responseObservabilityAttributes transportResponse)
     && not (any Text.null (HarchWeb.responseLogEntries transportResponse))
   where
-    transportResponse = HarchWeb.clientActionResponseBody actionResponse
+    transportResponse = HarchWeb.clientActionResponseBody routeCodec actionResponse
 
     wellFormedHeader (_, value) = not (ByteString.null value)
 
@@ -1204,16 +1203,23 @@ protocolResponseStrictBody protocolResponse =
     HarchWeb.ProtocolResponseStream _ -> error "expected a strict protocol response body"
     HarchWeb.ProtocolResponseWai _ -> error "expected a strict protocol response body"
 
+-- | Make database-result tests insensitive to request-local timing and the
+-- pre-render page-security value.  Neither affects the page/data result the
+-- helper's callers are asserting.
 stripVolatileDatabaseTimingResponse :: HarchWeb.Response route context -> HarchWeb.Response route context
 stripVolatileDatabaseTimingResponse response =
   case response of
-    HarchWeb.PageResponse page -> HarchWeb.PageResponse page
-    HarchWeb.PageResponseWithMetadata responseBody page ->
-      HarchWeb.PageResponseWithMetadata (stripVolatileDatabaseTimingResponseBody responseBody) page
+    HarchWeb.PageResponse _ page -> HarchWeb.PageResponse testPageSecurity page
+    HarchWeb.PageResponseWithMetadata _ responseBody page ->
+      HarchWeb.PageResponseWithMetadata testPageSecurity (stripVolatileDatabaseTimingResponseBody responseBody) page
     HarchWeb.BodyResponse responseBody ->
       HarchWeb.BodyResponse (stripVolatileDatabaseTimingResponseBody responseBody)
     HarchWeb.RedirectResponse responseBody location ->
       HarchWeb.RedirectResponse (stripVolatileDatabaseTimingResponseBody responseBody) location
+    HarchWeb.InternalRedirectResponse responseBody routeRequest ->
+      HarchWeb.InternalRedirectResponse (stripVolatileDatabaseTimingResponseBody responseBody) routeRequest
+    HarchWeb.InternalRedirectResponseWithHeaders responseBody headers routeRequest ->
+      HarchWeb.InternalRedirectResponseWithHeaders (stripVolatileDatabaseTimingResponseBody responseBody) headers routeRequest
     HarchWeb.ClientActionBodyResponse actionResponse ->
       HarchWeb.ClientActionBodyResponse actionResponse
     HarchWeb.EventStreamResponse responseBody eventSource ->

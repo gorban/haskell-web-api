@@ -3,7 +3,11 @@
 -- | Response finalization and WAI rendering for typed applications.
 module HarchWeb.Server.ResponseRendering
   ( applyResponseHeaders,
+    internalRedirectResponse,
     redirectResponse,
+    nonPageInternalRedirectResponse,
+    nonPageInternalRedirectResponseWithHeaders,
+    nonPageRedirectResponse,
     responseDiagnostics,
     responseKind,
     responsePageSecurity,
@@ -18,17 +22,19 @@ import Data.ByteString.Builder qualified as ByteStringBuilder
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Foldable (for_)
 import Data.Text (Text)
+import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import HarchWeb.Csrf (CsrfCookieDisposition (..), PageCsrf, PageSecurity, csrfCookieMaxAgeSeconds, csrfTokenText, pageCsrfCookieDisposition, pageCsrfCookieMaxAge, pageCsrfValue, pageSecurityCsrf, pageSecurityRuntimeNonce, samePageSecurity)
 import HarchWeb.Document (Page)
 import HarchWeb.Document qualified as Document
+import HarchWeb.Markup (safeUrlText)
 import HarchWeb.Observability qualified as Observability
-import HarchWeb.Routing (RouteCodec (..), RouteRequest (..))
+import HarchWeb.Routing (RouteCodec (..), RouteRequest (..), encodeRouteLocation)
 import HarchWeb.Security (RequestPolicyConfig, requestPolicyResponseHeadersWithNonce)
 import HarchWeb.Server.Application (Application (..))
 import HarchWeb.Server.ClientAction (clientActionResponseBody)
 import HarchWeb.Server.Response
 import HarchWeb.Server.Sse (renderServerSentEvent)
-import HarchWeb.Session (CsrfToken, csrfTokenText)
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 
@@ -39,41 +45,67 @@ applyResponseHeaders additionalHeaders =
 responsePolicyHeaders :: RequestPolicyConfig -> Wai.Request -> Maybe Document.RuntimeNonce -> Http.ResponseHeaders
 responsePolicyHeaders = requestPolicyResponseHeadersWithNonce
 
-responsePageSecurity :: Application route action context authorization -> Response route context -> IO (Maybe (Document.RuntimeNonce, CsrfToken))
-responsePageSecurity webApplication response =
+responsePageSecurity :: Response route context -> Maybe PageSecurity
+responsePageSecurity response =
   case response of
-    PageResponse page -> pageSecurity page
-    PageResponseWithMetadata _ page -> pageSecurity page
-    BodyResponse _ -> pure Nothing
-    RedirectResponse _ _ -> pure Nothing
-    ClientActionBodyResponse _ -> pure Nothing
-    EventStreamResponse _ _ -> pure Nothing
-    ProtocolResponseResult _ -> pure Nothing
-  where
-    pageSecurity page = do
-      runtimeNonce <- Document.generateRuntimeNonce
-      csrfToken <- pageCsrfToken webApplication page
-      pure (Just (runtimeNonce, csrfToken))
+    PageResponse pageSecurity _ -> Just pageSecurity
+    PageResponseWithMetadata pageSecurity _ _ -> Just pageSecurity
+    BodyResponse _ -> Nothing
+    RedirectResponse _ _ -> Nothing
+    InternalRedirectResponse _ _ -> Nothing
+    InternalRedirectResponseWithHeaders {} -> Nothing
+    ClientActionBodyResponse _ -> Nothing
+    EventStreamResponse _ _ -> Nothing
+    ProtocolResponseResult _ -> Nothing
 
 redirectResponse :: Http.Status -> Text -> Response route context
 redirectResponse status =
-  RedirectResponse
-    ResponseBody
-      { responseStatus = status,
-        responseContentType = "text/plain; charset=utf-8",
-        responseBody = "",
-        responseObservabilityAttributes = [],
-        responseLogEntries = [],
-        responseDatabaseOperations = []
-      }
+  nonPageResponse . nonPageRedirectResponse status
+
+-- | Construct a redirect to an application-owned route. The root renderer is
+-- the only point that turns it into a browser location.
+internalRedirectResponse :: Http.Status -> RouteRequest route context -> Response route context
+internalRedirectResponse status =
+  nonPageResponse . nonPageInternalRedirectResponse status
+
+-- | Construct a redirect that is valid from a protocol route or endpoint
+-- guard. It deliberately inhabits 'NonPageResponse', so redirect challenges
+-- retain the established response semantics without gaining page authority.
+nonPageRedirectResponse :: Http.Status -> Text -> NonPageResponse route context
+nonPageRedirectResponse status =
+  NonPageRedirectResponse (emptyRedirectResponseBody status)
+
+nonPageInternalRedirectResponse :: Http.Status -> RouteRequest route context -> NonPageResponse route context
+nonPageInternalRedirectResponse status =
+  NonPageInternalRedirectResponse (emptyRedirectResponseBody status)
+
+-- | Redirect to an application route while retaining response headers needed
+-- to establish a new grant. The renderer always derives the final
+-- @Location@ from the typed route and discards a supplied @Location@ header.
+nonPageInternalRedirectResponseWithHeaders :: Http.Status -> Http.ResponseHeaders -> RouteRequest route context -> NonPageResponse route context
+nonPageInternalRedirectResponseWithHeaders status =
+  NonPageInternalRedirectResponseWithHeaders (emptyRedirectResponseBody status)
+
+emptyRedirectResponseBody :: Http.Status -> ResponseBody
+emptyRedirectResponseBody status =
+  ResponseBody
+    { responseStatus = status,
+      responseContentType = "text/plain; charset=utf-8",
+      responseBody = "",
+      responseObservabilityAttributes = [],
+      responseLogEntries = [],
+      responseDatabaseOperations = []
+    }
 
 responseDiagnostics :: Response route context -> ResponseDiagnostics
 responseDiagnostics response =
   case response of
-    PageResponse _ -> ResponseDiagnostics [] [] []
-    PageResponseWithMetadata responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
+    PageResponse _ _ -> ResponseDiagnostics [] [] []
+    PageResponseWithMetadata _ responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
     BodyResponse responseBodyValue -> responseBodyDiagnostics responseBodyValue
     RedirectResponse responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
+    InternalRedirectResponse responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
+    InternalRedirectResponseWithHeaders responseBodyValue _ _ -> responseBodyDiagnostics responseBodyValue
     ClientActionBodyResponse actionResponse ->
       ResponseDiagnostics
         (clientActionObservabilityAttributes actionResponse)
@@ -97,10 +129,12 @@ responseBodyDiagnostics responseBodyValue =
 responseStatusCode :: (Eq route) => Application route action context authorization -> Response route context -> Int
 responseStatusCode webApplication response =
   case response of
-    PageResponse page -> Http.statusCode (if isNotFoundPage webApplication page then Http.status404 else Http.status200)
-    PageResponseWithMetadata responseBodyValue _ -> Http.statusCode (responseStatus responseBodyValue)
+    PageResponse _ page -> Http.statusCode (if isNotFoundPage webApplication page then Http.status404 else Http.status200)
+    PageResponseWithMetadata _ responseBodyValue _ -> Http.statusCode (responseStatus responseBodyValue)
     BodyResponse responseBodyValue -> Http.statusCode (responseStatus responseBodyValue)
     RedirectResponse responseBodyValue _ -> Http.statusCode (responseStatus responseBodyValue)
+    InternalRedirectResponse responseBodyValue _ -> Http.statusCode (responseStatus responseBodyValue)
+    InternalRedirectResponseWithHeaders responseBodyValue _ _ -> Http.statusCode (responseStatus responseBodyValue)
     ClientActionBodyResponse actionResponse -> Http.statusCode (clientActionStatus actionResponse)
     EventStreamResponse responseBodyValue _ -> Http.statusCode (responseStatus responseBodyValue)
     ProtocolResponseResult protocolResponse -> Http.statusCode (protocolResponseStatus protocolResponse)
@@ -108,10 +142,12 @@ responseStatusCode webApplication response =
 responseKind :: Response route context -> Observability.ResponseKind
 responseKind response =
   case response of
-    PageResponse _ -> Observability.PageResponseKind
-    PageResponseWithMetadata _ _ -> Observability.PageResponseKind
+    PageResponse _ _ -> Observability.PageResponseKind
+    PageResponseWithMetadata {} -> Observability.PageResponseKind
     BodyResponse _ -> Observability.BodyResponseKind
     RedirectResponse _ _ -> Observability.BodyResponseKind
+    InternalRedirectResponse _ _ -> Observability.BodyResponseKind
+    InternalRedirectResponseWithHeaders {} -> Observability.BodyResponseKind
     ClientActionBodyResponse _ -> Observability.BodyResponseKind
     EventStreamResponse _ _ -> Observability.BodyResponseKind
     ProtocolResponseResult _ -> Observability.BodyResponseKind
@@ -119,43 +155,66 @@ responseKind response =
 toWaiResponse ::
   (Eq route) =>
   Http.ResponseHeaders ->
-  Maybe (Document.RuntimeNonce, CsrfToken) ->
+  Maybe PageSecurity ->
   Application route action context authorization ->
   Response route context ->
   Wai.Response
 toWaiResponse additionalHeaders maybePageSecurity webApplication response =
   case response of
-    PageResponse page ->
+    PageResponse pageSecurity page ->
       renderPageResponse
         (if isNotFoundPage webApplication page then Http.status404 else Http.status200)
+        pageSecurity
         page
-    PageResponseWithMetadata pageResponseBodyValue page ->
-      renderPageResponse (responseStatus pageResponseBodyValue) page
+    PageResponseWithMetadata pageSecurity pageResponseBodyValue page ->
+      renderPageResponse (responseStatus pageResponseBodyValue) pageSecurity page
     BodyResponse responseBodyValue -> toWaiBodyResponse additionalHeaders responseBodyValue
     RedirectResponse responseBodyValue location -> toWaiBodyResponse (additionalHeaders <> [(Http.hLocation, TextEncoding.encodeUtf8 location)]) responseBodyValue
-    ClientActionBodyResponse actionResponse -> toWaiBodyResponse (additionalHeaders <> clientActionHeaders actionResponse) (clientActionResponseBody actionResponse)
+    InternalRedirectResponse responseBodyValue routeRequest -> toWaiBodyResponse (additionalHeaders <> [(Http.hLocation, TextEncoding.encodeUtf8 (safeUrlText (encodeRouteLocation (renderRoute (routeCodec webApplication) routeRequest))))]) responseBodyValue
+    InternalRedirectResponseWithHeaders responseBodyValue headers routeRequest ->
+      toWaiBodyResponse
+        (additionalHeaders <> filter ((/= Http.hLocation) . fst) headers <> [(Http.hLocation, TextEncoding.encodeUtf8 (safeUrlText (encodeRouteLocation (renderRoute (routeCodec webApplication) routeRequest))))])
+        responseBodyValue
+    ClientActionBodyResponse actionResponse -> toWaiBodyResponse (additionalHeaders <> clientActionHeaders actionResponse) (clientActionResponseBody (routeCodec webApplication) actionResponse)
     EventStreamResponse responseBodyValue eventSource -> toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource
     ProtocolResponseResult protocolResponse -> toWaiProtocolResponse additionalHeaders protocolResponse
   where
-    renderPageResponse status page =
+    renderPageResponse status pageSecurity page =
       case maybePageSecurity of
-        Just (runtimeNonce, csrfToken) ->
-          Wai.responseLBS
-            status
-            (pageResponseHeaders additionalHeaders csrfToken)
-            (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (Document.renderDocumentWithNonce runtimeNonce (pageShell webApplication page))))
+        Just renderedPageSecurity
+          | samePageSecurity renderedPageSecurity pageSecurity ->
+              Wai.responseLBS
+                status
+                (pageResponseHeaders additionalHeaders (pageSecurityCsrf pageSecurity))
+                ( LazyByteString.fromStrict
+                    ( TextEncoding.encodeUtf8
+                        ( Document.renderDocumentWithNonceAndActionCsrf
+                            (pageSecurityRuntimeNonce pageSecurity)
+                            (Just (csrfTokenText (pageCsrfValue (pageSecurityCsrf pageSecurity))))
+                            (pageShell webApplication page)
+                        )
+                    )
+                )
         Nothing ->
           Wai.responseLBS
             Http.internalServerError500
             [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)]
             "A page response was missing its CSP nonce."
+        Just _ ->
+          Wai.responseLBS
+            Http.internalServerError500
+            [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)]
+            "A page response security value did not match its renderer input."
 
-pageResponseHeaders :: Http.ResponseHeaders -> CsrfToken -> Http.ResponseHeaders
-pageResponseHeaders additionalHeaders csrfToken =
+pageResponseHeaders :: Http.ResponseHeaders -> PageCsrf -> Http.ResponseHeaders
+pageResponseHeaders additionalHeaders pageCsrf =
   additionalHeaders
-    <> [ (Http.hContentType, TextEncoding.encodeUtf8 htmlContentType),
-         ("Set-Cookie", TextEncoding.encodeUtf8 ("__Host-harch-csrf=" <> csrfTokenText csrfToken <> "; Path=/; Secure; SameSite=Strict"))
-       ]
+    <> [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)]
+    <> case pageCsrfCookieDisposition pageCsrf of
+      RetainCsrfCookie -> []
+      SetCsrfCookie ->
+        [ ("Set-Cookie", TextEncoding.encodeUtf8 ("__Host-harch-csrf=" <> csrfTokenText (pageCsrfValue pageCsrf) <> "; Path=/; Max-Age=" <> Text.pack (show (csrfCookieMaxAgeSeconds (pageCsrfCookieMaxAge pageCsrf))) <> "; Secure; HttpOnly; SameSite=Strict"))
+        ]
 
 toWaiBodyResponse :: Http.ResponseHeaders -> ResponseBody -> Wai.Response
 toWaiBodyResponse additionalHeaders responseBodyValue =

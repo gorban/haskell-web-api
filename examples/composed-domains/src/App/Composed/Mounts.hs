@@ -42,6 +42,9 @@ catalogModuleMount =
       mountedActions =
         ActionMount
           { embedChildActionTarget = CatalogActionTarget,
+            projectChildActionTarget = \case
+              CatalogActionTarget target -> Just target
+              _ -> Nothing,
             embedChildAction = CatalogAction,
             projectChildAction = \case
               CatalogAction childAction -> Just childAction
@@ -66,6 +69,9 @@ ordersModuleMount =
       mountedActions =
         ActionMount
           { embedChildActionTarget = OrdersActionTarget,
+            projectChildActionTarget = \case
+              OrdersActionTarget target -> Just target
+              _ -> Nothing,
             embedChildAction = OrdersAction,
             projectChildAction = \case
               OrdersAction childAction -> Just childAction

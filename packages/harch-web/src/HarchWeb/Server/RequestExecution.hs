@@ -33,6 +33,7 @@ import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
+import HarchWeb.Csrf (PageSecurity, pageSecurityRuntimeNonce)
 import HarchWeb.Document (NavigationRuntime, RuntimeAsset)
 import HarchWeb.Document qualified as Document
 import HarchWeb.EndpointSecurity
@@ -92,7 +93,6 @@ import HarchWeb.Server.RequestObservability
 import HarchWeb.Server.Response
 import HarchWeb.Server.ResponseRendering
 import HarchWeb.Server.StaticAssets (serveStaticAssetResponse)
-import HarchWeb.Session (CsrfToken)
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 
@@ -321,7 +321,7 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
       guardResult <- runEndpointGuards webApplication request (routedRequestPath routedRequestExecution) routeDispatch middlewareResult
       case guardResult of
         HaltEndpoint guardedResponse ->
-          continueRoutedResponse routedRequestExecution timingState routeDispatch guardedResponse
+          continueRoutedResponse routedRequestExecution timingState routeDispatch (nonPageResponse guardedResponse)
         ContinueEndpoint guardedContext -> do
           let guardedDispatch = setRouteDispatchContext guardedContext routeDispatch
           routeMiddleware <- routeAdmissionMiddleware routedRequestExecution guardedDispatch
@@ -352,10 +352,14 @@ runEndpointGuards ::
   IO (EndpointGuardResult route context)
 runEndpointGuards webApplication request requestPath routeDispatch middlewareResult =
   case middlewareResult of
-    HaltMiddleware _ responseBodyValue -> pure (HaltEndpoint (BodyResponse responseBodyValue))
+    HaltMiddleware _ responseBodyValue -> pure (HaltEndpoint (NonPageBodyResponse responseBodyValue))
     ContinueMiddleware middlewareContext ->
       case routeDispatch of
-        RouteNotFound _ -> pure (ContinueEndpoint middlewareContext)
+        RouteNotFound _
+          | isAction,
+            Just _ <- actionRoute ->
+              runSelectedEndpointGuards EndpointClientAction
+          | otherwise -> pure (ContinueEndpoint middlewareContext)
         RouteMethodNotAllowed _ _ -> runSelectedEndpointGuards EndpointMethodNotAllowed
         RouteMatched _ -> runSelectedEndpointGuards EndpointMatched
         RouteMatchedHead _ -> runSelectedEndpointGuards EndpointMatchedHead
@@ -363,6 +367,14 @@ runEndpointGuards webApplication request requestPath routeDispatch middlewareRes
   where
     routeRequest = routeDispatchRequest routeDispatch
     isAction = isClientActionRequest request
+    actionRoute =
+      if isAction
+        then clientActionRoute webApplication (requestMethodText request) requestPath (requestContext routeRequest)
+        else Nothing
+    guardRouteRequest =
+      case actionRoute of
+        Nothing -> routeRequest
+        Just actionRouteValue -> routeRequest {requestRoute = actionRouteValue}
     selectedEndpointMetadata =
       if isAction
         then clientActionEndpointMetadata webApplication (requestMethodText request) requestPath (requestContext routeRequest)
@@ -372,13 +384,13 @@ runEndpointGuards webApplication request requestPath routeDispatch middlewareRes
         Nothing -> pure (ContinueEndpoint (requestContext routeRequest))
         Just selectedMetadata ->
           let observedRouteRequest =
-                routeRequest
+                guardRouteRequest
                   { requestContext =
                       applicationAttachRouteObservation
                         webApplication
-                        (requestRoute routeRequest)
-                        (routeEndpointMetadata webApplication (requestRoute routeRequest))
-                        (requestContext routeRequest)
+                        (requestRoute guardRouteRequest)
+                        selectedMetadata
+                        (requestContext guardRouteRequest)
                   }
               endpointRequest =
                 EndpointRequest
@@ -390,7 +402,7 @@ runEndpointGuards webApplication request requestPath routeDispatch middlewareRes
                         ( \eventRoot ->
                             case applicationRouteModuleChain webApplication of
                               Nothing -> rootSecurityEventSink eventRoot (endpointName selectedMetadata) (endpointRouteTemplate selectedMetadata) (requestContext observedRouteRequest)
-                              Just routeModuleChain -> rootSecurityEventSinkWithMountChain eventRoot (routeModuleChain (requestRoute routeRequest)) (endpointName selectedMetadata) (endpointRouteTemplate selectedMetadata) (requestContext observedRouteRequest)
+                              Just routeModuleChain -> rootSecurityEventSinkWithMountChain eventRoot (routeModuleChain (requestRoute guardRouteRequest)) (endpointName selectedMetadata) (endpointRouteTemplate selectedMetadata) (requestContext observedRouteRequest)
                         )
                         (applicationSecurityEventRoot webApplication),
                     endpointDispatchKind = if isAction then EndpointClientAction else routeDispatchKind
@@ -399,7 +411,7 @@ runEndpointGuards webApplication request requestPath routeDispatch middlewareRes
                 AuthenticationDisabled _ ->
                   case endpointAccess (endpointMetadata endpointRequest) of
                     AllowUnauthenticated -> runEndpointGuardPipeline (applicationEndpointGuards (applicationSecurity webApplication)) endpointRequest
-                    _ -> pure (HaltEndpoint (BodyResponse disabledSecurityResponse))
+                    _ -> pure (HaltEndpoint (NonPageBodyResponse disabledSecurityResponse))
                 _ -> runEndpointGuardPipeline (applicationEndpointGuards (applicationSecurity webApplication)) endpointRequest
 
 -- | An explicitly public root cannot accidentally make a protected endpoint
@@ -472,9 +484,8 @@ continueRoutedResponseAt ::
   Response route context ->
   IO Wai.ResponseReceived
 continueRoutedResponseAt routedRequestExecution timingState routeDispatch renderStartedAt response = do
-  let webApplication = routedRequestApplication routedRequestExecution
   responseRenderedAt <- response `seq` getMonotonicTimeNSec
-  pageSecurity <- responsePageSecurity webApplication response
+  let pageSecurity = responsePageSecurity response
   let executionTimings =
         RequestExecutionTimings
           { requestExecutionStartedAt = requestTimingStartedAt timingState,
@@ -616,7 +627,7 @@ finalizeRoutedResponse ::
   RoutedRequestExecution route action context authorization ->
   RequestExecutionTimings ->
   RouteDispatch route context ->
-  Maybe (Document.RuntimeNonce, CsrfToken) ->
+  Maybe PageSecurity ->
   Response route context ->
   IO Wai.ResponseReceived
 finalizeRoutedResponse routedRequestExecution executionTimings routeDispatch pageSecurity response = do
@@ -629,7 +640,7 @@ finalizeRoutedResponse routedRequestExecution executionTimings routeDispatch pag
     respond
       ( omitResponseBodyWhen
           (isHeadDispatch routeDispatch)
-          (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request (fst <$> pageSecurity)) (toWaiResponse [] pageSecurity webApplication response))
+          (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request (pageSecurityRuntimeNonce <$> pageSecurity)) (toWaiResponse [] pageSecurity webApplication response))
       )
   reportRoutedResponseObservability
     (routedRequestObservabilityContext routedRequestExecution)

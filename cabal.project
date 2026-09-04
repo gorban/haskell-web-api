@@ -10,6 +10,7 @@ packages:
   packages/core/
   packages/harch-web/
   packages/hspec-expectations-match/
+  packages/postgres-database-changes/
   packages/test-core/
   packages/test-spec-preprocessor/
   packages/web-api/

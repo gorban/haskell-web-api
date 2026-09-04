@@ -13,9 +13,10 @@
 module WebApi.App
   ( buildAppWithDatabase,
     buildAppWithDatabaseAndAccountWorkflow,
+    buildAppWithDatabaseAndAccountWorkflowAndSecurity,
     buildApp,
     buildRuntimeAccountWorkflow,
-    buildRuntimeApp,
+    buildRuntimeAppWithAccountJwt,
     buildRuntimeAppWithDatabaseBuilder,
     otlpExportFailureMessage,
     run,
@@ -35,11 +36,13 @@ import HarchWeb qualified
 import HarchWeb.Action (decodeAction)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Site qualified as Site
+import Network.HTTP.Types qualified as Http
 import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush)
-import WebApi.AccountPages (AccountAction, accountActionEndpointMetadata, accountActions, authorizeAccountActionCsrf, handleAccountAction, pageCsrfTokenForAccountPage)
+import WebApi.AccountJwt (AccountJwtLoadError, AccountJwtRuntime, accountJwtAuthenticationPipeline, accountJwtIssuerFromRuntime, loadAccountJwtRuntime)
+import WebApi.AccountPages (AccountAction, accountActionEndpointMetadata, accountActions, accountCsrfProtection, handleAccountAction)
 import WebApi.Api.Endpoints (secondApiRouteDefinition, statusApiRouteDefinition)
-import WebApi.App.AccountWorkflow (buildRuntimeAccountWorkflow, unavailableAccountWorkflow)
+import WebApi.App.AccountWorkflow (buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwt, unavailableAccountWorkflow)
 import WebApi.App.Observability
   ( otlpExportFailureMessage,
     runtimeApplicationLogReporter,
@@ -62,7 +65,7 @@ import WebApi.Config
 import WebApi.Database (PageRepository, defaultPageRepository)
 import WebApi.Postgres.Pool (PostgresPool, closePostgresPool, newPostgresPool)
 import WebApi.Postgres.Runtime (buildRuntimePostgresPageRepository)
-import WebApi.Response (selectResponseWithDatabaseAndAccountWorkflow)
+import WebApi.Response (apiNotFoundResponse, selectResponseWithDatabaseAndAccountWorkflow, spacesLocation)
 import WebApi.Route
   ( AppRequestContext (..),
     AppRoute (..),
@@ -87,6 +90,24 @@ buildAppWithDatabaseAndAccountWorkflow ::
 buildAppWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow =
   buildAppWithDatabaseAndOptionalReporters config pageRepository accountWorkflow Nothing
 
+-- | Compose a supplied application workflow with an explicit endpoint-security
+-- policy. This is the pluggable assembly point for embedders and test
+-- applications; the production server uses 'buildRuntimeAppWithAccountJwt'
+-- so it can only start with startup-validated key material and durable
+-- principal establishment.
+buildAppWithDatabaseAndAccountWorkflowAndSecurity ::
+  AppConfig ->
+  PageRepository ->
+  AccountWorkflow ->
+  HarchWeb.ApplicationSecurity AppRoute AppRequestContext () ->
+  HarchWeb.Application AppRoute AccountAction AppRequestContext ()
+buildAppWithDatabaseAndAccountWorkflowAndSecurity config pageRepository accountWorkflow =
+  buildAppWithDatabaseAndOptionalReportersAndSecurity
+    config
+    pageRepository
+    accountWorkflow
+    Nothing
+
 buildAppWithDatabaseAndReporters ::
   AppConfig ->
   PageRepository ->
@@ -95,6 +116,20 @@ buildAppWithDatabaseAndReporters ::
   HarchWeb.Application AppRoute AccountAction AppRequestContext ()
 buildAppWithDatabaseAndReporters config pageRepository !accountWorkflow reporters =
   buildAppWithDatabaseAndOptionalReporters
+    config
+    pageRepository
+    accountWorkflow
+    (Just reporters)
+
+buildAppWithDatabaseAndReportersAndSecurity ::
+  AppConfig ->
+  PageRepository ->
+  AccountWorkflow ->
+  RuntimeApplicationReporters ->
+  HarchWeb.ApplicationSecurity AppRoute AppRequestContext () ->
+  HarchWeb.Application AppRoute AccountAction AppRequestContext ()
+buildAppWithDatabaseAndReportersAndSecurity config pageRepository !accountWorkflow reporters =
+  buildAppWithDatabaseAndOptionalReportersAndSecurity
     config
     pageRepository
     accountWorkflow
@@ -116,6 +151,21 @@ buildAppWithDatabaseAndOptionalReporters ::
   Maybe RuntimeApplicationReporters ->
   HarchWeb.Application AppRoute AccountAction AppRequestContext ()
 buildAppWithDatabaseAndOptionalReporters config pageRepository !accountWorkflow maybeReporters =
+  buildAppWithDatabaseAndOptionalReportersAndSecurity
+    config
+    pageRepository
+    accountWorkflow
+    maybeReporters
+    (HarchWeb.AuthenticationDisabled [])
+
+buildAppWithDatabaseAndOptionalReportersAndSecurity ::
+  AppConfig ->
+  PageRepository ->
+  AccountWorkflow ->
+  Maybe RuntimeApplicationReporters ->
+  HarchWeb.ApplicationSecurity AppRoute AppRequestContext () ->
+  HarchWeb.Application AppRoute AccountAction AppRequestContext ()
+buildAppWithDatabaseAndOptionalReportersAndSecurity config pageRepository !accountWorkflow maybeReporters applicationSecurity =
   Site.buildSiteApplication
     ( configureReporters
         ( ( Site.simpleSite
@@ -123,7 +173,8 @@ buildAppWithDatabaseAndOptionalReporters config pageRepository !accountWorkflow 
                 { Site.simpleSiteName = "web-api",
                   Site.simpleSiteDefaultRequestContext = defaultRequestContext,
                   Site.simpleSiteRouteCodec = routeCodec,
-                  Site.simpleSiteSecurity = HarchWeb.AuthenticationDisabled [],
+                  Site.simpleSiteSecurity = applicationSecurity,
+                  Site.simpleSiteCsrfProtection = accountCsrfProtection accountWorkflow,
                   Site.simpleSitePageShell = buildAppPageShellConfig config . HarchWeb.pageContext,
                   Site.simpleSiteNavigationRoutes = appNavigationRoutes,
                   Site.simpleSiteRouteDefinition = buildAppRouteDefinition config pageRepository accountWorkflow
@@ -137,8 +188,6 @@ buildAppWithDatabaseAndOptionalReporters config pageRepository !accountWorkflow 
               Site.siteRequestPolicy = requestPolicy config,
               Site.siteDecodeClientAction = decodeAction accountActions,
               Site.siteClientActionEndpointMetadata = accountActionEndpointMetadata,
-              Site.sitePageCsrfToken = pageCsrfTokenForAccountPage accountWorkflow,
-              Site.siteAuthorizeClientActionCsrf = authorizeAccountActionCsrf accountWorkflow,
               Site.siteHandleClientAction = handleAccountAction accountWorkflow
             }
         )
@@ -172,15 +221,32 @@ buildAppRouteDefinition config pageRepository accountWorkflow route =
   case route of
     StatusApiRoute -> statusApiRouteDefinition
     SecondApiRoute -> secondApiRouteDefinition pageRepository
+    HomeRoute ->
+      protocolRouteDefinition route $
+        \routeRequest -> pure (HarchWeb.nonPageRedirectResponse Http.status302 (spacesLocation routeRequest))
+    ApiNotFoundRoute ->
+      protocolRouteDefinition route $
+        \_ ->
+          pure (HarchWeb.NonPageBodyResponse apiNotFoundResponse)
     _ ->
       Site.RouteDefinition
         { Site.routeNavigationLabel = routeNavigationLabel route,
           Site.routeMetadata = endpointMetadata route,
           Site.routeMethods = HarchWeb.routeMethodPolicyMethods (HarchWeb.routeMethods routeCodec route),
           Site.routeExecutionPolicy = HarchWeb.unboundedRouteExecutionPolicy,
-          Site.routeResponse =
+          Site.routeHandler = Site.PageRouteHandler $
             \_ -> selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow
         }
+
+protocolRouteDefinition :: AppRoute -> (HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.NonPageResponse AppRoute AppRequestContext)) -> Site.RouteDefinition AppRoute AppRequestContext ()
+protocolRouteDefinition route renderProtocol =
+  Site.RouteDefinition
+    { Site.routeNavigationLabel = routeNavigationLabel route,
+      Site.routeMetadata = endpointMetadata route,
+      Site.routeMethods = HarchWeb.routeMethodPolicyMethods (HarchWeb.routeMethods routeCodec route),
+      Site.routeExecutionPolicy = HarchWeb.unboundedRouteExecutionPolicy,
+      Site.routeHandler = Site.ProtocolRouteHandler (const renderProtocol)
+    }
 
 routeNavigationLabel :: AppRoute -> Maybe Text.Text
 routeNavigationLabel route = lookup route navigationLabels
@@ -194,17 +260,36 @@ routeNavigationLabel route = lookup route navigationLabels
         (ProfileRoute, "Profile")
       ]
 
-buildRuntimeApp ::
+-- | The runnable server path supplies the immutable startup-validated JWT
+-- runtime. Keeping the legacy three-argument builder available lets storage
+-- and observability tests assemble an application whose login issuer is
+-- deliberately unavailable, rather than loading key files as a test side
+-- effect.
+buildRuntimeAppWithAccountJwt ::
   PostgresPool ->
   AppConfig ->
   AppEnvironmentConfig ->
+  AccountJwtRuntime ->
   HarchWeb.Application AppRoute AccountAction AppRequestContext ()
-buildRuntimeApp pool config environmentConfig =
-  buildAppWithDatabaseAndReporters
+buildRuntimeAppWithAccountJwt pool config environmentConfig jwtRuntime =
+  buildAppWithDatabaseAndReportersAndSecurity
     (withPublicBaseUrlRedirectAuthority environmentConfig config)
     (buildRuntimePostgresPageRepository pool)
-    (buildRuntimeAccountWorkflow pool environmentConfig)
+    accountWorkflow
     (runtimeApplicationReporters environmentConfig config)
+    ( HarchWeb.AuthenticationEnabled
+        []
+        ( HarchWeb.authenticationGuardFromPipeline
+            ( accountJwtAuthenticationPipeline
+                (accountWorkflowSessionStore accountWorkflow)
+                (accountWorkflowClock accountWorkflow)
+                jwtRuntime
+            )
+        )
+        []
+    )
+  where
+    accountWorkflow = buildRuntimeAccountWorkflowWithJwt pool environmentConfig (accountJwtIssuerFromRuntime jwtRuntime)
 
 buildRuntimeAppWithDatabaseBuilder ::
   AppConfig ->
@@ -257,14 +342,20 @@ authorityFromPublicBaseUrl baseUrl =
 
 runWithConfig :: Handle -> AppConfig -> AppEnvironmentConfig -> IO ()
 runWithConfig outputHandle appConfig !environmentConfig = do
+  jwtRuntimeResult <- loadAccountJwtRuntime (accountJwtConfiguration environmentConfig)
+  jwtRuntime <- either throwAccountJwtLoadError pure jwtRuntimeResult
   let runtimeDatabaseConfig = databaseConfig environmentConfig
   bracket
     (newPostgresPool (databasePoolCapacity runtimeDatabaseConfig) runtimeDatabaseConfig)
     closePostgresPool
     ( \pool -> do
         announceParsedListenerConfigs outputHandle appConfig
-        HarchWeb.runServer outputHandle appConfig (buildRuntimeApp pool appConfig environmentConfig)
+        HarchWeb.runServer outputHandle appConfig (buildRuntimeAppWithAccountJwt pool appConfig environmentConfig jwtRuntime)
     )
+
+throwAccountJwtLoadError :: AccountJwtLoadError -> IO value
+throwAccountJwtLoadError loadError =
+  ioError (userError ("Failed to load account JWT configuration: " <> show loadError))
 
 run :: Handle -> IO ()
 run outputHandle = do

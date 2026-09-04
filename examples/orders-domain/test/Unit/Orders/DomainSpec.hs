@@ -5,15 +5,15 @@ module Unit.Orders.DomainSpec (spec) where
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import HarchWeb.Action qualified as Action
 import HarchWeb.ApplicationModule (ApplicationModule (..))
-import HarchWeb.Document (Page (..))
+import HarchWeb.Csrf (PageSecurity, mkCsrfToken, mkPageCsrf, mkPageSecurity)
+import HarchWeb.Document (Page (..), testRuntimeNonce)
 import HarchWeb.EndpointMetadata (AccessRequirement (RequireAuthorized), EndpointProtocol (ActionEndpoint, HtmlEndpoint), endpointAccess, endpointName, endpointNameText, endpointProtocol, endpointRouteTemplate, routeTemplateText)
 import HarchWeb.Routing (RouteCodec (..), RouteLocation (..), RouteMethod (RouteGet), RouteParseResult (..), RouteRequest (..), requiredPathSegment, routeMethodPolicy)
 import HarchWeb.Routing qualified as Routing
-import HarchWeb.Server (ClientActionRequest (..), ClientActionResponse (..), Response (PageResponse), unboundedRouteExecutionPolicy)
-import HarchWeb.Site (RouteDefinition (..))
+import HarchWeb.Server (ActionNavigation (StayOnCurrentRoute), ClientActionRequest (..), ClientActionResponse (..), PageResult (..), unboundedRouteExecutionPolicy)
+import HarchWeb.Site (RouteDefinition (..), RouteHandler (..))
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
-import Network.Wai qualified as Wai
 import Orders.Domain
 import Test.Hspec
 
@@ -68,6 +68,7 @@ spec = describe "Unit.Orders.Domain" $ do
       `shouldBe` Just "/actions/submit"
     Action.staticActionPath (moduleActionCodec moduleValue) SubmitOrderTarget
       `shouldBe` Just "/actions/submit"
+    moduleActionRoute moduleValue ordersContext SubmitOrderTarget `shouldBe` Just OrdersIndex
     let definition = moduleEndpoints moduleValue OrdersIndex
     routeNavigationLabel definition `shouldBe` Just "Orders"
     endpointProtocol (routeMetadata definition) `shouldBe` HtmlEndpoint
@@ -76,15 +77,18 @@ spec = describe "Unit.Orders.Domain" $ do
     routeTemplateText (endpointRouteTemplate (routeMetadata definition)) `shouldBe` "/"
     Site.routeMethods definition `shouldBe` [RouteGet]
     routeExecutionPolicy definition `shouldBe` unboundedRouteExecutionPolicy
-    response <- routeResponse definition Wai.defaultRequest (RouteRequest OrdersIndex ordersContext)
-    case response of
-      PageResponse page -> do
-        pageTitle page `shouldBe` "Orders"
-        pageRoute page `shouldBe` OrdersIndex
-        pageContext page `shouldBe` ordersContext
-        pageBootstrapHooks page `shouldBe` []
-        show (pageBody page) `shouldBe` "\"<h1>en summary</h1>\""
-      _ -> expectationFailure "expected orders page"
+    case routeHandler definition of
+      PageRouteHandler renderPage -> do
+        response <- renderPage testPageSecurity (RouteRequest OrdersIndex ordersContext)
+        case response of
+          RenderedPage page -> do
+            pageTitle page `shouldBe` "Orders"
+            pageRoute page `shouldBe` OrdersIndex
+            pageContext page `shouldBe` ordersContext
+            pageBootstrapHooks page `shouldBe` []
+            show (pageBody page) `shouldBe` "\"<h1>en summary</h1>\""
+          _ -> expectationFailure "expected orders page"
+      _ -> expectationFailure "expected a page route handler"
     actionResult <- moduleHandleAction moduleValue (ClientActionRequest SubmitOrder Nothing ordersContext)
     case actionResult of
       Nothing -> expectationFailure "orders action must produce a response"
@@ -92,6 +96,7 @@ spec = describe "Unit.Orders.Domain" $ do
         clientActionStatus actionResponse `shouldBe` Http.status202
         clientActionPatches actionResponse `shouldBe` []
         clientActionFocusId actionResponse `shouldBe` Nothing
+        clientActionNavigation actionResponse `shouldBe` StayOnCurrentRoute
         clientActionHeaders actionResponse `shouldBe` []
         clientActionObservabilityAttributes actionResponse `shouldBe` []
         clientActionLogEntries actionResponse `shouldBe` []
@@ -102,6 +107,15 @@ spec = describe "Unit.Orders.Domain" $ do
         endpointProtocol actionMetadata `shouldBe` ActionEndpoint
         endpointAccess actionMetadata `shouldBe` RequireAuthorized MaySubmitOrders
       _ -> expectationFailure "orders module must declare exactly one action endpoint"
+
+testPageSecurity :: PageSecurity
+testPageSecurity =
+  mkPageSecurity testRuntimeNonce (mkPageCsrf testCsrfToken "orders")
+  where
+    testCsrfToken =
+      case mkCsrfToken "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" of
+        Just csrfToken -> csrfToken
+        Nothing -> error "invalid test CSRF token"
 
 checkDerived :: (Eq value, Show value) => value -> Expectation
 checkDerived value = do

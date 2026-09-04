@@ -15,7 +15,6 @@ where
 import Control.Monad.IO.Class (liftIO)
 import HarchWeb qualified
 import HarchWeb.Email qualified as Email
-import HarchWeb.Session (SessionId)
 import HarchWeb.Time (UnixTimeNanoseconds)
 import Network.HTTP.Types qualified as Http
 import WebApi.Account
@@ -29,6 +28,7 @@ import WebApi.Account
 import WebApi.AccountPages.Actions.Common
 import WebApi.AccountPages.Actions.Contract (ProfileSubmission (..))
 import WebApi.AccountPages.Forms (PendingProfileForm (..))
+import WebApi.AccountPrincipal (AccountPrincipal)
 import WebApi.AppEffect
   ( AccountWorkflow (..),
     AppM,
@@ -38,7 +38,7 @@ import WebApi.Localization (AppMessage (..))
 import WebApi.Profile
   ( ProfileLoadError,
     ProfileState (..),
-    loadProfile,
+    loadProfileForPrincipal,
   )
 import WebApi.Route (AppRequestContext (..))
 
@@ -50,7 +50,7 @@ data ProfileWorkflowInput = ProfileWorkflowInput
 
 handleProfileWorkflow :: ProfileWorkflowInput -> AccountActionWorkflow
 handleProfileWorkflow input = do
-  (now, loadedProfile) <- loadProfileNow (requestSessionId (HarchWeb.clientActionContext actionRequest))
+  (now, loadedProfile) <- loadProfileNow (requestAccountPrincipal (HarchWeb.clientActionContext actionRequest))
   case loadedProfile of
     Left loadError -> throwClientActionFailure (profileResponse actionRequest Http.status503 (PendingProfileForm mempty (Just (localized actionRequest ProfileUnavailable)) True (resendLabel actionRequest))) ProfileLoadFailure (profileLoadErrorType loadError) (profileLoadErrorDetail loadError)
     Right ProfileUnauthenticated -> pure (profileResponse actionRequest Http.status403 (PendingProfileForm mempty (Just (localized actionRequest SignInBeforeResend)) True (resendLabel actionRequest)))
@@ -60,12 +60,12 @@ handleProfileWorkflow input = do
     actionRequest = profileWorkflowRequest input
     submission = profileWorkflowSubmission input
 
-loadProfileNow :: Maybe SessionId -> AppM publicFailure (UnixTimeNanoseconds, Either ProfileLoadError ProfileState)
-loadProfileNow maybeSessionId = do
+loadProfileNow :: Maybe AccountPrincipal -> AppM publicFailure (UnixTimeNanoseconds, Either ProfileLoadError ProfileState)
+loadProfileNow maybePrincipal = do
   workflow <- accountWorkflow
   liftIO $ do
     now <- accountWorkflowClock workflow
-    loadedProfile <- loadProfile (accountWorkflowSessionStore workflow) (accountWorkflowProfileStore workflow) now maybeSessionId
+    loadedProfile <- loadProfileForPrincipal (accountWorkflowProfileStore workflow) maybePrincipal
     pure (now, loadedProfile)
 
 handlePendingProfile ::

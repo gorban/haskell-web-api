@@ -18,18 +18,18 @@ import Data.List (isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
-import Data.Text qualified as Text (isInfixOf, pack)
+import Data.Text qualified as Text (isInfixOf, pack, replace)
 import Data.Text.Encoding qualified as TextEncoding (decodeUtf8, encodeUtf8)
-import HarchWeb (Application (applicationNavigationRuntime, applicationRequestMiddleware, applicationRequestPolicy, authorizeClientActionCsrf, decodeClientAction, handleClientAction, pageCsrfToken, pageShell, renderRequestResponse, reportApplicationLog, reportRequestObservability, requestContextFromRequest, routeExecutionPolicy), ClientActionDecodeResult (DecodedClientAction, UnrecognizedClientAction), ClientActionPayload (clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod), ClientActionRequest (ClientActionRequest, clientAction, clientActionContext, clientActionRequestIdempotencyKey), ClientActionResponse (ClientActionResponse, clientActionFocusId, clientActionHeaders, clientActionLogEntries, clientActionObservabilityAttributes, clientActionPatches, clientActionStatus), CorsPolicyConfig (CorsPolicyConfig, corsAllowedHeaders, corsAllowedMethods, corsAllowedOrigins, corsMaxAgeSeconds), Document (documentRuntimeDescriptors), ForwardedHeaderTrust (NeverTrustForwarded), MiddlewareResult (ContinueMiddleware, HaltMiddleware), Page (pageRoute), ProtocolResponse (ProtocolResponse, protocolResponseBody, protocolResponseDatabaseOperations, protocolResponseHeaders, protocolResponseLogEntries, protocolResponseObservabilityAttributes, protocolResponseStatus), ProtocolResponseBody (ProtocolResponseBytes, ProtocolResponseStream, ProtocolResponseWai), RequestMiddleware (RequestMiddleware), RequestPolicyConfig (RequestPolicyConfig, corsPolicy, forwardedHeaderTrust, httpsRedirectAuthority, httpsRedirectPort, redirectHttpToHttps, requestConcurrencyLimit, requestHeadLimits, requestTransportLimits, responseSecurityHeaders, strictTransportSecurity), Response (BodyResponse, ClientActionBodyResponse, EventStreamResponse, PageResponse, PageResponseWithMetadata, ProtocolResponseResult), ResponseBody (ResponseBody, responseBody, responseContentType, responseDatabaseOperations, responseLogEntries, responseObservabilityAttributes, responseStatus), ResponseDiagnostics (diagnosticLogEntries, diagnosticObservabilityAttributes), ResponseSecurityHeadersConfig (ResponseSecurityHeadersConfig, contentSecurityPolicy, contentTypeOptionsNoSniff, frameOptions, permissionsPolicy, referrerPolicy, xssProtection), RouteExecutionPolicy (RouteExecutionPolicy), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (InlineBootstrap), ServerSentEvent (ServerSentEvent), StaticAssetRoot (StaticAssetRoot, staticDirectory, staticUrlPrefix), StaticAssetsConfig (StaticAssetsConfig, staticAssetContentTypes, staticAssetRoots, staticCacheControlSeconds), StrictTransportSecurityConfig (StrictTransportSecurityConfig, strictTransportSecurityIncludeSubDomains, strictTransportSecurityMaxAgeSeconds, strictTransportSecurityPreload), clientActionResponseBody, defaultContentSecurityPolicy, defaultCorsPolicyConfig, defaultNavigationRuntime, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, eventStreamResponse, isClientActionRequest, literalElementId, mkRequestConcurrencyLimit, parseClientActionFields, redirectResponse, responseDiagnostics, responseKind, responseStatusCode, serverSentEventSourceFromList, toWaiApplication, toWaiResponse, unboundedRequestHeadLimits, unboundedRouteExecutionPolicy, warpDefaultRequestTransportLimits)
+import HarchWeb (ActionNavigation (NavigateInternal, StayOnCurrentRoute), Application (applicationNavigationRuntime, applicationRequestMiddleware, applicationRequestPolicy, csrfProtection, decodeClientAction, handleClientAction, pageShell, renderRequestResponse, reportApplicationLog, reportRequestObservability, requestContextFromRequest, routeCodec, routeExecutionPolicy), ClientActionDecodeResult (DecodedClientAction, UnrecognizedClientAction), ClientActionPayload (clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod), ClientActionRequest (ClientActionRequest, clientAction, clientActionContext, clientActionRequestIdempotencyKey), ClientActionResponse (ClientActionResponse, clientActionFocusId, clientActionHeaders, clientActionLogEntries, clientActionNavigation, clientActionObservabilityAttributes, clientActionPatches, clientActionStatus), CorsPolicyConfig (CorsPolicyConfig, corsAllowedHeaders, corsAllowedMethods, corsAllowedOrigins, corsMaxAgeSeconds), Document (documentRuntimeDescriptors), ForwardedHeaderTrust (NeverTrustForwarded), HistoryMode (ReplaceHistory), MiddlewareResult (ContinueMiddleware, HaltMiddleware), Page (pageRoute), ProtocolResponse (ProtocolResponse, protocolResponseBody, protocolResponseDatabaseOperations, protocolResponseHeaders, protocolResponseLogEntries, protocolResponseObservabilityAttributes, protocolResponseStatus), ProtocolResponseBody (ProtocolResponseBytes, ProtocolResponseStream, ProtocolResponseWai), RequestMiddleware (RequestMiddleware), RequestPolicyConfig (RequestPolicyConfig, corsPolicy, forwardedHeaderTrust, httpsRedirectAuthority, httpsRedirectPort, redirectHttpToHttps, requestConcurrencyLimit, requestHeadLimits, requestTransportLimits, responseSecurityHeaders, strictTransportSecurity), Response (BodyResponse, ClientActionBodyResponse, EventStreamResponse, PageResponse, PageResponseWithMetadata, ProtocolResponseResult), ResponseBody (ResponseBody, responseBody, responseContentType, responseDatabaseOperations, responseLogEntries, responseObservabilityAttributes, responseStatus), ResponseDiagnostics (diagnosticLogEntries, diagnosticObservabilityAttributes), ResponseSecurityHeadersConfig (ResponseSecurityHeadersConfig, contentSecurityPolicy, contentTypeOptionsNoSniff, frameOptions, permissionsPolicy, referrerPolicy, xssProtection), RouteExecutionPolicy (RouteExecutionPolicy), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (InlineBootstrap), ServerSentEvent (ServerSentEvent), StaticAssetRoot (StaticAssetRoot, staticDirectory, staticUrlPrefix), StaticAssetsConfig (StaticAssetsConfig, staticAssetContentTypes, staticAssetRoots, staticCacheControlSeconds), StrictTransportSecurityConfig (StrictTransportSecurityConfig, strictTransportSecurityIncludeSubDomains, strictTransportSecurityMaxAgeSeconds, strictTransportSecurityPreload), clientActionResponseBody, defaultContentSecurityPolicy, defaultCorsPolicyConfig, defaultNavigationRuntime, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, eventStreamResponse, internalRedirectResponse, isClientActionRequest, literalElementId, mkRequestConcurrencyLimit, parseClientActionFields, redirectResponse, responseDiagnostics, responseKind, responseStatusCode, serverSentEventSourceFromList, toWaiApplication, toWaiResponse, unboundedRequestHeadLimits, unboundedRouteExecutionPolicy, warpDefaultRequestTransportLimits)
 import HarchWeb qualified
 import HarchWeb.Action qualified as Action (ActionDecoder, action, actionCodec, decodeAction, post)
+import HarchWeb.Csrf (csrfTokenText)
 import HarchWeb.Database qualified as Database (DatabaseOperation (DatabaseOperation, databaseOperationEndedAtNanoseconds, databaseOperationName, databaseOperationStartedAtNanoseconds, databaseOperationSystem, databaseQueryTemplate))
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
 import HarchWeb.Observability qualified as Observability (ObservabilityAttribute (ObservabilityAttribute, attributeName, attributeValue), ObservabilityAttributeValue (TextAttribute), RequestIdentity (RequestIdentity, requestIdentityMethod, requestIdentityPath, requestIdentityRoutePath, requestIdentityScheme), RequestObservability (observabilityRequestSpan), RequestSpan (requestSpanAttributes, requestSpanDisplayName), RequestTraceContext (RequestTraceContext, traceContextParentSpanId, traceContextState, traceContextTraceId), ResponseKind (BodyResponseKind, PageResponseKind), buildRequestObservability, mkSpanMethodLabel, mkSpanRoutePath, withDatabaseOperations, withRequestTraceContext)
 import HarchWeb.Security qualified as Security ()
-import HarchWeb.Session (csrfTokenText, generateCsrfToken)
 import Network.HTTP.Client qualified as HttpClient ()
-import Network.HTTP.Types qualified as Http (Status (statusCode, statusMessage), hAcceptRanges, hAllow, hCacheControl, hContentLength, hContentRange, hContentType, hETag, hIfModifiedSince, hIfNoneMatch, hLastModified, hLocation, hRange, status200, status201, status202, status204, status206, status302, status304, status308, status400, status401, status403, status404, status405, status413, status415, status416, status422, status500, status503)
+import Network.HTTP.Types qualified as Http (Status (statusCode, statusMessage), hAcceptRanges, hAllow, hCacheControl, hContentLength, hContentRange, hContentType, hETag, hIfModifiedSince, hIfNoneMatch, hLastModified, hLocation, hRange, status200, status201, status202, status204, status206, status302, status303, status304, status308, status400, status401, status403, status404, status405, status413, status415, status416, status422, status500, status503)
 import Network.Socket qualified as Socket (SockAddr (SockAddrInet, SockAddrUnix), tupleToHostAddress)
 import Network.Socket.ByteString qualified as SocketByteString ()
 import Network.Wai qualified as Wai (Request (isSecure, pathInfo, rawPathInfo, rawQueryString, requestHeaders, requestMethod), defaultRequest, responseHeaders, responseLBS, responseStatus, setRequestBodyChunks)
@@ -46,12 +46,12 @@ import System.Process ()
 import TestCore.CustomAssertions ()
 import TestCore.Wai (nextRequestBodyChunk, performWaiRequest, readResponseBody, waiRequest)
 import Text.Read ()
-import Unit.HarchWeb.TestSupport (TestContext (requestLanguage, testContextPathPrefix), TestRoute (DataRoute, EventStreamRoute, KnownRoute, MissingRoute), defaultContext, defaultRequestPolicy, emptyStaticAssets, expectMeasuredRequestTiming, expectMeasuredRootRequestTiming, hasTextAttribute, renderDocument, renderSampleResponse, rootPathApplication, sampleApplication, sampleApplicationWithConfig, sampleApplicationWithStaticAssets, samplePage, sampleRequestContextFromRequest, spanishContext, stripVolatileRequestTiming, testActionCodec, testRegionPatch, testTrustedForwardedProxy, trustedForwardedApplication, waiRequestWithRemoteHostAndHeaders, waitUntilIORefEquals)
+import Unit.HarchWeb.TestSupport (TestContext (requestLanguage, testContextPathPrefix), TestRoute (DataRoute, EventStreamRoute, KnownRoute, MissingRoute), defaultContext, defaultRequestPolicy, emptyStaticAssets, expectMeasuredRequestTiming, expectMeasuredRootRequestTiming, hasTextAttribute, renderDocument, renderSampleResponse, rootPathApplication, sampleApplication, sampleApplicationWithConfig, sampleApplicationWithStaticAssets, samplePage, sampleRequestContextFromRequest, spanishContext, stripVolatileRequestTiming, testActionCodec, testPageSecurity, testRegionPatch, testTrustedForwardedProxy, trustedForwardedApplication, waiRequestWithRemoteHostAndHeaders, waitUntilIORefEquals)
 
 spec = do
   describe "toWaiApplication" $ do
     it "fails closed if a page response reaches rendering without its CSP nonce" $ do
-      let pageResponse = PageResponse (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
+      let pageResponse = PageResponse testPageSecurity (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
           response = toWaiResponse [] Nothing sampleApplication pageResponse
       Wai.responseStatus response `shouldBe` Http.status500
       Wai.responseHeaders response `shouldBe` [(Http.hContentType, "text/html; charset=utf-8")]
@@ -78,7 +78,7 @@ spec = do
                     []
                     ( HarchWeb.AuthenticationGuard $ \endpointRequest ->
                         case HarchWeb.endpointSecurityEventSink endpointRequest of
-                          Nothing -> pure (HarchWeb.HaltEndpoint (HarchWeb.BodyResponse securityEventUnavailableResponse))
+                          Nothing -> pure (HarchWeb.HaltEndpoint (HarchWeb.NonPageBodyResponse securityEventUnavailableResponse))
                           Just sink -> do
                             _ <- HarchWeb.emitSecurityEvent sink HarchWeb.TelemetryBestEffort eventBody
                             pure (HarchWeb.ContinueEndpoint (requestContext (HarchWeb.endpointRouteRequest endpointRequest)))
@@ -132,7 +132,7 @@ spec = do
                     []
                     ( HarchWeb.AuthenticationGuard $ \endpointRequest ->
                         case HarchWeb.endpointSecurityEventSink endpointRequest of
-                          Nothing -> pure (HarchWeb.HaltEndpoint (HarchWeb.BodyResponse securityEventUnavailableResponse))
+                          Nothing -> pure (HarchWeb.HaltEndpoint (HarchWeb.NonPageBodyResponse securityEventUnavailableResponse))
                           Just sink -> do
                             _ <- HarchWeb.emitSecurityEvent sink HarchWeb.TelemetryBestEffort eventBody
                             pure (HarchWeb.ContinueEndpoint (requestContext (HarchWeb.endpointRouteRequest endpointRequest)))
@@ -242,15 +242,20 @@ spec = do
                     ( HarchWeb.AuthenticationGuard $ \endpointRequest -> do
                         modifyIORef' guardRuns (+ 1)
                         HarchWeb.endpointDispatchKind endpointRequest `shouldBe` HarchWeb.EndpointClientAction
+                        HarchWeb.requestRoute (HarchWeb.endpointRouteRequest endpointRequest) `shouldBe` KnownRoute
                         Wai.requestMethod (HarchWeb.endpointWaiRequest endpointRequest) `shouldBe` "POST"
-                        pure (HarchWeb.HaltEndpoint (HarchWeb.BodyResponse securityEventUnavailableResponse))
+                        pure (HarchWeb.HaltEndpoint (HarchWeb.NonPageBodyResponse securityEventUnavailableResponse))
                     )
                     [],
                 HarchWeb.applicationRequestMiddleware =
                   [RequestMiddleware $ \_ requestContextValue -> pure (ContinueMiddleware requestContextValue {requestLanguage = "es"})],
                 HarchWeb.clientActionEndpointMetadata = \methodValue pathValue requestContextValue ->
-                  if methodValue == "POST" && pathValue == "/known" && requestLanguage requestContextValue == "es"
+                  if methodValue == "POST" && pathValue == "/actions/protected" && requestLanguage requestContextValue == "es"
                     then Just protectedEndpointMetadata
+                    else Nothing,
+                HarchWeb.clientActionRoute = \methodValue pathValue requestContextValue ->
+                  if methodValue == "POST" && pathValue == "/actions/protected" && requestLanguage requestContextValue == "es"
+                    then Just KnownRoute
                     else Nothing,
                 HarchWeb.decodeClientAction = \_ ->
                   error "client action decoder must not run after guard halt",
@@ -259,7 +264,7 @@ spec = do
                   pure Nothing
               }
           actionRequest =
-            (waiRequest ["known"])
+            (waiRequest ["actions", "protected"])
               { Wai.requestMethod = "POST",
                 Wai.requestHeaders = [("X-Harch-Action", "1")]
               }
@@ -343,7 +348,7 @@ spec = do
             sampleApplication
               { renderRequestResponse = \_ request ->
                   case requestRoute request of
-                    EventStreamRoute -> pure (eventStreamResponse eventSource)
+                    EventStreamRoute -> pure (HarchWeb.nonPageResponse (eventStreamResponse eventSource))
                     _ -> pure (renderSampleResponse request)
               }
       response <- performWaiRequest (toWaiApplication eventApplication) (waiRequest ["events"])
@@ -357,7 +362,7 @@ spec = do
         `shouldReturn` "event: page-update\nid: 1\ndata: first\n\nid: 2\ndata: second\n\n"
 
       emptyEventSource <- serverSentEventSourceFromList []
-      let emptyEventApplication = eventApplication {renderRequestResponse = \_ _ -> pure (eventStreamResponse emptyEventSource)}
+      let emptyEventApplication = eventApplication {renderRequestResponse = \_ _ -> pure (HarchWeb.nonPageResponse (eventStreamResponse emptyEventSource))}
       emptyResponse <- performWaiRequest (toWaiApplication emptyEventApplication) (waiRequest ["events"])
       readResponseBody emptyResponse `shouldReturn` ""
 
@@ -401,12 +406,12 @@ spec = do
       Text.isInfixOf "<a href=\"/es/known\" data-page-link=\"true\" aria-current=\"page\">Known</a>" responseBody `shouldBe` True
       Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" responseBody `shouldBe` True
 
-    it "keeps the host-scoped CSRF token independent from the page CSP nonce" $ do
+    it "renders the preconstructed host-scoped CSRF token into action metadata independently from the page CSP nonce" $ do
       let csrfApplication =
             sampleApplication
-              { pageCsrfToken = \page -> do
-                  pageRoute page `shouldBe` KnownRoute
-                  generateCsrfToken
+              { renderRequestResponse = \_ request -> do
+                  pageRoute (samplePage request) `shouldBe` KnownRoute
+                  pure (PageResponse testPageSecurity (samplePage request))
               }
       response <- performWaiRequest (toWaiApplication csrfApplication) (waiRequest ["known"])
       nextResponse <- performWaiRequest (toWaiApplication csrfApplication) (waiRequest ["known"])
@@ -417,12 +422,13 @@ spec = do
           csrfToken = ByteString.takeWhile (/= 59) (ByteString.drop 18 csrfCookie)
           contentSecurityPolicy = fromMaybe "" (lookup "Content-Security-Policy" responseHeaders)
       csrfCookie `shouldSatisfy` ByteString.isPrefixOf "__Host-harch-csrf="
-      csrfCookie `shouldSatisfy` ByteString.isInfixOf "; Path=/; Secure; SameSite=Strict"
+      csrfCookie `shouldSatisfy` ByteString.isInfixOf "; Path=/; Max-Age=3600; Secure; HttpOnly; SameSite=Strict"
       csrfCookie `shouldSatisfy` (not . ByteString.isInfixOf "Domain=")
-      csrfCookie `shouldSatisfy` (not . ByteString.isInfixOf "HttpOnly")
-      csrfCookie /= nextCsrfCookie `shouldBe` True
+      csrfCookie `shouldSatisfy` ByteString.isInfixOf "HttpOnly"
+      csrfCookie `shouldBe` nextCsrfCookie
       contentSecurityPolicy `shouldSatisfy` (not . ByteString.isInfixOf csrfToken)
-      TextEncoding.encodeUtf8 responseBody `shouldSatisfy` (not . ByteString.isInfixOf csrfToken)
+      TextEncoding.encodeUtf8 responseBody `shouldSatisfy` ByteString.isInfixOf csrfToken
+      responseBody `shouldSatisfy` Text.isInfixOf "data-harch-csrf-token=\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\""
 
     it "uses the route-resolved context for captured actions and returns typed region patches" $ do
       actionRequestReference <- newIORef Nothing
@@ -439,6 +445,7 @@ spec = do
                           { clientActionStatus = Http.status422,
                             clientActionPatches = [testRegionPatch "status-region" "Enter a valid email address."],
                             clientActionFocusId = Just (literalElementId "email"),
+                            clientActionNavigation = StayOnCurrentRoute,
                             clientActionHeaders = [("Set-Cookie", "session=opaque")],
                             clientActionObservabilityAttributes = [failureAttribute],
                             clientActionLogEntries = ["private registration failure detail"]
@@ -487,7 +494,7 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/json; charset=utf-8"
       lookup "Set-Cookie" (Wai.responseHeaders response) `shouldBe` Just "session=opaque"
       readResponseBody response
-        `shouldReturn` "{\"patches\":[{\"id\":\"status-region\",\"html\":\"<p id=\\\"status-region\\\" data-harch-region=\\\"true\\\">Enter a valid email address.</p>\"}],\"focusId\":\"email\"}"
+        `shouldReturn` "{\"patches\":[{\"id\":\"status-region\",\"html\":\"<p id=\\\"status-region\\\" data-harch-region=\\\"true\\\">Enter a valid email address.</p>\"}],\"focusId\":\"email\",\"navigation\":null}"
       maybeRequestObservability <- readIORef requestObservabilityReference
       fmap (Observability.requestSpanAttributes . Observability.observabilityRequestSpan) maybeRequestObservability
         `shouldSatisfy` maybe False (hasTextAttribute "error.type" "RegistrationStoreUnavailable")
@@ -507,7 +514,7 @@ spec = do
       response <- performWaiRequest (toWaiApplication sampleApplication) actionRequest
       Wai.responseStatus response `shouldBe` Http.status400
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/json; charset=utf-8"
-      readResponseBody response `shouldReturn` "{\"patches\":[],\"focusId\":null}"
+      readResponseBody response `shouldReturn` "{\"patches\":[],\"focusId\":null,\"navigation\":null}"
 
     it "bounds client-action form fields before decoding" $ do
       let fields fieldCount = LazyByteString.fromStrict (ByteString.intercalate "&" (replicate fieldCount "field=value"))
@@ -601,7 +608,7 @@ spec = do
       Wai.responseStatus missingCookieResponse `shouldBe` Http.status403
       Wai.responseStatus parameterizedContentTypeResponse `shouldBe` Http.status404
       Wai.responseStatus missingOriginAndHostResponse `shouldBe` Http.status403
-      rejectedBodies `shouldBe` replicate 11 "{\"patches\":[],\"focusId\":null}"
+      rejectedBodies `shouldBe` replicate 11 "{\"patches\":[],\"focusId\":null,\"navigation\":null}"
 
     it "rejects malformed or duplicated strict CSRF transport before an action handler" $ do
       handlerCalled <- newIORef False
@@ -609,7 +616,7 @@ spec = do
             sampleApplication
               { handleClientAction = \_ -> do
                   writeIORef handlerCalled True
-                  pure (Just (ClientActionResponse Http.status204 [] Nothing [] [] []))
+                  pure (Just (ClientActionResponse Http.status204 [] Nothing StayOnCurrentRoute [] [] []))
               }
           requestWith bodyChunks bodyHeaders =
             Wai.setRequestBodyChunks
@@ -660,7 +667,7 @@ spec = do
             sampleApplication
               { handleClientAction = \_ -> do
                   writeIORef handlerCalled True
-                  pure (Just (ClientActionResponse Http.status204 [] Nothing [] [] []))
+                  pure (Just (ClientActionResponse Http.status204 [] Nothing StayOnCurrentRoute [] [] []))
               }
           requestWith requestMethodValue bodyChunks =
             Wai.setRequestBodyChunks
@@ -687,18 +694,22 @@ spec = do
                ]
         )
 
-    it "runs CSRF authorization after decoding and before an action handler" $ do
+    it "runs CSRF verification before an action handler" $ do
       authorizationCalled <- newIORef False
       handlerCalled <- newIORef False
       actionBodyChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
       let actionApplication =
             sampleApplication
-              { authorizeClientActionCsrf = \clientActionRequest csrfToken -> do
-                  clientAction clientActionRequest `shouldBe` "/known"
-                  csrfTokenText csrfToken `shouldBe` "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-                  writeIORef authorizationCalled True
-                  pure False,
-                handleClientAction = \_ -> writeIORef handlerCalled True >> pure (Just (ClientActionResponse Http.status204 [] Nothing [] [] []))
+              { csrfProtection =
+                  HarchWeb.CsrfProtection
+                    { HarchWeb.issueCsrfToken = const (pure HarchWeb.CsrfProtectionUnavailable),
+                      HarchWeb.verifyCsrfToken = \requestContext csrfToken -> do
+                        requestLanguage requestContext `shouldBe` "en"
+                        csrfTokenText csrfToken `shouldBe` "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                        writeIORef authorizationCalled True
+                        pure HarchWeb.CsrfRejected
+                    },
+                handleClientAction = \_ -> writeIORef handlerCalled True >> pure (Just (ClientActionResponse Http.status204 [] Nothing StayOnCurrentRoute [] [] []))
               }
           actionRequest =
             Wai.setRequestBodyChunks
@@ -720,7 +731,7 @@ spec = do
       readIORef handlerCalled `shouldReturn` False
 
     it "passes decoded client-action CSRF and idempotency metadata to the application" $ do
-      receivedAction <- newIORef Nothing
+      receivedAction <- newIORef (Nothing :: Maybe (ClientActionRequest Text TestContext))
       actionBodyChunks <- newIORef ["intent=save&_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
       let metadataApplication =
             sampleApplication
@@ -735,7 +746,7 @@ spec = do
                   ),
                 handleClientAction = \decodedActionRequest -> do
                   writeIORef receivedAction (Just decodedActionRequest)
-                  pure (Just (ClientActionResponse Http.status204 [] Nothing [] [] []))
+                  pure (Just (ClientActionResponse Http.status204 [] Nothing StayOnCurrentRoute [] [] []))
               }
           actionRequest =
             Wai.setRequestBodyChunks
@@ -780,15 +791,41 @@ spec = do
                ]
         )
 
+    it "renders a typed internal redirect through the root route codec" $ do
+      let redirect = internalRedirectResponse Http.status303 (RouteRequest KnownRoute defaultContext)
+          rendered = toWaiResponse [] Nothing sampleApplication redirect
+      expectAll
+        ( (Wai.responseStatus rendered `shouldBe` Http.status303)
+            :| [lookup Http.hLocation (Wai.responseHeaders rendered) `shouldBe` Just "/known"]
+        )
+
+    it "keeps an internal redirect target typed while retaining issued-cookie headers" $ do
+      let redirect =
+            HarchWeb.nonPageResponse
+              ( HarchWeb.nonPageInternalRedirectResponseWithHeaders
+                  Http.status303
+                  [("Set-Cookie", "__Host-session=opaque"), (Http.hLocation, "https://attacker.invalid")]
+                  (RouteRequest KnownRoute defaultContext)
+              )
+          rendered = toWaiResponse [] Nothing sampleApplication redirect
+      expectAll
+        ( (Wai.responseStatus rendered `shouldBe` Http.status303)
+            :| [ lookup "Set-Cookie" (Wai.responseHeaders rendered) `shouldBe` Just "__Host-session=opaque",
+                 lookup Http.hLocation (Wai.responseHeaders rendered) `shouldBe` Just "/known"
+               ]
+        )
+
     it "serializes client-action metadata, multiple patches, and every JSON escape" $ do
       let escapedText = "quote\" slash\\ backspace\b formfeed\f newline\n carriage\r tab\t unicode ☃"
           observabilityAttribute = Observability.ObservabilityAttribute "action.outcome" (Observability.TextAttribute "rejected")
           responseBodyValue =
             clientActionResponseBody
+              (routeCodec sampleApplication)
               ClientActionResponse
                 { clientActionStatus = Http.status422,
                   clientActionPatches = [testRegionPatch ("first " <> escapedText) escapedText, testRegionPatch "second" escapedText],
                   clientActionFocusId = Just (literalElementId escapedText),
+                  clientActionNavigation = NavigateInternal ReplaceHistory (RouteRequest KnownRoute defaultContext),
                   clientActionHeaders = [],
                   clientActionObservabilityAttributes = [observabilityAttribute],
                   clientActionLogEntries = ["private action diagnostic"]
@@ -808,7 +845,8 @@ spec = do
                  encodedResponse `shouldSatisfy` Text.isInfixOf "\\n",
                  encodedResponse `shouldSatisfy` Text.isInfixOf "\\r",
                  encodedResponse `shouldSatisfy` Text.isInfixOf "\\t",
-                 encodedResponse `shouldSatisfy` Text.isInfixOf "☃"
+                 encodedResponse `shouldSatisfy` Text.isInfixOf "☃",
+                 encodedResponse `shouldSatisfy` Text.isInfixOf "\"navigation\":{\"historyMode\":\"replace\",\"href\":\"/known\"}"
                ]
         )
 
@@ -839,6 +877,7 @@ spec = do
                               { clientActionStatus = Http.status422,
                                 clientActionPatches = [],
                                 clientActionFocusId = Nothing,
+                                clientActionNavigation = StayOnCurrentRoute,
                                 clientActionHeaders = [],
                                 clientActionObservabilityAttributes = [],
                                 clientActionLogEntries = []
@@ -881,11 +920,11 @@ spec = do
       Wai.responseStatus unknownResponse `shouldBe` Http.status404
       Wai.responseStatus wrongMethodResponse `shouldBe` Http.status405
       lookup "Allow" (Wai.responseHeaders wrongMethodResponse) `shouldBe` Just "POST, GET"
-      readResponseBody wrongMethodResponse `shouldReturn` "{\"patches\":[],\"focusId\":null}"
+      readResponseBody wrongMethodResponse `shouldReturn` "{\"patches\":[],\"focusId\":null,\"navigation\":null}"
       Wai.responseStatus malformedResponse `shouldBe` Http.status400
-      readResponseBody malformedResponse `shouldReturn` "{\"patches\":[],\"focusId\":null}"
+      readResponseBody malformedResponse `shouldReturn` "{\"patches\":[],\"focusId\":null,\"navigation\":null}"
       Wai.responseStatus invalidDecoderResponse `shouldBe` Http.status500
-      readResponseBody invalidDecoderResponse `shouldReturn` "{\"patches\":[],\"focusId\":null}"
+      readResponseBody invalidDecoderResponse `shouldReturn` "{\"patches\":[],\"focusId\":null,\"navigation\":null}"
       fmap (any (Text.isInfixOf "client action decode failure: malformed")) (readIORef loggedActionFailures) `shouldReturn` True
       fmap (any (Text.isInfixOf "client action decode failure: invalid decoder")) (readIORef loggedActionFailures) `shouldReturn` True
       Wai.responseStatus domainResponse `shouldBe` Http.status422
@@ -1030,8 +1069,8 @@ spec = do
       otherEventSource <- serverSentEventSourceFromList []
       let responseBodyValue = ResponseBody Http.status200 "text/plain" "ok" [] [] []
           otherResponseBodyValue = ResponseBody Http.status500 "text/plain" "failed" [] [] []
-          actionResponse = ClientActionResponse Http.status200 [] Nothing [] [] []
-          otherActionResponse = ClientActionResponse Http.status422 [] (Just (literalElementId "email")) [] [] []
+          actionResponse = ClientActionResponse Http.status200 [] Nothing StayOnCurrentRoute [] [] []
+          otherActionResponse = ClientActionResponse Http.status422 [] (Just (literalElementId "email")) StayOnCurrentRoute [] [] []
           eventResponse = EventStreamResponse responseBodyValue eventSource :: Response TestRoute TestContext
           sameEventResponse = EventStreamResponse responseBodyValue sameEventSource
           otherEventResponse = EventStreamResponse otherResponseBodyValue otherEventSource
@@ -1055,7 +1094,7 @@ spec = do
     it "serializes action responses with no patches or focus target" $ do
       let actionApplication =
             sampleApplication
-              { handleClientAction = const (pure (Just ClientActionResponse {clientActionStatus = Http.status204, clientActionPatches = [], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}))
+              { handleClientAction = const (pure (Just ClientActionResponse {clientActionStatus = Http.status204, clientActionPatches = [], clientActionFocusId = Nothing, clientActionNavigation = StayOnCurrentRoute, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}))
               }
       actionBodyChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
       let actionRequest =
@@ -1068,7 +1107,7 @@ spec = do
               )
       response <- performWaiRequest (toWaiApplication actionApplication) actionRequest
       Wai.responseStatus response `shouldBe` Http.status204
-      readResponseBody response `shouldReturn` "{\"patches\":[],\"focusId\":null}"
+      readResponseBody response `shouldReturn` "{\"patches\":[],\"focusId\":null,\"navigation\":null}"
 
     it "adds the page nonce to custom CSP script sources, including policies without script-src" $ do
       let applicationWithPolicy policy =
@@ -1095,10 +1134,7 @@ spec = do
               }
           metadataApplication =
             sampleApplication
-              { renderRequestResponse = \_ -> pure . PageResponseWithMetadata metadata . samplePage,
-                pageCsrfToken = \page -> do
-                  pageRoute page `shouldBe` KnownRoute
-                  generateCsrfToken,
+              { renderRequestResponse = \_ request -> pure (PageResponseWithMetadata testPageSecurity metadata (samplePage request)),
                 pageShell =
                   \page ->
                     (pageShell sampleApplication page)
@@ -2283,6 +2319,7 @@ spec = do
                   \_ ->
                     pure
                       . PageResponseWithMetadata
+                        testPageSecurity
                         ResponseBody
                           { responseStatus = Http.status500,
                             responseContentType = "text/html; charset=utf-8",
@@ -2301,7 +2338,11 @@ spec = do
       Http.statusCode (Wai.responseStatus response) `shouldBe` 500
       Http.statusMessage (Wai.responseStatus response) `shouldBe` "Internal Server Error"
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/html; charset=utf-8"
-      readResponseBody response `shouldReturn` renderDocument (pageShell diagnosticApplication (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext})))
+      readResponseBody response
+        `shouldReturn` Text.replace
+          "<body data-app=\"sample\">"
+          "<body data-app=\"sample\" data-harch-csrf-token=\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\">"
+          (renderDocument (pageShell diagnosticApplication (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))))
       readIORef requestObservabilityReference
         `shouldReturn` [ Observability.buildRequestObservability
                            Observability.RequestIdentity
@@ -2356,6 +2397,7 @@ spec = do
                       case (requestRoute request, requestLanguage (requestContext request), testContextPathPrefix (requestContext request)) of
                         (KnownRoute, "es", _) ->
                           PageResponseWithMetadata
+                            testPageSecurity
                             ResponseBody
                               { responseStatus = Http.status500,
                                 responseContentType = "text/html; charset=utf-8",
@@ -2366,7 +2408,7 @@ spec = do
                               }
                             (samplePage request)
                         (KnownRoute, _, _) ->
-                          PageResponse (samplePage request)
+                          PageResponse testPageSecurity (samplePage request)
                         (DataRoute, _, "/app") ->
                           BodyResponse
                             ResponseBody

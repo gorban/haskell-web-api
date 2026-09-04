@@ -24,9 +24,10 @@ import HarchWeb.Localization (Locale, localeText)
 import HarchWeb.RequestContext (CoreRequestContext (..), RequestContext (..))
 import HarchWeb.Routing (RouteCodec (..), RouteLocation (..), RouteParseResult (..), RouteRequest (..), pathSegmentText, requiredPathSegment)
 import HarchWeb.Routing qualified as Routing
+import HarchWeb.Security (RequestPolicyConfig, requestClientAddress)
 import HarchWeb.SecurityEvent (requiredModuleNameOrDie)
-import HarchWeb.Server (Response, mapResponsePage)
-import HarchWeb.Site (RouteDefinition (..))
+import HarchWeb.Server (ClientActionRequest (..), NonPageResponse, mapClientActionResponse, mapNonPageResponse, mapPageResult)
+import HarchWeb.Site (RouteDefinition (..), RouteHandler (..))
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 
@@ -44,7 +45,13 @@ localizeApplicationModule localePolicy localizedModule = do
         moduleDeclaredRoutes = map (Localized (defaultLocale localePolicy)) (moduleDeclaredRoutes localizedModule),
         moduleEndpoints = localizedRootDefinition localePolicy localizedModule,
         moduleActionCodec = localizedActions,
-        moduleHandleAction = moduleHandleAction localizedModule,
+        moduleActionRoute = \rootContext actionTarget -> do
+          localRoute <- moduleActionRoute localizedModule (setRequestLocale (defaultLocale localePolicy) (requestLocale (requestCore rootContext)) rootContext) actionTarget
+          pure (Localized (requestLocale (requestCore rootContext)) localRoute),
+        moduleHandleAction = \rootActionRequest ->
+          let selectedLocale = requestLocale (requestCore (clientActionContext rootActionRequest))
+           in fmap (mapClientActionResponse (mapLocalizedActionDestination selectedLocale rootActionRequest))
+                <$> moduleHandleAction localizedModule rootActionRequest,
         moduleGuards = map (localizedRootGuard localePolicy localizedModule) (moduleGuards localizedModule)
       }
 
@@ -81,9 +88,16 @@ localizedRootDefinition localePolicy localizedModule rootRoute =
       let localDefinition = moduleEndpoints localizedModule localRoute
        in localDefinition
             { routeMetadata = prefixLocaleMetadata (routeMetadata localDefinition),
-              routeResponse = \request rootRequest -> do
-                localResponse <- routeResponse localDefinition request (RouteRequest localRoute (setRequestLocale (defaultLocale localePolicy) selectedLocale (requestContext rootRequest)))
-                pure (mapLocalizedResponse selectedLocale (requestContext rootRequest) localResponse)
+              routeHandler =
+                case routeHandler localDefinition of
+                  PageRouteHandler renderLocalPage ->
+                    PageRouteHandler $ \pageSecurity rootRequest ->
+                      mapPageResult (mapLocalizedPage selectedLocale (requestContext rootRequest))
+                        <$> renderLocalPage pageSecurity (RouteRequest localRoute (setRequestLocale (defaultLocale localePolicy) selectedLocale (requestContext rootRequest)))
+                  ProtocolRouteHandler renderLocalProtocol ->
+                    ProtocolRouteHandler $ \request rootRequest -> do
+                      localResponse <- renderLocalProtocol request (RouteRequest localRoute (setRequestLocale (defaultLocale localePolicy) selectedLocale (requestContext rootRequest)))
+                      pure (mapLocalizedNonPageResponse selectedLocale (requestContext rootRequest) localResponse)
             }
 
 localizedRootGuard :: LocalePolicy -> ApplicationModule LocalizedRoute RootActionTarget RootAction ComposedContext RootAuthorization -> EndpointGuard LocalizedRoute ComposedContext RootAuthorization -> EndpointGuard RootRoute ComposedContext RootAuthorization
@@ -104,17 +118,31 @@ localizedRootGuard localePolicy localizedModule (EndpointGuard guard) =
               }
         case guardResult of
           ContinueEndpoint continuedContext -> pure (ContinueEndpoint continuedContext)
-          HaltEndpoint response -> pure (HaltEndpoint (mapLocalizedResponse selectedLocale parentContext response))
+          HaltEndpoint response -> pure (HaltEndpoint (mapLocalizedNonPageResponse selectedLocale parentContext response))
 
 isLocalizedRouteOwned :: ApplicationModule LocalizedRoute target action ComposedContext authorization -> RootRoute -> Bool
 isLocalizedRouteOwned localizedModule rootRoute =
   case rootRoute of
     Localized _ localRoute -> moduleOwnsRoute localizedModule localRoute
 
-mapLocalizedResponse :: Locale -> ComposedContext -> Response LocalizedRoute ComposedContext -> Response RootRoute ComposedContext
-mapLocalizedResponse selectedLocale parentContext =
-  mapResponsePage $ \page ->
-    page {pageRoute = Localized selectedLocale (pageRoute page), pageContext = parentContext}
+mapLocalizedNonPageResponse :: Locale -> ComposedContext -> NonPageResponse LocalizedRoute ComposedContext -> NonPageResponse RootRoute ComposedContext
+mapLocalizedNonPageResponse selectedLocale parentContext =
+  mapNonPageResponse (mapLocalizedDestination selectedLocale parentContext)
+
+mapLocalizedActionDestination :: Locale -> ClientActionRequest RootAction ComposedContext -> RouteRequest LocalizedRoute ComposedContext -> RouteRequest RootRoute ComposedContext
+mapLocalizedActionDestination selectedLocale rootActionRequest =
+  mapLocalizedDestination selectedLocale (clientActionContext rootActionRequest)
+
+mapLocalizedDestination :: Locale -> ComposedContext -> RouteRequest LocalizedRoute ComposedContext -> RouteRequest RootRoute ComposedContext
+mapLocalizedDestination selectedLocale parentContext localRequest =
+  RouteRequest
+    { requestRoute = Localized selectedLocale (requestRoute localRequest),
+      requestContext = parentContext
+    }
+
+mapLocalizedPage :: Locale -> ComposedContext -> Page LocalizedRoute ComposedContext -> Page RootRoute ComposedContext
+mapLocalizedPage selectedLocale parentContext page =
+  page {pageRoute = Localized selectedLocale (pageRoute page), pageContext = parentContext}
 
 prefixLocaleMetadata :: EndpointMetadata RootAuthorization -> EndpointMetadata RootAuthorization
 prefixLocaleMetadata metadata =
@@ -139,9 +167,11 @@ setRequestLocale fallbackLocale selectedLocale requestContext =
           }
     }
 
-requestContextFromWai :: LocalePolicy -> Wai.Request -> ComposedContext -> ComposedContext
-requestContextFromWai localePolicy request requestContext =
-  setRequestLocale (defaultLocale localePolicy) selectedLocale requestContext
+requestContextFromWai :: LocalePolicy -> RequestPolicyConfig -> Wai.Request -> ComposedContext -> ComposedContext
+requestContextFromWai localePolicy requestPolicy request requestContext =
+  (setRequestLocale (defaultLocale localePolicy) selectedLocale requestContext)
+    { requestClient = TrustedNetworkClient (requestClient requestContext) (requestClientAddress requestPolicy request)
+    }
   where
     selectedLocale =
       resolveLocale

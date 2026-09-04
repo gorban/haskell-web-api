@@ -40,6 +40,7 @@ module HarchWeb.Action
     FormField,
     action,
     actionEndpointMetadata,
+    actionEndpointTarget,
     actionCodec,
     combineActionCodecs,
     declaredActionEndpointMetadata,
@@ -269,6 +270,19 @@ actionEndpointMetadata (ActionCodec endpoints) requestContext methodValue pathVa
   listToMaybe
     [ metadata
     | ValidatedActionEndpoint _ endpointActionPath metadata _ <- endpoints,
+      renderActionPath endpointActionPath requestContext == pathValue,
+      actionMethodText (actionPathMethod endpointActionPath) == methodValue
+    ]
+
+-- | Resolve the authored target of the same validated endpoint selected by
+-- 'actionEndpointMetadata'. The module composition boundary uses this before
+-- decoding to recover the action's typed owning route for guards and route
+-- observation; it never derives ownership from an untrusted path.
+actionEndpointTarget :: ActionCodec target context authorization action -> context -> Text -> Text -> Maybe target
+actionEndpointTarget (ActionCodec endpoints) requestContext methodValue pathValue =
+  listToMaybe
+    [ target
+    | ValidatedActionEndpoint target endpointActionPath _ _ <- endpoints,
       renderActionPath endpointActionPath requestContext == pathValue,
       actionMethodText (actionPathMethod endpointActionPath) == methodValue
     ]

@@ -12,7 +12,7 @@ import App.Components.Layout (twoPageShell)
 import App.Components.SubscriptionEmailField (subscriptionEmailId)
 import App.CustomPages.Preview (previewPageDefinition)
 import App.Pages.Generated (pageRouteDefinition)
-import App.Pages.Home (nativeSubscriptionFallbackPage, subscriptionResultRegion)
+import App.Pages.Home (nativeSubscriptionResultPage, subscriptionResultRegion)
 import App.Pages.Route.Generated (PageRoute (..))
 import App.Routes
   ( ApiRoute (..),
@@ -24,27 +24,30 @@ import App.Routes
     twoPageActions,
     twoPageEndpointMetadata,
   )
-import Control.Monad (join)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Text qualified as Text
 import HarchWeb
-  ( Application,
+  ( ActionNavigation (NavigateInternal, StayOnCurrentRoute),
+    Application,
     ApplicationSecurity (AuthenticationDisabled),
     ClientActionRequest (..),
     ClientActionResponse (..),
+    CsrfProtection,
+    CsrfVerification (..),
     EndpointProtocol (ApiEndpoint, HtmlEndpoint),
     ForwardedHeaderTrust (..),
+    HistoryMode (PushHistory),
     ListenerConfig (..),
     ListenerScheme (..),
-    MiddlewareResult (..),
+    NonPageResponse (..),
     ObservabilityConfig (..),
     RegionPatch,
     RequestBodyReadFailure (..),
-    RequestMiddleware (..),
     RequestPolicyConfig (..),
     ResponseBody (..),
     RouteMethod (..),
+    RouteRequest (..),
     ServerConfig (..),
     ServerSentEvent (..),
     StaticAssetRoot (..),
@@ -53,16 +56,21 @@ import HarchWeb
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
     eventStreamResponse,
+    nonPageInternalRedirectResponse,
+    parseClientActionFields,
     readRequestBodyUpTo,
     replaceRegion,
     serverSentEventSourceFromList,
     unboundedRequestHeadLimits,
     unboundedRouteExecutionPolicy,
+    validateActionCsrfTransport,
+    verifyCsrfToken,
     warpDefaultRequestTransportLimits,
   )
 import HarchWeb.Action (decodeAction)
 import HarchWeb.Site
   ( RouteDefinition (..),
+    RouteHandler (ProtocolRouteHandler),
     SimpleSiteConfiguration (..),
     Site (..),
     buildSiteApplication,
@@ -70,44 +78,47 @@ import HarchWeb.Site
   )
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
-import Network.HTTP.Types.URI qualified as HttpUri
 import Network.Wai qualified as Wai
 
-buildApplication :: Application TwoPageRoute TwoPageAction () ()
-buildApplication = buildSiteApplication twoPageSite
+-- | Compose the example with an application-selected CSRF authority. The
+-- example deliberately does not compile a signing secret into its library;
+-- its executable supplies an ephemeral development authority and a real
+-- deployment can inject a configured rotating keyring instead.
+buildApplication :: CsrfProtection () -> Application TwoPageRoute TwoPageAction () ()
+buildApplication csrfProtection = buildSiteApplication (twoPageSite csrfProtection)
 
-twoPageSite :: Site TwoPageRoute TwoPageAction () ()
-twoPageSite =
+twoPageSite :: CsrfProtection () -> Site TwoPageRoute TwoPageAction () ()
+twoPageSite csrfProtection =
   ( simpleSite
       SimpleSiteConfiguration
         { simpleSiteName = "two-pages-example",
           simpleSiteDefaultRequestContext = (),
           simpleSiteRouteCodec = routeCodec,
           simpleSiteSecurity = AuthenticationDisabled [],
+          simpleSiteCsrfProtection = csrfProtection,
           simpleSitePageShell = twoPageShell,
           simpleSiteNavigationRoutes = [Page HomePage, Page SecondPage, Page LiveDataPage],
-          simpleSiteRouteDefinition = routeDefinition
+          simpleSiteRouteDefinition = routeDefinition csrfProtection
         }
   )
     { siteStaticAssets = twoPageStaticAssets,
       siteRequestPolicy = twoPageRequestPolicy,
-      siteRequestMiddleware = [RequestMiddleware nativeFallbackCsrfMiddleware],
       siteDecodeClientAction = decodeAction twoPageActions,
       siteClientActionEndpointMetadata = twoPageActionEndpointMetadata,
       siteHandleClientAction = twoPageClientAction
     }
 
-routeDefinition :: TwoPageRoute -> RouteDefinition TwoPageRoute () ()
-routeDefinition route =
+routeDefinition :: CsrfProtection () -> TwoPageRoute -> RouteDefinition TwoPageRoute () ()
+routeDefinition csrfProtection route =
   case route of
     Page PageNotFound -> (pageRouteDefinition PageNotFound) {routeMethods = []}
     Page page -> pageRouteDefinition page
     Api LiveDataEvents -> liveDataEventsRouteDefinition
     Custom (PreviewPage previewSlug) -> previewPageDefinition previewSlug
     Custom NativeSubscriptionFallback ->
-      (Site.pageRoute (twoPageEndpointMetadata HtmlEndpoint (Custom NativeSubscriptionFallback)) Nothing nativeSubscriptionFallbackPage)
-        { routeMethods = [RouteGet, RoutePost]
-        }
+      nativeSubscriptionFallbackRouteDefinition csrfProtection
+    Custom NativeSubscriptionResult ->
+      Site.pageRoute (twoPageEndpointMetadata HtmlEndpoint (Custom NativeSubscriptionResult)) Nothing nativeSubscriptionResultPage
 
 liveDataEventsRouteDefinition :: RouteDefinition TwoPageRoute () ()
 liveDataEventsRouteDefinition =
@@ -116,14 +127,14 @@ liveDataEventsRouteDefinition =
       routeMetadata = twoPageEndpointMetadata ApiEndpoint (Api LiveDataEvents),
       routeMethods = [RouteGet],
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
-      routeResponse = \_ _ -> do
+      routeHandler = ProtocolRouteHandler $ \_ _ -> do
         eventSource <-
           serverSentEventSourceFromList
             [ServerSentEvent (Just "update") (Just "example-1") "The live update arrived."]
         pure (eventStreamResponse eventSource)
     }
 
-twoPageClientAction :: ClientActionRequest TwoPageAction () -> IO (Maybe ClientActionResponse)
+twoPageClientAction :: ClientActionRequest TwoPageAction () -> IO (Maybe (ClientActionResponse TwoPageRoute ()))
 twoPageClientAction actionRequest =
   pure $
     case clientAction actionRequest of
@@ -131,12 +142,12 @@ twoPageClientAction actionRequest =
         Just
           ( case emailAddress of
               value
-                | "@" `Text.isInfixOf` value,
-                  "." `Text.isInfixOf` value ->
+                | validSubscriptionEmail value ->
                     ClientActionResponse
                       { clientActionStatus = Http.status200,
                         clientActionPatches = subscriptionPatch "status" "Thanks. Your subscription request is ready.",
                         clientActionFocusId = Nothing,
+                        clientActionNavigation = NavigateInternal PushHistory (RouteRequest (Custom NativeSubscriptionResult) ()),
                         clientActionHeaders = [],
                         clientActionObservabilityAttributes = [],
                         clientActionLogEntries = []
@@ -146,34 +157,48 @@ twoPageClientAction actionRequest =
                   { clientActionStatus = Http.status422,
                     clientActionPatches = subscriptionPatch "alert" "Enter a valid email address.",
                     clientActionFocusId = Just subscriptionEmailId,
+                    clientActionNavigation = StayOnCurrentRoute,
                     clientActionHeaders = [],
                     clientActionObservabilityAttributes = [],
                     clientActionLogEntries = []
                   }
           )
 
-nativeFallbackCsrfMiddleware :: Wai.Request -> () -> IO (MiddlewareResult ())
-nativeFallbackCsrfMiddleware request requestContext =
-  if isNativeFallbackPost request
-    then do
-      requestBodyResult <- readRequestBodyUpTo nativeFallbackBodyBytes request
-      pure
-        ( case requestBodyResult of
-            Left RequestBodyLimitExceeded -> nativeFallbackBodyTooLarge requestContext
-            Right requestBody ->
-              if nativeFallbackFieldCountExceedsLimit requestBody
-                then nativeFallbackTooManyFields requestContext
-                else case (nativeFallbackCsrfToken request, nativeFallbackSubmittedToken requestBody) of
-                  (Just cookieToken, Just submittedToken)
-                    | cookieToken == submittedToken -> ContinueMiddleware requestContext
-                  _ -> nativeFallbackCsrfRejected requestContext
-        )
-    else pure (ContinueMiddleware requestContext)
+nativeSubscriptionFallbackRouteDefinition :: CsrfProtection () -> RouteDefinition TwoPageRoute () ()
+nativeSubscriptionFallbackRouteDefinition csrfProtection =
+  RouteDefinition
+    { routeNavigationLabel = Nothing,
+      routeMetadata = twoPageEndpointMetadata ApiEndpoint (Custom NativeSubscriptionFallback),
+      routeMethods = [RoutePost],
+      routeExecutionPolicy = unboundedRouteExecutionPolicy,
+      routeHandler = ProtocolRouteHandler (nativeSubscriptionFallbackHandler csrfProtection)
+    }
 
-isNativeFallbackPost :: Wai.Request -> Bool
-isNativeFallbackPost request =
-  Wai.requestMethod request == "POST"
-    && Wai.rawPathInfo request == "/native-subscribe"
+nativeSubscriptionFallbackHandler :: CsrfProtection () -> Wai.Request -> RouteRequest TwoPageRoute () -> IO (NonPageResponse TwoPageRoute ())
+nativeSubscriptionFallbackHandler csrfProtection request routeRequest = do
+  requestBodyResult <- readRequestBodyUpTo nativeFallbackBodyBytes request
+  case requestBodyResult of
+    Left RequestBodyLimitExceeded -> pure nativeFallbackBodyTooLarge
+    Right requestBody
+      | nativeFallbackFieldCountExceedsLimit requestBody -> pure nativeFallbackTooManyFields
+      | otherwise ->
+          case parseClientActionFields requestBody of
+            Left _ -> pure nativeFallbackCsrfRejected
+            Right formFields ->
+              case validateActionCsrfTransport request formFields of
+                Left _ -> pure nativeFallbackCsrfRejected
+                Right csrfToken -> do
+                  verification <- verifyCsrfToken csrfProtection (requestContext routeRequest) csrfToken
+                  pure $
+                    case verification of
+                      CsrfVerified ->
+                        case lookup "email" formFields of
+                          Just emailAddress
+                            | validSubscriptionEmail emailAddress ->
+                                nonPageInternalRedirectResponse Http.status303 (RouteRequest (Custom NativeSubscriptionResult) (requestContext routeRequest))
+                          _ -> nativeFallbackInvalidEmail
+                      CsrfRejected -> nativeFallbackCsrfRejected
+                      CsrfVerificationUnavailable -> nativeFallbackCsrfUnavailable
 
 nativeFallbackBodyBytes :: Int
 nativeFallbackBodyBytes = 8192
@@ -185,10 +210,9 @@ nativeFallbackBodyBytes = 8192
 nativeFallbackFieldCountLimit :: Int
 nativeFallbackFieldCountLimit = 32
 
-nativeFallbackBodyTooLarge :: () -> MiddlewareResult ()
-nativeFallbackBodyTooLarge requestContext =
-  HaltMiddleware
-    requestContext
+nativeFallbackBodyTooLarge :: NonPageResponse TwoPageRoute ()
+nativeFallbackBodyTooLarge =
+  NonPageBodyResponse
     ResponseBody
       { responseStatus = Http.status413,
         responseContentType = "text/plain; charset=utf-8",
@@ -198,10 +222,9 @@ nativeFallbackBodyTooLarge requestContext =
         responseDatabaseOperations = []
       }
 
-nativeFallbackTooManyFields :: () -> MiddlewareResult ()
-nativeFallbackTooManyFields requestContext =
-  HaltMiddleware
-    requestContext
+nativeFallbackTooManyFields :: NonPageResponse TwoPageRoute ()
+nativeFallbackTooManyFields =
+  NonPageBodyResponse
     ResponseBody
       { responseStatus = Http.status413,
         responseContentType = "text/plain; charset=utf-8",
@@ -211,10 +234,9 @@ nativeFallbackTooManyFields requestContext =
         responseDatabaseOperations = []
       }
 
-nativeFallbackCsrfRejected :: () -> MiddlewareResult ()
-nativeFallbackCsrfRejected requestContext =
-  HaltMiddleware
-    requestContext
+nativeFallbackCsrfRejected :: NonPageResponse TwoPageRoute ()
+nativeFallbackCsrfRejected =
+  NonPageBodyResponse
     ResponseBody
       { responseStatus = Http.status403,
         responseContentType = "text/plain; charset=utf-8",
@@ -224,13 +246,29 @@ nativeFallbackCsrfRejected requestContext =
         responseDatabaseOperations = []
       }
 
-nativeFallbackCsrfToken :: Wai.Request -> Maybe ByteString.ByteString
-nativeFallbackCsrfToken request =
-  lookup "harch-native-fallback-csrf" (requestCookies request)
+nativeFallbackCsrfUnavailable :: NonPageResponse TwoPageRoute ()
+nativeFallbackCsrfUnavailable =
+  NonPageBodyResponse
+    ResponseBody
+      { responseStatus = Http.status503,
+        responseContentType = "text/plain; charset=utf-8",
+        responseBody = "Native fallback CSRF protection is unavailable.",
+        responseObservabilityAttributes = [],
+        responseLogEntries = [],
+        responseDatabaseOperations = []
+      }
 
-nativeFallbackSubmittedToken :: LazyByteString.ByteString -> Maybe ByteString.ByteString
-nativeFallbackSubmittedToken requestBody =
-  join (lookup "_harch_csrf" (HttpUri.parseQuery (LazyByteString.toStrict requestBody)))
+nativeFallbackInvalidEmail :: NonPageResponse TwoPageRoute ()
+nativeFallbackInvalidEmail =
+  NonPageBodyResponse
+    ResponseBody
+      { responseStatus = Http.status422,
+        responseContentType = "text/plain; charset=utf-8",
+        responseBody = "Enter a valid email address.",
+        responseObservabilityAttributes = [],
+        responseLogEntries = [],
+        responseDatabaseOperations = []
+      }
 
 nativeFallbackFieldCountExceedsLimit :: LazyByteString.ByteString -> Bool
 nativeFallbackFieldCountExceedsLimit requestBody =
@@ -242,13 +280,9 @@ nativeFallbackFieldCount requestBody =
     then 0
     else 1 + sum (map (ByteString.count 38) (LazyByteString.toChunks requestBody))
 
-requestCookies :: Wai.Request -> [(ByteString.ByteString, ByteString.ByteString)]
-requestCookies request =
-  maybe [] (map parseCookie . ByteString.split 59) (lookup "Cookie" (Wai.requestHeaders request))
-  where
-    parseCookie cookie =
-      let (cookieName, valueWithSeparator) = ByteString.break (== 61) (ByteString.dropWhile (== 32) cookie)
-       in (cookieName, ByteString.drop 1 valueWithSeparator)
+validSubscriptionEmail :: Text.Text -> Bool
+validSubscriptionEmail value =
+  "@" `Text.isInfixOf` value && "." `Text.isInfixOf` value
 
 subscriptionPatch :: Text.Text -> Text.Text -> [RegionPatch]
 subscriptionPatch liveRole message =

@@ -20,16 +20,16 @@ import HarchWeb.Routing
     routeMethodPolicy,
   )
 import HarchWeb.Server
-  ( ProtocolResponse (..),
+  ( NonPageResponse (NonPageProtocolResponse),
+    ProtocolResponse (..),
     ProtocolResponseBody (ProtocolResponseWai),
-    Response (ProtocolResponseResult),
     unboundedRouteExecutionPolicy,
   )
 import HarchWeb.Server.StaticAssets
   ( serveStaticAssetPathResponse,
     staticAssetRouteOwnsPath,
   )
-import HarchWeb.Site (RouteDefinition (..))
+import HarchWeb.Site (RouteDefinition (..), RouteHandler (ProtocolRouteHandler))
 import HarchWeb.StaticAssets (StaticAssetsConfig)
 import Network.Wai qualified as Wai
 
@@ -59,8 +59,8 @@ staticAssetRouteDefinition staticAssetsConfig metadata =
       routeMetadata = metadata,
       routeMethods = [RouteGet],
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
-      routeResponse = \request routeRequest ->
-        ProtocolResponseResult <$> staticAssetRouteResponse staticAssetsConfig request (requestRoute routeRequest)
+      routeHandler = ProtocolRouteHandler $ \request routeRequest ->
+        NonPageProtocolResponse <$> staticAssetRouteResponse staticAssetsConfig request (requestRoute routeRequest)
     }
 
 -- | Execute the existing static interpreter for a route that has already

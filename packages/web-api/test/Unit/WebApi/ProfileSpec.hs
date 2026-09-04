@@ -8,68 +8,63 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
 import HarchWeb.Account (AccountId, mkAccountId)
+import HarchWeb.Database (DatabaseOperation)
 import HarchWeb.Email (EmailAddress, mkEmailAddress)
 import HarchWeb.Observability qualified as Observability
-import HarchWeb.Session (OpaqueSession (..), SessionId, mkCsrfToken, mkSessionId)
-import HarchWeb.Time (UnixTimeNanoseconds, unixTimeNanoseconds)
+import HarchWeb.Session (SessionId, mkSessionId)
 import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import TestCore.Wai (waiRequest)
 import Unit.WebApi.TestSupport (pureApplication)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStoreError (..))
+import WebApi.AccountPrincipal (mkAccountPrincipal)
 import WebApi.App (unavailableAccountWorkflow)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (defaultAppConfig)
 import WebApi.Database (defaultPageRepository)
-import WebApi.Profile (ProfileLoadError (..), ProfileState (..), loadProfile)
+import WebApi.Profile (ProfileLoadError (..), ProfileState (..), loadProfileForPrincipal)
 import WebApi.Response (selectResponseWithDatabaseAndAccountWorkflow)
 import WebApi.Route (AppRoute (..), defaultRequestContext)
 import WebApi.Route qualified
-import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..))
 
 spec =
-  describe "profile session resolution" $ do
-    it "distinguishes absent, expired, pending, and authenticated sessions" $ do
-      assertProfileResult (loadProfile (sessionStore (Right (Just activeSession))) (profileStore (Right (Just pendingProfile))) 150 Nothing) isUnauthenticated
-      assertProfileResult (loadProfile (sessionStore (Right Nothing)) (profileStore (Right (Just pendingProfile))) 150 (Just testSessionId)) isUnauthenticated
-      assertProfileResult (loadProfile (sessionStore (Right (Just expiredSession))) (profileStore (Right (Just pendingProfile))) 150 (Just testSessionId)) isUnauthenticated
-      assertProfileResult (loadProfile (sessionStore (Right (Just activeSession))) (profileStore (Right Nothing)) 150 (Just testSessionId)) isUnauthenticated
-      assertProfileResult (loadProfile (sessionStore (Right (Just activeSession))) (profileStore (Right (Just pendingProfile))) 150 (Just testSessionId)) (isPendingProfile pendingProfile)
-      assertProfileResult (loadProfile (sessionStore (Right (Just activeSession))) (profileStore (Right (Just verifiedProfile))) 150 (Just testSessionId)) (isAuthenticatedProfile verifiedProfile)
+  describe "profile principal resolution" $ do
+    it "distinguishes no principal, no profile, pending, and authenticated accounts" $ do
+      assertProfileResult (loadProfileForPrincipal (profileStore (Right (Just pendingProfile))) Nothing) isUnauthenticated
+      assertProfileResult (loadProfileForPrincipal (profileStore (Right Nothing)) (WebApi.Route.requestAccountPrincipal sessionRequestContext)) isUnauthenticated
+      assertProfileResult (loadProfileForPrincipal (profileStore (Right (Just pendingProfile))) (WebApi.Route.requestAccountPrincipal sessionRequestContext)) (isPendingProfile pendingProfile)
+      assertProfileResult (loadProfileForPrincipal (profileStore (Right (Just verifiedProfile))) (WebApi.Route.requestAccountPrincipal sessionRequestContext)) (isAuthenticatedProfile verifiedProfile)
 
-    it "keeps session and profile persistence failures on the error rail" $ do
-      assertProfileResult (loadProfile (sessionStore (Left AccountSessionStoreUnavailable)) (profileStore (Right (Just verifiedProfile))) 150 (Just testSessionId)) isUnavailableSessionFailure
-      assertProfileResult (loadProfile (sessionStore (Right (Just activeSession))) (profileStore (Left (AccountStoreUnavailable "database unavailable"))) 150 (Just testSessionId)) (isAccountFailure (AccountStoreUnavailable "database unavailable"))
-      assertProfileResult (loadProfile (sessionStore (Right (Just activeSession))) (profileStore (Right (Just mismatchedProfile))) 150 (Just testSessionId)) (isAccountFailure (AccountStoreCorruptData "account profile lookup returned a different account id"))
+    it "keeps account persistence failures on the error rail" $ do
+      assertProfileResult (loadProfileForPrincipal (profileStore (Left (AccountStoreUnavailable "database unavailable"))) (WebApi.Route.requestAccountPrincipal sessionRequestContext)) (isAccountFailure (AccountStoreUnavailable "database unavailable"))
+      assertProfileResult (loadProfileForPrincipal (profileStore (Right (Just mismatchedProfile))) (WebApi.Route.requestAccountPrincipal sessionRequestContext)) (isAccountFailure (AccountStoreCorruptData "account profile lookup returned a different account id"))
 
-    it "rejects a replayed raw legacy session cookie after a clock-origin reset" $ do
+    it "keeps a replayed raw legacy session cookie out of request context" $ do
       let replayedCookieValue = Text.replicate 43 "a"
           rawReplayRequest =
             (waiRequest ["profile"])
               { Wai.requestHeaders =
                   [("Cookie", TextEncoding.encodeUtf8 ("__Host-harch-session=" <> replayedCookieValue))]
               }
-          rebootedUnixEpoch = unixTimeNanoseconds 1
       let replayContext = HarchWeb.requestContextFromRequest pureApplication rawReplayRequest defaultRequestContext
       replayContext
         `shouldBe` defaultRequestContext
           { WebApi.Route.requestClientAddress = HarchWeb.requestClientAddress (HarchWeb.applicationRequestPolicy pureApplication) rawReplayRequest,
-            WebApi.Route.requestSessionId = mkSessionId replayedCookieValue
+            WebApi.Route.requestAccountPrincipal = Nothing
           }
       assertProfileResult
-        (loadProfile (sessionStore (Right Nothing)) (profileStore (Right (Just verifiedProfile))) rebootedUnixEpoch (WebApi.Route.requestSessionId replayContext))
+        (loadProfileForPrincipal (profileStore (Right (Just verifiedProfile))) (WebApi.Route.requestAccountPrincipal replayContext))
         isUnauthenticated
 
     it "renders signed-out, pending, authenticated, and unavailable profiles as SSR pages" $ do
-      signedOutResponse <- profileResponse (workflowFor (sessionStore (Right Nothing)) (profileStore (Right (Just verifiedProfile)))) defaultRequestContext
-      pendingResponse <- profileResponse (workflowFor (sessionStore (Right (Just activeSession))) (profileStore (Right (Just pendingProfile)))) sessionRequestContext
-      authenticatedResponse <- profileResponse (workflowFor (sessionStore (Right (Just activeSession))) (profileStore (Right (Just verifiedProfile)))) sessionRequestContext
-      spanishPendingResponse <- profileResponse (workflowFor (sessionStore (Right (Just activeSession))) (profileStore (Right (Just pendingProfile)))) spanishSessionRequestContext
-      spanishAuthenticatedResponse <- profileResponse (workflowFor (sessionStore (Right (Just activeSession))) (profileStore (Right (Just verifiedProfile)))) spanishSessionRequestContext
-      unavailableResponse <- profileResponse (workflowFor (sessionStore (Left AccountSessionStoreUnavailable)) (profileStore (Right (Just verifiedProfile)))) sessionRequestContext
-      spanishUnavailableResponse <- profileResponse (workflowFor (sessionStore (Left AccountSessionStoreUnavailable)) (profileStore (Right (Just verifiedProfile)))) spanishSessionRequestContext
-      accountUnavailableResponse <- profileResponse (workflowFor (sessionStore (Right (Just activeSession))) (profileStore (Left (AccountStoreUnavailable "database unavailable")))) sessionRequestContext
+      signedOutResponse <- profileResponse (workflowFor (profileStore (Right (Just verifiedProfile)))) defaultRequestContext
+      pendingResponse <- profileResponse (workflowFor (profileStore (Right (Just pendingProfile)))) sessionRequestContext
+      authenticatedResponse <- profileResponse (workflowFor (profileStore (Right (Just verifiedProfile)))) sessionRequestContext
+      spanishPendingResponse <- profileResponse (workflowFor (profileStore (Right (Just pendingProfile)))) spanishSessionRequestContext
+      spanishAuthenticatedResponse <- profileResponse (workflowFor (profileStore (Right (Just verifiedProfile)))) spanishSessionRequestContext
+      unavailableResponse <- profileResponse (workflowFor (profileStore (Left (AccountStoreUnavailable "database unavailable")))) sessionRequestContext
+      spanishUnavailableResponse <- profileResponse (workflowFor (profileStore (Left (AccountStoreUnavailable "database unavailable")))) spanishSessionRequestContext
       secondPageResponse <-
         selectResponseWithDatabaseAndAccountWorkflow
           defaultAppConfig
@@ -88,11 +83,9 @@ spec =
                  responsePageTitle authenticatedResponse `shouldBe` "web-api: Profile",
                  responsePageTitle unavailableResponse `shouldBe` "web-api: Profile",
                  responsePageBody unavailableResponse `shouldSatisfy` (not . Text.isInfixOf "AccountSessionStoreUnavailable"),
-                 responseDiagnosticAttributes unavailableResponse `shouldBe` profileFailureAttributes "AccountSessionStoreError",
-                 responseDiagnosticLogs unavailableResponse `shouldBe` ["Profile loading failed: AccountSessionStoreError"],
-                 HarchWeb.diagnosticDatabaseOperations (HarchWeb.responseDiagnostics unavailableResponse) `shouldBe` [],
-                 responseDiagnosticAttributes accountUnavailableResponse `shouldBe` profileFailureAttributes "AccountStoreError",
-                 responseDiagnosticLogs accountUnavailableResponse `shouldBe` ["Profile loading failed: AccountStoreError"],
+                 responseDiagnosticAttributes unavailableResponse `shouldBe` profileFailureAttributes "AccountStoreError",
+                 responseDiagnosticLogs unavailableResponse `shouldBe` ["Profile loading failed: AccountStoreError"],
+                 responseDiagnosticDatabaseOperations unavailableResponse `shouldBe` [],
                  responsePageBody secondPageResponse `shouldSatisfy` Text.isInfixOf "data-page=\"second\""
                ]
         )
@@ -104,7 +97,7 @@ assertProfileResult action matches = do
     then pure ()
     else expectationFailure "unexpected profile-resolution result"
 
-profileResponse :: AccountWorkflow -> WebApi.Route.AppRequestContext -> IO (HarchWeb.Response AppRoute WebApi.Route.AppRequestContext)
+profileResponse :: AccountWorkflow -> WebApi.Route.AppRequestContext -> IO (HarchWeb.PageResult AppRoute WebApi.Route.AppRequestContext)
 profileResponse workflow requestContext =
   selectResponseWithDatabaseAndAccountWorkflow
     defaultAppConfig
@@ -112,46 +105,53 @@ profileResponse workflow requestContext =
     workflow
     (HarchWeb.RouteRequest ProfileRoute requestContext)
 
-workflowFor :: AccountSessionStore -> AccountProfileStore -> AccountWorkflow
-workflowFor sessionStoreValue profileStoreValue =
+workflowFor :: AccountProfileStore -> AccountWorkflow
+workflowFor profileStoreValue =
   unavailableAccountWorkflow
-    { accountWorkflowClock = pure 150,
-      accountWorkflowSessionStore = sessionStoreValue,
-      accountWorkflowProfileStore = profileStoreValue
+    { accountWorkflowProfileStore = profileStoreValue
     }
 
 sessionRequestContext :: WebApi.Route.AppRequestContext
-sessionRequestContext = defaultRequestContext {WebApi.Route.requestSessionId = Just testSessionId}
+sessionRequestContext = defaultRequestContext {WebApi.Route.requestAccountPrincipal = Just (mkAccountPrincipal accountId testSessionId 200)}
 
 spanishSessionRequestContext :: WebApi.Route.AppRequestContext
 spanishSessionRequestContext = sessionRequestContext {WebApi.Route.requestLocale = WebApi.Route.Spanish, WebApi.Route.requestLocaleIsExplicit = True}
 
-responsePageBody :: HarchWeb.Response AppRoute WebApi.Route.AppRequestContext -> Text
+responsePageBody :: HarchWeb.PageResult AppRoute WebApi.Route.AppRequestContext -> Text
 responsePageBody response =
   case response of
-    HarchWeb.PageResponse page -> HarchWeb.renderHtml (HarchWeb.pageBody page)
-    HarchWeb.PageResponseWithMetadata _ page -> HarchWeb.renderHtml (HarchWeb.pageBody page)
-    _ -> ""
+    HarchWeb.RenderedPage page -> HarchWeb.renderHtml (HarchWeb.pageBody page)
+    HarchWeb.RenderedPageWithMetadata _ page -> HarchWeb.renderHtml (HarchWeb.pageBody page)
 
-responseStatus :: HarchWeb.Response AppRoute WebApi.Route.AppRequestContext -> Int
+responseStatus :: HarchWeb.PageResult AppRoute WebApi.Route.AppRequestContext -> Int
 responseStatus response =
   case response of
-    HarchWeb.PageResponse _ -> 200
-    HarchWeb.PageResponseWithMetadata metadata _ -> Http.statusCode (HarchWeb.responseStatus metadata)
-    _ -> 0
+    HarchWeb.RenderedPage _ -> 200
+    HarchWeb.RenderedPageWithMetadata metadata _ -> Http.statusCode (HarchWeb.responseStatus metadata)
 
-responsePageTitle :: HarchWeb.Response AppRoute WebApi.Route.AppRequestContext -> Text
+responsePageTitle :: HarchWeb.PageResult AppRoute WebApi.Route.AppRequestContext -> Text
 responsePageTitle response =
   case response of
-    HarchWeb.PageResponse page -> HarchWeb.pageTitle page
-    HarchWeb.PageResponseWithMetadata _ page -> HarchWeb.pageTitle page
-    _ -> ""
+    HarchWeb.RenderedPage page -> HarchWeb.pageTitle page
+    HarchWeb.RenderedPageWithMetadata _ page -> HarchWeb.pageTitle page
 
-responseDiagnosticAttributes :: HarchWeb.Response AppRoute WebApi.Route.AppRequestContext -> [Observability.ObservabilityAttribute]
-responseDiagnosticAttributes = HarchWeb.diagnosticObservabilityAttributes . HarchWeb.responseDiagnostics
+responseDiagnosticAttributes :: HarchWeb.PageResult AppRoute WebApi.Route.AppRequestContext -> [Observability.ObservabilityAttribute]
+responseDiagnosticAttributes pageResult =
+  case pageResult of
+    HarchWeb.RenderedPage _ -> []
+    HarchWeb.RenderedPageWithMetadata metadata _ -> HarchWeb.responseObservabilityAttributes metadata
 
-responseDiagnosticLogs :: HarchWeb.Response AppRoute WebApi.Route.AppRequestContext -> [Text]
-responseDiagnosticLogs = HarchWeb.diagnosticLogEntries . HarchWeb.responseDiagnostics
+responseDiagnosticLogs :: HarchWeb.PageResult AppRoute WebApi.Route.AppRequestContext -> [Text]
+responseDiagnosticLogs pageResult =
+  case pageResult of
+    HarchWeb.RenderedPage _ -> []
+    HarchWeb.RenderedPageWithMetadata metadata _ -> HarchWeb.responseLogEntries metadata
+
+responseDiagnosticDatabaseOperations :: HarchWeb.PageResult AppRoute WebApi.Route.AppRequestContext -> [DatabaseOperation]
+responseDiagnosticDatabaseOperations pageResult =
+  case pageResult of
+    HarchWeb.RenderedPage _ -> []
+    HarchWeb.RenderedPageWithMetadata metadata _ -> HarchWeb.responseDatabaseOperations metadata
 
 profileFailureAttributes :: Text -> [Observability.ObservabilityAttribute]
 profileFailureAttributes errorType =
@@ -182,12 +182,6 @@ isAuthenticatedProfile expectedProfile result =
     Right (ProfileAuthenticated actualProfile) -> sameProfile actualProfile expectedProfile
     _ -> False
 
-isUnavailableSessionFailure :: Either ProfileLoadError ProfileState -> Bool
-isUnavailableSessionFailure result =
-  case result of
-    Left (ProfileSessionStoreError AccountSessionStoreUnavailable) -> True
-    _ -> False
-
 isAccountFailure :: AccountStoreError -> Either ProfileLoadError ProfileState -> Bool
 isAccountFailure expectedError result =
   case result of
@@ -207,35 +201,8 @@ sameAccountStoreError leftError rightError =
     (AccountStoreCorruptData leftDetail, AccountStoreCorruptData rightDetail) -> leftDetail == rightDetail
     _ -> False
 
-sessionStore :: Either AccountSessionStoreError (Maybe (OpaqueSession AccountId)) -> AccountSessionStore
-sessionStore result =
-  AccountSessionStore
-    { saveAccountSession = \_ -> pure (Right True),
-      loadAccountSession = \sessionIdValue -> sessionIdValue `seq` pure result,
-      invalidateAccountSession = \_ _ -> pure (Right False)
-    }
-
 profileStore :: Either AccountStoreError (Maybe AccountProfile) -> AccountProfileStore
 profileStore result = AccountProfileStore (\accountIdValue -> accountIdValue `seq` pure result)
-
-activeSession :: OpaqueSession AccountId
-activeSession = opaqueSession 200
-
-expiredSession :: OpaqueSession AccountId
-expiredSession = opaqueSession 150
-
-opaqueSession :: UnixTimeNanoseconds -> OpaqueSession AccountId
-opaqueSession expiresAtNanoseconds =
-  case mkCsrfToken "abcdefghijklmnopqrstuvwxyz0123456789-_" of
-    Just csrfToken ->
-      OpaqueSession
-        { sessionId = testSessionId,
-          sessionPrincipal = accountId,
-          sessionCsrfToken = csrfToken,
-          sessionIssuedAtNanoseconds = 100,
-          sessionExpiresAtNanoseconds = expiresAtNanoseconds
-        }
-    Nothing -> error "expected a valid CSRF token"
 
 pendingProfile :: AccountProfile
 pendingProfile = AccountProfile accountId emailAddress (Username.mkUsername "person_01") (Just "Person Example") False

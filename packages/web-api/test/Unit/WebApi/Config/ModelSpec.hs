@@ -118,7 +118,7 @@ spec = do
                 requestClientAddress = requestClientAddress defaultRequestContext,
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
-                requestSessionId = Nothing,
+                requestAccountPrincipal = Nothing,
                 requestMfaEnrollmentSessionId = Nothing
               }
           callToAction =
@@ -306,11 +306,11 @@ spec = do
               requestClientAddress = requestClientAddress defaultRequestContext,
               requestPathPrefix = requestPathPrefix defaultRequestContext,
               requestQueryParameters = [],
-              requestSessionId = Nothing,
+              requestAccountPrincipal = Nothing,
               requestMfaEnrollmentSessionId = Nothing
             }
         )
-        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-789\", requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}"
+        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-789\", requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestAccountPrincipal = Nothing, requestMfaEnrollmentSessionId = Nothing}"
       show
         ( CallToAction
             { callToActionLabel = "Return home",
@@ -439,7 +439,7 @@ spec = do
                 requestClientAddress = requestClientAddress defaultRequestContext,
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
-                requestSessionId = Nothing,
+                requestAccountPrincipal = Nothing,
                 requestMfaEnrollmentSessionId = Nothing
               }
           callToAction =
@@ -580,7 +580,7 @@ spec = do
                 requestClientAddress = requestClientAddress defaultRequestContext,
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
-                requestSessionId = Nothing,
+                requestAccountPrincipal = Nothing,
                 requestMfaEnrollmentSessionId = Nothing
               }
           callToAction =
@@ -710,7 +710,7 @@ spec = do
                 requestClientAddress = requestClientAddress defaultRequestContext,
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
-                requestSessionId = Nothing,
+                requestAccountPrincipal = Nothing,
                 requestMfaEnrollmentSessionId = Nothing
               }
           callToAction =
@@ -762,7 +762,7 @@ spec = do
       show [Page WebApi.Route.HomePage, Api WebApi.Route.StatusApi]
         `shouldBe` "[HomeRoute,StatusApiRoute]"
       show [requestContext]
-        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-list\", requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}]"
+        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-list\", requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestAccountPrincipal = Nothing, requestMfaEnrollmentSessionId = Nothing}]"
       show [callToAction]
         `shouldBe` "[CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = SafeUrl \"/\"}]"
       show [secondPageModel]

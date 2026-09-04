@@ -78,9 +78,11 @@ toJoseAlgorithm algorithm =
     JwtRs256 -> Jws.RS256
     JwtRs512 -> Jws.RS512
 
--- | Verify a compact JWT using explicit algorithms and a key set (including
--- @kid@ selection implemented by @jose@).  Claim projection remains
--- application-owned and cannot expose raw claims through Harch telemetry.
+-- | Verify a compact JWT and project the application-owned claims. Signature,
+-- algorithm, and standard-claim failures use Harch's fixed rejection code;
+-- a projection failure retains its validated application failure code so
+-- observability can distinguish a malformed subject from a malformed session
+-- without retaining the rejected claim values.
 jwtProofVerifier :: JWTValidationSettings -> JwtAllowedAlgorithms -> JWKSet -> (ClaimsSet -> Either JwtClaimsError verified) -> AuthenticationProofVerifier EncodedJwt verified
 jwtProofVerifier validationSettings allowedAlgorithms keySet claimsProjection =
   AuthenticationProofVerifier $ \encodedJwt -> do
@@ -92,7 +94,7 @@ jwtProofVerifier validationSettings allowedAlgorithms keySet claimsProjection =
         Left _ -> Left (ProofRejected rejectedJwtProof)
         Right claimsSet ->
           case claimsProjection claimsSet of
-            Left _ -> Left (ProofRejected rejectedJwtClaims)
+            Left (JwtClaimsError failureCode) -> Left (ProofRejected (mkProofRejection failureCode))
             Right verified -> Right verified
 
 -- | Issue exactly the claims the application supplies. In particular this
@@ -111,6 +113,3 @@ withAllowedAlgorithms (JwtAllowedAlgorithms allowedAlgorithms) validationSetting
 
 rejectedJwtProof :: ProofRejection
 rejectedJwtProof = mkProofRejection (knownSecurityFailureCode "jwt.rejected")
-
-rejectedJwtClaims :: ProofRejection
-rejectedJwtClaims = mkProofRejection (knownSecurityFailureCode "jwt.claims-rejected")

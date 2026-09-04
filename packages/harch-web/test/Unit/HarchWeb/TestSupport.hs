@@ -24,7 +24,6 @@ import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe (unsafeTrustHtml)
 import HarchWeb.Observability qualified as Observability (ConnectionObservability (observabilityConnectionSpan), HttpServerMetrics (httpServerMetricAttributes), ObservabilityAttribute (attributeName, attributeValue), ObservabilityAttributeValue (IntAttribute, TextAttribute), RequestObservability (observabilityHttpServerMetrics, observabilityRequestSpan), RequestSpan (requestSpanAttributes), buildConnectionObservability)
 import HarchWeb.Security qualified as Security ()
-import HarchWeb.Session (generateCsrfToken)
 import Network.HTTP.Types qualified as Http (RequestHeaders, status200, status202, status501)
 import Network.Socket qualified as Socket (Family (AF_INET), HostAddress, SockAddr (SockAddrInet), Socket, SocketType (Stream), bind, close, connect, defaultProtocol, getSocketName, listen, maxListenQueue, socket, tupleToHostAddress, withSocketsDo)
 import Network.Socket.ByteString qualified as SocketByteString (recv, sendAll)
@@ -54,6 +53,27 @@ data TestRoute
   | EventStreamRoute
   | MissingRoute
   deriving (Eq, Show)
+
+-- | Deterministic page security for pure response-shape tests only. Runtime
+-- request tests continue to obtain a fresh value through their site boundary.
+testPageSecurity :: PageSecurity
+testPageSecurity =
+  mkPageSecurity
+    testRuntimeNonce
+    (mkPageCsrf testCsrfToken "test")
+
+testCsrfToken :: CsrfToken
+testCsrfToken =
+  case mkCsrfToken "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" of
+    Just csrfToken -> csrfToken
+    Nothing -> error "invalid test CSRF token"
+
+testCsrfProtection :: CsrfProtection context
+testCsrfProtection =
+  CsrfProtection
+    { issueCsrfToken = const (pure (CsrfTokenIssued testCsrfToken defaultCsrfCookieMaxAgeSeconds)),
+      verifyCsrfToken = \_ _ -> pure CsrfVerified
+    }
 
 type TestAuthorization = ()
 
@@ -315,11 +335,11 @@ sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
       applicationAttachRouteObservation = \_ _ requestContext -> requestContext,
       routeEndpointMetadata = testEndpointMetadata,
       clientActionEndpointMetadata = \_ _ _ -> Nothing,
+      clientActionRoute = \_ _ _ -> Nothing,
       routeExecutionPolicy = const unboundedRouteExecutionPolicy,
       renderRequestResponse = \_ -> pure . renderSampleResponse,
       decodeClientAction = DecodedClientAction . clientActionPath,
-      pageCsrfToken = const generateCsrfToken,
-      authorizeClientActionCsrf = \_ _ -> pure True,
+      csrfProtection = testCsrfProtection,
       handleClientAction = const (pure Nothing),
       pageShell = buildPageShell sampleCodec sampleShell,
       reportRequestObservability = const (pure ()),
@@ -546,11 +566,11 @@ rootPathApplication =
       applicationAttachRouteObservation = \_ _ requestContext -> requestContext,
       routeEndpointMetadata = testEndpointMetadata,
       clientActionEndpointMetadata = \_ _ _ -> Nothing,
+      clientActionRoute = \_ _ _ -> Nothing,
       routeExecutionPolicy = const unboundedRouteExecutionPolicy,
-      renderRequestResponse = \_ -> pure . PageResponse . samplePage,
+      renderRequestResponse = \_ request -> pure (PageResponse testPageSecurity (samplePage request)),
       decodeClientAction = DecodedClientAction . clientActionPath,
-      pageCsrfToken = const generateCsrfToken,
-      authorizeClientActionCsrf = \_ _ -> pure True,
+      csrfProtection = testCsrfProtection,
       handleClientAction = const (pure Nothing),
       pageShell = buildPageShell rootPathCodec sampleShell,
       reportRequestObservability = const (pure ()),
@@ -580,7 +600,7 @@ rootPathCodec =
 renderSampleResponse :: RouteRequest TestRoute TestContext -> Response TestRoute TestContext
 renderSampleResponse request =
   case requestRoute request of
-    KnownRoute -> PageResponse (samplePage request)
+    KnownRoute -> PageResponse testPageSecurity (samplePage request)
     QueryRoute queryString ->
       BodyResponse
         ResponseBody
@@ -611,7 +631,7 @@ renderSampleResponse request =
             responseLogEntries = [],
             responseDatabaseOperations = []
           }
-    MissingRoute -> PageResponse (sampleMissingPage request)
+    MissingRoute -> PageResponse testPageSecurity (sampleMissingPage request)
 
 waiRequestWithRemoteHostAndHeaders ::
   [Text] ->

@@ -56,4 +56,3 @@ test-suite catalog-domain-tests
     harch-web ^>=0.1.2.0,
     hspec ^>=2.11.17,
     http-types ^>=0.12.5,
-    wai ^>=3.2.5,

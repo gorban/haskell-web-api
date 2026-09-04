@@ -13,6 +13,7 @@ module HarchWeb.Authentication
     AuthenticationDependency,
     AuthenticationFailure (..),
     AuthenticationPipeline (..),
+    AuthenticationCookiePolicy,
     AuthenticationProofMaximumBytes,
     AuthenticationProofExtractor (..),
     AuthenticationProofVerifier (..),
@@ -30,17 +31,22 @@ module HarchWeb.Authentication
     ScopeAuthorizationDenial (..),
     SecurityFailureCode,
     authenticationGuardFromPipeline,
+    authenticationChallengeForAction,
+    authenticationCookieName,
     bearerJwtExtractor,
+    clearAuthenticationCookie,
     combineProofExtractors,
     cookieJwtExtractor,
     encodedJwtFromBytes,
     encodedJwtBytes,
     mkAuthenticationDependency,
     mkAuthenticationCookieName,
+    mkAuthenticationCookiePolicy,
     mkAuthenticationProofMaximumBytes,
     mkPrincipalRejection,
     mkProofRejection,
     mkSecurityFailureCode,
+    renderAuthenticationCookie,
     runAuthenticationPipeline,
     scopeAuthorizationInterpreter,
   )
@@ -58,9 +64,11 @@ import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import Data.Word (Word64)
 import HarchWeb.EndpointSecurity
   ( AccessRequirement (..),
     AuthenticationGuard (..),
+    EndpointDispatchKind (EndpointClientAction),
     EndpointGuardResult (..),
     EndpointMetadata (..),
     EndpointRequest (..),
@@ -75,7 +83,8 @@ import HarchWeb.SecurityEvent
     SecurityEventSink (..),
   )
 import HarchWeb.SecurityFailureCode
-import HarchWeb.Server.Response (Response)
+import HarchWeb.Server.ClientAction (clientActionReauthenticationRequiredResponse)
+import HarchWeb.Server.Response (NonPageResponse (..))
 import Network.Wai qualified as Wai
 
 newtype ProofRejection = ProofRejection SecurityFailureCode
@@ -109,6 +118,77 @@ mkAuthenticationCookieName value
   | otherwise = Left "authentication cookie name has invalid characters"
   where
     validCookieCharacter character = character > ' ' && character /= ';' && character /= '=' && character /= ','
+
+-- | The only browser-session cookie policy supplied by Harch's JWT boundary.
+-- A policy is deliberately host-only: the @__Host-@ prefix plus the fixed
+-- @Path=/@, @Secure@, @HttpOnly@, and @SameSite=Strict@ attributes make a
+-- deployment-specific domain or broad path impossible to author here.
+--
+-- Decision (AHI-4C, 2026-09-03): JWT proof extraction already belonged to
+-- this module, but issuing one required every application to reconstruct the
+-- security-sensitive cookie string.  Extend that existing capability with a
+-- validated policy and opaque-token renderer rather than adding a web-api
+-- helper. Applications still own the chosen name and lifetime; Harch never
+-- loads keys or issues a JWT itself.
+data AuthenticationCookiePolicy = AuthenticationCookiePolicy
+  { authenticationCookieName :: AuthenticationCookieName,
+    authenticationCookieMaxAgeSeconds :: Word64
+  }
+  deriving (Eq, Show)
+
+-- | Construct a non-sliding host-only JWT cookie policy. A zero lifetime is
+-- reserved for 'clearAuthenticationCookie', so successful authentication
+-- cannot accidentally issue an immediately expired credential.
+mkAuthenticationCookiePolicy :: Text -> Word64 -> Either Text AuthenticationCookiePolicy
+mkAuthenticationCookiePolicy name maxAgeSeconds
+  | maxAgeSeconds == 0 = Left "authentication cookie max age must be positive"
+  | not ("__Host-" `Text.isPrefixOf` name) = Left "authentication cookie name must use the __Host- prefix"
+  | otherwise =
+      AuthenticationCookiePolicy <$> mkAuthenticationCookieName name <*> pure maxAgeSeconds
+
+-- | Render an issued compact JWT only when its opaque bytes are valid cookie
+-- octets. 'EncodedJwt' intentionally also represents untrusted received
+-- proofs for verifier tests, so rendering is partial rather than assuming its
+-- bytes came from 'issueJwt'.
+renderAuthenticationCookie :: AuthenticationCookiePolicy -> EncodedJwt -> Maybe Text
+renderAuthenticationCookie policy encodedJwt = do
+  token <- either (const Nothing) Just (TextEncoding.decodeUtf8' (encodedJwtBytes encodedJwt))
+  if Text.null token || Text.any (not . validCookieValueCharacter) token
+    then Nothing
+    else
+      pure
+        ( authenticationCookieNameText (authenticationCookieName policy)
+            <> "="
+            <> token
+            <> cookieAttributes (authenticationCookieMaxAgeSeconds policy)
+        )
+
+-- | Expire the configured host-only cookie after durable session revocation.
+-- It deliberately accepts no token value, so logout cannot reflect an
+-- untrusted credential back into a response header.
+clearAuthenticationCookie :: AuthenticationCookiePolicy -> Text
+clearAuthenticationCookie policy =
+  authenticationCookieNameText (authenticationCookieName policy)
+    <> "="
+    <> cookieAttributes 0
+
+authenticationCookieNameText :: AuthenticationCookieName -> Text
+authenticationCookieNameText (AuthenticationCookieName name) = TextEncoding.decodeUtf8 name
+
+cookieAttributes :: Word64 -> Text
+cookieAttributes maxAgeSeconds =
+  "; Path=/; Max-Age="
+    <> Text.pack (show maxAgeSeconds)
+    <> "; HttpOnly; Secure; SameSite=Strict"
+
+validCookieValueCharacter :: Char -> Bool
+validCookieValueCharacter character =
+  character > ' '
+    && character <= '~'
+    && character /= '"'
+    && character /= ','
+    && character /= ';'
+    && character /= '\\'
 
 -- | A positive, application-selected byte budget for one compact proof.
 -- Keeping the bound validated makes a missing or non-positive extraction
@@ -215,9 +295,9 @@ data AuthenticationPipeline route context authorization proof verified principal
     authenticationAuthorizationInterpreter :: AuthorizationInterpreter principal authorization denial,
     authenticationDenialFailureCode :: denial -> SecurityFailureCode,
     authenticationAttachPrincipal :: principal -> context -> context,
-    authenticationChallenge :: EndpointRequest route context authorization -> AuthenticationFailure -> Response route context,
-    authenticationForbidden :: EndpointRequest route context authorization -> denial -> Response route context,
-    authenticationUnavailable :: EndpointRequest route context authorization -> AuthenticationDependency -> Response route context
+    authenticationChallenge :: EndpointRequest route context authorization -> AuthenticationFailure -> NonPageResponse route context,
+    authenticationForbidden :: EndpointRequest route context authorization -> denial -> NonPageResponse route context,
+    authenticationUnavailable :: EndpointRequest route context authorization -> AuthenticationDependency -> NonPageResponse route context
   }
 
 -- | Assemble one configured authentication guard. The root's
@@ -225,6 +305,17 @@ data AuthenticationPipeline route context authorization proof verified principal
 -- to application-specific before/after guards.
 authenticationGuardFromPipeline :: AuthenticationPipeline route context authorization proof verified principal denial -> AuthenticationGuard route context authorization
 authenticationGuardFromPipeline pipeline = AuthenticationGuard (runAuthenticationPipeline pipeline)
+
+-- | Preserve an application's ordinary authentication challenge for a page or
+-- protocol endpoint, but turn an action guard's pre-handler 401 into Harch's
+-- one retained-action marker.  The browser runtime recognizes only this
+-- framework-owned response, so authorization, CSRF, validation, and handler
+-- failures cannot be mistaken for a reauthentication invitation.
+authenticationChallengeForAction :: EndpointRequest route context authorization -> NonPageResponse route context -> NonPageResponse route context
+authenticationChallengeForAction endpointRequest ordinaryChallenge =
+  case endpointDispatchKind endpointRequest of
+    EndpointClientAction -> NonPageClientActionBodyResponse clientActionReauthenticationRequiredResponse
+    _ -> ordinaryChallenge
 
 -- | Run the pipeline against the selected endpoint. Anonymous endpoints may
 -- enrich their context when proof succeeds, but every presented-proof failure

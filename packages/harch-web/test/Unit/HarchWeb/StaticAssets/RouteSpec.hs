@@ -8,7 +8,7 @@ import HarchWeb.EndpointMetadata (AccessRequirement (AllowUnauthenticated), Endp
 import HarchWeb.Routing (RouteCodec (..), RouteLocation (..), RouteMethod (RouteGet), RouteParseResult (..), RouteRequest (..), requiredPathSegment, routeMethodPolicy)
 import HarchWeb.Routing qualified as Routing
 import HarchWeb.Server (ProtocolResponse (..), ProtocolResponseBody (ProtocolResponseWai), Response (ProtocolResponseResult), unboundedRouteExecutionPolicy)
-import HarchWeb.Site (RouteDefinition (..))
+import HarchWeb.Site (RouteDefinition (..), routeResponse)
 import HarchWeb.Site qualified as Site
 import HarchWeb.StaticAssets (StaticAssetRoot (..), StaticAssetsConfig (..), defaultStaticAssetContentTypes)
 import HarchWeb.StaticAssets.Route

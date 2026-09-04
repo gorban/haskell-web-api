@@ -56,4 +56,3 @@ test-suite orders-domain-tests
     hspec ^>=2.11.17,
     http-types ^>=0.12.5,
     orders-domain ^>=0.1.0.0,
-    wai ^>=3.2.5,

@@ -7,6 +7,8 @@ module WebApi.Response
     jsonText,
     pageFailureDiagnostics,
     renderLocale,
+    spacesLocation,
+    apiNotFoundResponse,
     secondRouteApiBody,
     selectResponseWithDatabaseAndAccountWorkflow,
     selectResponseWithDatabase,
@@ -30,7 +32,7 @@ import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppConfig)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), PageRepository, defaultPageRepository)
 import WebApi.Page (renderPageFromRouteData, renderProfilePageWithState, renderUnavailableProfilePage)
-import WebApi.Profile (ProfileLoadError (..), loadProfile)
+import WebApi.Profile (ProfileLoadError (..), loadProfileForPrincipal)
 import WebApi.Route
   ( AppLocale (..),
     AppRequestContext (..),
@@ -44,22 +46,20 @@ import WebApi.RouteData
     selectRouteDataSelectionWithDatabase,
   )
 
-selectResponse :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
+-- | Select a page-handler outcome before Harch's single renderer attaches
+-- per-document security.  API and redirect routes are dispatched separately
+-- by 'WebApi.App'; this function cannot construct a final page response.
+selectResponse :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.PageResult AppRoute AppRequestContext)
 selectResponse config =
   selectResponseWithDatabase config defaultPageRepository
 
-selectResponseWithDatabase :: AppConfig -> PageRepository -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
+selectResponseWithDatabase :: AppConfig -> PageRepository -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.PageResult AppRoute AppRequestContext)
 selectResponseWithDatabase config pageRepository routeRequest =
-  if isHomePageRequest routeRequest
-    then pure (HarchWeb.redirectResponse Http.status302 (spacesLocation routeRequest))
-    else case HarchWeb.requestRoute routeRequest of
-      Api _ -> pure (HarchWeb.BodyResponse apiNotFoundResponse)
-      Page _ ->
-        fmap
-          (renderPageResponseFromRouteDataSelection config routeRequest)
-          (selectRouteDataSelectionWithDatabase pageRepository routeRequest)
+  fmap
+    (renderPageResponseFromRouteDataSelection config routeRequest)
+    (selectRouteDataSelectionWithDatabase pageRepository routeRequest)
 
-selectResponseWithDatabaseAndAccountWorkflow :: AppConfig -> PageRepository -> AccountWorkflow -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
+selectResponseWithDatabaseAndAccountWorkflow :: AppConfig -> PageRepository -> AccountWorkflow -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.PageResult AppRoute AppRequestContext)
 selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow routeRequest =
   if isProfilePageRequest routeRequest
     then selectProfileResponse config accountWorkflow routeRequest
@@ -69,26 +69,19 @@ isProfilePageRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Bool
 isProfilePageRequest routeRequest =
   HarchWeb.requestRoute routeRequest == ProfileRoute
 
-selectProfileResponse :: AppConfig -> AccountWorkflow -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
+selectProfileResponse :: AppConfig -> AccountWorkflow -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.PageResult AppRoute AppRequestContext)
 selectProfileResponse config accountWorkflow routeRequest = do
-  nowNanoseconds <- accountWorkflowClock accountWorkflow
   loadedProfile <-
-    loadProfile
-      (accountWorkflowSessionStore accountWorkflow)
+    loadProfileForPrincipal
       (accountWorkflowProfileStore accountWorkflow)
-      nowNanoseconds
-      (requestSessionId (HarchWeb.requestContext routeRequest))
+      (requestAccountPrincipal (HarchWeb.requestContext routeRequest))
   pure $
     case loadedProfile of
-      Right profileState -> HarchWeb.PageResponse (renderProfilePageWithState config routeRequest profileState)
+      Right profileState -> HarchWeb.RenderedPage (renderProfilePageWithState config routeRequest profileState)
       Left profileLoadError ->
-        HarchWeb.PageResponseWithMetadata
+        HarchWeb.RenderedPageWithMetadata
           (pageErrorResponseMetadata (profileFailureDiagnostics profileLoadError))
           (renderUnavailableProfilePage config routeRequest)
-
-isHomePageRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Bool
-isHomePageRequest routeRequest =
-  HarchWeb.requestRoute routeRequest == HomeRoute
 
 spacesLocation :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Text
 spacesLocation routeRequest =
@@ -102,19 +95,19 @@ renderPageResponseFromRouteDataSelection ::
   AppConfig ->
   HarchWeb.RouteRequest AppRoute AppRequestContext ->
   RouteDataSelection ->
-  HarchWeb.Response AppRoute AppRequestContext
+  HarchWeb.PageResult AppRoute AppRequestContext
 renderPageResponseFromRouteDataSelection config routeRequest routeDataSelection =
   case routeData of
     SecondRouteDataResult (Left databaseError) ->
       let renderedPage = renderPageFromRouteData config routeRequest routeData
-       in HarchWeb.PageResponseWithMetadata
+       in HarchWeb.RenderedPageWithMetadata
             (pageErrorResponseMetadata (pageFailureDiagnostics PageFailureSurface "/second" "second-page" routeDataDatabaseOperationsValue databaseError))
             renderedPage
     _ ->
       let renderedPage = renderPageFromRouteData config routeRequest routeData
        in if null routeDataDatabaseOperationsValue
-            then HarchWeb.PageResponse renderedPage
-            else HarchWeb.PageResponseWithMetadata (pageSuccessResponseMetadata routeDataDatabaseOperationsValue) renderedPage
+            then HarchWeb.RenderedPage renderedPage
+            else HarchWeb.RenderedPageWithMetadata (pageSuccessResponseMetadata routeDataDatabaseOperationsValue) renderedPage
   where
     routeData = routeDataResult routeDataSelection
     routeDataDatabaseOperationsValue = routeDataDatabaseOperations routeDataSelection
@@ -253,7 +246,6 @@ profileFailureDiagnostics profileLoadError =
 profileLoadErrorType :: ProfileLoadError -> Text
 profileLoadErrorType profileLoadError =
   case profileLoadError of
-    ProfileSessionStoreError _ -> "AccountSessionStoreError"
     ProfileAccountStoreError _ -> "AccountStoreError"
 
 toHarchDatabaseOperation :: DatabaseOperation -> HarchDatabase.DatabaseOperation

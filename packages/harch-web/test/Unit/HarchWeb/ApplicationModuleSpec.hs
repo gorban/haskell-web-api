@@ -13,6 +13,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Action qualified as Action
 import HarchWeb.ApplicationModule
+import HarchWeb.Csrf (PageSecurity, mkCsrfToken, mkPageCsrf, mkPageSecurity)
 import HarchWeb.Document (Page (..))
 import HarchWeb.Document qualified as Document
 import HarchWeb.EndpointMetadata qualified as EndpointMetadata
@@ -21,8 +22,8 @@ import HarchWeb.Markup (safeUrlText, text)
 import HarchWeb.Routing
 import HarchWeb.Routing qualified as Routing
 import HarchWeb.SecurityEvent (ModuleName, mkModuleName)
-import HarchWeb.Server (ClientActionRequest (..), ClientActionResponse (..), ProtocolResponse (..), ProtocolResponseBody (..), Response (..), ResponseBody (..), ServerSentEventSource (..), unboundedRouteExecutionPolicy)
-import HarchWeb.Site (RouteDefinition (..))
+import HarchWeb.Server (ActionNavigation (StayOnCurrentRoute), ClientActionRequest (..), ClientActionResponse (..), NonPageResponse (..), PageResult (..), ProtocolResponse (..), ProtocolResponseBody (..), Response (..), ResponseBody (..), ServerSentEventSource (..), unboundedRouteExecutionPolicy)
+import HarchWeb.Site (RouteDefinition (..), RouteHandler (..), routeResponse)
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
@@ -57,10 +58,9 @@ data ChildAuthorization = ChildCanSave
   deriving (Eq, Show)
 
 data ChildResponseKind
-  = ChildPageResponse
-  | ChildPageResponseWithMetadata
-  | ChildBodyResponse
+  = ChildBodyResponse
   | ChildRedirectResponse
+  | ChildInternalRedirectWithHeadersResponse
   | ChildActionBodyResponse
   | ChildEventStreamResponse
   | ChildProtocolResponse
@@ -117,6 +117,9 @@ spec =
       Action.actionPath (moduleActionCodec mountedModule) 42 ParentSaveTarget `shouldBe` Just "/catalog/tenant-42/save"
       Action.actionEndpointMetadata (moduleActionCodec mountedModule) 42 "POST" "/catalog/tenant-42/save"
         `shouldBe` Just mountedChildActionMetadata
+      Action.actionEndpointTarget (moduleActionCodec mountedModule) 42 "POST" "/catalog/tenant-42/save"
+        `shouldBe` Just ParentSaveTarget
+      moduleActionRoute mountedModule 42 ParentSaveTarget `shouldBe` Just (CatalogRoute ChildItemRoute)
       Site.routeNavigationLabel mountedDefinition `shouldBe` Just "Catalog"
       Site.routeMethods mountedDefinition `shouldBe` [RouteGet]
       Site.routeExecutionPolicy mountedDefinition `shouldBe` unboundedRouteExecutionPolicy
@@ -124,12 +127,15 @@ spec =
       mountedNotFoundRequest `shouldBe` RouteRequest (CatalogRoute ChildItemRoute) 42
       requestRoute mountedNotFoundRequest `shouldBe` CatalogRoute ChildItemRoute
       requestContext mountedNotFoundRequest `shouldBe` 42
-      response <- routeResponse mountedDefinition Wai.defaultRequest parentRequest
-      case response of
-        PageResponse page -> do
-          Document.pageRoute page `shouldBe` CatalogRoute ChildItemRoute
-          pageContext page `shouldBe` 42
-        _ -> expectationFailure "expected mounted page response"
+      case routeHandler mountedDefinition of
+        PageRouteHandler renderPage -> do
+          pageResult <- renderPage testPageSecurity parentRequest
+          case pageResult of
+            RenderedPage page -> do
+              Document.pageRoute page `shouldBe` CatalogRoute ChildItemRoute
+              pageContext page `shouldBe` 42
+            RenderedPageWithMetadata {} -> expectationFailure "expected the mounted page handler without response metadata"
+        ProtocolRouteHandler {} -> expectationFailure "expected mounted page handler"
       actionResult <-
         moduleHandleAction
           mountedModule
@@ -230,7 +236,7 @@ spec =
         Left mountError -> mountError `shouldBe` InvalidMountedActionCodec (Action.InvalidActionEndpointMetadata EndpointMetadata.EndpointNameTooLong)
         Right _ -> expectationFailure "expected an invalid mounted action declaration"
 
-    it "maps every response shape without allowing a child route or context to escape its mount" $ do
+    it "maps every non-page response shape without allowing a child route or context to escape its mount" $ do
       forM_ [minBound .. maxBound] $ \responseKind -> do
         actionContext <- newIORef Nothing
         guardContext <- newIORef Nothing
@@ -338,16 +344,16 @@ spec =
         `shouldBe` testRouteLocation "/catalog/item"
       notFoundRequest mountedCodec 7 `shouldBe` RouteRequest (CatalogRoute ChildItemRoute) 7
 
-    it "forwards the original WAI request and projected context to a child route response" $ do
+    it "projects context before a child page handler renders" $ do
       actionContext <- newIORef Nothing
       guardContext <- newIORef Nothing
       let requestAwareDefinition =
             (childDefinition ChildItemRoute)
-              { routeResponse = \waiRequest childRequest ->
+              { routeHandler = PageRouteHandler $ \_ childRequest ->
                   pure
-                    ( PageResponse
+                    ( RenderedPage
                         Page
-                          { pageTitle = Text.pack (ByteString.unpack (Wai.requestMethod waiRequest)) <> ":" <> requestContext childRequest,
+                          { pageTitle = "page:" <> requestContext childRequest,
                             pageRoute = requestRoute childRequest,
                             pageContext = requestContext childRequest,
                             pageBody = text "Item",
@@ -361,19 +367,18 @@ spec =
                   ChildItemRoute -> requestAwareDefinition
               }
       mountedModule <- requireMountedModule testModuleMount childModule
-      response <-
-        routeResponse
-          (moduleEndpoints mountedModule (CatalogRoute ChildItemRoute))
-          (Wai.defaultRequest {Wai.requestMethod = "PATCH"})
-          (RouteRequest (CatalogRoute ChildItemRoute) 7)
-      case response of
-        PageResponse page -> do
-          pageTitle page `shouldBe` "PATCH:tenant-7"
-          Document.pageRoute page `shouldBe` CatalogRoute ChildItemRoute
-          pageContext page `shouldBe` 7
-        _ -> expectationFailure "expected mounted page response"
+      case routeHandler (moduleEndpoints mountedModule (CatalogRoute ChildItemRoute)) of
+        PageRouteHandler renderPage -> do
+          response <- renderPage testPageSecurity (RouteRequest (CatalogRoute ChildItemRoute) 7)
+          case response of
+            RenderedPage page -> do
+              pageTitle page `shouldBe` "page:tenant-7"
+              Document.pageRoute page `shouldBe` CatalogRoute ChildItemRoute
+              pageContext page `shouldBe` 7
+            _ -> expectationFailure "expected mounted page result"
+        _ -> expectationFailure "expected mounted page handler"
 
-    it "scopes child guards to their mount and maps a child halt through the parent response algebra" $ do
+    it "scopes child guards to their mount and maps a non-page halt through the parent response algebra" $ do
       actionContext <- newIORef Nothing
       guardContext <- newIORef Nothing
       guardFacts <- newIORef Nothing
@@ -396,15 +401,7 @@ spec =
                             )
                           pure
                             ( HaltEndpoint
-                                ( PageResponse
-                                    Page
-                                      { pageTitle = "Blocked",
-                                        pageRoute = ChildItemRoute,
-                                        pageContext = "tenant-42",
-                                        pageBody = text "Blocked",
-                                        pageBootstrapHooks = []
-                                      }
-                                )
+                                (NonPageBodyResponse testResponseBody)
                             )
                       )
                   ]
@@ -425,10 +422,9 @@ spec =
             `shouldReturn` ContinueEndpoint 42
           haltResult <- runEndpointGuard mountedGuard (endpointRequest (CatalogRoute ChildItemRoute))
           case haltResult of
-            HaltEndpoint (PageResponse page) -> do
-              pageRoute page `shouldBe` CatalogRoute ChildItemRoute
-              pageContext page `shouldBe` 42
-            _ -> expectationFailure "expected the child guard page to be mapped to the parent algebra"
+            HaltEndpoint (NonPageBodyResponse responseBodyValue) ->
+              responseBodyValue `shouldBe` testResponseBody
+            _ -> expectationFailure "expected the child guard's non-page response to be mapped"
           readIORef guardFacts `shouldReturn` Just ("GET", "item", False, EndpointMatched)
         _ -> expectationFailure "expected exactly one mounted guard"
 
@@ -548,7 +544,7 @@ spec =
               clientActionRequestIdempotencyKey = Nothing,
               clientActionContext = 42
             }
-      actionResult `shouldBe` Just testClientActionResponse
+      actionResult `shouldBe` Just parentTestClientActionResponse
       readIORef actionContext `shouldReturn` Just "tenant-42"
       Site.siteHandleClientAction
         installedSite
@@ -557,7 +553,7 @@ spec =
             clientActionRequestIdempotencyKey = Nothing,
             clientActionContext = 42
           }
-        `shouldReturn` Just testClientActionResponse
+        `shouldReturn` Just parentTestClientActionResponse
       Site.siteHandleClientAction
         directModuleSite
         ClientActionRequest
@@ -565,7 +561,7 @@ spec =
             clientActionRequestIdempotencyKey = Nothing,
             clientActionContext = 42
           }
-        `shouldReturn` Just testClientActionResponse
+        `shouldReturn` Just parentTestClientActionResponse
       Action.decodeAction
         (moduleActionCodec rootModule)
         Action.ClientActionPayload
@@ -619,7 +615,7 @@ spec =
             clientActionRequestIdempotencyKey = Nothing,
             clientActionContext = 42
           }
-        `shouldReturn` Just testClientActionResponse
+        `shouldReturn` Just parentTestClientActionResponse
 
       let noHandlerCatalogModule = catalogModule {moduleHandleAction = const (pure Nothing)}
           noHandlerOtherModule = otherModule {moduleHandleAction = const (pure Nothing)}
@@ -698,7 +694,8 @@ otherModule =
         ParentOtherRoute -> otherDefinition
         routeValue -> error ("root.other does not own " <> show routeValue),
       moduleActionCodec = Action.emptyActionCodec,
-      moduleHandleAction = const (pure (Just testClientActionResponse)),
+      moduleActionRoute = \_ _ -> Nothing,
+      moduleHandleAction = const (pure (Just parentTestClientActionResponse)),
       moduleGuards = []
     }
 
@@ -732,7 +729,7 @@ otherDefinitionWithMetadata metadata =
   Site.pageRoute
     metadata
     Nothing
-    (\request -> pure Page {pageTitle = "Other", pageRoute = requestRoute request, pageContext = requestContext request, pageBody = text "Other", pageBootstrapHooks = []})
+    (\_ request -> pure Page {pageTitle = "Other", pageRoute = requestRoute request, pageContext = requestContext request, pageBody = text "Other", pageBootstrapHooks = []})
 
 otherEndpointMetadata :: EndpointMetadata.EndpointMetadata ParentAuthorization
 otherEndpointMetadata =
@@ -783,6 +780,8 @@ testModuleMount =
       mountedActions =
         ActionMount
           { embedChildActionTarget = const ParentSaveTarget,
+            projectChildActionTarget = \case
+              ParentSaveTarget -> Just ChildSaveTarget,
             embedChildAction = CatalogAction,
             projectChildAction = \case
               CatalogAction childAction -> Just childAction
@@ -803,6 +802,7 @@ buildChildModule actionContext guardContext =
       moduleDeclaredRoutes = [ChildItemRoute],
       moduleEndpoints = childDefinition,
       moduleActionCodec = childActionCodec,
+      moduleActionRoute = \_ ChildSaveTarget -> Just ChildItemRoute,
       moduleHandleAction = \request -> do
         let actionSuffix = case clientAction request of
               SaveChildItem -> Text.empty
@@ -855,12 +855,12 @@ childDefinition ChildItemRoute =
   Site.pageRoute
     childMetadata
     (Just "Catalog")
-    (\request -> pure Page {pageTitle = "Catalog", pageRoute = requestRoute request, pageContext = requestContext request, pageBody = text "Item", pageBootstrapHooks = []})
+    (\_ request -> pure Page {pageTitle = "Catalog", pageRoute = requestRoute request, pageContext = requestContext request, pageBody = text "Item", pageBootstrapHooks = []})
 
 childDefinitionWithResponse :: ChildResponseKind -> RouteDefinition ChildRoute Text ChildAuthorization
 childDefinitionWithResponse responseKind =
   (childDefinition ChildItemRoute)
-    { routeResponse = \_ request -> pure (childResponseFor responseKind request)
+    { routeHandler = ProtocolRouteHandler $ \_ request -> pure (childResponseFor responseKind request)
     }
 
 childDefinitionForAccess :: ChildRoute -> RouteDefinition ChildRoute Text ChildAuthorization
@@ -877,51 +877,35 @@ childDefinitionWithAccess accessRequirement template =
         accessRequirement
     )
     (Just "Catalog")
-    (\request -> pure Page {pageTitle = "Catalog", pageRoute = requestRoute request, pageContext = requestContext request, pageBody = text "Item", pageBootstrapHooks = []})
+    (\_ request -> pure Page {pageTitle = "Catalog", pageRoute = requestRoute request, pageContext = requestContext request, pageBody = text "Item", pageBootstrapHooks = []})
 
-childResponseFor :: ChildResponseKind -> RouteRequest ChildRoute Text -> Response ChildRoute Text
-childResponseFor responseKind request =
+childResponseFor :: ChildResponseKind -> RouteRequest ChildRoute Text -> NonPageResponse ChildRoute Text
+childResponseFor responseKind _request =
   case responseKind of
-    ChildPageResponse -> PageResponse (childPage request)
-    ChildPageResponseWithMetadata -> PageResponseWithMetadata testResponseBody (childPage request)
-    ChildBodyResponse -> BodyResponse testResponseBody
-    ChildRedirectResponse -> RedirectResponse testResponseBody "/next"
-    ChildActionBodyResponse -> ClientActionBodyResponse testClientActionResponse
-    ChildEventStreamResponse -> EventStreamResponse testResponseBody (ServerSentEventSource (pure Nothing))
-    ChildProtocolResponse -> ProtocolResponseResult testProtocolResponse
-
-childPage :: RouteRequest ChildRoute Text -> Page ChildRoute Text
-childPage request =
-  Page
-    { pageTitle = "Catalog",
-      pageRoute = requestRoute request,
-      pageContext = requestContext request,
-      pageBody = text "Item",
-      pageBootstrapHooks = []
-    }
+    ChildBodyResponse -> NonPageBodyResponse testResponseBody
+    ChildRedirectResponse -> NonPageRedirectResponse testResponseBody "/next"
+    ChildInternalRedirectWithHeadersResponse -> NonPageInternalRedirectResponseWithHeaders testResponseBody [("Set-Cookie", "__Host-session=opaque")] (RouteRequest ChildItemRoute "child")
+    ChildActionBodyResponse -> NonPageClientActionBodyResponse testClientActionResponse
+    ChildEventStreamResponse -> NonPageEventStreamResponse testResponseBody (ServerSentEventSource (pure Nothing))
+    ChildProtocolResponse -> NonPageProtocolResponse testProtocolResponse
 
 assertMountedResponse :: ChildResponseKind -> Response ParentRoute Int -> Expectation
 assertMountedResponse responseKind response =
   case (responseKind, response) of
-    (ChildPageResponse, PageResponse page) -> assertMountedPage page
-    (ChildPageResponseWithMetadata, PageResponseWithMetadata responseBodyValue page) -> do
-      responseBodyValue `shouldBe` testResponseBody
-      assertMountedPage page
     (ChildBodyResponse, BodyResponse responseBodyValue) -> responseBodyValue `shouldBe` testResponseBody
     (ChildRedirectResponse, RedirectResponse responseBodyValue location) -> do
       responseBodyValue `shouldBe` testResponseBody
       location `shouldBe` "/next"
-    (ChildActionBodyResponse, ClientActionBodyResponse actionResponse) -> actionResponse `shouldBe` testClientActionResponse
+    (ChildInternalRedirectWithHeadersResponse, InternalRedirectResponseWithHeaders responseBodyValue headers routeRequest) -> do
+      responseBodyValue `shouldBe` testResponseBody
+      headers `shouldBe` [("Set-Cookie", "__Host-session=opaque")]
+      routeRequest `shouldBe` RouteRequest (CatalogRoute ChildItemRoute) 7
+    (ChildActionBodyResponse, ClientActionBodyResponse actionResponse) -> actionResponse `shouldBe` parentTestClientActionResponse
     (ChildEventStreamResponse, EventStreamResponse responseBodyValue source) -> do
       responseBodyValue `shouldBe` testResponseBody
       nextServerSentEvent source `shouldReturn` Nothing
     (ChildProtocolResponse, ProtocolResponseResult protocolResponse) -> protocolResponse `shouldBe` testProtocolResponse
     _ -> expectationFailure ("response kind was not preserved: " <> show responseKind <> " rendered as " <> show response)
-
-assertMountedPage :: Page ParentRoute Int -> Expectation
-assertMountedPage page = do
-  Document.pageRoute page `shouldBe` CatalogRoute ChildItemRoute
-  pageContext page `shouldBe` 7
 
 testResponseBody :: ResponseBody
 testResponseBody =
@@ -934,12 +918,25 @@ testResponseBody =
       responseDatabaseOperations = []
     }
 
-testClientActionResponse :: ClientActionResponse
+testClientActionResponse :: ClientActionResponse ChildRoute Text
 testClientActionResponse =
   ClientActionResponse
     { clientActionStatus = Http.status200,
       clientActionPatches = [],
       clientActionFocusId = Nothing,
+      clientActionNavigation = StayOnCurrentRoute,
+      clientActionHeaders = [],
+      clientActionObservabilityAttributes = [],
+      clientActionLogEntries = []
+    }
+
+parentTestClientActionResponse :: ClientActionResponse ParentRoute Int
+parentTestClientActionResponse =
+  ClientActionResponse
+    { clientActionStatus = Http.status200,
+      clientActionPatches = [],
+      clientActionFocusId = Nothing,
+      clientActionNavigation = StayOnCurrentRoute,
       clientActionHeaders = [],
       clientActionObservabilityAttributes = [],
       clientActionLogEntries = []
@@ -955,6 +952,15 @@ testProtocolResponse =
       protocolResponseLogEntries = [],
       protocolResponseDatabaseOperations = []
     }
+
+testPageSecurity :: PageSecurity
+testPageSecurity =
+  mkPageSecurity Document.testRuntimeNonce (mkPageCsrf testCsrfToken "application-module")
+  where
+    testCsrfToken =
+      case mkCsrfToken "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" of
+        Just csrfToken -> csrfToken
+        Nothing -> error "invalid test CSRF token"
 
 childMetadata :: EndpointMetadata.EndpointMetadata ChildAuthorization
 childMetadata =

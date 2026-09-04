@@ -14,8 +14,6 @@ import HarchWeb.Account (AccountId, accountIdText, mkAccountId)
 import HarchWeb.Session
   ( OpaqueSession (..),
     SessionId,
-    csrfTokenText,
-    mkCsrfToken,
     sessionIdText,
   )
 import HarchWeb.Time (unixTimeNanoseconds, unixTimeNanosecondsValue)
@@ -49,7 +47,6 @@ buildRuntimePostgresMfaEnrollmentSessionStoreWithRunner runQuery source =
             saveMfaEnrollmentSessionQuery
             [ sessionIdText (sessionId session),
               accountIdText (sessionPrincipal session),
-              csrfTokenText (sessionCsrfToken session),
               Text.pack (show (unixTimeNanosecondsValue (sessionIssuedAtNanoseconds session))),
               Text.pack (show (unixTimeNanosecondsValue (sessionExpiresAtNanoseconds session)))
             ]
@@ -84,15 +81,14 @@ decodeStoredSession :: SessionId -> [[Text]] -> Either MfaEnrollmentSessionStore
 decodeStoredSession sessionToken rows =
   case rows of
     [] -> Right Nothing
-    [[accountIdValue, csrfTokenValue, issuedAtValue, expiresAtValue]] ->
-      case (mkAccountId accountIdValue, mkCsrfToken csrfTokenValue, readMaybe (Text.unpack issuedAtValue), readMaybe (Text.unpack expiresAtValue)) of
-        (Just accountId, Just csrfToken, Just issuedAt, Just expiresAt) ->
+    [[accountIdValue, issuedAtValue, expiresAtValue]] ->
+      case (mkAccountId accountIdValue, readMaybe (Text.unpack issuedAtValue), readMaybe (Text.unpack expiresAtValue)) of
+        (Just accountId, Just issuedAt, Just expiresAt) ->
           Right
             ( Just
                 OpaqueSession
                   { sessionId = sessionToken,
                     sessionPrincipal = accountId,
-                    sessionCsrfToken = csrfToken,
                     sessionIssuedAtNanoseconds = unixTimeNanoseconds issuedAt,
                     sessionExpiresAtNanoseconds = unixTimeNanoseconds expiresAt
                   }
@@ -101,6 +97,6 @@ decodeStoredSession sessionToken rows =
     _ -> Left MfaEnrollmentSessionStoreCorruptData
 
 saveMfaEnrollmentSessionQuery, loadMfaEnrollmentSessionQuery, invalidateMfaEnrollmentSessionQuery :: Text
-saveMfaEnrollmentSessionQuery = "INSERT INTO web_api.mfa_enrollment_sessions (session_id, account_id, csrf_token, issued_at_nanoseconds, expires_at_nanoseconds) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (session_id) DO NOTHING RETURNING session_id;"
-loadMfaEnrollmentSessionQuery = "SELECT account_id, csrf_token, issued_at_nanoseconds::TEXT, expires_at_nanoseconds::TEXT FROM web_api.mfa_enrollment_sessions WHERE session_id = $1 AND invalidated_at_nanoseconds IS NULL;"
+saveMfaEnrollmentSessionQuery = "INSERT INTO web_api.mfa_enrollment_sessions (session_id, account_id, issued_at_nanoseconds, expires_at_nanoseconds) VALUES ($1, $2, $3, $4) ON CONFLICT (session_id) DO NOTHING RETURNING session_id;"
+loadMfaEnrollmentSessionQuery = "SELECT account_id, issued_at_nanoseconds::TEXT, expires_at_nanoseconds::TEXT FROM web_api.mfa_enrollment_sessions WHERE session_id = $1 AND invalidated_at_nanoseconds IS NULL;"
 invalidateMfaEnrollmentSessionQuery = "UPDATE web_api.mfa_enrollment_sessions SET invalidated_at_nanoseconds = $2 WHERE session_id = $1 AND invalidated_at_nanoseconds IS NULL RETURNING session_id;"

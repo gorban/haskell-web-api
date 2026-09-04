@@ -13,7 +13,9 @@ testRuntimeSecrets :: [(Text.Text, Text.Text)]
 testRuntimeSecrets =
   [ ("DATABASE_PASSWORD", "web_api"),
     ("SMTP_PASSWORD", "password"),
-    ("TOTP_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+    ("TOTP_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+    ("CSRF_SIGNING_ACTIVE_KEY_ID", "development-v1"),
+    ("CSRF_SIGNING_VERIFICATION_KEYS", "development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
   ]
 
 testSetupDefaults :: [(Text.Text, Text.Text)]
@@ -176,7 +178,7 @@ spec = do
               let envPath = tempDirectory <> "/.env"
                   envLocalPath = tempDirectory <> "/.env.local"
               writeFile envPath "APP_TITLE_PREFIX=web-api-shared\nSETUP_AUTOSTART_DATABASE=true\n"
-              writeFile envLocalPath "DATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nAPP_TITLE_PREFIX=web-api-local\nSETUP_AUTOSTART_JAEGER=yes\n"
+              writeFile envLocalPath "DATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nCSRF_SIGNING_ACTIVE_KEY_ID=development-v1\nCSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nAPP_TITLE_PREFIX=web-api-local\nSETUP_AUTOSTART_JAEGER=yes\n"
               loadAppSetupConfigWithFiles envPath envLocalPath
                 `shouldReturn` Right
                   AppSetupConfig
@@ -204,7 +206,7 @@ spec = do
                     let envPath = tempDirectory <> "/.env"
                         envLocalPath = tempDirectory <> "/.env.local"
                     writeFile envPath "APP_TITLE_PREFIX=web-api-shared\nSETUP_AUTOSTART_DATABASE=true\n"
-                    writeFile envLocalPath "DATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nAPP_TITLE_PREFIX=web-api-local\nSETUP_AUTOSTART_JAEGER=no\n"
+                    writeFile envLocalPath "DATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nCSRF_SIGNING_ACTIVE_KEY_ID=development-v1\nCSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nAPP_TITLE_PREFIX=web-api-local\nSETUP_AUTOSTART_JAEGER=no\n"
                     loadAppSetupConfigWithFiles envPath envLocalPath
                       `shouldReturn` Right
                         AppSetupConfig
@@ -238,7 +240,7 @@ spec = do
                       "WEB_API_MIGRATION_DATABASE_USER=web_api_owner"
                     ]
                 )
-              writeFile envLocalPath "DATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nWEB_API_MIGRATION_DATABASE_PASSWORD=owner-secret\n"
+              writeFile envLocalPath "DATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nCSRF_SIGNING_ACTIVE_KEY_ID=development-v1\nCSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nWEB_API_MIGRATION_DATABASE_PASSWORD=owner-secret\n"
               loadAppSetupConfigWithFiles envPath envLocalPath
                 `shouldReturn` Right
                   AppSetupConfig
@@ -284,7 +286,7 @@ spec = do
               loadAppSetupConfigWithFiles brokenEnvPath envLocalPath
                 `shouldReturn` Left
                   (AppSetupOverridesFileError brokenEnvPath (InvalidConfigOverridesLine 1 "SETUP_AUTOSTART_DATABASE"))
-              writeFile envLocalPath "DATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+              writeFile envLocalPath "DATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nCSRF_SIGNING_ACTIVE_KEY_ID=development-v1\nCSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
               writeFile invalidEnvPath "SETUP_AUTOSTART_JAEGER=maybe\n"
               loadAppSetupConfigWithFiles invalidEnvPath envLocalPath
                 `shouldReturn` Left
@@ -314,7 +316,7 @@ spec = do
           withClearedRuntimeEnvironment $
             withClearedSetupEnvironment $ do
               writeFile (tempDirectory <> "/.env") "SETUP_AUTOSTART_DATABASE=true\n"
-              writeFile (tempDirectory <> "/.env.local") "DATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nAPP_TITLE_PREFIX=web-api-dev\nSETUP_AUTOSTART_JAEGER=true\n"
+              writeFile (tempDirectory <> "/.env.local") "DATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nCSRF_SIGNING_ACTIVE_KEY_ID=development-v1\nCSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nAPP_TITLE_PREFIX=web-api-dev\nSETUP_AUTOSTART_JAEGER=true\n"
               withCurrentDirectory tempDirectory $
                 loadAppSetupConfig
                   `shouldReturn` Right

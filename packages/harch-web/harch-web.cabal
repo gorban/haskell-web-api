@@ -69,8 +69,10 @@ library
     HarchWeb.Api.Multipart.Storage
     HarchWeb.ApplicationModule
     HarchWeb.Authentication
+    HarchWeb.Authentication.Attempt
     HarchWeb.Authentication.Jwt
     HarchWeb.Controls
+    HarchWeb.Csrf
     HarchWeb.Database
     HarchWeb.DevSmtp
     HarchWeb.Document
@@ -234,6 +236,7 @@ test-suite harch-web-tests
     Unit.HarchWeb.Api.RequestSpec
     Unit.HarchWeb.Api.ResponseSpec
     Unit.HarchWeb.ApplicationModuleSpec
+    Unit.HarchWeb.Authentication.AttemptSpec
     Unit.HarchWeb.Authentication.JwtSpec
     Unit.HarchWeb.AuthenticationSpec
     Unit.HarchWeb.DatabaseSpec

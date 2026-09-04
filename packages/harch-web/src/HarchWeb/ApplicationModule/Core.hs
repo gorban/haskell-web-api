@@ -18,7 +18,7 @@ where
 
 import Data.List.NonEmpty (NonEmpty)
 import Data.Text qualified as Text
-import HarchWeb.Action (ActionCodec, actionEndpointMetadata, decodeAction)
+import HarchWeb.Action (ActionCodec, actionEndpointMetadata, actionEndpointTarget, decodeAction)
 import HarchWeb.EndpointSecurity
   ( ApplicationSecurity (..),
     EndpointGuard,
@@ -52,7 +52,12 @@ data ApplicationModule route actionTarget action context authorization = Applica
     moduleDeclaredRoutes :: [route],
     moduleEndpoints :: route -> RouteDefinition route context authorization,
     moduleActionCodec :: ActionCodec actionTarget context authorization action,
-    moduleHandleAction :: ClientActionRequest action context -> IO (Maybe ClientActionResponse),
+    -- | Typed route ownership for an already-declared action target. The
+    -- server consults this after the codec has matched method/path but before
+    -- it decodes an untrusted action body, so guards and observation use the
+    -- action's declared route family rather than an incidental 404.
+    moduleActionRoute :: context -> actionTarget -> Maybe route,
+    moduleHandleAction :: ClientActionRequest action context -> IO (Maybe (ClientActionResponse route context)),
     moduleGuards :: [EndpointGuard route context authorization]
   }
 
@@ -122,6 +127,9 @@ attachApplicationModuleFeatures applicationModule site =
   site
     { siteClientActionEndpointMetadata = \methodValue pathValue requestContext ->
         actionEndpointMetadata (moduleActionCodec applicationModule) requestContext methodValue pathValue,
+      siteClientActionRoute = \methodValue pathValue requestContext -> do
+        actionTarget <- actionEndpointTarget (moduleActionCodec applicationModule) requestContext methodValue pathValue
+        moduleActionRoute applicationModule requestContext actionTarget,
       siteDecodeClientAction = decodeAction (moduleActionCodec applicationModule),
       siteHandleClientAction = moduleHandleAction applicationModule,
       siteRouteModuleChain = Just (moduleRouteMountChain applicationModule),

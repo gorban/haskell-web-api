@@ -17,9 +17,9 @@ import Data.Text qualified as Text
 import HarchWeb.Server.Response
 import Network.HTTP.Types qualified as Http
 
-eventStreamResponse :: ServerSentEventSource -> Response route context
+eventStreamResponse :: ServerSentEventSource -> NonPageResponse route context
 eventStreamResponse =
-  EventStreamResponse
+  NonPageEventStreamResponse
     ResponseBody
       { responseStatus = Http.status200,
         responseContentType = serverSentEventContentType,

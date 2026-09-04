@@ -48,7 +48,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
 import HarchWeb.EndpointSecurity
-  ( AccessRequirement (AllowUnauthenticated),
+  ( AccessRequirement (AllowUnauthenticated, RequireAuthenticated),
     EndpointMetadata,
     EndpointProtocol (ApiEndpoint, HtmlEndpoint),
     mkEndpointMetadata,
@@ -57,13 +57,13 @@ import HarchWeb.EndpointSecurity
   )
 import HarchWeb.Session
   ( SessionId,
-    defaultSessionCookiePolicy,
     mkSessionId,
     sessionCookieName,
     sessionCookieNameText,
   )
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
+import WebApi.AccountPrincipal (AccountPrincipal)
 import WebApi.Session (mfaEnrollmentSessionCookiePolicy)
 
 data AppLocale
@@ -78,7 +78,7 @@ data AppRequestContext = AppRequestContext
     requestClientAddress :: HarchWeb.ClientAddress,
     requestPathPrefix :: HarchWeb.PathPrefix,
     requestQueryParameters :: [(Text, Text)],
-    requestSessionId :: Maybe SessionId,
+    requestAccountPrincipal :: Maybe AccountPrincipal,
     requestMfaEnrollmentSessionId :: Maybe SessionId
   }
   deriving (Eq, Show)
@@ -212,7 +212,7 @@ defaultRequestContext =
       requestClientAddress = HarchWeb.defaultClientAddress,
       requestPathPrefix = HarchWeb.emptyPathPrefix,
       requestQueryParameters = [],
-      requestSessionId = Nothing,
+      requestAccountPrincipal = Nothing,
       requestMfaEnrollmentSessionId = Nothing
     }
 
@@ -333,7 +333,6 @@ requestContextFromWaiRequest requestPolicyConfig request requestContext =
     { requestPathPrefix =
         HarchWeb.requestPathPrefix requestPolicyConfig request,
       requestClientAddress = HarchWeb.requestClientAddress requestPolicyConfig request,
-      requestSessionId = sessionIdFromCookieHeaders (sessionCookieNameText (sessionCookieName defaultSessionCookiePolicy)) (Wai.requestHeaders request),
       requestMfaEnrollmentSessionId = sessionIdFromCookieHeaders (sessionCookieNameText (sessionCookieName mfaEnrollmentSessionCookiePolicy)) (Wai.requestHeaders request)
     }
 
@@ -412,9 +411,8 @@ routeMetadata route =
     Api _ -> RouteMetadata Nothing "/api/404" "Not Found" []
 
 -- | Stable, application-authored endpoint identities for the existing route
--- table. The reference app deliberately chooses the explicitly public root
--- configuration until AHI-4C supplies its account-backed authentication
--- guard, so that choice is visible in every route declaration.
+-- table. AHI-4C's configured root guard establishes a principal before the
+-- protected profile/logout handlers run; public routes remain explicit.
 endpointMetadata :: AppRoute -> EndpointMetadata ()
 endpointMetadata route =
   case route of
@@ -425,8 +423,8 @@ endpointMetadata route =
     EmailVerificationRoute -> html "account.email-verification" "/{locale}/verify"
     MfaEnrollmentRoute -> html "account.mfa-enrollment" "/{locale}/mfa"
     LoginRoute -> html "account.login" "/{locale}/login"
-    LogoutRoute -> html "account.logout" "/{locale}/logout"
-    ProfileRoute -> html "account.profile" "/{locale}/profile"
+    LogoutRoute -> protectedHtml "account.logout" "/{locale}/logout"
+    ProfileRoute -> protectedHtml "account.profile" "/{locale}/profile"
     LanguageRoute -> html "web.language" "/{locale}/language"
     HelpRoute -> html "web.help" "/{locale}/help"
     NotFoundRoute -> html "web.not-found" "/{locale}/404"
@@ -434,16 +432,17 @@ endpointMetadata route =
     SecondApiRoute -> api "api.second" "/api/second"
     ApiNotFoundRoute -> api "api.not-found" "/api/404"
   where
-    html = declaredMetadata HtmlEndpoint
-    api = declaredMetadata ApiEndpoint
+    html = declaredMetadata HtmlEndpoint AllowUnauthenticated
+    protectedHtml = declaredMetadata HtmlEndpoint RequireAuthenticated
+    api = declaredMetadata ApiEndpoint AllowUnauthenticated
 
-declaredMetadata :: EndpointProtocol -> Text -> Text -> EndpointMetadata ()
-declaredMetadata protocol name template =
+declaredMetadata :: EndpointProtocol -> AccessRequirement () -> Text -> Text -> EndpointMetadata ()
+declaredMetadata protocol accessRequirement name template =
   mkEndpointMetadata
     (requiredEndpointNameOrDie name)
     (requiredRouteTemplateOrDie template)
     protocol
-    AllowUnauthenticated
+    accessRequirement
 
 pageRouteMetadata :: PageRoute -> RouteMetadata
 pageRouteMetadata pageRoute =

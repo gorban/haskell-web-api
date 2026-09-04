@@ -3,7 +3,7 @@
 {-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
-import HarchWeb (ClientActionResponse (..), Response (..), ResponseBody (..), ServerSentEvent (..), eventStreamResponse, nextServerSentEvent, renderServerSentEvent, serverSentEventContentType, serverSentEventSourceFromList)
+import HarchWeb (ActionNavigation (StayOnCurrentRoute), ClientActionResponse (..), NonPageResponse (..), Response (..), ResponseBody (..), ServerSentEvent (..), eventStreamResponse, nextServerSentEvent, renderServerSentEvent, serverSentEventContentType, serverSentEventSourceFromList)
 import Network.HTTP.Types qualified as Http
 
 spec =
@@ -32,20 +32,20 @@ spec =
 
     it "uses an opaque source in response display output" $ do
       source <- serverSentEventSourceFromList []
-      show (eventStreamResponse source :: Response () ())
-        `shouldBe` "EventStreamResponse (ResponseBody {responseStatus = Status {statusCode = 200, statusMessage = \"OK\"}, responseContentType = \"text/event-stream; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}) <event-source>"
+      show (eventStreamResponse source :: NonPageResponse () ())
+        `shouldBe` "NonPageEventStreamResponse (ResponseBody {responseStatus = Status {statusCode = 200, statusMessage = \"OK\"}, responseContentType = \"text/event-stream; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}) <event-source>"
 
     it "compares opaque streams by their safe metadata and renders every response form" $ do
       firstSource <- serverSentEventSourceFromList []
       secondSource <- serverSentEventSourceFromList []
       let responseBodyValue = ResponseBody Http.status204 "text/plain; charset=utf-8" "Done" [] [] []
-          actionResponse = ClientActionResponse Http.status200 [] Nothing [] [] []
-          streamResponse = eventStreamResponse firstSource :: Response () ()
+          actionResponse = ClientActionResponse Http.status200 [] Nothing StayOnCurrentRoute [] [] []
+          streamResponse = eventStreamResponse firstSource :: NonPageResponse () ()
           clientActionResponse = ClientActionBodyResponse actionResponse :: Response () ()
       expectAll
         ( (streamResponse `shouldBe` eventStreamResponse secondSource)
-            :| [ streamResponse `shouldNotBe` BodyResponse responseBodyValue,
+            :| [ streamResponse `shouldNotBe` NonPageBodyResponse responseBodyValue,
                  showsPrec 11 (RedirectResponse responseBodyValue "/next" :: Response () ()) "" `shouldBe` "(RedirectResponse (ResponseBody {responseStatus = Status {statusCode = 204, statusMessage = \"No Content\"}, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Done\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}) \"/next\")",
-                 showsPrec 11 clientActionResponse "" `shouldBe` "(ClientActionBodyResponse (ClientActionResponse {clientActionStatus = Status {statusCode = 200, statusMessage = \"OK\"}, clientActionPatches = [], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}))"
+                 showsPrec 11 clientActionResponse "" `shouldBe` "(ClientActionBodyResponse (ClientActionResponse {clientActionStatus = Status {statusCode = 200, statusMessage = \"OK\"}, clientActionPatches = [], clientActionFocusId = Nothing, clientActionNavigation = StayOnCurrentRoute, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}))"
                ]
         )

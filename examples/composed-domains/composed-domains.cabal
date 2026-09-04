@@ -26,19 +26,34 @@ library
   import: common
   exposed-modules: App.Composed
   other-modules:
+    App.Composed.Admission
+    App.Composed.Admission.Proof
+    App.Composed.Admission.Session
+    App.Composed.Admission.Types
+    App.Composed.CsrfSynchronizer
     App.Composed.Localized
     App.Composed.Model
     App.Composed.Mounts
+    App.Composed.Postgres
+    App.Composed.Postgres.AdmissionAttemptStore
+    App.Composed.Postgres.AdmissionCredentialStore
+    App.Composed.Postgres.AdmissionSessionStore
+    App.Composed.Postgres.SynchronizerStore
     App.Composed.Public
 
   hs-source-dirs: src
   build-depends:
+    aeson ^>=2.3.1.0,
     base ^>=4.22.0.0,
     bytestring ^>=0.12.2.0,
     catalog-domain ^>=0.1.0.0,
+    core ^>=0.1.2.0,
+    crypton ^>=1.0.6,
     harch-web ^>=0.1.2.0,
     http-types ^>=0.12.5,
+    mtl ^>=2.3.1,
     orders-domain ^>=0.1.0.0,
+    postgres-database-changes ^>=0.1.2.0,
     text ^>=2.1.3,
     wai ^>=3.2.5,
 
@@ -70,6 +85,9 @@ test-suite composed-domains-tests
 
   other-modules:
     E2E.ComposedSpec
+    Unit.App.Composed.AdmissionProofSpec
+    Unit.App.Composed.AdmissionTypesSpec
+    Unit.App.Composed.CsrfSynchronizerSpec
     Unit.App.ComposedSpec
 
   build-depends:
@@ -77,10 +95,12 @@ test-suite composed-domains-tests
     bytestring ^>=0.12.2.0,
     catalog-domain ^>=0.1.0.0,
     composed-domains ^>=0.1.0.0,
+    crypton ^>=1.0.6,
     harch-web ^>=0.1.2.0,
     hspec ^>=2.11.17,
     http-types ^>=0.12.5,
     orders-domain ^>=0.1.0.0,
+    postgres-database-changes ^>=0.1.2.0,
     test-core ^>=0.1.2.0,
     text ^>=2.1.3,
     wai ^>=3.2.5,

@@ -29,15 +29,14 @@ import HarchWeb.Secret (encryptSecret)
 import HarchWeb.Session
   ( OpaqueSession (..),
     SessionId,
-    defaultSessionCookiePolicy,
     renderSessionCookie,
-    sessionCookieMaxAgeSeconds,
     sessionId,
   )
 import HarchWeb.Time (UnixTimeNanoseconds)
 import HarchWeb.Totp qualified as Totp
 import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
+import WebApi.AccountJwt (AccountJwtIssueError (..), AccountJwtIssuer (..))
 import WebApi.AccountPages.Actions.Common
 import WebApi.AccountPages.Actions.Contract
 import WebApi.AccountPages.Actions.Profile qualified as Profile
@@ -53,6 +52,7 @@ import WebApi.AccountPages.FieldIds
   )
 import WebApi.AccountPages.Forms
 import WebApi.AccountPages.Validation (Validation, invalid, valid, validate3, validationResult)
+import WebApi.AccountPrincipal (accountPrincipalSessionId)
 import WebApi.AppEffect
   ( AccountWorkflow (..),
     AppFailure (..),
@@ -83,6 +83,7 @@ import WebApi.MfaEnrollment
   )
 import WebApi.Route
   ( AppRequestContext (..),
+    AppRoute (ProfileRoute),
   )
 import WebApi.Session
   ( AccountSessionStoreError,
@@ -115,7 +116,7 @@ handleVerificationSubmission actionRequest submission =
 -- to a session principal, per that entry's own instruction, but no session
 -- existed at either legitimate handoff point (right after email
 -- verification, or after a correct password with enrollment still
--- required) — 'WebApi.Profile.loadProfile'/'WebApi.Session.AccountSessionStore'
+-- required) — 'WebApi.Profile.loadProfileForPrincipal'/'WebApi.Session.AccountSessionStore'
 -- are login sessions, and issuing one before MFA is confirmed would let a
 -- password alone grant everything a completed login grants (Profile access
 -- and any future protected resource), silently narrowing what "signed in"
@@ -151,7 +152,7 @@ handleMfaEnrollmentSubmission actionRequest submission = do
                     "confirm" -> confirmMfaAction actionRequest accountId (mfaEnrollmentCodeValue submission)
                     _ -> pure (mfaEnrollmentResponse (accountActionResponseContext actionRequest Http.status422 Nothing []) (MfaEnrollmentForm Nothing [] False (Just (localized actionRequest ChooseEnrollmentAction)) True))
 
-invalidEnrollmentSessionResponse :: AccountActionRequest -> HarchWeb.ClientActionResponse
+invalidEnrollmentSessionResponse :: AccountActionRequest -> AccountActionResponse
 invalidEnrollmentSessionResponse actionRequest =
   mfaEnrollmentResponse
     (accountActionResponseContext actionRequest Http.status403 Nothing [])
@@ -282,7 +283,7 @@ completePasswordLoginNow actionRequest identifier passwordValue proof = do
 parseLoginForm ::
   AccountActionRequest ->
   LoginSubmission ->
-  Either HarchWeb.ClientActionResponse (Text, LoginProofChoice, Text, LoginIdentifier, MfaLoginProof)
+  Either AccountActionResponse (Text, LoginProofChoice, Text, LoginIdentifier, MfaLoginProof)
 parseLoginForm actionRequest submission =
   let identifierValue = loginIdentifierValue submission
       proofChoice = loginProofChoiceValue submission
@@ -373,12 +374,60 @@ issueLoginSession actionRequest identifierValue proofChoice nowNanoseconds accou
   let form message statusKind = LoginForm identifierValue (Just proofChoice) (FormStatusMessage (FormStatus message statusKind))
   case issuedSession of
     Left storeError -> throwClientActionFailure (loginResponse (accountActionResponseContext actionRequest Http.status503 (Just loginIdentifierId) []) (form (localized actionRequest SignInUnavailable) FormStatusFailure)) LoginSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
-    Right opaqueSession -> pure (loginResponse (accountActionResponseContext actionRequest Http.status200 Nothing [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie defaultSessionCookiePolicy (sessionId opaqueSession)))]) (form (localized actionRequest SignedIn) FormStatusSuccess))
+    -- AHI-4C keeps the credential-bearing login document out of browser Back
+    -- history.  The destination is an application route, not a serialized
+    -- URL, so Harch's root codec remains the one route-rendering authority.
+    Right opaqueSession -> do
+      issuedJwt <- issueLoginJwt opaqueSession
+      case issuedJwt of
+        Left issueError -> do
+          -- No browser credential has been sent when JWT issuance fails. Best
+          -- effort durable revocation prevents an orphaned usable session;
+          -- either failure remains a generic unavailable login response.
+          _ <- invalidateAccountSessionNow (sessionId opaqueSession)
+          throwClientActionFailure
+            (loginResponse (accountActionResponseContext actionRequest Http.status503 (Just loginIdentifierId) []) (form (localized actionRequest SignInUnavailable) FormStatusFailure))
+            LoginJwtIssueFailure
+            "AccountJwtIssueError"
+            (accountJwtIssueErrorMessage issueError)
+        Right (jwt, cookiePolicy) ->
+          case HarchWeb.renderAuthenticationCookie cookiePolicy jwt of
+            Nothing -> do
+              _ <- invalidateAccountSessionNow (sessionId opaqueSession)
+              throwClientActionFailure
+                (loginResponse (accountActionResponseContext actionRequest Http.status503 (Just loginIdentifierId) []) (form (localized actionRequest SignInUnavailable) FormStatusFailure))
+                LoginJwtIssueFailure
+                "AccountJwtCookieError"
+                "issued account JWT cannot be rendered as a cookie"
+            Just renderedCookie ->
+              pure
+                ( ( loginResponse
+                      (accountActionResponseContext actionRequest Http.status200 Nothing [HarchWeb.csrfClearCookieHeader, ("Set-Cookie", TextEncoding.encodeUtf8 renderedCookie)])
+                      (form (localized actionRequest SignedIn) FormStatusSuccess)
+                  )
+                    { HarchWeb.clientActionNavigation =
+                        HarchWeb.NavigateInternal
+                          HarchWeb.ReplaceHistory
+                          (HarchWeb.RouteRequest ProfileRoute (HarchWeb.clientActionContext actionRequest))
+                    }
+                )
 
 issueAccountSessionNow :: Account.AccountId -> UnixTimeNanoseconds -> AppM publicFailure (Either AccountSessionStoreError (OpaqueSession Account.AccountId))
 issueAccountSessionNow accountId nowNanoseconds = do
   workflow <- accountWorkflow
   liftIO (issueAccountSession (accountWorkflowSessionStore workflow) accountId nowNanoseconds)
+
+issueLoginJwt :: OpaqueSession Account.AccountId -> AppM publicFailure (Either AccountJwtIssueError (HarchWeb.EncodedJwt, HarchWeb.AuthenticationCookiePolicy))
+issueLoginJwt opaqueSession = do
+  workflow <- accountWorkflow
+  let jwtIssuer = accountWorkflowJwtIssuer workflow
+  issued <- liftIO (issueAccountSessionJwt jwtIssuer opaqueSession)
+  pure ((,accountJwtCookie jwtIssuer) <$> issued)
+
+accountJwtIssueErrorMessage :: AccountJwtIssueError -> Text
+accountJwtIssueErrorMessage issueError =
+  case issueError of
+    AccountJwtIssueFailed -> "account JWT issuance is unavailable"
 
 -- | A correct password already proves account ownership even though MFA
 -- enrollment is still outstanding, so this is the second legitimate place
@@ -392,18 +441,26 @@ issueLoginEnrollmentSession actionRequest identifierValue proofChoice nowNanosec
       response headers = loginResponse (accountActionResponseContext actionRequest Http.status403 Nothing headers) (form (localized actionRequest EnrollAuthenticatorBeforeSignIn))
   issued <- issueMfaEnrollmentSessionNow accountId nowNanoseconds
   case issued of
-    Right opaqueSession -> pure (response [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie mfaEnrollmentSessionCookiePolicy (sessionId opaqueSession)))])
+    Right opaqueSession -> pure (response [HarchWeb.csrfClearCookieHeader, ("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie mfaEnrollmentSessionCookiePolicy (sessionId opaqueSession)))])
     Left storeError -> throwClientActionFailure (response []) MfaEnrollmentSessionFailure "MfaEnrollmentSessionStoreError" (mfaEnrollmentSessionStoreErrorMessage storeError)
 
 handleLogout :: AccountActionRequest -> AccountActionWorkflow
 handleLogout actionRequest =
-  case requestSessionId (HarchWeb.clientActionContext actionRequest) of
-    Nothing -> pure (logoutResponse (accountActionResponseContext actionRequest Http.status200 Nothing []) (Just (localized actionRequest SignedOut, False)))
-    Just sessionToken -> do
+  case requestAccountPrincipal (HarchWeb.clientActionContext actionRequest) of
+    Nothing -> do
+      cookiePolicy <- accountJwtCookiePolicyNow
+      pure (logoutResponse (accountActionResponseContext actionRequest Http.status200 Nothing [HarchWeb.csrfClearCookieHeader, ("Set-Cookie", TextEncoding.encodeUtf8 (HarchWeb.clearAuthenticationCookie cookiePolicy))]) (Just (localized actionRequest SignedOut, False)))
+    Just principal -> do
+      let sessionToken = accountPrincipalSessionId principal
       invalidated <- invalidateAccountSessionNow sessionToken
       case invalidated of
         Left storeError -> throwClientActionFailure (logoutResponse (accountActionResponseContext actionRequest Http.status503 Nothing []) (Just (localized actionRequest SignOutUnavailable, True))) LogoutSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
-        Right _ -> pure (logoutResponse (accountActionResponseContext actionRequest Http.status200 Nothing [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie (defaultSessionCookiePolicy {sessionCookieMaxAgeSeconds = 0}) sessionToken))]) (Just (localized actionRequest SignedOut, False)))
+        Right _ -> do
+          cookiePolicy <- accountJwtCookiePolicyNow
+          pure (logoutResponse (accountActionResponseContext actionRequest Http.status200 Nothing [HarchWeb.csrfClearCookieHeader, ("Set-Cookie", TextEncoding.encodeUtf8 (HarchWeb.clearAuthenticationCookie cookiePolicy))]) (Just (localized actionRequest SignedOut, False)))
+
+accountJwtCookiePolicyNow :: AppM publicFailure HarchWeb.AuthenticationCookiePolicy
+accountJwtCookiePolicyNow = accountJwtCookie . accountWorkflowJwtIssuer <$> accountWorkflow
 
 invalidateAccountSessionNow :: SessionId -> AppM publicFailure (Either AccountSessionStoreError Bool)
 invalidateAccountSessionNow sessionToken = do

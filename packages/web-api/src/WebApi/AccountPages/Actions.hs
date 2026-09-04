@@ -1,29 +1,38 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | Account action orchestration and CSRF policy.
 --
--- Decision record (CZ, 2026-08-23): session-bound CSRF policy belongs at the
--- existing typed action boundary, after framework transport validation and
--- before a workflow can run. Ordinary account and MFA enrollment sessions are
--- distinct capabilities, so page token issuance receives the rendered route
--- and selects only that route's live session; anonymous pages receive a fresh
--- framework token. Store failures, revocation, expiry, and missing sessions
--- fail closed without exposing storage details.
+-- Decision record (AHI-4C, 2026-09-03): session-bound CSRF belongs at Harch's
+-- existing typed action boundary, after its mandatory transport validation and
+-- before any workflow can run.  This application supplies one signed backend,
+-- whose binding is the complete canonical set of live account and MFA
+-- enrollment grants carried by the request.  The binding is immediately
+-- hashed by Harch; session and account identifiers never enter the token or
+-- diagnostics.  Store failure is unavailable, never anonymous; revocation,
+-- expiry, or a changed grant set reject a previously issued token.
 module WebApi.AccountPages.Actions
   ( AccountAction,
     AccountActionTarget (..),
+    accountCsrfProtection,
     accountActionEndpointMetadata,
     accountActions,
-    authorizeAccountActionCsrf,
     handleAccountAction,
     mfaEnrollmentFailureDiagnostics,
-    pageCsrfTokenForAccountPage,
   )
 where
 
+import Data.ByteString qualified as ByteString
+import Data.List (sortOn)
+import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
+import HarchWeb.Account (AccountId, accountIdText)
+import HarchWeb.Session (OpaqueSession (..), SessionId, sessionIdText)
 import HarchWeb.Session qualified as Session
-import HarchWeb.Time (UnixTimeNanoseconds)
+import HarchWeb.Time (UnixTimeNanoseconds, unixTimeNanosecondsValue)
 import WebApi.AccountPages.Actions.Common
-  ( attachClientActionFailure,
+  ( AccountActionResponse,
+    attachClientActionFailure,
   )
 import WebApi.AccountPages.Actions.Contract
 import WebApi.AccountPages.Actions.Workflows
@@ -35,88 +44,122 @@ import WebApi.AccountPages.Actions.Workflows
     handleVerificationSubmission,
     mfaEnrollmentFailureDiagnostics,
   )
+import WebApi.AccountPrincipal
+  ( AccountPrincipal,
+    accountPrincipalAccountId,
+    accountPrincipalSessionExpiresAtNanoseconds,
+    accountPrincipalSessionId,
+  )
 import WebApi.AppEffect
   ( AccountWorkflow (..),
     AppM,
     AppServices (..),
     runAppM,
   )
-import WebApi.Route (AppRequestContext (..), AppRoute (..))
+import WebApi.Route (AppRequestContext (..))
 import WebApi.Session
-  ( AccountSessionStore (..),
-    MfaEnrollmentSessionStore (..),
+  ( MfaEnrollmentSessionStore (..),
   )
 
 type AccountActionRequest = HarchWeb.ClientActionRequest AccountAction AppRequestContext
 
-type AccountActionWorkflow = AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+type AccountActionWorkflow = AppM AccountActionResponse AccountActionResponse
 
--- | Selects the only session capability that may authorize the rendered page.
--- A bad or missing cookie/store record gets a fresh anonymous transport token;
--- the authorization hook below still rejects any protected submission.
-pageCsrfTokenForAccountPage :: AccountWorkflow -> HarchWeb.Page AppRoute AppRequestContext -> IO Session.CsrfToken
-pageCsrfTokenForAccountPage workflow page = do
+-- | The application-selected signed backend. Harch still owns exact-one
+-- cookie/form extraction and constant-work double-submit equality; this
+-- resolver only turns durable grants into its opaque binding rail.
+accountCsrfProtection :: AccountWorkflow -> HarchWeb.CsrfProtection AppRequestContext
+accountCsrfProtection workflow =
+  HarchWeb.signedCsrfProtection
+    (accountWorkflowCsrfSigningKeyring workflow)
+    HarchWeb.defaultSignedCsrfPolicy
+    (accountWorkflowClock workflow)
+    (resolveCsrfBinding workflow)
+
+resolveCsrfBinding :: AccountWorkflow -> AppRequestContext -> IO HarchWeb.CsrfBindingResolution
+resolveCsrfBinding workflow requestContext = do
   now <- accountWorkflowClock workflow
-  maybeToken <-
-    case HarchWeb.pageRoute page of
-      ProfileRoute -> accountSessionCsrfToken workflow now (requestSessionId (HarchWeb.pageContext page))
-      LogoutRoute -> accountSessionCsrfToken workflow now (requestSessionId (HarchWeb.pageContext page))
-      MfaEnrollmentRoute -> mfaEnrollmentSessionCsrfToken workflow now (requestMfaEnrollmentSessionId (HarchWeb.pageContext page))
-      _ -> pure Nothing
-  maybe Session.generateCsrfToken pure maybeToken
+  let accountGrant = activeAccountGrant (requestAccountPrincipal requestContext)
+  enrollmentGrant <- activeEnrollmentGrant workflow now (requestMfaEnrollmentSessionId requestContext)
+  case enrollmentGrant of
+    Left () -> pure HarchWeb.CsrfBindingUnavailable
+    Right maybeEnrollmentGrant ->
+      case accountGrant <> maybeEnrollmentGrant of
+        [] -> pure HarchWeb.AnonymousCsrfBinding
+        activeGrants ->
+          pure
+            ( HarchWeb.BoundCsrfBinding
+                (HarchWeb.csrfBindingFromCanonicalBytes (renderGrantBinding activeGrants))
+                (minimum (map csrfGrantExpiry activeGrants))
+            )
 
--- | Binds protected decoded actions to their current, non-expired session.
--- Register, verification, and login legitimately begin without a session;
--- every other account mutation requires the dedicated capability it uses.
-authorizeAccountActionCsrf :: AccountWorkflow -> AccountActionRequest -> Session.CsrfToken -> IO Bool
-authorizeAccountActionCsrf workflow actionRequest suppliedToken =
-  case HarchWeb.clientAction actionRequest of
-    RegisterAccount _ -> pure True
-    VerifyEmail _ -> pure True
-    LoginAccount _ -> pure True
-    UpdateProfile _ -> authorizeAccountSession
-    LogoutAccount -> authorizeAccountSession
-    EnrollMfa _ -> authorizeMfaEnrollmentSession
+data CsrfGrant = CsrfGrant
+  { csrfGrantDomain :: ByteString.ByteString,
+    csrfGrantSessionId :: SessionId,
+    csrfGrantAccountId :: AccountId,
+    csrfGrantExpiry :: UnixTimeNanoseconds
+  }
+
+activeAccountGrant :: Maybe AccountPrincipal -> [CsrfGrant]
+activeAccountGrant maybePrincipal =
+  case maybePrincipal of
+    Nothing -> []
+    Just principal ->
+      [ CsrfGrant
+          { csrfGrantDomain = "account-session",
+            csrfGrantSessionId = accountPrincipalSessionId principal,
+            csrfGrantAccountId = accountPrincipalAccountId principal,
+            csrfGrantExpiry = accountPrincipalSessionExpiresAtNanoseconds principal
+          }
+      ]
+
+activeEnrollmentGrant :: AccountWorkflow -> UnixTimeNanoseconds -> Maybe SessionId -> IO (Either () [CsrfGrant])
+activeEnrollmentGrant workflow now maybeSessionId =
+  case maybeSessionId of
+    Nothing -> pure (Right [])
+    Just sessionIdValue ->
+      activeGrant
+        now
+        "mfa-enrollment-session"
+        (loadMfaEnrollmentSession (accountWorkflowMfaEnrollmentSessionStore workflow) sessionIdValue)
+
+activeGrant :: UnixTimeNanoseconds -> ByteString.ByteString -> IO (Either storeError (Maybe (OpaqueSession AccountId))) -> IO (Either () [CsrfGrant])
+activeGrant now grantDomain loadSession = do
+  loadedSession <- loadSession
+  pure
+    ( case loadedSession of
+        Left _ -> Left ()
+        Right maybeSession ->
+          case Session.validateSession now maybeSession of
+            Session.ActiveSession sessionValue ->
+              Right
+                [ CsrfGrant
+                    { csrfGrantDomain = grantDomain,
+                      csrfGrantSessionId = sessionId sessionValue,
+                      csrfGrantAccountId = sessionPrincipal sessionValue,
+                      csrfGrantExpiry = sessionExpiresAtNanoseconds sessionValue
+                    }
+                ]
+            Session.MissingSession -> Right []
+            Session.ExpiredSession -> Right []
+    )
+
+renderGrantBinding :: [CsrfGrant] -> ByteString.ByteString
+renderGrantBinding activeGrants =
+  ByteString.intercalate
+    "\NUL"
+    ( "web-api-csrf-grants-v1"
+        : concatMap renderGrant (sortOn csrfGrantDomain activeGrants)
+    )
   where
-    requestContext = HarchWeb.clientActionContext actionRequest
-    authorizeAccountSession = do
-      now <- accountWorkflowClock workflow
-      matchesCsrfToken suppliedToken <$> accountSessionCsrfToken workflow now (requestSessionId requestContext)
-    authorizeMfaEnrollmentSession = do
-      now <- accountWorkflowClock workflow
-      matchesCsrfToken suppliedToken <$> mfaEnrollmentSessionCsrfToken workflow now (requestMfaEnrollmentSessionId requestContext)
+    renderGrant grant =
+      [ csrfGrantDomain grant,
+        TextEncoding.encodeUtf8 (sessionIdText (csrfGrantSessionId grant)),
+        TextEncoding.encodeUtf8 (accountIdText (csrfGrantAccountId grant)),
+        TextEncoding.encodeUtf8 (Text.pack (show (unixTimeNanosecondsValue (csrfGrantExpiry grant))))
+      ]
 
-accountSessionCsrfToken :: AccountWorkflow -> UnixTimeNanoseconds -> Maybe Session.SessionId -> IO (Maybe Session.CsrfToken)
-accountSessionCsrfToken workflow now maybeSessionId =
-  case maybeSessionId of
-    Nothing -> pure Nothing
-    Just sessionId -> do
-      loaded <- loadAccountSession (accountWorkflowSessionStore workflow) sessionId
-      pure (storedSessionCsrfToken now loaded)
-
-mfaEnrollmentSessionCsrfToken :: AccountWorkflow -> UnixTimeNanoseconds -> Maybe Session.SessionId -> IO (Maybe Session.CsrfToken)
-mfaEnrollmentSessionCsrfToken workflow now maybeSessionId =
-  case maybeSessionId of
-    Nothing -> pure Nothing
-    Just sessionId -> do
-      loaded <- loadMfaEnrollmentSession (accountWorkflowMfaEnrollmentSessionStore workflow) sessionId
-      pure (storedSessionCsrfToken now loaded)
-
-storedSessionCsrfToken :: UnixTimeNanoseconds -> Either storeError (Maybe (Session.OpaqueSession principal)) -> Maybe Session.CsrfToken
-storedSessionCsrfToken now loaded =
-  case loaded of
-    Right sessionValue ->
-      case Session.validateSession now sessionValue of
-        Session.ActiveSession activeSession -> Just (Session.sessionCsrfToken activeSession)
-        Session.MissingSession -> Nothing
-        Session.ExpiredSession -> Nothing
-    Left _ -> Nothing
-
-matchesCsrfToken :: Session.CsrfToken -> Maybe Session.CsrfToken -> Bool
-matchesCsrfToken suppliedToken =
-  maybe False (`Session.validateCsrfToken` suppliedToken)
-
-handleAccountAction :: AccountWorkflow -> AccountActionRequest -> IO (Maybe HarchWeb.ClientActionResponse)
+handleAccountAction :: AccountWorkflow -> AccountActionRequest -> IO (Maybe AccountActionResponse)
 handleAccountAction workflow actionRequest =
   Just <$> runSelectedAccountAction (accountActionCodec actionRequest)
   where

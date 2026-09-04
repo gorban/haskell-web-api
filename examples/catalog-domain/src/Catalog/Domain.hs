@@ -39,12 +39,13 @@ import HarchWeb.Routing
   )
 import HarchWeb.SecurityEvent (requiredModuleNameOrDie)
 import HarchWeb.Server
-  ( ClientActionRequest (..),
+  ( ActionNavigation (StayOnCurrentRoute),
+    ClientActionRequest (..),
     ClientActionResponse (..),
-    Response (PageResponse),
+    PageResult (RenderedPage),
     unboundedRouteExecutionPolicy,
   )
-import HarchWeb.Site (RouteDefinition (..))
+import HarchWeb.Site (RouteDefinition (..), RouteHandler (PageRouteHandler))
 import Network.HTTP.Types qualified as Http
 
 data CatalogRoute = CatalogIndex
@@ -86,6 +87,7 @@ buildCatalogModule queries commands =
       moduleDeclaredRoutes = [CatalogIndex],
       moduleEndpoints = catalogRouteDefinition queries,
       moduleActionCodec = catalogActionCodec,
+      moduleActionRoute = \_ RefreshCatalogTarget -> Just CatalogIndex,
       moduleHandleAction = catalogActionHandler commands,
       moduleGuards = []
     }
@@ -114,10 +116,10 @@ catalogRouteDefinition queries CatalogIndex =
           (RequireAuthorized MayReadCatalog),
       routeMethods = [RouteGet],
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
-      routeResponse = \_ request -> do
+      routeHandler = PageRouteHandler $ \_ request -> do
         summary <- loadCatalogSummary queries (requestContext request)
         pure
-          ( PageResponse
+          ( RenderedPage
               Page
                 { pageTitle = "Catalog",
                   pageRoute = CatalogIndex,
@@ -141,7 +143,7 @@ catalogActionCodec =
     )
     (pure RefreshCatalog)
 
-catalogActionHandler :: CatalogCommands -> ClientActionRequest CatalogAction CatalogContext -> IO (Maybe ClientActionResponse)
+catalogActionHandler :: CatalogCommands -> ClientActionRequest CatalogAction CatalogContext -> IO (Maybe (ClientActionResponse CatalogRoute CatalogContext))
 catalogActionHandler commands actionRequest =
   case clientAction actionRequest of
     RefreshCatalog -> do
@@ -152,6 +154,7 @@ catalogActionHandler commands actionRequest =
               { clientActionStatus = Http.status200,
                 clientActionPatches = [],
                 clientActionFocusId = Nothing,
+                clientActionNavigation = StayOnCurrentRoute,
                 clientActionHeaders = [],
                 clientActionObservabilityAttributes = [],
                 clientActionLogEntries = []

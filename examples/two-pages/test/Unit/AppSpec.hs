@@ -3,10 +3,11 @@
 
 {-# SPEC #-}
 
-import App.App (TwoPageAction (..), buildApplication, twoPageServerConfig, twoPageSite)
+import App.App (TwoPageAction (..), twoPageServerConfig)
+import App.App qualified as App
 import App.Components.Controls qualified as ExampleControls
 import App.CustomPages.Preview (previewPageDefinition)
-import App.Pages.Home (nativeSubscriptionFallbackPage)
+import App.Pages.Home (nativeSubscriptionResultPage)
 import App.Pages.Route.Generated (PageRoute (..), allPageRoutes, pageRoutePath, parsePageRoute)
 import App.Routes (ApiRoute (..), CustomRoute (..), TwoPageNavigationTarget (..), TwoPageRoute (..), mkPreviewSlug, requiredEndpointName, requiredRouteTemplate, routeHref, twoPageActionEndpointMetadata, twoPageEndpointMetadata, twoPageNavigationPath)
 import App.Routes qualified as ExampleRoutes
@@ -23,11 +24,41 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb (ClientActionPayload (..), ClientActionRequest (..), ForwardedHeaderTrust (..), ListenerConfig (..), RouteMethod (..), RouteRequest (..), appName, applicationStaticAssets, corsPolicy, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, forwardedHeaderTrust, httpsRedirectAuthority, httpsRedirectPort, listenerConfigs, metricsExporter, notFoundRequest, observability, redirectHttpToHttps, requestConcurrencyLimit, requestPolicy, requestTransportLimits, responseSecurityHeaders, staticAssetContentTypes, staticAssetRoots, staticAssets, staticCacheControlSeconds, strictTransportSecurity, toWaiApplication, tracingExporter, warpDefaultRequestTransportLimits)
 import HarchWeb qualified
+import HarchWeb.Csrf (generateCsrfToken, mkPageCsrf, mkPageSecurity)
 import HarchWeb.Site (routeNavigationLabel, siteName, siteNavigationRoutes, siteRequestPolicy, siteRouteDefinition, siteStaticAssets)
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import Network.Wai.Internal qualified as WaiInternal
+
+testCsrfProtection :: HarchWeb.CsrfProtection ()
+testCsrfProtection =
+  HarchWeb.CsrfProtection
+    { HarchWeb.issueCsrfToken = const ((`HarchWeb.CsrfTokenIssued` HarchWeb.defaultCsrfCookieMaxAgeSeconds) <$> generateCsrfToken),
+      HarchWeb.verifyCsrfToken = \requestContext csrfToken ->
+        pure $
+          if requestContext == () && HarchWeb.csrfTokenText csrfToken == TextEncoding.decodeUtf8 nativeFallbackCsrfValue
+            then HarchWeb.CsrfVerified
+            else HarchWeb.CsrfRejected
+    }
+
+nativeFallbackCsrfValue :: ByteString.ByteString
+nativeFallbackCsrfValue = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+nativeFallbackCsrfCookie :: ByteString.ByteString
+nativeFallbackCsrfCookie = "__Host-harch-csrf=" <> nativeFallbackCsrfValue
+
+unavailableCsrfProtection :: HarchWeb.CsrfProtection ()
+unavailableCsrfProtection =
+  testCsrfProtection
+    { HarchWeb.verifyCsrfToken = \_ _ -> pure HarchWeb.CsrfVerificationUnavailable
+    }
+
+buildApplication :: HarchWeb.Application TwoPageRoute TwoPageAction () ()
+buildApplication = App.buildApplication testCsrfProtection
+
+twoPageSite :: Site.Site TwoPageRoute TwoPageAction () ()
+twoPageSite = App.twoPageSite testCsrfProtection
 
 parseRoute :: HarchWeb.RouteCodec TwoPageRoute () -> () -> Text.Text -> Maybe (RouteRequest TwoPageRoute ())
 parseRoute codec requestContext target = do
@@ -75,7 +106,11 @@ spec =
                    Site.routeMethods (siteRouteDefinition twoPageSite (Custom (PreviewPage previewSlug)))
                      `shouldBe` [RouteGet],
                    Site.routeMethods (siteRouteDefinition twoPageSite (Custom NativeSubscriptionFallback))
-                     `shouldBe` [RouteGet, RoutePost],
+                     `shouldBe` [RoutePost],
+                   routeNavigationLabel (siteRouteDefinition twoPageSite (Custom NativeSubscriptionFallback))
+                     `shouldBe` Nothing,
+                   Site.routeMethods (siteRouteDefinition twoPageSite (Custom NativeSubscriptionResult))
+                     `shouldBe` [RouteGet],
                    staticAssetRoots (siteStaticAssets twoPageSite)
                      `shouldBe` [HarchWeb.StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}],
                    staticAssetContentTypes (siteStaticAssets twoPageSite) `shouldBe` defaultStaticAssetContentTypes,
@@ -131,7 +166,8 @@ spec =
                 (HarchWeb.HtmlEndpoint, Page PageNotFound, "two-pages.not-found", "/404"),
                 (HarchWeb.ApiEndpoint, Api LiveDataEvents, "two-pages.live-data-events", "/live-data/events"),
                 (HarchWeb.HtmlEndpoint, Custom (PreviewPage previewSlug), "two-pages.preview", "/preview/{slug}"),
-                (HarchWeb.HtmlEndpoint, Custom NativeSubscriptionFallback, "two-pages.native-subscription", "/native-subscribe")
+                (HarchWeb.ApiEndpoint, Custom NativeSubscriptionFallback, "two-pages.native-subscription", "/native-subscribe"),
+                (HarchWeb.HtmlEndpoint, Custom NativeSubscriptionResult, "two-pages.native-subscription-result", "/subscription-received")
               ]
         forM_ endpointCases $ \(endpointProtocol, route, expectedName, expectedTemplate) -> do
           let endpointMetadata = twoPageEndpointMetadata endpointProtocol route
@@ -195,6 +231,7 @@ spec =
                      `shouldSatisfy` not
                      . null,
                    show NativeSubscriptionFallback `shouldBe` "NativeSubscriptionFallback",
+                   show NativeSubscriptionResult `shouldBe` "NativeSubscriptionResult",
                    show (Page PageNotFound) `shouldBe` "Page PageNotFound",
                    show (Page HomePage) `shouldBe` "Page HomePage",
                    showList ([] :: [TwoPageRoute]) "" `shouldBe` "[]",
@@ -205,6 +242,7 @@ spec =
                    parseRoute ExampleRoutes.routeCodec () "/live-data" `shouldBe` Just RouteRequest {requestRoute = Page LiveDataPage, requestContext = ()},
                    parseRoute ExampleRoutes.routeCodec () "/live-data/events" `shouldBe` Just RouteRequest {requestRoute = Api LiveDataEvents, requestContext = ()},
                    parseRoute ExampleRoutes.routeCodec () "/native-subscribe" `shouldBe` Just RouteRequest {requestRoute = Custom NativeSubscriptionFallback, requestContext = ()},
+                   parseRoute ExampleRoutes.routeCodec () "/subscription-received" `shouldBe` Just RouteRequest {requestRoute = Custom NativeSubscriptionResult, requestContext = ()},
                    parseRoute ExampleRoutes.routeCodec () "/preview/summer-release"
                      `shouldBe` (\slug -> RouteRequest {requestRoute = Custom (PreviewPage slug), requestContext = ()})
                      <$> mkPreviewSlug "summer-release",
@@ -219,18 +257,22 @@ spec =
                    HarchWeb.routeMethods ExampleRoutes.routeCodec (Custom (PreviewPage previewSlug))
                      `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
                    HarchWeb.routeMethods ExampleRoutes.routeCodec (Custom NativeSubscriptionFallback)
-                     `shouldBe` HarchWeb.routeMethodPolicy [RouteGet, RoutePost],
+                     `shouldBe` HarchWeb.routeMethodPolicy [RoutePost],
+                   HarchWeb.routeMethods ExampleRoutes.routeCodec (Custom NativeSubscriptionResult)
+                     `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page HomePage, requestContext = ()} `shouldBe` "/",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page SecondPage, requestContext = ()} `shouldBe` "/second",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page LiveDataPage, requestContext = ()} `shouldBe` "/live-data",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Api LiveDataEvents, requestContext = ()} `shouldBe` "/live-data/events",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Custom NativeSubscriptionFallback, requestContext = ()} `shouldBe` "/native-subscribe",
+                   renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Custom NativeSubscriptionResult, requestContext = ()} `shouldBe` "/subscription-received",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page PageNotFound, requestContext = ()} `shouldBe` "/404",
                    routeHref (Page HomePage) `shouldBe` "/",
                    routeHref (Page SecondPage) `shouldBe` "/second",
                    routeHref (Page LiveDataPage) `shouldBe` "/live-data",
                    routeHref (Api LiveDataEvents) `shouldBe` "/live-data/events",
                    routeHref (Custom NativeSubscriptionFallback) `shouldBe` "/native-subscribe",
+                   routeHref (Custom NativeSubscriptionResult) `shouldBe` "/subscription-received",
                    ExampleRoutes.twoPageActionPath () `shouldBe` Just "/actions/subscribe",
                    routeHref (Page PageNotFound) `shouldBe` "/404",
                    twoPageNavigationPath (NavigationPage HomePage) `shouldBe` "/",
@@ -300,12 +342,17 @@ spec =
             allPageRoutes
         responses `shouldSatisfy` all isCompletePageResponse
 
-      it "renders the native fallback route as a complete SSR page" $ do
-        nativePage <- nativeSubscriptionFallbackPage RouteRequest {requestRoute = Custom NativeSubscriptionFallback, requestContext = ()}
+      it "renders the native fallback destination as a complete SSR page" $ do
+        pageSecurity <- testPageSecurity
+        nativePage <- nativeSubscriptionResultPage pageSecurity RouteRequest {requestRoute = Custom NativeSubscriptionResult, requestContext = ()}
+        response <- performWaiRequest (toWaiApplication buildApplication) (waiRequest ["subscription-received"])
+        responseBody <- readResponseBody response
         expectAll
-          ( (HarchWeb.pageRoute nativePage `shouldBe` Custom NativeSubscriptionFallback)
+          ( (HarchWeb.pageRoute nativePage `shouldBe` Custom NativeSubscriptionResult)
               :| [ Text.isInfixOf "Subscription received" (HarchWeb.renderHtml (HarchWeb.pageBody nativePage)) `shouldBe` True,
-                   routeNavigationLabel (siteRouteDefinition twoPageSite (Custom NativeSubscriptionFallback)) `shouldBe` Nothing
+                   routeNavigationLabel (siteRouteDefinition twoPageSite (Custom NativeSubscriptionResult)) `shouldBe` Nothing,
+                   Wai.responseStatus response `shouldBe` Http.status200,
+                   Text.isInfixOf "Subscription received" responseBody `shouldBe` True
                  ]
           )
 
@@ -339,7 +386,8 @@ spec =
                    Text.isInfixOf "action=\"/actions/subscribe\" method=\"dialog\"" responseBody `shouldBe` True,
                    Text.isInfixOf "action=\"/native-subscribe\" method=\"post\"" responseBody `shouldBe` True,
                    Text.isInfixOf "data-harch-action-path=\"/actions/subscribe\"" responseBody `shouldBe` True,
-                   Text.isInfixOf "name=\"_harch_csrf\" value=\"two-pages-native-fallback\"" responseBody `shouldBe` True,
+                   Text.isInfixOf "name=\"_harch_csrf\"" responseBody `shouldBe` True,
+                   Text.isInfixOf ("name=\"_harch_csrf\" value=\"" <> TextEncoding.decodeUtf8 (csrfCookieValue response) <> "\"") responseBody `shouldBe` True,
                    Text.isInfixOf "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"status\"></p>" responseBody `shouldBe` True,
                    Text.isInfixOf "<script nonce=\"" responseBody `shouldBe` True,
                    Text.isInfixOf "new FormData(target, submitter)" responseBody `shouldBe` True,
@@ -396,11 +444,16 @@ spec =
           HarchWeb.renderResponse
             buildApplication
             RouteRequest {requestRoute = previewRoute, requestContext = ()}
+        pageSecurity <- testPageSecurity
         directlyDefinedResponse <-
-          Site.routeResponse
-            (previewPageDefinition previewSlug)
-            Wai.defaultRequest
-            RouteRequest {requestRoute = previewRoute, requestContext = ()}
+          case Site.routeHandler (previewPageDefinition previewSlug) of
+            Site.PageRouteHandler renderPage -> do
+              pageResult <- renderPage pageSecurity RouteRequest {requestRoute = previewRoute, requestContext = ()}
+              pure $
+                case pageResult of
+                  HarchWeb.RenderedPage page -> HarchWeb.PageResponse pageSecurity page
+                  HarchWeb.RenderedPageWithMetadata responseBodyValue page -> HarchWeb.PageResponseWithMetadata pageSecurity responseBodyValue page
+            Site.ProtocolRouteHandler {} -> expectationFailure "expected preview page handler" >> fail "unreachable"
         expectAll
           ( (Wai.responseStatus response `shouldBe` Http.status200)
               :| [ Text.isInfixOf "<title>Preview: summer-release</title>" responseBody
@@ -515,10 +568,20 @@ spec =
                 clientActionRequestIdempotencyKey = Nothing,
                 clientActionContext = ()
               }
+        directNavigationTarget <-
+          case directResponse of
+            Just actionResponse ->
+              case HarchWeb.clientActionNavigation actionResponse of
+                HarchWeb.NavigateInternal _ target -> pure target
+                _ -> expectationFailure "expected the valid subscription action to navigate internally" >> fail "unreachable"
+            Nothing -> expectationFailure "expected the valid subscription action to return a response" >> fail "unreachable"
         expectAll
           ( (Wai.responseStatus response `shouldBe` Http.status200)
               :| [ Text.isInfixOf "Thanks. Your subscription request is ready." responseBody `shouldBe` True,
                    Text.isInfixOf "\"focusId\":null" responseBody `shouldBe` True,
+                   Text.isInfixOf "\"navigation\":{\"historyMode\":\"push\",\"href\":\"/subscription-received\"}" responseBody `shouldBe` True,
+                   requestRoute directNavigationTarget `shouldBe` Custom NativeSubscriptionResult,
+                   requestContext directNavigationTarget `shouldBe` (),
                    fmap HarchWeb.clientActionHeaders directResponse `shouldBe` Just [],
                    fmap HarchWeb.clientActionObservabilityAttributes directResponse `shouldBe` Just [],
                    fmap HarchWeb.clientActionLogEntries directResponse `shouldBe` Just []
@@ -526,28 +589,61 @@ spec =
           )
 
       it "accepts only a matching CSRF cookie and form token for the native fallback" $ do
-        validRequest <- nativeFallbackRequest "_harch_csrf=two-pages-native-fallback" "harch-native-fallback-csrf=two-pages-native-fallback"
-        mismatchedRequest <- nativeFallbackRequest "_harch_csrf=wrong-token" "harch-native-fallback-csrf=two-pages-native-fallback"
+        validRequest <- nativeFallbackRequest ("email=native%40example.com&_harch_csrf=" <> nativeFallbackCsrfValue) nativeFallbackCsrfCookie
+        directValidRequest <- nativeFallbackRequest ("email=native%40example.com&_harch_csrf=" <> nativeFallbackCsrfValue) nativeFallbackCsrfCookie
+        mismatchedRequest <- nativeFallbackRequest "_harch_csrf=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" nativeFallbackCsrfCookie
+        rejectedByAuthorityRequest <- nativeFallbackRequest "_harch_csrf=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" "__Host-harch-csrf=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+        malformedRequest <- nativeFallbackRequest "email=\255&_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" nativeFallbackCsrfCookie
         missingRequest <- nativeFallbackRequest "email=native%40example.com" ""
-        emptyRequest <- nativeFallbackRequest "" "harch-native-fallback-csrf=two-pages-native-fallback"
+        emptyRequest <- nativeFallbackRequest "" nativeFallbackCsrfCookie
+        invalidEmailRequest <- nativeFallbackRequest ("email=invalid&_harch_csrf=" <> nativeFallbackCsrfValue) nativeFallbackCsrfCookie
+        unavailableRequest <- nativeFallbackRequest ("_harch_csrf=" <> nativeFallbackCsrfValue) nativeFallbackCsrfCookie
         validResponse <- performWaiRequest (toWaiApplication buildApplication) validRequest
         mismatchedResponse <- performWaiRequest (toWaiApplication buildApplication) mismatchedRequest
+        rejectedByAuthorityResponse <- performWaiRequest (toWaiApplication buildApplication) rejectedByAuthorityRequest
+        malformedResponse <- performWaiRequest (toWaiApplication buildApplication) malformedRequest
         missingResponse <- performWaiRequest (toWaiApplication buildApplication) missingRequest
         emptyResponse <- performWaiRequest (toWaiApplication buildApplication) emptyRequest
-        validBody <- readResponseBody validResponse
+        invalidEmailResponse <- performWaiRequest (toWaiApplication buildApplication) invalidEmailRequest
         mismatchedBody <- readResponseBody mismatchedResponse
+        rejectedByAuthorityBody <- readResponseBody rejectedByAuthorityResponse
+        malformedBody <- readResponseBody malformedResponse
         missingBody <- readResponseBody missingResponse
         emptyBody <- readResponseBody emptyResponse
+        invalidEmailBody <- readResponseBody invalidEmailResponse
+        unavailableResponse <- performWaiRequest (toWaiApplication (App.buildApplication unavailableCsrfProtection)) unavailableRequest
+        unavailableBody <- readResponseBody unavailableResponse
+        directResponse <-
+          case Site.routeHandler (siteRouteDefinition twoPageSite (Custom NativeSubscriptionFallback)) of
+            Site.ProtocolRouteHandler handleProtocol ->
+              handleProtocol directValidRequest RouteRequest {requestRoute = Custom NativeSubscriptionFallback, requestContext = ()}
+            Site.PageRouteHandler {} -> expectationFailure "expected native fallback protocol handler" >> fail "unreachable"
+        redirectTarget <-
+          case directResponse of
+            HarchWeb.NonPageInternalRedirectResponse _ target -> pure target
+            _ -> expectationFailure "expected the valid native fallback to return a typed redirect" >> fail "unreachable"
         expectAll
-          ( (Wai.responseStatus validResponse `shouldBe` Http.status200)
-              :| [ Text.isInfixOf "<title>Subscription received</title>" validBody `shouldBe` True,
+          ( (Wai.responseStatus validResponse `shouldBe` Http.status303)
+              :| [ lookup Http.hLocation (Wai.responseHeaders validResponse) `shouldBe` Just "/subscription-received",
+                   requestRoute redirectTarget `shouldBe` Custom NativeSubscriptionResult,
+                   requestContext redirectTarget `shouldBe` (),
                    lookup Http.hContentType (Wai.responseHeaders mismatchedResponse) `shouldBe` Just "text/plain; charset=utf-8",
                    Wai.responseStatus mismatchedResponse `shouldBe` Http.status403,
                    Text.isInfixOf "Native fallback CSRF validation failed." mismatchedBody `shouldBe` True,
+                   Wai.responseStatus rejectedByAuthorityResponse `shouldBe` Http.status403,
+                   Text.isInfixOf "Native fallback CSRF validation failed." rejectedByAuthorityBody `shouldBe` True,
+                   Wai.responseStatus malformedResponse `shouldBe` Http.status403,
+                   Text.isInfixOf "Native fallback CSRF validation failed." malformedBody `shouldBe` True,
                    Wai.responseStatus missingResponse `shouldBe` Http.status403,
                    Text.isInfixOf "Native fallback CSRF validation failed." missingBody `shouldBe` True,
                    Wai.responseStatus emptyResponse `shouldBe` Http.status403,
-                   Text.isInfixOf "Native fallback CSRF validation failed." emptyBody `shouldBe` True
+                   Text.isInfixOf "Native fallback CSRF validation failed." emptyBody `shouldBe` True,
+                   Wai.responseStatus invalidEmailResponse `shouldBe` Http.status422,
+                   lookup Http.hContentType (Wai.responseHeaders invalidEmailResponse) `shouldBe` Just "text/plain; charset=utf-8",
+                   Text.isInfixOf "Enter a valid email address." invalidEmailBody `shouldBe` True,
+                   Wai.responseStatus unavailableResponse `shouldBe` Http.status503,
+                   lookup Http.hContentType (Wai.responseHeaders unavailableResponse) `shouldBe` Just "text/plain; charset=utf-8",
+                   Text.isInfixOf "Native fallback CSRF protection is unavailable." unavailableBody `shouldBe` True
                  ]
           )
 
@@ -555,7 +651,7 @@ spec =
         oversizedRequest <-
           nativeFallbackRequestChunks
             [ByteString.replicate 4096 97, ByteString.replicate 4097 97]
-            "harch-native-fallback-csrf=two-pages-native-fallback"
+            nativeFallbackCsrfCookie
         oversizedResponse <- performWaiRequest (toWaiApplication buildApplication) oversizedRequest
         oversizedBody <- readResponseBody oversizedResponse
         expectAll
@@ -569,7 +665,7 @@ spec =
         tooManyFieldsRequest <-
           nativeFallbackRequest
             (ByteString.intercalate "&" (replicate 33 "x"))
-            "harch-native-fallback-csrf=two-pages-native-fallback"
+            nativeFallbackCsrfCookie
         tooManyFieldsResponse <- performWaiRequest (toWaiApplication buildApplication) tooManyFieldsRequest
         tooManyFieldsBody <- readResponseBody tooManyFieldsResponse
         expectAll
@@ -578,34 +674,6 @@ spec =
                    Text.isInfixOf "Native fallback request has too many form fields." tooManyFieldsBody `shouldBe` True
                  ]
           )
-
-      it "preserves the middleware context through every native-fallback rejection" $ do
-        oversizedRequest <-
-          nativeFallbackRequestChunks
-            [ByteString.replicate 4096 97, ByteString.replicate 4097 97]
-            "harch-native-fallback-csrf=two-pages-native-fallback"
-        tooManyFieldsRequest <-
-          nativeFallbackRequest
-            (ByteString.intercalate "&" (replicate 33 "x"))
-            "harch-native-fallback-csrf=two-pages-native-fallback"
-        rejectedCsrfRequest <- nativeFallbackRequest "_harch_csrf=wrong-token" "harch-native-fallback-csrf=two-pages-native-fallback"
-        emptyRequest <- nativeFallbackRequest "" "harch-native-fallback-csrf=two-pages-native-fallback"
-        case HarchWeb.applicationRequestMiddleware buildApplication of
-          [HarchWeb.RequestMiddleware nativeFallbackMiddleware] -> do
-            oversizedResult <- nativeFallbackMiddleware oversizedRequest ()
-            tooManyFieldsResult <- nativeFallbackMiddleware tooManyFieldsRequest ()
-            rejectedCsrfResult <- nativeFallbackMiddleware rejectedCsrfRequest ()
-            emptyResult <- nativeFallbackMiddleware emptyRequest ()
-            unrelatedResult <- nativeFallbackMiddleware (waiRequest ["known"]) ()
-            expectAll
-              ( (haltedMiddlewareContext oversizedResult `shouldBe` Just ())
-                  :| [ haltedMiddlewareContext tooManyFieldsResult `shouldBe` Just (),
-                       haltedMiddlewareContext rejectedCsrfResult `shouldBe` Just (),
-                       haltedMiddlewareContext emptyResult `shouldBe` Just (),
-                       unrelatedResult `shouldBe` HarchWeb.ContinueMiddleware ()
-                     ]
-              )
-          _ -> expectationFailure "expected the configured native-fallback middleware"
 
       it "rejects an address that does not contain an at sign" $ do
         invalidAction <-
@@ -618,10 +686,16 @@ spec =
               }
         fmap HarchWeb.clientActionStatus invalidAction `shouldBe` Just Http.status422
 
+testPageSecurity :: IO HarchWeb.PageSecurity
+testPageSecurity = do
+  runtimeNonce <- HarchWeb.generateRuntimeNonce
+  csrfToken <- generateCsrfToken
+  pure (mkPageSecurity runtimeNonce (mkPageCsrf csrfToken "two-pages-test"))
+
 isCompletePageResponse :: HarchWeb.Response TwoPageRoute () -> Bool
 isCompletePageResponse response =
   case response of
-    HarchWeb.PageResponse page ->
+    HarchWeb.PageResponse _ page ->
       not (Text.null (HarchWeb.renderHtml (HarchWeb.pageBody page)))
     _ -> False
 
@@ -644,11 +718,11 @@ nativeFallbackRequestChunks requestBodyChunks csrfCookie = do
 nonEmptyCookie :: ByteString.ByteString -> Maybe ByteString.ByteString
 nonEmptyCookie cookie = if ByteString.null cookie then Nothing else Just cookie
 
-haltedMiddlewareContext :: HarchWeb.MiddlewareResult context -> Maybe context
-haltedMiddlewareContext result =
-  case result of
-    HarchWeb.HaltMiddleware requestContext _ -> Just requestContext
-    HarchWeb.ContinueMiddleware _ -> Nothing
+csrfCookieValue :: Wai.Response -> ByteString.ByteString
+csrfCookieValue response =
+  case lookup "Set-Cookie" (Wai.responseHeaders response) of
+    Just cookie -> ByteString.takeWhile (/= 59) (ByteString.drop (ByteString.length "__Host-harch-csrf=") cookie)
+    Nothing -> error "expected an SSR CSRF cookie"
 
 waiRequest :: [Text.Text] -> Wai.Request
 waiRequest segments =
@@ -707,7 +781,7 @@ decodeUtf8Response =
 hasPageRoute :: TwoPageRoute -> HarchWeb.Response TwoPageRoute () -> Bool
 hasPageRoute expectedRoute response =
   case response of
-    HarchWeb.PageResponse page -> routeHref (HarchWeb.pageRoute page) == routeHref expectedRoute
+    HarchWeb.PageResponse _ page -> routeHref (HarchWeb.pageRoute page) == routeHref expectedRoute
     _ -> False
 
 exerciseGeneratedPageRouteInstances :: Expectation

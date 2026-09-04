@@ -374,8 +374,11 @@ package $candidate
 EOF
     done
 
-    # Use -O0 to disable optimization for accurate coverage (prevents inlining)
-    cabal configure --disable-backup --ghc-options="-O0 -optl-fuse-ld=lld"
+    # Cabal's project-level optimization setting overrides a bare @-O0@ GHC
+    # option.  Disable optimization at Cabal's configuration boundary so HPC
+    # observes the production modules' actual branch structure rather than
+    # optimized/inlined counters.
+    cabal configure --disable-backup --disable-optimization --ghc-options="-optl-fuse-ld=lld"
 
     # Clean build artifacts to avoid stale tix data that can bleed between runs.
     find dist-newstyle -name "*.tix" -type f -print0 | xargs -0 rm -f --

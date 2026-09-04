@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Versioned schema migration runs own one short-lived, owner-credential
+-- | Database-change migration runs on one short-lived, owner-credential
 -- libpq connection for the complete transaction.  This deliberately differs
 -- from the application's shared runtime pool: a migration is exclusive,
 -- privileged setup work and must retain its advisory lock until commit or
@@ -10,27 +10,25 @@
 -- AX decision record in @docs/design-guidance.md@.
 module WebApi.Postgres.Migration
   ( migrationStatementsFor,
-    PostgresMigrationExecutor (..),
-    PostgresMigrationResult (..),
     runPostgresMigrations,
     runPostgresMigrationsForRuntime,
-    runPostgresMigrationsWithExecutor,
     runPostgresSeed,
     runPostgresSeedWithRunner,
     seedStatements,
   )
 where
 
-import Control.Exception (bracket)
-import Control.Monad (unless, void)
-import Control.Monad.Except (ExceptT, runExceptT, throwError)
-import Core.Control.Error (liftEitherWith)
-import Data.Bifunctor (first)
-import Data.ByteString qualified as ByteString
+import Data.List.NonEmpty qualified as NonEmpty
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Data.Text.Encoding qualified as TextEncoding
-import Database.PostgreSQL.LibPQ qualified as LibPQ
+import Postgres.DatabaseChange
+  ( DatabaseChange (..),
+    DatabaseChangeConnectionString (..),
+    DatabaseChangeError (..),
+    DatabaseChangeId (..),
+    DatabaseChangeLedger (..),
+    runDatabaseChanges,
+  )
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Postgres.Pool (runtimeConnectionString)
 import WebApi.Postgres.Runtime
@@ -41,187 +39,63 @@ import WebApi.Postgres.Runtime
     runStatements,
   )
 
--- | A connection-scoped SQL executor.  It is deliberately migration-specific:
--- tests can record transaction and version-table operations without preserving
--- the old one-process-per-statement @psql@ fixture contract.  Its result is on
--- the same typed rail as the transaction: an adapter can report a malformed
--- wire value without throwing or inventing a schema version.
-newtype PostgresMigrationExecutor = PostgresMigrationExecutor
-  { executeMigrationSql :: Text -> IO (Either PostgresRunnerError (Maybe PostgresMigrationResult))
-  }
-
--- | The two successful shapes the migration protocol accepts.  Commands and
--- queries are intentionally distinct, so a test or libpq interpreter cannot
--- accidentally treat an empty command result as an applied-version query.
--- Query cells stay as raw optional bytes until the transaction's typed
--- decoding boundary, where NULL and invalid UTF-8 become explicit failures.
-data PostgresMigrationResult
-  = PostgresMigrationCommandSucceeded
-  | PostgresMigrationRows [Maybe ByteString.ByteString]
-
--- | One ordered, durable schema change.  The version is recorded only after
--- every statement in this migration has succeeded, while the surrounding
--- transaction makes that record and its schema changes atomic.
-data PostgresMigration = PostgresMigration
-  { postgresMigrationVersion :: Text,
-    postgresMigrationStatements :: [Text]
-  }
-
 runPostgresMigrations :: DatabaseConfig -> IO (Either PostgresRunnerError ())
 runPostgresMigrations databaseConfig =
   runPostgresMigrationsForRuntime databaseConfig databaseConfig
 
 runPostgresMigrationsForRuntime :: DatabaseConfig -> DatabaseConfig -> IO (Either PostgresRunnerError ())
 runPostgresMigrationsForRuntime migrationDatabaseConfig runtimeDatabaseConfig =
-  bracket
-    (LibPQ.connectdb (runtimeConnectionString migrationDatabaseConfig))
-    LibPQ.finish
-    (\connection -> runPostgresMigrationsWithExecutor (libpqMigrationExecutor connection) migrationDatabaseConfig runtimeDatabaseConfig)
+  mapDatabaseChangeFailure
+    <$> runDatabaseChanges
+      (DatabaseChangeConnectionString (runtimeConnectionString migrationDatabaseConfig))
+      webApiDatabaseChangeLedger
+      webApiDatabaseChanges
+      (migrationReconciliationStatementsFor migrationDatabaseConfig runtimeDatabaseConfig)
 
-runPostgresMigrationsWithExecutor :: PostgresMigrationExecutor -> DatabaseConfig -> DatabaseConfig -> IO (Either PostgresRunnerError ())
-runPostgresMigrationsWithExecutor executor migrationDatabaseConfig runtimeDatabaseConfig = do
-  begun <- runExceptT (executeMigration executor "BEGIN;")
-  case begun of
-    Left failure -> pure (Left failure)
-    Right () -> do
-      result <-
-        runExceptT $ do
-          runMigrationTransaction executor migrationDatabaseConfig runtimeDatabaseConfig
-          executeMigration executor "COMMIT;"
-      case result of
-        Right () -> pure (Right ())
-        Left failure -> rollbackAfterFailure executor failure
+mapDatabaseChangeFailure :: Either DatabaseChangeError () -> Either PostgresRunnerError ()
+mapDatabaseChangeFailure = either (Left . PostgresMigrationFailed . renderDatabaseChangeFailure) Right
 
-rollbackAfterFailure :: PostgresMigrationExecutor -> PostgresRunnerError -> IO (Either PostgresRunnerError ())
-rollbackAfterFailure executor failure = do
-  void (runExceptT (executeMigration executor "ROLLBACK;"))
-  pure (Left failure)
+renderDatabaseChangeFailure :: DatabaseChangeError -> Text
+renderDatabaseChangeFailure failure =
+  case failure of
+    DatabaseChangeInvalidId -> "PostgreSQL database change has an invalid ID"
+    DatabaseChangeInvalidLedger -> "PostgreSQL database change ledger is invalid"
+    DatabaseChangeDuplicateId _ -> "PostgreSQL database change plan has a duplicate ID"
+    DatabaseChangeExecutionFailed -> "PostgreSQL database change command failed"
+    DatabaseChangeCommandReturnedRows -> "PostgreSQL database change command returned rows"
+    DatabaseChangeQueryReturnedNoRows -> "PostgreSQL database change query returned no rows"
+    DatabaseChangeMalformedLedgerRow -> "PostgreSQL database change ledger row is malformed"
+    DatabaseChangeUnknownRecordedId _ -> "Unknown PostgreSQL database change ID"
+    DatabaseChangeDigestMismatch _ -> "PostgreSQL database change digest mismatch"
+    DatabaseChangeOutOfOrder _ -> "PostgreSQL database changes are out of order"
 
-runMigrationTransaction :: PostgresMigrationExecutor -> DatabaseConfig -> DatabaseConfig -> ExceptT PostgresRunnerError IO ()
-runMigrationTransaction executor migrationDatabaseConfig runtimeDatabaseConfig = do
-  executeMigrationQuery executor "SELECT pg_advisory_xact_lock(782476311);"
-  runMigrationStatements executor migrationBootstrapStatements
-  appliedVersions <- executeMigrationRows executor "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
-  runPendingMigrations executor appliedVersions migrations
-  runMigrationStatements executor (migrationReconciliationStatementsFor migrationDatabaseConfig runtimeDatabaseConfig)
+webApiDatabaseChangeLedger :: DatabaseChangeLedger
+webApiDatabaseChangeLedger =
+  DatabaseChangeLedger
+    { databaseChangeLedgerSchema = "web_api",
+      databaseChangeLedgerTable = "database_changes",
+      databaseChangeLegacyTable = Just "schema_migrations",
+      databaseChangeLedgerLockId = 782476311
+    }
 
-runPendingMigrations :: PostgresMigrationExecutor -> [Text] -> [PostgresMigration] -> ExceptT PostgresRunnerError IO ()
-runPendingMigrations executor appliedVersions migrationPlan =
-  case unknownAppliedVersions appliedVersions migrationPlan of
-    unknownVersion : _ -> throwError (PostgresMigrationFailed ("Unknown PostgreSQL schema migration version: " <> unknownVersion))
-    [] -> mapM_ runMigration migrationPlan
+webApiDatabaseChanges :: [DatabaseChange]
+webApiDatabaseChanges =
+  [ change "initial-schema" migrationStatementsFor,
+    change "epoch-security-time-v1" epochSecurityTimeMigrationStatements,
+    change "login-attempt-reservations-v1" loginAttemptReservationMigrationStatements,
+    change "login-attempt-reservation-function-v1" loginAttemptReservationFunctionMigrationStatements,
+    change "login-attempt-storage-bound-v1" loginAttemptStorageBoundMigrationStatements,
+    change "pending-registration-lifecycle-v1" pendingRegistrationLifecycleMigrationStatements,
+    change "verification-resend-lifecycle-v1" verificationResendLifecycleMigrationStatements,
+    change "keyed-login-attempt-groups-v1" keyedLoginAttemptGroupMigrationStatements,
+    change "remove-session-csrf-v1" removeSessionCsrfMigrationStatements
+  ]
   where
-    runMigration migration =
-      unless (postgresMigrationVersion migration `elem` appliedVersions) $ do
-        runMigrationStatements executor (postgresMigrationStatements migration)
-        executeMigration
-          executor
-          ("INSERT INTO web_api.schema_migrations (version) VALUES (" <> sqlLiteral (postgresMigrationVersion migration) <> ");")
-
-unknownAppliedVersions :: [Text] -> [PostgresMigration] -> [Text]
-unknownAppliedVersions appliedVersions migrationPlan =
-  filter (`notElem` map postgresMigrationVersion migrationPlan) appliedVersions
-
-runMigrationStatements :: PostgresMigrationExecutor -> [Text] -> ExceptT PostgresRunnerError IO ()
-runMigrationStatements executor = mapM_ (executeMigration executor)
-
-executeMigration :: PostgresMigrationExecutor -> Text -> ExceptT PostgresRunnerError IO ()
-executeMigration executor sql = do
-  result <- runMigrationSql executor sql
-  case result of
-    Nothing -> throwError (PostgresMigrationFailed "PostgreSQL migration command failed")
-    Just PostgresMigrationCommandSucceeded -> pure ()
-    Just (PostgresMigrationRows _) -> throwError (PostgresMigrationFailed "PostgreSQL migration command returned rows")
-
-executeMigrationRows :: PostgresMigrationExecutor -> Text -> ExceptT PostgresRunnerError IO [Text]
-executeMigrationRows executor sql = do
-  result <- runMigrationSql executor sql
-  case result of
-    Nothing -> throwError (PostgresMigrationFailed "PostgreSQL migration command failed")
-    Just PostgresMigrationCommandSucceeded -> throwError (PostgresMigrationFailed "PostgreSQL migration version query returned no rows")
-    Just (PostgresMigrationRows rows) -> liftEitherWith id (pure (traverse decodeMigrationVersion rows))
-
-executeMigrationQuery :: PostgresMigrationExecutor -> Text -> ExceptT PostgresRunnerError IO ()
-executeMigrationQuery executor sql = do
-  void (executeMigrationRows executor sql)
-
-runMigrationSql :: PostgresMigrationExecutor -> Text -> ExceptT PostgresRunnerError IO (Maybe PostgresMigrationResult)
-runMigrationSql executor sql =
-  liftEitherWith id (executeMigrationSql executor sql)
-
-migrationBootstrapStatements :: [Text]
-migrationBootstrapStatements =
-  [ "CREATE SCHEMA IF NOT EXISTS web_api;",
-    "CREATE TABLE IF NOT EXISTS web_api.schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);"
-  ]
-
-migrations :: [PostgresMigration]
-migrations =
-  [ PostgresMigration
-      { postgresMigrationVersion = "initial-schema",
-        postgresMigrationStatements = migrationStatementsFor
-      },
-    PostgresMigration
-      { postgresMigrationVersion = "epoch-security-time-v1",
-        postgresMigrationStatements = epochSecurityTimeMigrationStatements
-      },
-    PostgresMigration
-      { postgresMigrationVersion = "login-attempt-reservations-v1",
-        postgresMigrationStatements = loginAttemptReservationMigrationStatements
-      },
-    PostgresMigration
-      { postgresMigrationVersion = "login-attempt-reservation-function-v1",
-        postgresMigrationStatements = loginAttemptReservationFunctionMigrationStatements
-      },
-    PostgresMigration
-      { postgresMigrationVersion = "login-attempt-storage-bound-v1",
-        postgresMigrationStatements = loginAttemptStorageBoundMigrationStatements
-      },
-    PostgresMigration
-      { postgresMigrationVersion = "pending-registration-lifecycle-v1",
-        postgresMigrationStatements = pendingRegistrationLifecycleMigrationStatements
-      },
-    PostgresMigration
-      { postgresMigrationVersion = "verification-resend-lifecycle-v1",
-        postgresMigrationStatements = verificationResendLifecycleMigrationStatements
-      },
-    PostgresMigration
-      { postgresMigrationVersion = "keyed-login-attempt-groups-v1",
-        postgresMigrationStatements = keyedLoginAttemptGroupMigrationStatements
-      }
-  ]
-
-libpqMigrationExecutor :: LibPQ.Connection -> PostgresMigrationExecutor
-libpqMigrationExecutor connection =
-  PostgresMigrationExecutor (runLibpqMigrationSql connection)
-
-runLibpqMigrationSql :: LibPQ.Connection -> Text -> IO (Either PostgresRunnerError (Maybe PostgresMigrationResult))
-runLibpqMigrationSql connection sql = do
-  maybeResult <- LibPQ.exec connection (TextEncoding.encodeUtf8 sql)
-  case maybeResult of
-    Nothing -> pure (Right Nothing)
-    Just result -> do
-      status <- LibPQ.resultStatus result
-      if status == LibPQ.CommandOk
-        then pure (Right (Just PostgresMigrationCommandSucceeded))
-        else
-          if status == LibPQ.TuplesOk
-            then fmap (Right . Just . PostgresMigrationRows) (readMigrationRows result)
-            else pure (Right Nothing)
-
-readMigrationRows :: LibPQ.Result -> IO [Maybe ByteString.ByteString]
-readMigrationRows result = do
-  rowCount <- LibPQ.ntuples result
-  traverse (\rowIndex -> LibPQ.getvalue result rowIndex 0) [0 .. rowCount - 1]
-
-decodeMigrationVersion :: Maybe ByteString.ByteString -> Either PostgresRunnerError Text
-decodeMigrationVersion maybeValue =
-  case maybeValue of
-    Nothing -> Left (PostgresMigrationFailed "PostgreSQL migration version row was NULL")
-    Just value ->
-      first
-        (const (PostgresMigrationFailed "PostgreSQL migration version row contained invalid UTF-8"))
-        (TextEncoding.decodeUtf8' value)
+    change changeId statements =
+      DatabaseChange
+        { databaseChangeId = DatabaseChangeId changeId,
+          databaseChangeStatements = NonEmpty.fromList statements
+        }
 
 runPostgresSeed :: DatabaseConfig -> IO (Either PostgresRunnerError ())
 runPostgresSeed = runPostgresSeedWithRunner runPostgresCommand
@@ -346,6 +220,12 @@ keyedLoginAttemptGroupMigrationStatements =
     "CREATE INDEX IF NOT EXISTS login_attempt_groups_time ON web_api.login_attempt_groups (attempted_at_nanoseconds);",
     "CREATE INDEX IF NOT EXISTS login_attempts_group ON web_api.login_attempts (attempt_group_id);",
     "CREATE OR REPLACE FUNCTION web_api.reserve_login_attempt_group(p_budgets JSONB, p_retention_since BIGINT, p_now BIGINT, p_storage_max BIGINT) RETURNS TABLE(outcome TEXT, value TEXT) LANGUAGE plpgsql VOLATILE AS $$ DECLARE budget JSONB; budget_key TEXT; budget_max BIGINT; budget_window BIGINT; budget_lockout BIGINT; latest_failure BIGINT; failure_count BIGINT; lockout_ends_at BIGINT := 0; stored_count BIGINT; reserved_group_id BIGINT; budget_count BIGINT; BEGIN IF jsonb_typeof(p_budgets) <> 'array' THEN RETURN QUERY SELECT 'invalid-budget'::TEXT, ''::TEXT; RETURN; END IF; SELECT jsonb_array_length(p_budgets) INTO budget_count; IF budget_count < 1 OR budget_count > 4 OR (SELECT count(DISTINCT entry->>'key') FROM jsonb_array_elements(p_budgets) entry) <> budget_count THEN RETURN QUERY SELECT 'invalid-budget'::TEXT, ''::TEXT; RETURN; END IF; PERFORM pg_advisory_xact_lock(hashtextextended('web_api.login_attempt_groups.capacity', 0)); DELETE FROM web_api.login_attempt_groups WHERE attempted_at_nanoseconds < p_retention_since; FOR budget IN SELECT entry FROM jsonb_array_elements(p_budgets) entry ORDER BY entry->>'key' LOOP budget_key := budget->>'key'; IF budget_key IS NULL OR char_length(budget_key) < 1 OR char_length(budget_key) > 260 OR (budget->>'maximum') !~ '^[1-9][0-9]{0,17}$' OR (budget->>'window') !~ '^[1-9][0-9]{0,17}$' OR (budget->>'lockout') !~ '^[1-9][0-9]{0,17}$' THEN RETURN QUERY SELECT 'invalid-budget'::TEXT, ''::TEXT; RETURN; END IF; budget_max := (budget->>'maximum')::BIGINT; budget_window := (budget->>'window')::BIGINT; budget_lockout := (budget->>'lockout')::BIGINT; PERFORM pg_advisory_xact_lock(hashtextextended('web_api.login_attempt.scope.' || budget_key, 0)); SELECT max(group_row.attempted_at_nanoseconds), count(*) INTO latest_failure, failure_count FROM web_api.login_attempts attempt JOIN web_api.login_attempt_groups group_row ON group_row.attempt_group_id = attempt.attempt_group_id WHERE attempt.attempt_key = budget_key AND group_row.succeeded = 'false' AND group_row.attempted_at_nanoseconds >= GREATEST(0, p_now - budget_window) AND group_row.attempted_at_nanoseconds <= p_now; IF failure_count >= budget_max AND latest_failure + budget_lockout > p_now THEN lockout_ends_at := GREATEST(lockout_ends_at, latest_failure + budget_lockout); END IF; END LOOP; IF lockout_ends_at > 0 THEN RETURN QUERY SELECT 'throttled'::TEXT, lockout_ends_at::TEXT; RETURN; END IF; SELECT count(*) INTO stored_count FROM web_api.login_attempt_groups; IF stored_count >= p_storage_max THEN RETURN QUERY SELECT 'storage-exhausted'::TEXT, ''::TEXT; RETURN; END IF; INSERT INTO web_api.login_attempt_groups (attempted_at_nanoseconds, succeeded, settled) VALUES (p_now, 'false', false) RETURNING attempt_group_id INTO reserved_group_id; FOR budget IN SELECT entry FROM jsonb_array_elements(p_budgets) entry ORDER BY entry->>'key' LOOP INSERT INTO web_api.login_attempts (attempt_key, attempted_at_nanoseconds, succeeded, settled, attempt_group_id) VALUES (budget->>'key', p_now, 'false', false, reserved_group_id); END LOOP; RETURN QUERY SELECT 'reserved'::TEXT, reserved_group_id::TEXT; END $$;"
+  ]
+
+removeSessionCsrfMigrationStatements :: [Text]
+removeSessionCsrfMigrationStatements =
+  [ "ALTER TABLE web_api.account_sessions DROP COLUMN IF EXISTS csrf_token;",
+    "ALTER TABLE web_api.mfa_enrollment_sessions DROP COLUMN IF EXISTS csrf_token;"
   ]
 
 migrationEpochNanoseconds :: Text

@@ -2,6 +2,7 @@
 
 {-# SPEC #-}
 
+import Data.ByteString qualified as ByteString
 import Data.Either (fromRight)
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.List.NonEmpty (NonEmpty (..))
@@ -23,6 +24,7 @@ spec = do
                  extract [("Cookie", "__Host-session=one; __Host-session=two")] `shouldBe` Left ProofAmbiguous,
                  extract [("Cookie", "__Host-session=toolong-token")] `shouldBe` Left ProofTooLarge,
                  extract [("Cookie", "other=value")] `shouldBe` Right Nothing,
+                 extract [("X-Ignored", "__Host-session=good")] `shouldBe` Right Nothing,
                  extract [("Cookie", "__Host-session=")] `shouldBe` Left ProofMalformed,
                  extract [("Cookie", "__Host-session")] `shouldBe` Left ProofMalformed
                ]
@@ -76,6 +78,22 @@ spec = do
                  mkSecurityFailureCode "" `shouldBe` Left "security failure code cannot be empty",
                  mkSecurityFailureCode (Text.replicate 81 "a") `shouldBe` Left "security failure code is too long",
                  mkSecurityFailureCode "Bad.Code" `shouldBe` Left "security failure code has invalid characters"
+               ]
+        )
+
+    it "renders and clears only host-only safe JWT cookies" $ do
+      let policy = fromRight (error "expected authentication cookie policy") (mkAuthenticationCookiePolicy "__Host-account-session" 28800)
+      expectAll
+        ( ( renderAuthenticationCookie policy (encodedJwtFromBytes "header.payload.signature")
+              `shouldBe` Just "__Host-account-session=header.payload.signature; Path=/; Max-Age=28800; HttpOnly; Secure; SameSite=Strict"
+          )
+            :| [ clearAuthenticationCookie policy `shouldBe` "__Host-account-session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict",
+                 hasDerivedContract [policy] `shouldBe` True,
+                 mkAuthenticationCookiePolicy "account-session" 28800 `shouldBe` Left "authentication cookie name must use the __Host- prefix",
+                 mkAuthenticationCookiePolicy "__Host-account-session" 0 `shouldBe` Left "authentication cookie max age must be positive",
+                 renderAuthenticationCookie policy (encodedJwtFromBytes "header;payload") `shouldBe` Nothing,
+                 renderAuthenticationCookie policy (encodedJwtFromBytes "header\npayload") `shouldBe` Nothing,
+                 renderAuthenticationCookie policy (encodedJwtFromBytes (ByteString.singleton 255)) `shouldBe` Nothing
                ]
         )
 
@@ -164,21 +182,21 @@ spec = do
                 authenticationAttachPrincipal = \principal requestContextValue -> requestContextValue {requestLanguage = principal},
                 authenticationChallenge = \receivedRequest failure ->
                   case (endpointAccess (endpointMetadata receivedRequest), failure) of
-                    (RequireAuthenticated, ProofMissing) -> BodyResponse response401
-                    _ -> BodyResponse response503,
+                    (RequireAuthenticated, ProofMissing) -> NonPageBodyResponse response401
+                    _ -> NonPageBodyResponse response503,
                 authenticationForbidden = \receivedRequest denial ->
                   case (endpointAccess (endpointMetadata receivedRequest), denial) of
-                    (RequireAuthorized _, MissingRequiredScopes) -> BodyResponse response403
-                    _ -> BodyResponse response503,
+                    (RequireAuthorized _, MissingRequiredScopes) -> NonPageBodyResponse response403
+                    _ -> NonPageBodyResponse response503,
                 authenticationUnavailable = \receivedRequest dependency ->
                   if endpointAccess (endpointMetadata receivedRequest) == RequireAuthenticated
                     && dependency == mkAuthenticationDependency (requiredFailureCode "identity.unavailable")
-                    then BodyResponse response503
-                    else BodyResponse response401
+                    then NonPageBodyResponse response503
+                    else NonPageBodyResponse response401
               }
       runAuthenticationPipeline pipeline request `shouldReturn` ContinueEndpoint (defaultContext {requestLanguage = "ada"})
       runAuthenticationPipeline pipeline ((endpointRequest (RequireAuthorized (RequireAllScopes ("operator" :| []))) []) {endpointSecurityEventSink = Just sink})
-        `shouldReturn` HaltEndpoint (BodyResponse response403)
+        `shouldReturn` HaltEndpoint (NonPageBodyResponse response403)
       readIORef observations `shouldReturn` ["proof", "verified", "proof", "verified"]
       readIORef emitted
         `shouldReturn` [ (TelemetryBestEffort, AuthenticationEvaluated (AuthenticationEvent AuthenticationEstablished Nothing)),
@@ -224,12 +242,23 @@ spec = do
       request <- newIORef (endpointRequest RequireAuthenticated []) >>= readIORef
       expectAll
         ( ( runAuthenticationPipeline missing request
-              `shouldReturn` HaltEndpoint (BodyResponse response401)
+              `shouldReturn` HaltEndpoint (NonPageBodyResponse response401)
           )
             :| [ runAuthenticationPipeline rejected request
-                   `shouldReturn` HaltEndpoint (BodyResponse response401),
+                   `shouldReturn` HaltEndpoint (NonPageBodyResponse response401),
                  runAuthenticationPipeline unavailable request
-                   `shouldReturn` HaltEndpoint (BodyResponse response503)
+                   `shouldReturn` HaltEndpoint (NonPageBodyResponse response503)
+               ]
+        )
+
+    it "marks only a pre-handler client-action challenge for retained reauthentication" $ do
+      let ordinaryChallenge = NonPageBodyResponse response401
+          actionRequest = (endpointRequest RequireAuthenticated []) {endpointDispatchKind = EndpointClientAction}
+      expectAll
+        ( (authenticationChallengeForAction actionRequest ordinaryChallenge `shouldBe` NonPageClientActionBodyResponse clientActionReauthenticationRequiredResponse)
+            :| [ authenticationChallengeForAction (endpointRequest RequireAuthenticated []) ordinaryChallenge `shouldBe` ordinaryChallenge,
+                 clientActionStatus clientActionReauthenticationRequiredResponse `shouldBe` Http.status401,
+                 clientActionHeaders clientActionReauthenticationRequiredResponse `shouldBe` [("X-Harch-Action-Reauthenticate", "required")]
                ]
         )
 
@@ -243,13 +272,13 @@ spec = do
             )
               { authenticationChallenge = \receivedRequest failure ->
                   case (endpointNameText (endpointName (endpointMetadata receivedRequest)), endpointDispatchKind receivedRequest, failure) of
-                    ("test.authentication", EndpointMatched, ProofMissing) -> BodyResponse response401
-                    _ -> BodyResponse response503,
+                    ("test.authentication", EndpointMatched, ProofMissing) -> NonPageBodyResponse response401
+                    _ -> NonPageBodyResponse response503,
                 authenticationUnavailable = \receivedRequest receivedDependency ->
                   if endpointRouteTemplate (endpointMetadata receivedRequest) == requiredRouteTemplate "/authentication"
                     && receivedDependency == dependency
-                    then BodyResponse response503
-                    else BodyResponse response401
+                    then NonPageBodyResponse response503
+                    else NonPageBodyResponse response401
               }
           unavailablePipeline =
             pipeline
@@ -264,9 +293,9 @@ spec = do
               }
           request = endpointRequest RequireAuthenticated []
       expectAll
-        ( (runAuthenticationPipeline pipeline request `shouldReturn` HaltEndpoint (BodyResponse response401))
-            :| [ runAuthenticationPipeline unavailablePipeline request `shouldReturn` HaltEndpoint (BodyResponse response503),
-                 runAuthenticationPipeline principalUnavailablePipeline request `shouldReturn` HaltEndpoint (BodyResponse response503)
+        ( (runAuthenticationPipeline pipeline request `shouldReturn` HaltEndpoint (NonPageBodyResponse response401))
+            :| [ runAuthenticationPipeline unavailablePipeline request `shouldReturn` HaltEndpoint (NonPageBodyResponse response503),
+                 runAuthenticationPipeline principalUnavailablePipeline request `shouldReturn` HaltEndpoint (NonPageBodyResponse response503)
                ]
         )
 
@@ -274,7 +303,7 @@ spec = do
       let pipeline = testPipeline (AuthenticationProofExtractor (const (Right (Just "proof")))) (const (pure (Right "verified"))) (const (pure (Right "ada")))
           scopes = RequireAllScopes ("operator" :| [])
       runAuthenticationPipeline pipeline (endpointRequest (RequireAuthorized scopes) [])
-        `shouldReturn` HaltEndpoint (BodyResponse response403)
+        `shouldReturn` HaltEndpoint (NonPageBodyResponse response403)
 
     it "runs the guard adapter and preserves every protected authentication failure rail" $ do
       let rejection = mkProofRejection (requiredFailureCode "proof.rejected")
@@ -287,12 +316,12 @@ spec = do
           authorized = testPipeline (AuthenticationProofExtractor (const (Right (Just "proof")))) (const (pure (Right "verified"))) (const (pure (Right "ada")))
       expectAll
         ( ( runAuthenticationGuard (authenticationGuardFromPipeline extractedFailure) (endpointRequest RequireAuthenticated [])
-              `shouldReturn` HaltEndpoint (BodyResponse response401)
+              `shouldReturn` HaltEndpoint (NonPageBodyResponse response401)
           )
             :| [ runAuthenticationPipeline principalFailure (endpointRequest RequireAuthenticated [])
-                   `shouldReturn` HaltEndpoint (BodyResponse response401),
+                   `shouldReturn` HaltEndpoint (NonPageBodyResponse response401),
                  runAuthenticationPipeline principalUnavailable (endpointRequest RequireAuthenticated [])
-                   `shouldReturn` HaltEndpoint (BodyResponse response503),
+                   `shouldReturn` HaltEndpoint (NonPageBodyResponse response503),
                  runAuthenticationPipeline authenticated (endpointRequest RequireAuthenticated [])
                    `shouldReturn` ContinueEndpoint (defaultContext {requestLanguage = "ada"}),
                  runAuthenticationPipeline authorized (endpointRequest (RequireAuthorized (RequireAllScopes ("reader" :| []))) [])
@@ -310,7 +339,7 @@ spec = do
           pipeline = testPipeline (AuthenticationProofExtractor (const (Right (Just "proof")))) (const (pure (Right "verified"))) (const (pure (Right "ada")))
           scopes = RequireAllScopes ("operator" :| [])
           request = (endpointRequest (RequireAuthorized scopes) []) {endpointSecurityEventSink = Just sink}
-      runAuthenticationPipeline pipeline request `shouldReturn` HaltEndpoint (BodyResponse response403)
+      runAuthenticationPipeline pipeline request `shouldReturn` HaltEndpoint (NonPageBodyResponse response403)
       readIORef emitted
         `shouldReturn` [ (TelemetryBestEffort, AuthenticationEvaluated (AuthenticationEvent AuthenticationEstablished Nothing)),
                          (TelemetryBestEffort, AuthorizationDenied (AuthorizationEvent (requiredFailureCode "authorization.denied")))
@@ -328,11 +357,11 @@ spec = do
           verificationRejected = testPipeline (AuthenticationProofExtractor (const (Right (Just "proof")))) (const (pure (Left (ProofRejected rejected)))) (const (pure (Right "ada")))
           principalRejected = testPipeline (AuthenticationProofExtractor (const (Right (Just "proof")))) (const (pure (Right "verified"))) (const (pure (Left (PrincipalRejected principalRejection))))
           unavailable = testPipeline (AuthenticationProofExtractor (const (Right (Just "proof")))) (const (pure (Left (ProofVerificationUnavailable dependency)))) (const (pure (Right "ada")))
-      runAuthenticationPipeline missing request `shouldReturn` HaltEndpoint (BodyResponse response401)
-      runAuthenticationPipeline malformed request `shouldReturn` HaltEndpoint (BodyResponse response401)
-      runAuthenticationPipeline verificationRejected request `shouldReturn` HaltEndpoint (BodyResponse response401)
-      runAuthenticationPipeline principalRejected request `shouldReturn` HaltEndpoint (BodyResponse response401)
-      runAuthenticationPipeline unavailable request `shouldReturn` HaltEndpoint (BodyResponse response503)
+      runAuthenticationPipeline missing request `shouldReturn` HaltEndpoint (NonPageBodyResponse response401)
+      runAuthenticationPipeline malformed request `shouldReturn` HaltEndpoint (NonPageBodyResponse response401)
+      runAuthenticationPipeline verificationRejected request `shouldReturn` HaltEndpoint (NonPageBodyResponse response401)
+      runAuthenticationPipeline principalRejected request `shouldReturn` HaltEndpoint (NonPageBodyResponse response401)
+      runAuthenticationPipeline unavailable request `shouldReturn` HaltEndpoint (NonPageBodyResponse response503)
       readIORef emitted
         `shouldReturn` [ AuthenticationEvaluated (AuthenticationEvent AuthenticationMissing Nothing),
                          AuthenticationEvaluated (AuthenticationEvent AuthenticationRejected Nothing),
@@ -368,9 +397,9 @@ spec = do
                  authorizer "ada" (RequireAllScopes ("reader" :| [])) `shouldBe` Authorized,
                  authenticationDenialFailureCode pipeline MissingRequiredScopes `shouldBe` requiredFailureCode "authorization.denied",
                  authenticationAttachPrincipal pipeline "ada" defaultContext `shouldBe` defaultContext {requestLanguage = "ada"},
-                 authenticationChallenge pipeline request ProofMissing `shouldBe` BodyResponse response401,
-                 authenticationForbidden pipeline request MissingRequiredScopes `shouldBe` BodyResponse response403,
-                 authenticationUnavailable pipeline request (mkAuthenticationDependency (requiredFailureCode "identity.unavailable")) `shouldBe` BodyResponse response503
+                 authenticationChallenge pipeline request ProofMissing `shouldBe` NonPageBodyResponse response401,
+                 authenticationForbidden pipeline request MissingRequiredScopes `shouldBe` NonPageBodyResponse response403,
+                 authenticationUnavailable pipeline request (mkAuthenticationDependency (requiredFailureCode "identity.unavailable")) `shouldBe` NonPageBodyResponse response503
                ]
         )
 
@@ -414,9 +443,9 @@ testPipeline extractor verifier establisher =
       authenticationAuthorizationInterpreter = scopeAuthorizationInterpreter (const ["reader"]),
       authenticationDenialFailureCode = const (requiredFailureCode "authorization.denied"),
       authenticationAttachPrincipal = \principal requestContextValue -> requestContextValue {requestLanguage = principal},
-      authenticationChallenge = \_ _ -> BodyResponse response401,
-      authenticationForbidden = \_ _ -> BodyResponse response403,
-      authenticationUnavailable = \_ _ -> BodyResponse response503
+      authenticationChallenge = \_ _ -> NonPageBodyResponse response401,
+      authenticationForbidden = \_ _ -> NonPageBodyResponse response403,
+      authenticationUnavailable = \_ _ -> NonPageBodyResponse response503
     }
 
 response401 :: ResponseBody

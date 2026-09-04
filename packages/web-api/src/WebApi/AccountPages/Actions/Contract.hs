@@ -132,7 +132,7 @@ accountActionMetadata target =
     (HarchWeb.requiredEndpointNameOrDie name)
     (HarchWeb.requiredRouteTemplateOrDie template)
     HarchWeb.ActionEndpoint
-    HarchWeb.AllowUnauthenticated
+    accessRequirement
   where
     (name, template) =
       case target of
@@ -142,6 +142,11 @@ accountActionMetadata target =
         LoginAccountTarget -> ("account.login", "/{locale}/login")
         UpdateProfileTarget -> ("account.update-profile", "/{locale}/profile")
         LogoutAccountTarget -> ("account.logout", "/{locale}/logout")
+    accessRequirement =
+      case target of
+        UpdateProfileTarget -> HarchWeb.RequireAuthenticated
+        LogoutAccountTarget -> HarchWeb.RequireAuthenticated
+        _ -> HarchWeb.AllowUnauthenticated
 
 -- | The text-field convention is part of the action contract: missing fields
 -- decode to empty text while duplicate and malformed fields still carry their

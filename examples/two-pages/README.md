@@ -13,9 +13,16 @@ This is the smallest application to copy first. It demonstrates:
 
 It deliberately has no database, telemetry collector, HTTPS, or reverse-proxy prerequisite.
 
-Run it from the repository root:
+The executable creates a fresh, process-local CSRF signing key at startup and
+injects that authority into its site composition. This makes the example safe
+to run locally without compiling a reusable secret, but existing browser
+tokens become invalid on restart and it does not model production key rotation.
+An application deployment supplies its own immutable configured key ring.
+
+Run it from this example directory:
 
 ```sh
+cd examples/two-pages
 cabal run two-pages-example
 ```
 
@@ -183,9 +190,10 @@ server action request; an application must use that value at its durable dedupli
 contract causes an automatic retry.
 
 The adjacent “Native fallback subscription” form demonstrates the opt-in alternative. It supplies a
-server-owned fallback endpoint and CSRF form value; with scripts disabled it posts to a complete SSR
-confirmation page only when the matching CSRF cookie is present. Its enhanced path continues to use the
-typed `/actions/subscribe` codec endpoint.
+server-owned bounded POST endpoint and CSRF form value; with scripts disabled it verifies the same
+framework cookie/field transport and returns a typed `303` to the complete SSR confirmation route only
+for a valid submission. The enhanced `/actions/subscribe` codec endpoint uses the same email validation
+and typed `/subscription-received` destination after its patch lifecycle settles.
 
 ## Verification
 

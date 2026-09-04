@@ -5,7 +5,9 @@
 -- their local routes, actions, contexts, and policy values at an explicit
 -- mount boundary.
 module App.Composed.Model
-  ( ComposedContext,
+  ( AdmissionPrincipal,
+    AdmissionReturnTarget (..),
+    ComposedContext,
     LocalePolicy (..),
     LocaleResolutionInput (..),
     LocalizedRoute (..),
@@ -18,15 +20,19 @@ module App.Composed.Model
     RootPrincipal (..),
     RootRoute (..),
     allowedLocale,
+    admissionReturnTargetRoute,
     defaultComposedContext,
     defaultComposedStaticAssets,
     defaultLocalePolicy,
     principalLocalePreference,
     principalScopes,
+    mkAdmissionReturnTarget,
+    rootClientAddress,
     resolveLocale,
   )
 where
 
+import App.Composed.Admission.Types (AdmissionLoginName, AdmissionPrincipal)
 import Catalog.Domain
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NonEmpty
@@ -41,20 +47,36 @@ import HarchWeb.RequestContext
     correlationContext,
     requiredCanonicalOriginOrDie,
   )
-import HarchWeb.Security (emptyPathPrefix)
+import HarchWeb.Security (ClientAddress, defaultClientAddress, emptyPathPrefix)
 import HarchWeb.StaticAssets
   ( StaticAssetRoot (..),
     StaticAssetsConfig (..),
     defaultStaticAssetContentTypes,
   )
 import HarchWeb.StaticAssets.Route (StaticAssetRoute)
+import HarchWeb.Totp (TotpCode)
 import Orders.Domain
 
 data PublicRoute
-  = PublicLogin
+  = PublicAdmission
+  | PublicAdmissionNativeFallback
+  | PublicLogin
   | PublicAsset StaticAssetRoute
   | PublicNotFound
   deriving (Eq, Show)
+
+-- | The admission form accepts a closed return target, never a browser URL.
+-- Its present vocabulary intentionally has one target; a later public route
+-- must extend this ADT and its pure rendering rather than reintroduce an
+-- unvalidated redirect string.
+data AdmissionReturnTarget = ReturnToAccountLogin
+  deriving (Eq, Show)
+
+mkAdmissionReturnTarget :: Text -> Maybe AdmissionReturnTarget
+mkAdmissionReturnTarget value =
+  case value of
+    "login" -> Just ReturnToAccountLogin
+    _ -> Nothing
 
 data LocalizedRoute
   = Public PublicRoute
@@ -62,16 +84,23 @@ data LocalizedRoute
   | Orders OrdersRoute
   deriving (Eq, Show)
 
+admissionReturnTargetRoute :: AdmissionReturnTarget -> LocalizedRoute
+admissionReturnTargetRoute returnTarget =
+  case returnTarget of
+    ReturnToAccountLogin -> Public PublicLogin
+
 data RootRoute = Localized Locale LocalizedRoute
   deriving (Eq, Show)
 
 data RootActionTarget
-  = CatalogActionTarget CatalogActionTarget
+  = AdmissionActionTarget
+  | CatalogActionTarget CatalogActionTarget
   | OrdersActionTarget OrdersActionTarget
   deriving (Eq, Show)
 
 data RootAction
-  = CatalogAction CatalogAction
+  = SubmitAdmission AdmissionLoginName TotpCode AdmissionReturnTarget
+  | CatalogAction CatalogAction
   | OrdersAction OrdersAction
   deriving (Eq, Show)
 
@@ -91,10 +120,40 @@ data RootPrincipal = RootPrincipal
 data RootClient
   = BrowserClient
   | OtherClient
-  deriving (Eq, Show)
+  | TrustedNetworkClient RootClient ClientAddress
+  deriving (Eq)
 
-data RootLocal = RootLocal
-  deriving (Eq, Show)
+instance Show RootClient where
+  show rootClient =
+    case rootClient of
+      BrowserClient -> "BrowserClient"
+      OtherClient -> "OtherClient"
+      TrustedNetworkClient client _ -> "TrustedNetworkClient " <> show client <> " <redacted>"
+
+-- | The trusted forwarding resolver runs once when the site constructs the
+-- request context. Synthetic unit contexts intentionally use Harch's
+-- loopback test identity; application code never turns a request header into
+-- a peer budget directly.
+rootClientAddress :: RootClient -> ClientAddress
+rootClientAddress rootClient =
+  case rootClient of
+    TrustedNetworkClient _ clientAddress -> clientAddress
+    BrowserClient -> defaultClientAddress
+    OtherClient -> defaultClientAddress
+
+-- | Account identity remains in 'requestIdentity'.  A successful admission
+-- guard enriches only this separate local axis, so it cannot grant account
+-- scopes or be mistaken for an account-MFA/session result.
+data RootLocal
+  = RootLocal
+  | AdmissionEstablished AdmissionPrincipal
+  deriving (Eq)
+
+instance Show RootLocal where
+  show rootLocal =
+    case rootLocal of
+      RootLocal -> "RootLocal"
+      AdmissionEstablished _ -> "AdmissionEstablished <redacted>"
 
 type ComposedContext = RequestContext (RequestIdentity RootPrincipal) RootClient RootLocal
 

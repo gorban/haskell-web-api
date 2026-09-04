@@ -45,7 +45,7 @@ import System.Process ()
 import TestCore.CustomAssertions ()
 import TestCore.Wai ()
 import Text.Read ()
-import Unit.HarchWeb.TestSupport (TestContext, TestRoute (DataRoute, KnownRoute, MissingRoute), defaultContext, emptyStaticAssets, renderDocument, routeLocationText, sampleApplication, samplePage, spanishContext, testPathPrefix, testRegionPatch, testRouteLocation, trustedMarkup)
+import Unit.HarchWeb.TestSupport (TestContext, TestRoute (DataRoute, KnownRoute, MissingRoute), defaultContext, emptyStaticAssets, renderDocument, routeLocationText, sampleApplication, samplePage, spanishContext, testPageSecurity, testPathPrefix, testRegionPatch, testRouteLocation, trustedMarkup)
 
 movedSpec :: Spec
 movedSpec = do
@@ -130,7 +130,8 @@ movedSpec = do
                 clientActionContext = defaultContext
               }
           regionPatch = testRegionPatch "status-region" "Ready"
-          clientActionResponse = ClientActionResponse {clientActionStatus = Http.status200, clientActionPatches = [regionPatch], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
+          clientActionResponse :: ClientActionResponse TestRoute TestContext
+          clientActionResponse = ClientActionResponse {clientActionStatus = Http.status200, clientActionPatches = [regionPatch], clientActionFocusId = Nothing, clientActionNavigation = StayOnCurrentRoute, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
           NavigationItem {navigationLabel = navigationItemLabel, navigationRoute = navigationItemRoute} = navigationItem
           ResolvedNavigationItem {navigationLabel = resolvedNavigationItemLabel, navigationRoute = resolvedNavigationItemRoute, navigationHref = resolvedNavigationItemHref, navigationIsActive = resolvedNavigationItemIsActive} = resolvedNavigationItem
 
@@ -188,6 +189,8 @@ movedSpec = do
                  Text.isInfixOf "dialog.showModal();" defaultDialogRuntimeScript `shouldBe` True,
                  Text.isInfixOf "harch:navigation-before-replace" defaultDialogRuntimeScript `shouldBe` True,
                  Text.isInfixOf "settlement.completed();" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "async function navigateActionResponse(navigation)" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "settlement.completed();\n        if (outcome.navigation) {\n          await navigateActionResponse(outcome.navigation);" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "if (isRenderedDocument(window.location.href))" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "finalUrl = new URL(response.url);" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "window.history.pushState({ path: finalUrl.href }, '', finalUrl.href);" defaultNavigationRuntimeScript `shouldBe` True,
@@ -324,13 +327,13 @@ movedSpec = do
           pageMetadata = ResponseBody {responseStatus = Http.status500, responseContentType = "text/html; charset=utf-8", responseBody = "", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR page"], responseDatabaseOperations = []}
           otherPageMetadata = ResponseBody {responseStatus = Http.status503, responseContentType = "text/html; charset=utf-8", responseBody = "", responseObservabilityAttributes = [], responseLogEntries = ["ERROR other page"], responseDatabaseOperations = []}
           pageResponse :: Response TestRoute TestContext
-          pageResponse = PageResponse page
+          pageResponse = PageResponse testPageSecurity page
           otherPageResponse :: Response TestRoute TestContext
-          otherPageResponse = PageResponse otherPage
+          otherPageResponse = PageResponse testPageSecurity otherPage
           pageResponseWithMetadata :: Response TestRoute TestContext
-          pageResponseWithMetadata = PageResponseWithMetadata pageMetadata page
+          pageResponseWithMetadata = PageResponseWithMetadata testPageSecurity pageMetadata page
           otherPageResponseWithMetadata :: Response TestRoute TestContext
-          otherPageResponseWithMetadata = PageResponseWithMetadata otherPageMetadata otherPage
+          otherPageResponseWithMetadata = PageResponseWithMetadata testPageSecurity otherPageMetadata otherPage
           bodyResponseValue :: Response TestRoute TestContext
           bodyResponseValue = BodyResponse body
           otherBodyResponseValue :: Response TestRoute TestContext
@@ -355,8 +358,10 @@ movedSpec = do
               }
           regionPatch = testRegionPatch "status-region" "Ready"
           otherRegionPatch = testRegionPatch "other-region" "Other"
-          clientActionResponse = ClientActionResponse {clientActionStatus = Http.status200, clientActionPatches = [regionPatch], clientActionFocusId = Just (literalElementId "email"), clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
-          otherClientActionResponse = ClientActionResponse {clientActionStatus = Http.status422, clientActionPatches = [otherRegionPatch], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
+          clientActionResponse :: ClientActionResponse TestRoute TestContext
+          clientActionResponse = ClientActionResponse {clientActionStatus = Http.status200, clientActionPatches = [regionPatch], clientActionFocusId = Just (literalElementId "email"), clientActionNavigation = StayOnCurrentRoute, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
+          otherClientActionResponse :: ClientActionResponse TestRoute TestContext
+          otherClientActionResponse = ClientActionResponse {clientActionStatus = Http.status422, clientActionPatches = [otherRegionPatch], clientActionFocusId = Nothing, clientActionNavigation = StayOnCurrentRoute, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
       runtimeNonce <- generateRuntimeNonce
       otherRuntimeNonce <- generateRuntimeNonce
 
@@ -431,14 +436,14 @@ movedSpec = do
       (pageMetadata /= otherPageMetadata) `shouldBe` True
       show pageMetadata `shouldBe` "ResponseBody {responseStatus = Status {statusCode = 500, statusMessage = \"Internal Server Error\"}, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"], responseDatabaseOperations = []}"
       (pageResponse /= otherPageResponse) `shouldBe` True
-      show pageResponse `shouldBe` "PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
+      show pageResponse `shouldBe` "PageResponse PageSecurity <redacted> (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
       (pageResponseWithMetadata /= otherPageResponseWithMetadata) `shouldBe` True
       -- 'Response'\'s 'Eq' short-circuits its '&&': a same-'ResponseBody',
       -- different-'Page' comparison is the only way to reach its second
       -- operand, since 'otherPageResponseWithMetadata' above differs in
       -- both fields at once and never gets that far.
-      (pageResponseWithMetadata /= PageResponseWithMetadata pageMetadata otherPage) `shouldBe` True
-      show pageResponseWithMetadata `shouldBe` "PageResponseWithMetadata (ResponseBody {responseStatus = Status {statusCode = 500, statusMessage = \"Internal Server Error\"}, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"], responseDatabaseOperations = []}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
+      (pageResponseWithMetadata /= PageResponseWithMetadata testPageSecurity pageMetadata otherPage) `shouldBe` True
+      show pageResponseWithMetadata `shouldBe` "PageResponseWithMetadata PageSecurity <redacted> (ResponseBody {responseStatus = Status {statusCode = 500, statusMessage = \"Internal Server Error\"}, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"], responseDatabaseOperations = []}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
       (bodyResponseValue /= otherBodyResponseValue) `shouldBe` True
       show bodyResponseValue `shouldBe` "BodyResponse (ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []})"
       (redirectResponseValue /= otherRedirectResponseValue) `shouldBe` True
@@ -448,7 +453,7 @@ movedSpec = do
       -- not.
       (redirectResponseValue /= RedirectResponse body "/other") `shouldBe` True
       show redirectResponseValue `shouldBe` "RedirectResponse (ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}) \"/spaces\""
-      show [pageResponse, pageResponseWithMetadata, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),PageResponseWithMetadata (ResponseBody {responseStatus = Status {statusCode = 500, statusMessage = \"Internal Server Error\"}, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"], responseDatabaseOperations = []}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []})]"
+      show [pageResponse, pageResponseWithMetadata, bodyResponseValue] `shouldBe` "[PageResponse PageSecurity <redacted> (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),PageResponseWithMetadata PageSecurity <redacted> (ResponseBody {responseStatus = Status {statusCode = 500, statusMessage = \"Internal Server Error\"}, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"], responseDatabaseOperations = []}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []})]"
       (clientActionRequest /= otherClientActionRequest) `shouldBe` True
       show clientActionRequest `shouldBe` "ClientActionRequest {clientAction = \"/actions/subscribe\", clientActionRequestIdempotencyKey = Nothing, clientActionContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}}"
       show [clientActionRequest] `shouldContain` "ClientActionRequest {clientAction = \"/actions/subscribe\""
@@ -490,7 +495,7 @@ movedSpec = do
       parseRoute codec defaultContext (testRouteLocation "/data") `shouldBe` RouteParsed RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}
       routeLocationText (renderRoute codec request) `shouldBe` "/known"
       notFoundRequest codec defaultContext `shouldBe` RouteRequest {requestRoute = MissingRoute, requestContext = defaultContext}
-      renderResponse sampleApplication request `shouldReturn` PageResponse (samplePage request)
+      renderResponse sampleApplication request `shouldReturn` PageResponse testPageSecurity (samplePage request)
       renderDocument (pageShell sampleApplication (samplePage request))
         `shouldBe` "<!DOCTYPE html><html><head><title>Known</title><script type=\"module\" src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
       Text.isInfixOf

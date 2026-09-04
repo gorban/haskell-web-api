@@ -9,6 +9,7 @@ import App.Routes qualified as Routes
 import HarchWeb
   ( EndpointProtocol (HtmlEndpoint),
     Page (..),
+    PageSecurity,
     RouteRequest (..),
     harch,
   )
@@ -19,8 +20,8 @@ pageDefinition :: RouteDefinition TwoPageRoute () ()
 pageDefinition =
   Site.pageRoute (twoPageEndpointMetadata HtmlEndpoint (Routes.Page LiveDataPage)) (Just "Live updates") liveDataPage
 
-liveDataPage :: RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
-liveDataPage routeRequest =
+liveDataPage :: PageSecurity -> RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
+liveDataPage _ routeRequest =
   pure
     Page
       { pageTitle = "Live updates",

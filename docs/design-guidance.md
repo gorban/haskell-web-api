@@ -104,6 +104,330 @@ general arbitrary-attribute escape hatch would create a parallel, less-safe auth
 new primitive continues to use the central renderer, so dynamic text and language values are
 escaped exactly as for every existing typed attribute.
 
+### Decision record — pre-render page-security response capability (AHI-4C, 2026-09-03)
+
+**Decision: extend the existing response interpreter with a closed
+`NonPageResponse` subset for protocol route handlers and endpoint guards;
+reserve page materialization to `Site`.** The earlier shared `Response` sum
+allowed a post-match guard or a protocol route to return a `PageResponse` even
+though it had not received the request's pre-render `PageSecurity`. That made
+the required nonce/CSRF ownership a convention rather than a type-level
+property. A second page/security dispatcher would duplicate routing and guard
+order, while page-only guard continuations would add an unnecessary third
+response path.
+
+`NonPageResponse` contains the existing body, redirect, action, SSE, and raw
+protocol forms and is interpreted by the same final response renderer. A page
+handler returns only `PageResult`; after it has received framework-prepared
+security, `Site` is the one place that combines the two into a full page
+response. This preserves redirects for authentication challenges and all
+existing protocol behavior, but prevents APIs, assets, SSE handlers, and
+guards from manufacturing a page outside the page-security lifecycle. It is
+an extension of `Response`'s existing renderer, not a parallel dispatcher.
+
+### Decision record — typed redirect with grant headers (AHI-4C, 2026-09-04)
+
+**Decision: extend the existing typed internal-redirect response with an
+optional header-bearing form, while retaining exclusive renderer ownership of
+`Location`.** A native form fallback must establish a newly issued session and
+clear the preceding CSRF cookie before it performs its typed 303 navigation.
+The old internal redirect could carry only a `ResponseBody`, leaving an
+application to choose between an untyped raw protocol redirect or a redirect
+which silently lost its session cookie. Neither preserves the single routing
+authority promised by the action/native equivalence contract.
+
+`NonPageInternalRedirectResponseWithHeaders` and its corresponding final
+`Response` form carry ordinary response headers to the existing renderer. The
+renderer discards any supplied `Location` header and constructs the sole
+location from the typed `RouteRequest`; headers such as `Set-Cookie` survive.
+This is a small extension of the established response algebra rather than a
+new native-form dispatcher or a raw-URL escape hatch. Unit coverage proves a
+supplied attacker-controlled location cannot replace the typed destination.
+
+### Decision record — pluggable signed CSRF authority (AHI-4C, 2026-09-03)
+
+**Decision: add one `CsrfProtection` capability at the existing page/action
+lifecycle; provide an immutable-key-ring signed implementation, while leaving
+durable synchronizer storage application-owned.** Action execution already
+owns bounded form intake, exact-one host-cookie/submission parsing, and the
+boundary before a handler begins. A CSRF middleware or app-local dispatcher
+would duplicate that ownership and make a backend responsible for transport
+properties it cannot reliably observe. Harch therefore performs the mandatory
+double-submit transport check once, and the selected backend only issues a
+page token or verifies it against current application binding state.
+
+The default implementation signs a self-contained, bounded token with a
+dedicated HMAC key ring, issuance time, expiry, random nonce, and digest of
+canonical application grant state. Key IDs are bounded before lookup, signing
+keys are redacted, and the configured active/verification set is immutable for
+the process lifetime so deployment-driven rotation has a reviewable overlap.
+Harch neither knows account/session storage nor accepts raw storage handles:
+an application resolves its grants to an opaque binding on both issuance and
+verification. A PostgreSQL synchronizer implementation can use the same
+capability and report unavailable distinctly, without teaching Harch about
+PostgreSQL or creating another CSRF mode in the request dispatcher.
+
+`SimpleSiteConfiguration` therefore requires a `CsrfProtection`; it no longer
+inherits an accepting demonstration verifier. This makes a page-capable site
+name its authority at construction, including when it selects the supplied
+signed implementation. `apiOnlySite` is the deliberate exception because it
+cannot declare pages; its internal capability reports unavailable if an
+impossible action/page path reaches it. The runnable `two-pages` executable
+generates one process-local development signing key and injects it explicitly;
+it compiles no secret. Production applications instead provide their immutable
+deployment key ring and rotation overlap. This is an extension of the existing
+site composition record, not an implicit global key source.
+
+`CsrfToken` and its generation, parsing, redaction, and constant-work
+comparison live in `HarchWeb.Csrf`, not in `HarchWeb.Session`. This prevents a
+session record from becoming an accidental CSRF authority and lets a native
+fallback receive the opaque value from its page's pre-rendered `PageSecurity`.
+The fallback still uses Harch's exact-one host-cookie/hidden-field transport
+validation, then asks the same selected `CsrfProtection` to verify current
+binding state. It therefore cannot introduce an app-specific cookie, an
+accepting equality check, or a backend-verification bypass.
+
+### Decision record — typed account-JWT cookie policy (AHI-4C, 2026-09-03)
+
+**Decision: extend `HarchWeb.Authentication` with a validated host-only JWT
+cookie policy and opaque renderer.** Harch already owns bounded extraction of
+the configured JWT cookie, but without the matching issuance/clear operation
+every application would rebuild an authorization-bearing `Set-Cookie` string.
+That is a small, general gap in an existing authentication boundary, so an
+application-local helper would duplicate security ownership and could drift
+from the extractor's configured name.
+
+The policy requires an `__Host-` name and a positive issuance lifetime and
+always renders `Path=/`, `Secure`, `HttpOnly`, and `SameSite=Strict`, with no
+`Domain` attribute. Clearing is a separate no-token operation with `Max-Age=0`
+so logout cannot reflect an untrusted credential. `EncodedJwt` can also model
+untrusted input for verification tests, therefore the renderer checks that its
+opaque bytes are UTF-8 cookie octets rather than treating its constructor as an
+issuance proof. Harch still neither loads keys nor makes claims: `web-api`
+selects its JWK material at startup and supplies the issued compact JWT.
+
+### Decision record — application-owned JWT claims and durable principal (AHI-4C, 2026-09-04)
+
+**Decision: keep compact-JWT verification generic in `HarchWeb.Authentication`,
+but establish the `web-api` account principal only after an application-owned
+durable-session lookup.** The framework is the right owner for bounded cookie
+extraction, allowed-algorithm verification, typed authentication failures, and
+the guard lifecycle. It cannot know whether an application maps a subject to
+an account, a service identity, an external tenant, or a revocable durable
+session. A framework account store would therefore duplicate application
+identity policy, while parsing the raw cookie directly into `AppRequestContext`
+would make an unverified bearer credential appear to be a grant.
+
+At startup, `web-api` reads a configured RS256 private JWK and verification
+JWK set, checks the active key ID and RSA key shapes, and fails before binding
+a listener if either configuration is invalid or unavailable. It issues only
+issuer, audience, account subject, session ID/JTI, and standard times. The
+generic verifier validates issuer, audience, algorithm, signature, and time;
+the application then loads the referenced session, checks expiry and account
+identity, and creates the opaque `AccountPrincipal`. Login renders the typed
+host-only cookie and logout revokes that durable session before clearing it,
+so a still-unexpired signed token cannot survive revocation. Page/action
+workflows consume the established principal and do not reread a raw cookie or
+session as an alternate authority.
+
+This deliberately stops short of bearer-token/API conflict policy and
+multi-profile OAuth semantics. AHI-4D owns those authentication profiles and
+must extend this one guard boundary rather than introduce a `web-api`-local
+extractor.
+
+### Decision record — declared action-owner route for pre-decode guards (AHI-4C, 2026-09-04)
+
+**Decision: extend the existing `ActionCodec` and `ApplicationModule`
+composition boundary with a typed action-target-to-owning-route mapping, rather
+than infer ownership from an action URL or introduce an action router.** Client
+actions already have one validated declaration owner: `ActionCodec` matches
+their captured method/path and exposes its closed action target before body
+decoding. A page `RouteCodec` intentionally need not match `/actions/...`, so
+using its ordinary 404 result for pre-decode guards made route-family policy
+accidental and could not support a typed guard navigation safely. An
+application-local path-prefix check would duplicate routing and fail for a
+pluggable application with dynamic paths or non-page actions.
+
+Each module now declares `moduleActionRoute` for its own validated target.
+Mounts carry the corresponding target prism, sibling composition selects the
+one declared owner, and locale adaptation adds its trusted locale only after
+the action codec has matched. The server uses that route solely for endpoint
+metadata observation and guards before decoding the body; action dispatch,
+CSRF transport, and response rendering remain the established shared
+interpreters. A declared action whose path has no ordinary page route therefore
+still receives the correct authentication/admission policy, while an unknown
+action receives no invented owner. This is a framework capability completed by
+the current AHI-4C slice, not completion of AHI-4C itself. The application
+now supplies the durable admission credential/TOTP workflow, keyed PostgreSQL
+budgets, synchronizer CSRF adapter, cleanup, and enhanced/native action paths
+through this capability. Runnable deployment provisioning and the remaining
+browser matrix still require task-level completion evidence.
+
+### Decision record — generic authentication-attempt reservation lifecycle (AHI-4C, 2026-09-04)
+
+**Decision: extend `HarchWeb.Authentication` with the storage-neutral,
+cancellation-safe reservation hand-off, while retaining typed budgets and
+durable stores in each application.** `web-api` already had the correct
+protocol for a grouped login attempt: reserve before interruptible proof work,
+settle a known result, cancel an indeterminate result, and cancel again when
+settlement fails. AHI-4C needs the same protocol for admission credentials and
+TOTP. Copying it would make exceptional-path semantics diverge; moving the
+account store, account-specific scopes, or PostgreSQL behavior into Harch
+would instead make a framework authentication policy out of application data.
+
+`AttemptReservationStore` is therefore a small typed capability supplied by
+the application. It admits one atomic, application-defined reservation and
+offers settle/cancel operations; its budget, reservation, lockout, and error
+types remain opaque to Harch. The generic runner maps ordinary throttling and
+store failures through application constructors, keeps proof and settlement
+interruptible under a narrow masked hand-off, and leaves crash recovery to the
+application store's retention policy. `web-api` delegates its established
+login lifecycle through this boundary, and the composed admission adapter uses
+the same lifecycle with its own namespace and PostgreSQL store. This only
+completes shared lifecycle ownership: application-specific provisioning,
+deployment wiring, and complete browser proof remain AHI-4C work.
+
+### Decision record — composed synchronizer CSRF adapter (AHI-4C, 2026-09-04)
+
+**Decision: implement the durable synchronizer form as a composed-application
+adapter to `CsrfProtection`, not as a second framework CSRF mode.** The shared
+Harch boundary already owns exact-one host-cookie/submission extraction and
+constant-work equality before a backend runs. Recreating those steps in a
+PostgreSQL handler would make the native and enhanced paths drift, while
+teaching Harch a database table would reverse the intended storage-neutral
+ownership.
+
+The composed adapter hashes each generated opaque token before passing it to
+its supplied store, along with Harch's opaque current grant binding and the
+earliest permitted expiry. Harch exposes only the binding's domain-separated
+SHA-256 digest as base64url for that store contract; raw principal and session
+values never cross the boundary. It prunes deterministically before bounded
+issuance, reads durable state on every verification for immediate revocation,
+and maps store failure or capacity exhaustion to the existing unavailable
+rail. Its only small framework extension is a positive opaque cookie-lifetime
+constructor, so an application backend cannot invent an invalid transport
+lifetime. The composed migration ledger owns the three separate tables and the
+adapter's parameterized cleanup, bounded per-binding issuance, and
+current-state verification queries. The remaining task-level evidence is
+runnable deployment pool configuration and the complete browser coverage, not
+a framework-owned PostgreSQL mode.
+
+### Decision record — opaque-session cookie extraction (AHI-4C, 2026-09-04)
+
+**Decision: extend `HarchWeb.Session` with an exact-one parser for a configured
+opaque-session cookie, rather than duplicate Cookie-header handling in the
+admission application.** A durable admission session is application-owned,
+but matching its configured cookie name, rejecting a malformed or duplicate
+value, and enforcing the opaque session-ID grammar are transport concerns that
+must be the same for every application selecting that session form. A generic
+arbitrary-cookie accessor would encourage applications to turn unchecked text
+into a credential; selecting the established `SessionCookieName` instead
+retains the bearer-token type at the boundary.
+
+The parser sees only bounded request headers after the request-head policy,
+returns missing, malformed, ambiguous, or an opaque ID, and redacts a found
+ID in diagnostics. It never looks up a session, chooses first-cookie
+precedence, or decides access. `composed-domains` uses it for its distinct
+host-only admission cookie, while retaining its own session lifetime,
+PostgreSQL store, revocation, and public challenge policy.
+
+### Decision record — separate composed admission policy axis (AHI-4C, 2026-09-04)
+
+**Decision: model admission as a closed application policy installed in
+`beforeAuthenticationGuards`, with its principal held in the root context's
+separate local axis.** Reusing account identity would let a TOTP admission
+grant look like an account scope or MFA result. A second authentication
+pipeline would duplicate the framework guard lifecycle. The composed root
+instead classifies its own route algebra exhaustively: the admission page and
+public assets continue without admission, while login and mounted Catalog and
+Orders routes require it. An enabled policy cannot assemble against an
+`AuthenticationDisabled` root, so the intended admission-then-account shape
+cannot silently become an anonymously accessible domain application.
+
+The implemented example establishes an active durable admission-session
+principal from an exact-one host-only cookie and returns typed internal
+challenges (or 503 for an unavailable store). Its encrypted credential
+provisioning, TOTP action/native fallback, keyed attempt budgeting, durable
+PostgreSQL store/migrations, synchronizer CSRF backend, and cleanup remain
+application-owned. AHI-4C is nevertheless not complete until runnable
+deployment provisioning and the full browser proof matrix are green.
+
+### Decision record — typed action navigation at the existing response boundary (AHI-4C, 2026-09-03)
+
+**Decision: extend `ClientActionResponse` with `ActionNavigation route context`
+and render it only through the root `RouteCodec`.** A raw URL field or
+application-supplied URL callback would create a second routing authority and
+would make it too easy for a mounted module to emit an unscoped or external
+destination. The closed `StayOnCurrentRoute | NavigateInternal HistoryMode
+(RouteRequest route context)` algebra keeps an action's destination subject to
+the application's established route rendering and same-origin `SafeUrl`
+boundary. External redirects remain a distinct capability rather than an
+overloaded text value.
+
+Composition adapts the navigation destination with the same route/context
+projection that it already uses for pages and non-page protocol results. The
+browser action runtime applies patches, settles the capture-kernel lifecycle,
+and only then invokes the existing navigation runtime; when a destination is
+present it leaves focus and announcement to that document navigation lifecycle.
+This is an extension of the existing typed response/rendering pipeline, not a
+parallel action router. Native fallback uses the paired
+`NonPageInternalRedirectResponse`: its protocol handler verifies the same
+bounded form and CSRF transport, then returns a `303` whose `Location` is
+rendered by that same root codec. The two-pages subscription example proves
+the enhanced `PushHistory` and native `303` variants converge on one typed
+destination. Retained-action reauthentication and the remaining full browser
+evidence are AHI-4C work. `web-api` already applies
+`ReplaceHistory` after it has durably created the account session and returned
+the session-cookie plus CSRF-clear transition; its destination is the typed
+profile route, so browser Back does not reopen the credential-bearing form.
+
+### Decision record — bounded retained action reauthentication (AHI-4C, 2026-09-03)
+
+**Decision: extend the existing capture kernel and typed client-action
+response path, while leaving the reauthentication modal and login workflow
+application-owned.** The capture kernel already owns the one bounded form
+envelope and its lifecycle, so copying fields into an application event, web
+storage, or a second retry queue would create a parallel and less safe action
+authority. A framework-owned action-authentication challenge is the sole
+response marker the deferred action runtime recognizes. On that marker alone,
+the kernel retains its existing envelope in tab memory for a positive,
+per-control configured lifetime (ten minutes by default), emits only an opaque
+action ID to application JavaScript, and exposes a deliberate one-time replay
+operation. It discards the envelope on cancellation, navigation, expiry, and a
+second challenge; regular 4xx/5xx results do not enter this flow.
+
+An application listens for the opaque event, renders its own accessible modal,
+uses its ordinary login action, refreshes its current page security, and calls
+the replay operation only after user confirmation. Harch does not embed a
+credential UI, interpret application login results, persist an action, or
+store its fields in `localStorage`, `sessionStorage`, telemetry, or a server
+retry table. This extends the existing action/capture ownership boundary rather
+than adding a modal dispatcher or an application-specific mutation retry API.
+
+### Decision record — PostgreSQL database-change ledger (AHI-4C, 2026-09-03)
+
+**Decision: extract the existing connection-scoped migration transaction into
+the PostgreSQL-specific `postgres-database-changes` package, with each
+application supplying an immutable ordered `DatabaseChange` plan and its own
+ledger location.** The previous `WebApi.Postgres.Migration` protocol already
+owned one privileged connection, one transaction, an advisory lock, and
+rollback. Keeping that machinery in one reference application would force
+`composed-domains` either to import WebApi configuration and migrations or to
+reimplement a security-sensitive ledger. It is not a Harch capability:
+PostgreSQL connections, SQL, role management, and schemas remain adapter and
+application concerns.
+
+The new package therefore extends the existing PostgreSQL adapter boundary
+rather than adding a framework migration API. It validates application-owned
+ledger identifiers before constructing SQL, performs the legacy
+`schema_migrations` cutover in the same transaction, and stores a SHA-256 of a
+length-delimited UTF-8 statement sequence together with the stable change ID
+and position. A history is only a contiguous prefix of the supplied plan: an
+unknown, altered, missing, or out-of-order record fails startup and rolls back.
+Deployment role/password reconciliation remains an explicit application-owned
+final SQL sequence in that transaction, not mutable desired-state application
+data and not an invented database change.
+
 ### Decision record — configuration diagnostics and Certbot credential policy (PR-SEC5, 2026-08-28)
 
 **Decision: preserve the existing configuration and startup-plan boundaries, but make their
@@ -2675,6 +2999,71 @@ irrelevant, instead of manufacturing a child context solely to call a uniform
 page-route callback. `staticAssetRouteDefinition` is layered on the same
 operation, keeping the ordinary route-table path and the composed adapter
 semantically identical.
+
+### Decision record — AHI-4C: bounded page-security and JWT-claim rails (2026-09-04)
+
+**Decision: preserve the existing one-page-rendering and one-JWT-verification
+rails, adding only their missing typed boundary operations.** A route guard
+and a protocol route handler now return `NonPageResponse`, the closed subset
+of responses which cannot manufacture a page. Only the selected complete SSR
+page route receives the freshly prepared `PageSecurity` capability. This
+prevents a guard from accidentally rendering a page without a runtime nonce
+and CSRF transition, without adding a second dispatcher or a separate page
+constructor.
+
+`PageSecurity` deliberately has no public `Eq` instance. A runtime nonce is an
+affine framework capability, rather than ordinary application data which may
+be compared or reused. The sole framework renderer boundary instead owns
+`samePageSecurity`; it compares the opaque values only to confirm that the
+handler preserved its renderer-supplied capability. Application code receives
+the typed page value it needs to render controls, but no general nonce
+comparison/reuse capability.
+
+`CsrfBinding` follows the same rule: applications can provide a binding to the
+CSRF capability or persist its separately exposed digest, but cannot compare
+bindings as general correlation values. The CSRF interpreter owns its one
+private comparison when it evaluates `PageCsrf`; durable adapters compare the
+digest they were explicitly given. This avoids widening an otherwise opaque
+security proof merely to make record equality convenient.
+
+The account profile page likewise consumes the authenticated
+`AccountPrincipal` already attached by the endpoint guard. Its former
+cookie/session-store lookup was deleted rather than kept as a second, nominal
+fallback rail: it repeated bearer-session interpretation after authentication,
+and its absent/expired outcomes were unreachable from a page handler. The
+profile store still maps an absent profile to signed-out and retains its typed
+unavailable/corrupt error rail. This makes the boundary that establishes a
+principal the sole owner of session parsing, expiry, revocation, and
+account/session consistency.
+
+The JWT verifier continues to own compact decoding, explicit algorithm
+selection, signature validation, and standard-claim validation. Once those
+steps succeed, an application claim projection may return only a validated
+`SecurityFailureCode`; its code is retained in the ordinary rejected-proof
+rail. This allows a durable application to audit distinct malformed account or
+session claims while neither raw claims nor the JWT itself reach telemetry,
+logs, or public responses. JOSE failures remain Harch's fixed rejection code.
+This is an extension of the existing adapter, not a second application JWT
+verification path. The reusable framework decision is complete; AHI-4C still
+needs its admission module-health follow-up (AHI-4C-AMH) and its remaining
+implementation/gate evidence before the task is marked complete.
+
+The application configuration retains the parsed JWT issuer and audience with
+their redacted configuration text at startup, rather than reparsing them on
+each issuance or verification path. Account IDs follow their own opaque,
+ASCII-bounded domain constructor before their JWT subject conversion. This
+keeps configuration parsing and subject validity on distinct typed boundaries;
+the JWT adapter neither treats an arbitrary request string as a subject nor
+requires a second application claim parser.
+
+The former exported `buildRuntimeApp` composition omitted the account JWT
+guard and was therefore removed rather than retained as a convenient runtime
+test constructor. The only runnable-server composition is now
+`buildRuntimeAppWithAccountJwt`, which requires the startup-validated runtime;
+tests that need an intentionally unavailable issuer compose the existing
+explicit application/workflow builder instead. This closes a capability gap at
+the constructor boundary rather than relying on callers to remember which
+otherwise-similar runtime constructor is safe to expose.
 
 `ApplicationModule` also carries an immutable construction-owned mount chain.
 The root executor attaches it, alongside the declared endpoint/template and

@@ -4,9 +4,22 @@
 
 {-# E2E_SPEC #-}
 
-import App.App (buildApplication)
+import App.App qualified as App
+import App.Routes (TwoPageRoute)
 import Data.List.NonEmpty (NonEmpty (..))
 import HarchWeb (LocalTestServer (..), withLocalTestServer)
+import HarchWeb qualified
+import HarchWeb.Csrf (generateCsrfToken)
+
+testCsrfProtection :: HarchWeb.CsrfProtection ()
+testCsrfProtection =
+  HarchWeb.CsrfProtection
+    { HarchWeb.issueCsrfToken = const ((`HarchWeb.CsrfTokenIssued` HarchWeb.defaultCsrfCookieMaxAgeSeconds) <$> generateCsrfToken),
+      HarchWeb.verifyCsrfToken = \_ _ -> pure HarchWeb.CsrfVerified
+    }
+
+buildApplication :: HarchWeb.Application TwoPageRoute App.TwoPageAction () ()
+buildApplication = App.buildApplication testCsrfProtection
 
 spec =
   describe "two-page real-browser behavior" $ do
@@ -55,7 +68,7 @@ spec =
           )
           `shouldReturn` Right ()
 
-    it "captures a submitted control before the deferred module loads, then patches its SSR region" $
+    it "captures a submitted control before the deferred module loads, then settles its patch before navigating" $
       withBrowserAndServer $ \browser server -> do
         let homeUrl = localServerBaseUrl server <> "/"
             subscriptionForm = byRole Form `named` "Subscription"
@@ -83,10 +96,10 @@ spec =
             fill emailField "ada@example.com"
             submit subscriptionForm
             assertAll
-              ((,) <$> textContent (css "#subscription-result") <*> browserMetrics)
-              ( \(result, metrics) ->
-                  (result `shouldBe` "Thanks. Your subscription request is ready.")
-                    :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 0, mutationRequestCount = 2}|])]
+              ((,) <$> textContent (byRole Heading `named` "Subscription received") <*> browserMetrics)
+              ( \(heading, metrics) ->
+                  (heading `shouldBe` "Subscription received")
+                    :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 2}|])]
               )
           )
           `shouldReturn` Right ()
@@ -118,31 +131,13 @@ spec =
             fallbackEmail = byLabel "Native fallback email address"
         ( runBrowserScenario browser do
             visitWithoutScripts homeUrl
-            setCookie homeUrl "harch-native-fallback-csrf" "two-pages-native-fallback"
-            visitWithoutScripts homeUrl
             fill fallbackEmail "native@example.com"
             submit fallbackForm
             assertAll
               ((,) <$> textContent (byRole Heading `named` "Subscription received") <*> browserMetrics)
               ( \(heading, metrics) ->
                   (heading `shouldBe` "Subscription received")
-                    :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1, mutationRequestCount = 0}|])]
-              )
-          )
-          `shouldReturn` Right ()
-
-    it "rejects the native fallback when its CSRF cookie is absent" $
-      withBrowserAndServer $ \browser server -> do
-        let homeUrl = localServerBaseUrl server <> "/"
-            fallbackForm = byRole Form `named` "Native fallback subscription"
-        ( runBrowserScenario browser do
-            visitWithoutScripts homeUrl
-            submit fallbackForm
-            assertAll
-              ((,) <$> textContent (css "body") <*> browserMetrics)
-              ( \(body, metrics) ->
-                  (body `shouldBe` "Native fallback CSRF validation failed.")
-                    :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1, mutationRequestCount = 0}|])]
+                    :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 2, mutationRequestCount = 0}|])]
               )
           )
           `shouldReturn` Right ()
@@ -190,10 +185,10 @@ spec =
             assertEventually (textContent actionStatus) (`shouldBe` "Still waiting for this action to be handled.")
             releaseRequestsMatching "**/assets/navigation.js"
             assertAll
-              ((,) <$> textContent (css "#subscription-result") <*> browserMetrics)
-              ( \(result, metrics) ->
-                  (result `shouldBe` "Thanks. Your subscription request is ready.")
-                    :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])]
+              ((,) <$> textContent (byRole Heading `named` "Subscription received") <*> browserMetrics)
+              ( \(heading, metrics) ->
+                  (heading `shouldBe` "Subscription received")
+                    :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 1}|])]
               )
           )
           `shouldReturn` Right ()

@@ -12,14 +12,13 @@ import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResu
 import WebApi.Page (renderPage, renderPageFromRouteData)
 import WebApi.Postgres.Testing (buildPostgresPageRepositoryWithRunner)
 import WebApi.Response (selectResponse, selectResponseWithDatabase)
-import WebApi.Route (AppRequestContext (..), AppRoute (..))
 import WebApi.RouteData (RouteDataResult (..), SecondRouteData (..))
 
 spec = do
   describe "selectResponse" $ do
     it "resolves page routes to page responses that still flow through the shared shell" $ do
       renderedPage <- renderPage defaultAppConfig secondRequest
-      selectResponse defaultAppConfig secondRequest `shouldReturn` HarchWeb.PageResponse renderedPage
+      selectResponse defaultAppConfig secondRequest `shouldReturn` HarchWeb.RenderedPage renderedPage
 
     it "attaches typed database operations to postgres-backed page responses" $ do
       let postgresRunner command =
@@ -45,8 +44,8 @@ spec = do
                         }
                   )
               )
-      fmap stripVolatileDatabaseTimingResponse (selectResponseWithDatabase defaultAppConfig postgresEffect secondRequest)
-        `shouldReturn` HarchWeb.PageResponseWithMetadata
+      fmap stripVolatilePageResult (selectResponseWithDatabase defaultAppConfig postgresEffect secondRequest)
+        `shouldReturn` HarchWeb.RenderedPageWithMetadata
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = Http.status200,
               HarchWeb.responseContentType = "text/html; charset=utf-8",
@@ -56,19 +55,9 @@ spec = do
               HarchWeb.responseDatabaseOperations = expectedSecondDatabaseOperations
             }
           renderedSecondPage
-    it "keeps not-found handling consistent across page and non-page responses" $ do
+    it "keeps not-found handling in the page-result boundary" $ do
       renderedPage <- renderPage defaultAppConfig notFoundRequest
-      selectResponse defaultAppConfig notFoundRequest `shouldReturn` HarchWeb.PageResponse renderedPage
-      selectResponse defaultAppConfig apiNotFoundRequest
-        `shouldReturn` HarchWeb.BodyResponse
-          HarchWeb.ResponseBody
-            { HarchWeb.responseStatus = Http.status404,
-              HarchWeb.responseContentType = "application/json",
-              HarchWeb.responseBody = "{\"error\":\"not-found\"}",
-              HarchWeb.responseObservabilityAttributes = [],
-              HarchWeb.responseLogEntries = [],
-              HarchWeb.responseDatabaseOperations = []
-            }
+      selectResponse defaultAppConfig notFoundRequest `shouldReturn` HarchWeb.RenderedPage renderedPage
 
     it "maps required second-page failures into explicit HTML 500 responses" $ do
       let failingDatabaseEffect =
@@ -84,7 +73,7 @@ spec = do
               (SecondRouteDataResult (Left (SecondPageDataError "seed unavailable")))
       response <- selectResponseWithDatabase defaultAppConfig failingDatabaseEffect secondRequest
       response
-        `shouldBe` HarchWeb.PageResponseWithMetadata
+        `shouldBe` HarchWeb.RenderedPageWithMetadata
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = Http.status500,
               HarchWeb.responseContentType = "text/html; charset=utf-8",
@@ -113,7 +102,7 @@ spec = do
             }
           renderedPage
       case response of
-        HarchWeb.PageResponseWithMetadata metadata _ ->
+        HarchWeb.RenderedPageWithMetadata metadata _ ->
           case HarchWeb.responseObservabilityAttributes metadata of
             errorType : failureCode : _ -> do
               Observability.attributeValue errorType
@@ -143,34 +132,21 @@ spec = do
               }
       response <- selectResponseWithDatabase defaultAppConfig failingDatabaseEffect secondRequest
       case response of
-        HarchWeb.PageResponseWithMetadata metadata _ -> do
+        HarchWeb.RenderedPageWithMetadata metadata _ -> do
           HarchWeb.responseLogEntries metadata
             `shouldBe` ["Database failure while rendering required second-page page response after database operations [load-second-page-summary (SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;), load-second-page-highlights (SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;)]: SecondPageDataError \"summary unavailable\""]
           HarchWeb.responseDatabaseOperations metadata
             `shouldBe` [expectedDatabaseOperation "load-second-page-summary" "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;", expectedDatabaseOperation "load-second-page-highlights" "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"]
         _ -> expectationFailure "expected a page response with failure diagnostics"
 
-    it "keeps locale and forwarded path prefixes in root redirect locations" $ do
-      let prefixedSpanishRequest =
-            HarchWeb.RouteRequest
-              HomeRoute
-              spanishRequestContext {requestPathPrefix = testPathPrefix "/app"}
-      selectResponse defaultAppConfig spanishHomeRequest
-        `shouldReturn` (HarchWeb.redirectResponse Http.status302 "/es/spaces" :: HarchWeb.Response AppRoute AppRequestContext)
-      selectResponse defaultAppConfig prefixedSpanishRequest
-        `shouldReturn` (HarchWeb.redirectResponse Http.status302 "/app/es/spaces" :: HarchWeb.Response AppRoute AppRequestContext)
-
-    it "keeps root redirects independent of other page failures" $ do
-      let failingDatabaseEffect =
-            buildSeededPageRepository
-              DatabaseSeed
-                { englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
-                  spanishSecondPageData = Left (SecondPageDataError "seed unavailable")
-                }
-      selectResponseWithDatabase defaultAppConfig failingDatabaseEffect homeRequest
-        `shouldReturn` (HarchWeb.redirectResponse Http.status302 "/spaces" :: HarchWeb.Response AppRoute AppRequestContext)
-
     it "is deterministic for repeated requests" $ do
-      firstResponse <- selectResponse defaultAppConfig apiNotFoundRequest
-      secondResponse <- selectResponse defaultAppConfig apiNotFoundRequest
+      firstResponse <- selectResponse defaultAppConfig notFoundRequest
+      secondResponse <- selectResponse defaultAppConfig notFoundRequest
       firstResponse `shouldBe` secondResponse
+
+stripVolatilePageResult :: HarchWeb.PageResult route context -> HarchWeb.PageResult route context
+stripVolatilePageResult pageResult =
+  case pageResult of
+    HarchWeb.RenderedPage page -> HarchWeb.RenderedPage page
+    HarchWeb.RenderedPageWithMetadata metadata page ->
+      HarchWeb.RenderedPageWithMetadata (stripVolatileDatabaseTimingResponseBody metadata) page

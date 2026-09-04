@@ -14,6 +14,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
+import HarchWeb.Csrf (CsrfProtection (verifyCsrfToken), CsrfVerification (..))
 import HarchWeb.Security (requestScheme)
 import HarchWeb.Server.Application
 import HarchWeb.Server.ClientAction
@@ -53,10 +54,11 @@ clientActionResponse webApplication request requestMethod requestPath routedRequ
                   clientActionRequestIdempotencyKey = requestIdempotencyKey request,
                   clientActionContext = routedRequestContext
                 }
-        authorized <- liftIO (authorizeClientActionCsrf webApplication actionRequest csrfToken)
-        case authorized of
-          False -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionCsrfRejected))
-          True -> do
+        verification <- liftIO (verifyCsrfToken (csrfProtection webApplication) routedRequestContext csrfToken)
+        case verification of
+          CsrfRejected -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionCsrfRejected))
+          CsrfVerificationUnavailable -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionCsrfUnavailable))
+          CsrfVerified -> do
             maybeActionResponse <- liftIO (handleClientAction webApplication actionRequest)
             pure (maybe (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound)) ClientActionBodyResponse maybeActionResponse)
   pure (either (BodyResponse . clientActionProtocolErrorResponse) id result)

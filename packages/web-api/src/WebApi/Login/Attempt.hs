@@ -3,13 +3,11 @@ module WebApi.Login.Attempt
   )
 where
 
-import Control.Exception (mask, onException)
-import Control.Monad (void)
+import HarchWeb.Authentication.Attempt qualified as Attempt
 import HarchWeb.Time (UnixTimeNanoseconds)
 import WebApi.Login.Types
   ( LoginAttemptAdmission (..),
     LoginAttemptBudgets,
-    LoginAttemptReservation,
     LoginAttemptStore (..),
     LoginAttemptStoreError,
     LoginThrottleContext (..),
@@ -27,31 +25,19 @@ runAdmittedLoginAttempt ::
   (LoginAttemptStoreError -> result) ->
   IO (result, Maybe Bool) ->
   IO result
-runAdmittedLoginAttempt throttle budgets throttled storeFailure work =
-  mask $ \restore -> do
-    admissionResult <- restore (reserveLoginAttempt store budgets now)
-    case admissionResult of
-      Left storeError -> pure (storeFailure storeError)
-      Right (LoginAttemptThrottled lockoutEndsAt) -> pure (throttled lockoutEndsAt)
-      Right (LoginAttemptReserved reservation) -> do
-        (result, settlement) <- restore work `onException` discardReservation reservation
-        case settlement of
-          Nothing -> cancelOrFail reservation result
-          Just succeeded -> settleOrFail restore reservation succeeded result
+runAdmittedLoginAttempt throttle =
+  Attempt.runAdmittedAttempt attemptStore
   where
     store = loginThrottleStore throttle
     now = loginThrottleNow throttle
-    discardReservation :: LoginAttemptReservation -> IO ()
-    discardReservation reservation = void (cancelLoginAttempt store reservation)
-    cancelOrFail reservation result = do
-      cancelResult <- cancelLoginAttempt store reservation
-      pure (either storeFailure (const result) cancelResult)
-    settleOrFail restore reservation succeeded result = do
-      settleResult <- restore (settleLoginAttempt store reservation succeeded) `onException` discardReservation reservation
-      case settleResult of
-        Right () -> pure result
-        Left storeError -> do
-          -- Cancellation only deletes still-unsettled rows, so this recovers
-          -- the ordinary failed write without undoing a committed settlement.
-          discardReservation reservation
-          pure (storeFailure storeError)
+    attemptStore =
+      Attempt.AttemptReservationStore
+        { Attempt.reserveAttempt = \attemptBudgets ->
+            fmap (fmap mapAdmission) (reserveLoginAttempt store attemptBudgets now),
+          Attempt.settleAttempt = settleLoginAttempt store,
+          Attempt.cancelAttempt = cancelLoginAttempt store
+        }
+    mapAdmission admission =
+      case admission of
+        LoginAttemptReserved reservation -> Attempt.AttemptReserved reservation
+        LoginAttemptThrottled lockoutEndsAt -> Attempt.AttemptThrottled lockoutEndsAt

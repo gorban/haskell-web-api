@@ -8,25 +8,25 @@ import Control.Monad (forM_)
 import Data.ByteString qualified as ByteString
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (isNothing)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb qualified
 import HarchWeb.Api (ApiRequestDecodeResult (..), apiRequestDataFromWaiRequest, runRequestCodec)
 import HarchWeb.Observability qualified as Observability
-import HarchWeb.Session qualified as Session
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import System.IO (hClose)
 import System.IO.Error (isAlreadyInUseError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import TestCore.Wai (nextRequestBodyChunk, performWaiRequest, readResponseBody, waiRequest)
+import TestSupport.AccountJwt (withTestAccountJwtFixture)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, withContainerizedPsqlOnPath)
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi (buildApp, run)
 import WebApi.Api.Endpoints (noApiRequestFields)
-import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeAppWithDatabaseBuilder, otlpExportFailureMessage, runWithConfig)
+import WebApi.App (buildAppWithDatabase, buildAppWithDatabaseAndAccountWorkflowAndSecurity, buildRuntimeAccountWorkflow, buildRuntimeAppWithDatabaseBuilder, otlpExportFailureMessage, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Observability (runOtlpExportAction)
 import WebApi.AppEffect (AccountWorkflow (accountWorkflowEmailDelivery))
 import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), AppMode (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), TlsCertificateSource (..), TlsConfig (..), databasePoolCapacity, defaultAppConfig, defaultAppEnvironmentConfig, defaultTlsPolicy)
@@ -51,6 +51,20 @@ spec = do
     it "constructs the application description against the HarchWeb facade" $
       HarchWeb.appName pureApplication `shouldBe` "web-api"
 
+    it "retains explicitly supplied endpoint security at the application composition boundary" $ do
+      let application =
+            buildAppWithDatabaseAndAccountWorkflowAndSecurity
+              defaultAppConfig
+              defaultPageRepository
+              unavailableAccountWorkflow
+              (HarchWeb.AuthenticationDisabled [])
+      case HarchWeb.applicationSecurity application of
+        HarchWeb.AuthenticationDisabled guards -> length guards `shouldBe` 0
+        HarchWeb.AuthenticationEnabled {} -> expectationFailure "expected the explicitly supplied disabled security policy"
+      expectedResponse <- selectResponse defaultAppConfig secondRequest
+      actualResponse <- HarchWeb.renderResponse application secondRequest
+      assertRenderedPageResult expectedResponse actualResponse
+
     it "stores the account action decoder used by the WAI adapter" $ do
       let recognized =
             case HarchWeb.decodeClientAction
@@ -67,54 +81,13 @@ spec = do
               _ -> False
       recognized `shouldBe` True
 
-    it "uses the account action CSRF authorization policy through the application" $ do
-      let decodedRegisterAction =
-            HarchWeb.decodeClientAction
-              pureApplication
-              HarchWeb.ClientActionPayload
-                { HarchWeb.clientActionMethod = "POST",
-                  HarchWeb.clientActionPath = "/register",
-                  HarchWeb.clientActionFields = [],
-                  HarchWeb.clientActionCsrfToken = Nothing,
-                  HarchWeb.clientActionIdempotencyKey = Nothing,
-                  HarchWeb.clientActionPayloadContext = defaultRequestContext
-                }
-          csrfToken = fromMaybe (error "expected a valid CSRF token fixture") (Session.mkCsrfToken "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-          decodedProfileAction =
-            HarchWeb.decodeClientAction
-              pureApplication
-              HarchWeb.ClientActionPayload
-                { HarchWeb.clientActionMethod = "POST",
-                  HarchWeb.clientActionPath = "/profile",
-                  HarchWeb.clientActionFields = [("intent", "resend-verification")],
-                  HarchWeb.clientActionCsrfToken = Nothing,
-                  HarchWeb.clientActionIdempotencyKey = Nothing,
-                  HarchWeb.clientActionPayloadContext = defaultRequestContext
-                }
-      case decodedRegisterAction of
-        HarchWeb.DecodedClientAction action ->
-          HarchWeb.authorizeClientActionCsrf
-            pureApplication
-            HarchWeb.ClientActionRequest
-              { HarchWeb.clientAction = action,
-                HarchWeb.clientActionRequestIdempotencyKey = Nothing,
-                HarchWeb.clientActionContext = defaultRequestContext
-              }
-            csrfToken
-            `shouldReturn` True
-        _ -> expectationFailure "expected registration action to decode"
-      case decodedProfileAction of
-        HarchWeb.DecodedClientAction action ->
-          HarchWeb.authorizeClientActionCsrf
-            pureApplication
-            HarchWeb.ClientActionRequest
-              { HarchWeb.clientAction = action,
-                HarchWeb.clientActionRequestIdempotencyKey = Nothing,
-                HarchWeb.clientActionContext = defaultRequestContext
-              }
-            csrfToken
-            `shouldReturn` False
-        _ -> expectationFailure "expected profile action to decode"
+    it "uses the account signed CSRF policy through the application" $ do
+      issuance <- HarchWeb.issueCsrfToken (HarchWeb.csrfProtection pureApplication) defaultRequestContext
+      case issuance of
+        HarchWeb.CsrfTokenIssued csrfToken _ ->
+          HarchWeb.verifyCsrfToken (HarchWeb.csrfProtection pureApplication) defaultRequestContext csrfToken
+            `shouldReturn` HarchWeb.CsrfVerified
+        HarchWeb.CsrfProtectionUnavailable -> expectationFailure "anonymous application page must receive a CSRF token"
 
     it "returns a safe bad-request response for duplicate fields in a recognized action" $ do
       actionBodyChunks <- newIORef ["email=first%40example.com&email=second%40example.com&_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
@@ -134,7 +107,7 @@ spec = do
               )
       response <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) actionRequest
       Wai.responseStatus response `shouldBe` Http.status400
-      readResponseBody response `shouldReturn` "{\"patches\":[],\"focusId\":null}"
+      readResponseBody response `shouldReturn` "{\"patches\":[],\"focusId\":null,\"navigation\":null}"
 
     it "stores the default request context used by the WAI adapter" $
       HarchWeb.defaultRequestContext pureApplication `shouldBe` defaultRequestContext
@@ -166,7 +139,7 @@ spec = do
       HarchWeb.requestContextFromRequest pureApplication emptyForwardedPrefixRequest defaultRequestContext
         `shouldBe` contextFor emptyForwardedPrefixRequest
       HarchWeb.requestContextFromRequest pureApplication cookieRequest defaultRequestContext
-        `shouldBe` (contextFor cookieRequest) {requestSessionId = Session.mkSessionId sessionToken}
+        `shouldBe` contextFor cookieRequest
       HarchWeb.requestContextFromRequest pureApplication invalidCookieRequest defaultRequestContext
         `shouldBe` contextFor invalidCookieRequest
 
@@ -252,17 +225,24 @@ spec = do
       HarchWeb.routeMethods WebApi.Route.routeCodec StatusApiRoute `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet]
       HarchWeb.routeMethods WebApi.Route.routeCodec SecondApiRoute `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet]
 
-    it "stores the same response-selection behavior used by direct response tests" $ do
-      expectedHomeResponse <- selectResponse defaultAppConfig homeRequest
+    it "attaches security only after the page selector returns a page result" $ do
       expectedSecondResponse <- selectResponse defaultAppConfig secondRequest
       expectedSpacesResponse <- selectResponse defaultAppConfig spacesRequest
       expectedNotFoundResponse <- selectResponse defaultAppConfig notFoundRequest
-      expectedApiNotFoundResponse <- selectResponse defaultAppConfig apiNotFoundRequest
-      HarchWeb.renderResponse pureApplication homeRequest `shouldReturn` expectedHomeResponse
-      HarchWeb.renderResponse pureApplication secondRequest `shouldReturn` expectedSecondResponse
-      HarchWeb.renderResponse pureApplication spacesRequest `shouldReturn` expectedSpacesResponse
-      HarchWeb.renderResponse pureApplication notFoundRequest `shouldReturn` expectedNotFoundResponse
-      HarchWeb.renderResponse pureApplication apiNotFoundRequest `shouldReturn` expectedApiNotFoundResponse
+      HarchWeb.renderResponse pureApplication homeRequest `shouldReturn` HarchWeb.redirectResponse Http.status302 "/spaces"
+      HarchWeb.renderResponse pureApplication apiNotFoundRequest
+        `shouldReturn` HarchWeb.BodyResponse
+          HarchWeb.ResponseBody
+            { HarchWeb.responseStatus = Http.status404,
+              HarchWeb.responseContentType = "application/json",
+              HarchWeb.responseBody = "{\"error\":\"not-found\"}",
+              HarchWeb.responseObservabilityAttributes = [],
+              HarchWeb.responseLogEntries = [],
+              HarchWeb.responseDatabaseOperations = []
+            }
+      assertRenderedPageResult expectedSecondResponse =<< HarchWeb.renderResponse pureApplication secondRequest
+      assertRenderedPageResult expectedSpacesResponse =<< HarchWeb.renderResponse pureApplication spacesRequest
+      assertRenderedPageResult expectedNotFoundResponse =<< HarchWeb.renderResponse pureApplication notFoundRequest
 
     it "dispatches /api/status and /api/second through the typed endpoint boundary, not the shared page/API selector" $ do
       apiStatusResult <- HarchWeb.renderResponse pureApplication apiStatusRequest
@@ -528,9 +508,11 @@ spec = do
         HarchWeb.ProtocolResponseResult protocolResponse ->
           protocolResponseStrictBody protocolResponse
             `shouldBe` "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
-        HarchWeb.PageResponse _ -> expectationFailure "expected an API protocol response"
-        HarchWeb.PageResponseWithMetadata _ _ -> expectationFailure "expected an API protocol response"
+        HarchWeb.PageResponse _ _ -> expectationFailure "expected an API protocol response"
+        HarchWeb.PageResponseWithMetadata {} -> expectationFailure "expected an API protocol response"
         HarchWeb.RedirectResponse _ _ -> expectationFailure "expected an API protocol response"
+        HarchWeb.InternalRedirectResponse _ _ -> expectationFailure "expected an API protocol response"
+        HarchWeb.InternalRedirectResponseWithHeaders {} -> expectationFailure "expected an API protocol response"
         HarchWeb.ClientActionBodyResponse _ -> expectationFailure "expected an API protocol response"
         HarchWeb.EventStreamResponse _ _ -> expectationFailure "expected an API protocol response"
         HarchWeb.BodyResponse _ -> expectationFailure "expected an API protocol response"
@@ -575,9 +557,11 @@ spec = do
         HarchWeb.ProtocolResponseResult protocolResponse ->
           protocolResponseStrictBody protocolResponse
             `shouldBe` "{\"summary\":\"runtime:runtime_db:runtime_user\",\"highlights\":[\"configured-from-environment\"]}"
-        HarchWeb.PageResponse _ -> expectationFailure "expected an API protocol response"
-        HarchWeb.PageResponseWithMetadata _ _ -> expectationFailure "expected an API protocol response"
+        HarchWeb.PageResponse _ _ -> expectationFailure "expected an API protocol response"
+        HarchWeb.PageResponseWithMetadata {} -> expectationFailure "expected an API protocol response"
         HarchWeb.RedirectResponse _ _ -> expectationFailure "expected an API protocol response"
+        HarchWeb.InternalRedirectResponse _ _ -> expectationFailure "expected an API protocol response"
+        HarchWeb.InternalRedirectResponseWithHeaders {} -> expectationFailure "expected an API protocol response"
         HarchWeb.ClientActionBodyResponse _ -> expectationFailure "expected an API protocol response"
         HarchWeb.EventStreamResponse _ _ -> expectationFailure "expected an API protocol response"
         HarchWeb.BodyResponse _ -> expectationFailure "expected an API protocol response"
@@ -901,7 +885,7 @@ spec = do
         requestPath `shouldBe` "/v1/traces"
 
   describe "run" $ do
-    it "starts the runtime server from an explicit environment and app config" $
+    it "starts the runtime server from an explicit environment and app config" $ withTestAccountJwtFixture $ \runtimeEnvironmentConfig _ ->
       withUnusedTcpEndpoint $ \unusedEndpoint ->
         withSystemTempFile "web-api-runtime-output.txt" $ \outputPath outputHandle -> do
           completionReference <- newIORef Nothing
@@ -918,7 +902,7 @@ spec = do
                       ]
                   }
           serverThreadId <- forkIO $ do
-            result <- try (runWithConfig outputHandle runtimeAppConfig defaultAppEnvironmentConfig) :: IO (Either SomeException ())
+            result <- try (runWithConfig outputHandle runtimeAppConfig runtimeEnvironmentConfig) :: IO (Either SomeException ())
             writeIORef completionReference (Just result)
           responseText <- waitForRuntimeServerResponse completionReference (tcpEndpointPort unusedEndpoint) "/api/status"
           responseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
@@ -933,13 +917,13 @@ spec = do
                 "HTTP Server listening at http://127.0.0.1:" <> show (tcpEndpointPort unusedEndpoint)
               ]
 
-    it "surfaces listener bind failures through the default app config" $
+    it "surfaces listener bind failures through the default app config" $ withTestAccountJwtFixture $ \runtimeEnvironmentConfig _ ->
       withDefaultRuntimePortUnavailable $
         withSystemTempFile "web-api-runtime-output.txt" $ \_ outputHandle ->
-          runWithConfig outputHandle defaultAppConfig defaultAppEnvironmentConfig
+          runWithConfig outputHandle defaultAppConfig runtimeEnvironmentConfig
             `shouldThrow` isAlreadyInUseError
 
-    it "serves database-backed runtime routes from the supplied environment config" $
+    it "serves database-backed runtime routes from the supplied environment config" $ withTestAccountJwtFixture $ \jwtEnvironmentConfig _ ->
       withContainerizedPsqlOnPath $ do
         ensureDefaultPostgresAvailable
         runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig `shouldReturn` Right ()
@@ -960,7 +944,7 @@ spec = do
                         ]
                     }
                 runtimeEnvironmentConfig =
-                  defaultAppEnvironmentConfig
+                  jwtEnvironmentConfig
                     { databaseConfig = defaultMigrationPostgresConfig
                     }
             serverThreadId <- forkIO $ do
@@ -974,7 +958,7 @@ spec = do
             waitForRuntimeServerExit completionReference
             hClose outputHandle
 
-    it "announces parsed HTTPS listener configs before surfacing manual TLS startup failures" $
+    it "announces parsed HTTPS listener configs before surfacing manual TLS startup failures" $ withTestAccountJwtFixture $ \runtimeEnvironmentConfig _ ->
       withUnusedTcpEndpoint $ \unusedEndpoint ->
         withSystemTempFile "web-api-runtime-output.txt" $ \outputPath outputHandle -> do
           let runtimeAppConfig =
@@ -999,7 +983,7 @@ spec = do
                           }
                       ]
                   }
-          result <- try (runWithConfig outputHandle runtimeAppConfig defaultAppEnvironmentConfig) :: IO (Either IOException ())
+          result <- try (runWithConfig outputHandle runtimeAppConfig runtimeEnvironmentConfig) :: IO (Either IOException ())
           hClose outputHandle
           case result of
             Left exception ->
@@ -1010,12 +994,12 @@ spec = do
           readFile outputPath
             `shouldReturn` ("Parsed listener config: https://127.0.0.1:" <> show (tcpEndpointPort unusedEndpoint) <> "\n")
 
-    it "writes startup output to the supplied handle for isolated tests and serves real requests" $
+    it "writes startup output to the supplied handle for isolated tests and serves real requests" $ withTestAccountJwtFixture $ \_ jwtConfigLines ->
       withClearedAppEnvironment $
         withUnusedTcpEndpoint $ \unusedEndpoint ->
           withSystemTempDirectory "web-api-run" $ \tempDirectory ->
             withCurrentDirectory tempDirectory $ do
-              writeFile ".env" ("LISTENER_0_PORT=" <> show (tcpEndpointPort unusedEndpoint) <> "\nDATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n")
+              writeFile ".env" ("LISTENER_0_PORT=" <> show (tcpEndpointPort unusedEndpoint) <> "\nDATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nCSRF_SIGNING_ACTIVE_KEY_ID=development-v1\nCSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n" <> unlines jwtConfigLines)
               withSystemTempFile "web-api-output.txt" $ \outputPath outputHandle -> do
                 completionReference <- newIORef Nothing
                 serverThreadId <- forkIO $ do
@@ -1040,7 +1024,7 @@ spec = do
       withClearedAppEnvironment $
         withSystemTempDirectory "web-api-run-invalid" $ \tempDirectory ->
           withCurrentDirectory tempDirectory $ do
-            writeFile ".env" "LISTENER_0_PORT=0\nDATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+            writeFile ".env" "LISTENER_0_PORT=0\nDATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nCSRF_SIGNING_ACTIVE_KEY_ID=development-v1\nCSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
             result <-
               ( try $
                   withSystemTempFile "web-api-output.txt" $ \_ outputHandle -> do
@@ -1054,3 +1038,12 @@ spec = do
                   `shouldContain` "Failed to load app startup config: AppStartupConfigParseError (InvalidConfigValue \"LISTENER_0_PORT\" \"0\")"
               Right () ->
                 expectationFailure "expected run to fail on invalid runtime startup config"
+
+assertRenderedPageResult :: HarchWeb.PageResult AppRoute AppRequestContext -> HarchWeb.Response AppRoute AppRequestContext -> Expectation
+assertRenderedPageResult pageResult response =
+  case (pageResult, response) of
+    (HarchWeb.RenderedPage expectedPage, HarchWeb.PageResponse _ actualPage) -> actualPage `shouldBe` expectedPage
+    (HarchWeb.RenderedPageWithMetadata expectedMetadata expectedPage, HarchWeb.PageResponseWithMetadata _ actualMetadata actualPage) -> do
+      actualMetadata `shouldBe` expectedMetadata
+      actualPage `shouldBe` expectedPage
+    _ -> expectationFailure "page result and rendered response did not have matching shapes"

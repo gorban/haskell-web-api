@@ -20,9 +20,9 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text (isInfixOf, null, pack)
 import Data.Text.Encoding qualified as TextEncoding (encodeUtf8)
-import HarchWeb (ActionCapability (ConditionalLeaveConfirmation, HandlerSafeRetry, IdempotentMutationRetry, NativeFallback), ActionFormAttributes (actionFormCapabilities), ActionIdempotency (actionIdempotencyKey), ActionRecoveryCopy (actionCancelCopy, actionCancelledCopy, actionDelayedCopy, actionPendingCopy, actionReadyCopy, actionRecoverableCopy, actionRetryCopy), FormMethod (FormGet, FormPost), NativeActionFallback (NativeActionFallback, nativeActionFallbackCsrfToken, nativeActionFallbackMethod, nativeActionFallbackPath), actionForm, actionIdempotency, defaultActionFormAttributes, defaultActionRecoveryCopy, defaultCaptureKernelByteBudget, defaultCaptureKernelScript, renderActionForm, renderHtml, staticActionForm, text)
+import HarchWeb (ActionCapability (ConditionalLeaveConfirmation, HandlerSafeRetry, IdempotentMutationRetry, NativeFallback), ActionFormAttributes (actionFormCapabilities), ActionIdempotency (actionIdempotencyKey), ActionRecoveryCopy (actionCancelCopy, actionCancelledCopy, actionDelayedCopy, actionPendingCopy, actionReadyCopy, actionRecoverableCopy, actionRetryCopy), FormMethod (FormGet, FormPost), NativeActionFallback (NativeActionFallback, nativeActionFallbackCsrfToken, nativeActionFallbackMethod, nativeActionFallbackPath), actionForm, actionIdempotency, defaultActionFormAttributes, defaultActionRecoveryCopy, defaultCaptureKernelByteBudget, defaultCaptureKernelScript, defaultNavigationRuntimeScript, mkCsrfToken, mkRetainedActionLifetime, renderActionForm, renderHtml, retainedActionLifetimeMilliseconds, staticActionForm, text)
 import HarchWeb qualified as Web
-import HarchWeb.Action qualified as Action (ActionCodec, ActionCodecError (..), ActionDecoder, ActionMethod (ActionDelete, ActionGet, ActionPatch, ActionPost, ActionPut), ClientActionDecodeResult (..), ClientActionParseError (DuplicateActionField, InvalidActionField, MissingActionField), ClientActionPayload (ClientActionPayload, clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod, clientActionPath, clientActionPayloadContext), action, actionCodec, actionEndpointMetadata, actionMethod, actionMethodText, actionPath, combineActionCodecs, decodeAction, delete, deleteAt, emptyActionCodec, exactlyOne, formField, get, getAt, mapActionCodec, methodAt, mountActionCodecAtPrefix, optional, parseField, patch, patchAt, post, postAt, prefixActionCodecByContext, publicAction, put, putAt, required, singleActionCodec, singleActionCodecWithMetadata, singleOrDefault, staticActionEndpointMetadata, staticActionPath, textValue)
+import HarchWeb.Action qualified as Action (ActionCodec, ActionCodecError (..), ActionDecoder, ActionMethod (ActionDelete, ActionGet, ActionPatch, ActionPost, ActionPut), ClientActionDecodeResult (..), ClientActionParseError (DuplicateActionField, InvalidActionField, MissingActionField), ClientActionPayload (ClientActionPayload, clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod, clientActionPath, clientActionPayloadContext), action, actionCodec, actionEndpointMetadata, actionEndpointTarget, actionMethod, actionMethodText, actionPath, combineActionCodecs, decodeAction, delete, deleteAt, emptyActionCodec, exactlyOne, formField, get, getAt, mapActionCodec, methodAt, mountActionCodecAtPrefix, optional, parseField, patch, patchAt, post, postAt, prefixActionCodecByContext, publicAction, put, putAt, required, singleActionCodec, singleActionCodecWithMetadata, singleOrDefault, staticActionEndpointMetadata, staticActionPath, textValue)
 import HarchWeb.ApplicationModule (ActionMount (..), AuthorizationProjection (..), ContextProjection (..), mountActionCodec)
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.EndpointMetadata qualified as EndpointMetadata
@@ -52,6 +52,9 @@ import Unit.HarchWeb.TestSupport (TestContext (testContextPathPrefix), defaultCo
 
 data ChildActionTarget = ChildSaveTarget
   deriving (Eq, Show)
+
+testFallbackCsrfToken :: Web.CsrfToken
+testFallbackCsrfToken = fromMaybe (error "expected valid CSRF token") (mkCsrfToken "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 
 data ParentActionTarget = ParentCatalogActionTarget
   deriving (Eq, Show)
@@ -87,6 +90,8 @@ spec = do
             mountActionCodec
               ActionMount
                 { embedChildActionTarget = const ParentCatalogActionTarget,
+                  projectChildActionTarget = \case
+                    ParentCatalogActionTarget -> Just ChildSaveTarget,
                   embedChildAction = ParentCatalogAction,
                   projectChildAction = \case
                     ParentCatalogAction childAction -> Just childAction
@@ -112,6 +117,7 @@ spec = do
               `shouldBe` Just "/catalog/tenant-42/save"
           )
             :| [ Action.actionEndpointMetadata mountedCodec 42 "POST" "/catalog/tenant-42/save" `shouldBe` Just expectedMetadata,
+                 Action.actionEndpointTarget mountedCodec 42 "POST" "/catalog/tenant-42/save" `shouldBe` Just ParentCatalogActionTarget,
                  Action.decodeAction mountedCodec payload `shouldBe` Action.DecodedClientAction (ParentCatalogAction ChildSaved)
                ]
         )
@@ -352,7 +358,29 @@ spec = do
                  Text.isInfixOf "action=\"/app/known\" method=\"dialog\"" renderedForm `shouldBe` True,
                  Text.isInfixOf "data-harch-action-status" renderedForm `shouldBe` True,
                  Text.isInfixOf "data-harch-action-retry" renderedForm `shouldBe` True,
-                 Text.isInfixOf "data-harch-action-cancel" renderedForm `shouldBe` True
+                 Text.isInfixOf "data-harch-action-cancel" renderedForm `shouldBe` True,
+                 Text.isInfixOf "data-harch-action-retention-ms=\"600000\"" renderedForm `shouldBe` True
+               ]
+        )
+
+    it "keeps retained action envelopes in the capture kernel with a positive configurable lifetime" $ do
+      let customLifetime = fromMaybe (error "expected positive retained action lifetime") (mkRetainedActionLifetime 120000)
+          customAttributes = defaultActionFormAttributes {Web.actionFormRetainedActionLifetime = customLifetime}
+          renderedForm = renderHtml (renderActionForm (actionForm testActionCodec defaultContext "save" customAttributes [text "Save"]))
+          runtimeSources = defaultCaptureKernelScript <> defaultNavigationRuntimeScript
+      expectAll
+        ( (mkRetainedActionLifetime 0 `shouldBe` Nothing)
+            :| [ retainedActionLifetimeMilliseconds customLifetime `shouldBe` 120000,
+                 customLifetime == customLifetime `shouldBe` True,
+                 customLifetime /= fromMaybe (error "expected a distinct positive retained action lifetime") (mkRetainedActionLifetime 120001) `shouldBe` True,
+                 Text.isInfixOf "data-harch-action-retention-ms=\"120000\"" renderedForm `shouldBe` True,
+                 Text.isInfixOf "retainForReauthentication" defaultCaptureKernelScript `shouldBe` True,
+                 Text.isInfixOf "replayRetained" defaultCaptureKernelScript `shouldBe` True,
+                 Text.isInfixOf "harch:action-reauthentication-required" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "refreshPageSecurityForRetainedAction" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "localStorage" runtimeSources `shouldBe` False,
+                 Text.isInfixOf "sessionStorage" runtimeSources `shouldBe` False,
+                 length (show customLifetime) + length (showList [customLifetime] "") `shouldSatisfy` (> 0)
                ]
         )
 
@@ -421,7 +449,7 @@ spec = do
 
     it "renders only explicitly declared native fallback and recovery capabilities" $ do
       let idempotency = fromMaybe (error "expected a valid test idempotency key") (actionIdempotency "mutation-1")
-          nativeFallback = NativeActionFallback "/native-subscribe" FormPost "csrf-token"
+          nativeFallback = NativeActionFallback "/native-subscribe" FormPost testFallbackCsrfToken
           capabilities = [HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry idempotency, NativeFallback nativeFallback]
           nativeAttributes = defaultActionFormAttributes {actionFormCapabilities = capabilities}
           nativeForm = renderHtml (renderActionForm (actionForm testActionCodec defaultContext "save" nativeAttributes []))
@@ -431,7 +459,7 @@ spec = do
             :| [ Text.isInfixOf "method=\"post\"" nativeGetForm `shouldBe` True,
                  Text.isInfixOf "action=\"/native-subscribe\" method=\"post\"" nativeForm `shouldBe` True,
                  Text.isInfixOf "data-harch-action-path=\"/known\"" nativeForm `shouldBe` True,
-                 Text.isInfixOf "name=\"_harch_csrf\" value=\"csrf-token\"" nativeForm `shouldBe` True,
+                 Text.isInfixOf "name=\"_harch_csrf\" value=\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"" nativeForm `shouldBe` True,
                  Text.isInfixOf "</input>" nativeForm `shouldBe` False,
                  Text.isInfixOf "data-harch-action-idempotency-key=\"mutation-1\"" nativeForm `shouldBe` True,
                  Text.isInfixOf "handler-safe-retry,conditional-leave-confirmation,idempotent-mutation-retry,native-fallback" nativeForm `shouldBe` True,
@@ -446,8 +474,9 @@ spec = do
                  actionIdempotency "" `shouldBe` Nothing,
                  nativeActionFallbackPath nativeFallback `shouldBe` "/native-subscribe",
                  nativeActionFallbackMethod nativeFallback `shouldBe` FormPost,
-                 nativeActionFallbackCsrfToken nativeFallback `shouldBe` "csrf-token",
+                 nativeActionFallbackCsrfToken nativeFallback `shouldBe` testFallbackCsrfToken,
                  length (show (NativeFallback nativeFallback)) `shouldSatisfy` (> 0),
+                 show (NativeFallback nativeFallback) `shouldNotContain` "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                  showList capabilities "" `shouldSatisfy` (not . null),
                  sum [fromEnum (left == right) | left <- capabilities, right <- capabilities] `shouldBe` length capabilities,
                  sum [fromEnum (left /= right) | left <- capabilities, right <- capabilities] `shouldBe` length capabilities * (length capabilities - 1)
@@ -455,8 +484,8 @@ spec = do
         )
 
     it "keeps FormMethod, NativeActionFallback, and ActionIdempotency comparable and printable, and renders a GET native fallback" $ do
-      let getFallback = NativeActionFallback "/native-get" FormGet "csrf-token"
-          postFallback = NativeActionFallback "/native-post" FormPost "csrf-token"
+      let getFallback = NativeActionFallback "/native-get" FormGet testFallbackCsrfToken
+          postFallback = NativeActionFallback "/native-post" FormPost testFallbackCsrfToken
           idempotencyA = fromMaybe (error "expected a valid test idempotency key") (actionIdempotency "a")
           idempotencyB = fromMaybe (error "expected a valid test idempotency key") (actionIdempotency "b")
           getAttributes = defaultActionFormAttributes {actionFormCapabilities = [NativeFallback getFallback]}
@@ -707,7 +736,7 @@ spec = do
               Action.actionCodec [Action.action "put" (Action.put "/put") (pure "put")]
           nativeAttributes =
             defaultActionFormAttributes
-              { actionFormCapabilities = [NativeFallback (NativeActionFallback "/native" FormPost "csrf-token")]
+              { actionFormCapabilities = [NativeFallback (NativeActionFallback "/native" FormPost testFallbackCsrfToken)]
               }
       let undeclaredForm = renderHtml (renderActionForm (actionForm emptyCodec defaultContext "missing" nativeAttributes [text "Preserved input"]))
           unsupportedForm = renderHtml (renderActionForm (actionForm unsupportedCodec defaultContext "put" nativeAttributes []))

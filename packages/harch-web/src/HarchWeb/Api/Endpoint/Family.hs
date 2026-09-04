@@ -42,7 +42,7 @@ import HarchWeb.Api.Response
 import HarchWeb.EndpointSecurity (EndpointMetadata)
 import HarchWeb.Markup (safeUrlText)
 import HarchWeb.Server (unboundedRouteExecutionPolicy)
-import HarchWeb.Site (RouteDefinition (..))
+import HarchWeb.Site (RouteDefinition (..), RouteHandler (ProtocolRouteHandler))
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 
@@ -56,7 +56,7 @@ apiRouteDefinition metadata endpoint =
       routeMetadata = metadata,
       routeMethods = [toRouteMethod (apiRouteEndpointMethod endpoint)],
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
-      routeResponse = \request _ -> HarchWeb.ProtocolResponseResult <$> runApiRouteEndpoint endpoint request
+      routeHandler = ProtocolRouteHandler $ \request _ -> HarchWeb.NonPageProtocolResponse <$> runApiRouteEndpoint endpoint request
     }
 
 -- | Like 'apiRouteEndpoint' composed with 'apiRouteDefinition', but the
@@ -76,8 +76,8 @@ apiRouteDefinitionWithContext contract metadata contextAwareHandler failureRespo
       routeMetadata = metadata,
       routeMethods = [toRouteMethod method],
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
-      routeResponse = \request routeRequest ->
-        HarchWeb.ProtocolResponseResult
+      routeHandler = ProtocolRouteHandler $ \request routeRequest ->
+        HarchWeb.NonPageProtocolResponse
           <$> runApiRouteEndpointHandler
             (apiEndpointExecution contract request)
             (contextAwareHandler (HarchWeb.requestContext routeRequest))
@@ -100,8 +100,8 @@ apiRouteDefinitionWithContextNeverFailing contract metadata contextAwareHandler 
       routeMetadata = metadata,
       routeMethods = [toRouteMethod method],
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
-      routeResponse = \request routeRequest ->
-        HarchWeb.ProtocolResponseResult
+      routeHandler = ProtocolRouteHandler $ \request routeRequest ->
+        HarchWeb.NonPageProtocolResponse
           <$> runApiRouteEndpointHandlerNeverFailing
             (apiEndpointExecution contract request)
             (contextAwareHandler (HarchWeb.requestContext routeRequest))
@@ -225,13 +225,13 @@ apiRouteEndpointFamilyDefinition endpointMetadataForPath family apiPath@(ApiPath
       routeMetadata = endpointMetadataForPath apiPath,
       routeMethods = apiPathRouteMethods family pathText,
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
-      routeResponse = \request _ ->
+      routeHandler = ProtocolRouteHandler $ \request _ ->
         case NonEmpty.nonEmpty (filter (endpointAtPath pathText) (endpointFamilyEndpoints family)) of
-          Nothing -> pure (HarchWeb.ProtocolResponseResult (apiHttpResponseToProtocolResponse (ApiHttpResponse HttpTypes.status404 [] Nothing)))
+          Nothing -> pure (HarchWeb.NonPageProtocolResponse (apiHttpResponseToProtocolResponse (ApiHttpResponse HttpTypes.status404 [] Nothing)))
           Just pathEndpoints ->
             case matchedApiRouteEndpoint pathEndpoints (requestMethodTextFromWai request) of
-              Nothing -> pure (HarchWeb.ProtocolResponseResult (apiHttpResponseToProtocolResponse (methodNotAllowedResponse pathEndpoints)))
-              Just (SomeApiRouteEndpoint endpoint) -> HarchWeb.ProtocolResponseResult <$> runApiRouteEndpoint endpoint request
+              Nothing -> pure (HarchWeb.NonPageProtocolResponse (apiHttpResponseToProtocolResponse (methodNotAllowedResponse pathEndpoints)))
+              Just (SomeApiRouteEndpoint endpoint) -> HarchWeb.NonPageProtocolResponse <$> runApiRouteEndpoint endpoint request
     }
 
 -- | Resolve a method within a path that is already known to have at least one

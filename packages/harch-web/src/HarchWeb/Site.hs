@@ -2,18 +2,20 @@
 
 -- | Declarative site composition.
 --
--- FQ8 makes the six stable route-table and shell declaration inputs one
+-- FQ8 makes the stable route-table, shell, and CSRF declaration inputs one
 -- 'SimpleSiteConfiguration'. Dynamic policy, middleware, action, and
 -- reporter customizations stay on 'Site' itself. The default disabled
 -- reporters remain ordinary no-op observer policy, not strictness or
 -- coverage-only callbacks.
 module HarchWeb.Site
   ( RouteDefinition (..),
+    RouteHandler (..),
     Site (..),
     SimpleSiteConfiguration (..),
     apiOnlySite,
     buildSiteApplication,
     pageRoute,
+    routeResponse,
     simpleSite,
   )
 where
@@ -33,7 +35,9 @@ import HarchWeb
     ForwardedHeaderTrust (..),
     NavigationItem (..),
     NavigationRuntime,
+    NonPageResponse,
     Page,
+    PageResult (..),
     PageShell (..),
     PathPrefix,
     RequestMiddleware,
@@ -60,10 +64,20 @@ import HarchWeb
     warpDefaultRequestTransportLimits,
   )
 import HarchWeb qualified
+import HarchWeb.Csrf (CsrfPagePreparationFailure (..), CsrfProtection, PageSecurity, csrfProtectionUnavailable, preparePageSecurity)
 import HarchWeb.Document qualified as Document
 import HarchWeb.Observability qualified as Observability
-import HarchWeb.Session (CsrfToken, generateCsrfToken)
+import HarchWeb.Server.ClientAction (csrfCookieFromRequest)
+import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
+
+-- | A matched route is either an SSR page or a protocol endpoint.  Only the
+-- page alternative receives the security state that must be authored into
+-- its markup; protocol endpoints cannot accidentally receive a nonce/token
+-- which has no valid meaning for them.
+data RouteHandler route context
+  = PageRouteHandler (PageSecurity -> RouteRequest route context -> IO (PageResult route context))
+  | ProtocolRouteHandler (Wai.Request -> RouteRequest route context -> IO (NonPageResponse route context))
 
 data RouteDefinition route context authorization = RouteDefinition
   { routeNavigationLabel :: Maybe Text,
@@ -79,8 +93,18 @@ data RouteDefinition route context authorization = RouteDefinition
     -- dispatcher has selected its path and method. It cannot alter listener,
     -- request-head, or application-wide policy; see 'RouteExecutionPolicy'.
     routeExecutionPolicy :: RouteExecutionPolicy,
-    routeResponse :: Wai.Request -> RouteRequest route context -> IO (Response route context)
+    routeHandler :: RouteHandler route context
   }
+
+-- | Transitional direct invocation helper.  Protocol tests and adapters can
+-- exercise their handler without inventing page state.  A page must instead
+-- travel through 'buildSiteApplication', which constructs its security value
+-- before the page handler runs.
+routeResponse :: RouteDefinition route context authorization -> Wai.Request -> RouteRequest route context -> IO (Response route context)
+routeResponse routeDefinition request routeRequest =
+  case routeHandler routeDefinition of
+    ProtocolRouteHandler renderProtocol -> HarchWeb.nonPageResponse <$> renderProtocol request routeRequest
+    PageRouteHandler _ -> error "direct page response execution requires pre-render PageSecurity"
 
 data Site route action context authorization = Site
   { siteName :: Text,
@@ -102,10 +126,10 @@ data Site route action context authorization = Site
     siteNavigationRoutes :: [route],
     siteRouteDefinition :: route -> RouteDefinition route context authorization,
     siteClientActionEndpointMetadata :: Text -> Text -> context -> Maybe (EndpointMetadata authorization),
+    siteClientActionRoute :: Text -> Text -> context -> Maybe route,
     siteDecodeClientAction :: ClientActionPayload context -> ClientActionDecodeResult action,
-    sitePageCsrfToken :: Page route context -> IO CsrfToken,
-    siteAuthorizeClientActionCsrf :: ClientActionRequest action context -> CsrfToken -> IO Bool,
-    siteHandleClientAction :: ClientActionRequest action context -> IO (Maybe ClientActionResponse),
+    siteCsrfProtection :: CsrfProtection context,
+    siteHandleClientAction :: ClientActionRequest action context -> IO (Maybe (ClientActionResponse route context)),
     sitePageShell :: Page route context -> PageShell route context,
     siteReportRequestObservability :: Observability.RequestObservability -> IO (),
     siteReportConnectionObservability :: Observability.ConnectionObservability -> IO (),
@@ -115,13 +139,18 @@ data Site route action context authorization = Site
 -- | The stable declaration inputs for 'simpleSite'.  Request middleware,
 -- assets, policies, client actions, and reporters remain deliberate
 -- subsequent 'Site' customizations; grouping only the route-table and shell
--- declaration prevents those six values being transposed at every simple
--- composition root.
+-- declaration prevents those values being transposed at every simple
+-- composition root. CSRF is deliberately required here: a page-capable site
+-- must select an authority rather than inherit a verifier which accepts every
+-- token. This extends the existing site composition boundary instead of
+-- creating a second CSRF dispatcher; see the AHI-4C decision record in
+-- @docs/design-guidance.md@.
 data SimpleSiteConfiguration route context authorization = SimpleSiteConfiguration
   { simpleSiteName :: Text,
     simpleSiteDefaultRequestContext :: context,
     simpleSiteRouteCodec :: RouteCodec route context,
     simpleSiteSecurity :: ApplicationSecurity route context authorization,
+    simpleSiteCsrfProtection :: CsrfProtection context,
     simpleSitePageShell :: Page route context -> PageShell route context,
     simpleSiteNavigationRoutes :: [route],
     simpleSiteRouteDefinition :: route -> RouteDefinition route context authorization
@@ -149,9 +178,9 @@ simpleSite configuration =
       siteNavigationRoutes = simpleSiteNavigationRoutes configuration,
       siteRouteDefinition = simpleSiteRouteDefinition configuration,
       siteClientActionEndpointMetadata = \_ _ _ -> Nothing,
+      siteClientActionRoute = \_ _ _ -> Nothing,
       siteDecodeClientAction = const HarchWeb.UnrecognizedClientAction,
-      sitePageCsrfToken = const generateCsrfToken,
-      siteAuthorizeClientActionCsrf = \_ _ -> pure True,
+      siteCsrfProtection = simpleSiteCsrfProtection configuration,
       siteHandleClientAction = const (pure Nothing),
       sitePageShell = simpleSitePageShell configuration,
       siteReportRequestObservability = const (pure ()),
@@ -179,6 +208,7 @@ apiOnlySite name defaultContext codec siteSecurityValue routeDefinition =
           simpleSiteDefaultRequestContext = defaultContext,
           simpleSiteRouteCodec = codec,
           simpleSiteSecurity = siteSecurityValue,
+          simpleSiteCsrfProtection = csrfProtectionUnavailable,
           simpleSitePageShell = const apiOnlyFallbackPageShell,
           simpleSiteNavigationRoutes = [],
           simpleSiteRouteDefinition = routeDefinition
@@ -203,7 +233,7 @@ apiOnlyFallbackPageShell =
 pageRoute ::
   EndpointMetadata authorization ->
   Maybe Text ->
-  (RouteRequest route context -> IO (Page route context)) ->
+  (PageSecurity -> RouteRequest route context -> IO (Page route context)) ->
   RouteDefinition route context authorization
 pageRoute metadata navigationLabel renderPage =
   RouteDefinition
@@ -211,7 +241,8 @@ pageRoute metadata navigationLabel renderPage =
       routeMetadata = metadata,
       routeMethods = [HarchWeb.RouteGet],
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
-      routeResponse = \_ -> fmap PageResponse . renderPage
+      routeHandler = PageRouteHandler $ \pageSecurity routeRequest ->
+        RenderedPage <$> renderPage pageSecurity routeRequest
     }
 
 buildSiteApplication :: (Eq route) => Site route action context authorization -> Application route action context authorization
@@ -233,11 +264,11 @@ buildSiteApplication site =
         applicationAttachRouteObservation = siteAttachRouteObservation site,
         routeEndpointMetadata = routeMetadata . siteRouteDefinition site,
         clientActionEndpointMetadata = siteClientActionEndpointMetadata site,
+        clientActionRoute = siteClientActionRoute site,
         HarchWeb.routeExecutionPolicy = routeDefinitionExecutionPolicy . siteRouteDefinition site,
         renderRequestResponse = renderSiteResponse site,
         decodeClientAction = siteDecodeClientAction site,
-        pageCsrfToken = sitePageCsrfToken site,
-        authorizeClientActionCsrf = siteAuthorizeClientActionCsrf site,
+        csrfProtection = siteCsrfProtection site,
         handleClientAction = siteHandleClientAction site,
         pageShell = renderSitePageShell site,
         reportRequestObservability = siteReportRequestObservability site,
@@ -247,10 +278,30 @@ buildSiteApplication site =
 
 renderSiteResponse :: Site route action context authorization -> Wai.Request -> RouteRequest route context -> IO (Response route context)
 renderSiteResponse site request routeRequest =
-  routeResponse
-    (siteRouteDefinition site (HarchWeb.requestRoute routeRequest))
-    request
-    routeRequest
+  case routeHandler (siteRouteDefinition site (HarchWeb.requestRoute routeRequest)) of
+    PageRouteHandler renderPage -> do
+      preparedPageSecurity <- preparePageSecurity (siteCsrfProtection site) (csrfCookieFromRequest request) (HarchWeb.requestContext routeRequest)
+      case preparedPageSecurity of
+        Left CsrfPageProtectionUnavailable -> pure csrfUnavailableResponse
+        Right pageSecurity -> do
+          pageResult <- renderPage pageSecurity routeRequest
+          pure $
+            case pageResult of
+              RenderedPage page -> PageResponse pageSecurity page
+              RenderedPageWithMetadata responseBodyValue page -> PageResponseWithMetadata pageSecurity responseBodyValue page
+    ProtocolRouteHandler renderProtocol -> HarchWeb.nonPageResponse <$> renderProtocol request routeRequest
+
+csrfUnavailableResponse :: Response route context
+csrfUnavailableResponse =
+  BodyResponse
+    HarchWeb.ResponseBody
+      { HarchWeb.responseStatus = Http.status503,
+        HarchWeb.responseContentType = "text/plain; charset=utf-8",
+        HarchWeb.responseBody = "CSRF protection is unavailable.",
+        HarchWeb.responseObservabilityAttributes = [],
+        HarchWeb.responseLogEntries = [],
+        HarchWeb.responseDatabaseOperations = []
+      }
 
 routeDefinitionExecutionPolicy :: RouteDefinition route context authorization -> RouteExecutionPolicy
 routeDefinitionExecutionPolicy RouteDefinition {routeExecutionPolicy = executionPolicy} = executionPolicy

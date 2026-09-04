@@ -4,7 +4,7 @@
 module App.Pages.Home
   ( pageDefinition,
     homePage,
-    nativeSubscriptionFallbackPage,
+    nativeSubscriptionResultPage,
     subscriptionResultRegion,
   )
 where
@@ -24,7 +24,7 @@ import App.Components.SubscriptionEmailField
   )
 import App.Pages.Route.Generated (PageRoute (..))
 import App.Routes
-  ( CustomRoute (NativeSubscriptionFallback),
+  ( CustomRoute (NativeSubscriptionResult),
     TwoPageNavigationTarget (NavigationPage),
     TwoPageRoute,
     twoPageActions,
@@ -37,6 +37,7 @@ import HarchWeb
     EndpointProtocol (HtmlEndpoint),
     Html,
     Page (..),
+    PageSecurity,
     Region,
     RouteRequest (..),
     buttonTag,
@@ -53,6 +54,8 @@ import HarchWeb
     literalElementId,
     mkRegionId,
     name,
+    pageCsrfValue,
+    pageSecurityCsrf,
     paragraphTag,
     region,
     role,
@@ -75,8 +78,8 @@ aboutAuthorName = "Harch Web team"
 aboutAuthorRole :: Text
 aboutAuthorRole = "SSR framework maintainers"
 
-homePage :: RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
-homePage routeRequest =
+homePage :: PageSecurity -> RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
+homePage pageSecurity routeRequest =
   pure
     Page
       { pageTitle = "Home",
@@ -108,7 +111,7 @@ homePage routeRequest =
                     <button name="intent" value="subscribe" type="submit">Subscribe</button>
                   </ActionForm>
 
-                  {nativeSubscriptionFallbackForm}
+                  {nativeSubscriptionFallbackForm pageSecurity}
 
                   <Region value={subscriptionResultRegion "status" ""} />
                 </section>
@@ -116,8 +119,8 @@ homePage routeRequest =
         pageBootstrapHooks = []
       }
 
-nativeSubscriptionFallbackForm :: Html
-nativeSubscriptionFallbackForm =
+nativeSubscriptionFallbackForm :: PageSecurity -> Html
+nativeSubscriptionFallbackForm pageSecurity =
   Controls.renderActionForm
     ( Controls.staticActionForm
         twoPageActions
@@ -129,7 +132,7 @@ nativeSubscriptionFallbackForm =
                   Controls.NativeActionFallback
                     { Controls.nativeActionFallbackPath = "/native-subscribe",
                       Controls.nativeActionFallbackMethod = Controls.FormPost,
-                      Controls.nativeActionFallbackCsrfToken = "two-pages-native-fallback"
+                      Controls.nativeActionFallbackCsrfToken = pageCsrfValue (pageSecurityCsrf pageSecurity)
                     }
               ]
           }
@@ -139,12 +142,12 @@ nativeSubscriptionFallbackForm =
         ]
     )
 
-nativeSubscriptionFallbackPage :: RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
-nativeSubscriptionFallbackPage routeRequest =
+nativeSubscriptionResultPage :: PageSecurity -> RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
+nativeSubscriptionResultPage _ routeRequest =
   pure
     Page
       { pageTitle = "Subscription received",
-        pageRoute = Routes.Custom NativeSubscriptionFallback,
+        pageRoute = Routes.Custom NativeSubscriptionResult,
         pageContext = requestContext routeRequest,
         pageBody = element sectionTag [dataAttribute "page" "native-subscription"] [element headingOneTag [] [text "Subscription received"], element paragraphTag [] [text "The native fallback accepted this submission."]],
         pageBootstrapHooks = []

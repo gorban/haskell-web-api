@@ -20,7 +20,7 @@ import Data.Maybe ()
 import Data.Text ()
 import Data.Text qualified as Text (isInfixOf, pack)
 import Data.Text.Encoding qualified as TextEncoding ()
-import HarchWeb (Application (renderRequestResponse, routeExecutionPolicy), LocalTestServer (localServerBaseUrl, localServerHost, localServerPort), RequestHeadLimits (requestCookieCountLimit, requestHeaderByteLimit, requestHeaderCountLimit), RequestPolicyConfig (requestConcurrencyLimit, requestHeadLimits, requestTransportLimits), RequestTransportLimits (requestNetworkTimeout, requestSlowlorisByteLimit), RouteExecutionPolicy (RouteExecutionPolicy), RouteRequest (requestRoute), ServerSentEventSource (ServerSentEventSource), StaticAssetRoot (StaticAssetRoot, staticDirectory, staticUrlPrefix), StaticAssetsConfig (StaticAssetsConfig, staticAssetContentTypes, staticAssetRoots, staticCacheControlSeconds), defaultStaticAssetContentTypes, eventStreamResponse, mkRequestConcurrencyLimit, mkRequestHeaderCountLimit, requestByteLimit, requestItemCountLimit, requestTimeoutSeconds, toWaiApplication, unboundedRequestHeadLimits, unboundedRouteExecutionPolicy, warpDefaultRequestTransportLimits, withLocalTestServer, withLocalTestServerForApplication)
+import HarchWeb (Application (renderRequestResponse, routeExecutionPolicy), LocalTestServer (localServerBaseUrl, localServerHost, localServerPort), RequestHeadLimits (requestCookieCountLimit, requestHeaderByteLimit, requestHeaderCountLimit), RequestPolicyConfig (requestConcurrencyLimit, requestHeadLimits, requestTransportLimits), RequestTransportLimits (requestNetworkTimeout, requestSlowlorisByteLimit), RouteExecutionPolicy (RouteExecutionPolicy), RouteRequest (requestRoute), ServerSentEventSource (ServerSentEventSource), StaticAssetRoot (StaticAssetRoot, staticDirectory, staticUrlPrefix), StaticAssetsConfig (StaticAssetsConfig, staticAssetContentTypes, staticAssetRoots, staticCacheControlSeconds), defaultStaticAssetContentTypes, eventStreamResponse, mkRequestConcurrencyLimit, mkRequestHeaderCountLimit, nonPageResponse, requestByteLimit, requestItemCountLimit, requestTimeoutSeconds, toWaiApplication, unboundedRequestHeadLimits, unboundedRouteExecutionPolicy, warpDefaultRequestTransportLimits, withLocalTestServer, withLocalTestServerForApplication)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -242,7 +242,7 @@ spec = do
                     _ -> unboundedRouteExecutionPolicy,
                 renderRequestResponse = \request routeRequest ->
                   case requestRoute routeRequest of
-                    EventStreamRoute -> pure (eventStreamResponse eventSource)
+                    EventStreamRoute -> pure (nonPageResponse (eventStreamResponse eventSource))
                     _ -> renderRequestResponse baseApplication request routeRequest
               }
       withLocalTestServer limitedApplication $ \localTestServer -> do

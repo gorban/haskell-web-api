@@ -50,17 +50,18 @@ import HarchWeb.Routing
   )
 import HarchWeb.Routing qualified as Routing
 import HarchWeb.SecurityEvent (ModuleName, moduleNameText)
-import HarchWeb.Server.Response (ClientActionRequest (..), ClientActionResponse, Response, mapResponsePage)
-import HarchWeb.Site (RouteDefinition (..))
+import HarchWeb.Server.Response (ClientActionRequest (..), ClientActionResponse, NonPageResponse, mapClientActionResponse, mapNonPageResponse, mapPageResult)
+import HarchWeb.Site (RouteDefinition (..), RouteHandler (..))
 import HarchWeb.Site qualified as Site
 
 -- | The action-side analogue of the embedding half of 'RouteMount'.  The
--- root action decoder only maps a child-selected target into its closed
--- algebra; it never receives a parent target to project back.  Consequently
--- this declaration exposes only the two mappings its codec and handler can
--- actually consume, rather than a misleading reverse target projection.
+-- root action decoder maps a child-selected target into its closed algebra;
+-- pre-decode guards also need the inverse to recover the action's typed
+-- owning route. The target prism is therefore explicit, rather than inferred
+-- from a URL or an action value that has not yet been decoded.
 data ActionMount parentTarget parentAction childTarget childAction = ActionMount
   { embedChildActionTarget :: childTarget -> parentTarget,
+    projectChildActionTarget :: parentTarget -> Maybe childTarget,
     embedChildAction :: childAction -> parentAction,
     projectChildAction :: parentAction -> Maybe childAction
   }
@@ -152,7 +153,11 @@ mountApplicationModule moduleMount childModule = do
         moduleDeclaredRoutes = map (embedChildRoute routeMount) (moduleDeclaredRoutes childModule),
         moduleEndpoints = mountRouteDefinition routeMount contextProjection metadataMapper (moduleEndpoints childModule),
         moduleActionCodec = mountedActionCodec,
-        moduleHandleAction = mountActionHandler actionMount contextProjection (moduleHandleAction childModule),
+        moduleActionRoute = \parentContext parentTarget -> do
+          childTarget <- projectChildActionTarget actionMount parentTarget
+          childRoute <- moduleActionRoute childModule (projectRequestContext contextProjection parentContext) childTarget
+          pure (embedChildRoute routeMount childRoute),
+        moduleHandleAction = mountActionHandler routeMount actionMount contextProjection (moduleHandleAction childModule),
         moduleGuards =
           map
             (mountEndpointGuard routeMount contextProjection (moduleEndpoints childModule))
@@ -209,21 +214,26 @@ mountRouteDefinition routeMount contextProjection mapMetadata childDefinitions p
     Nothing -> error "attempted to select a route definition through a mount that does not own it"
     Just childRoute ->
       let childDefinition = childDefinitions childRoute
+          childRequest parentRequest =
+            RouteRequest
+              { requestRoute = childRoute,
+                requestContext = projectRequestContext contextProjection (requestContext parentRequest)
+              }
        in RouteDefinition
             { routeNavigationLabel = routeNavigationLabel childDefinition,
               routeMetadata = requiredMountedMetadata (mapMetadata (routeMetadata childDefinition)),
               routeMethods = Site.routeMethods childDefinition,
               routeExecutionPolicy = routeExecutionPolicy childDefinition,
-              routeResponse = \request parentRequest -> do
-                childResponse <-
-                  routeResponse
-                    childDefinition
-                    request
-                    RouteRequest
-                      { requestRoute = childRoute,
-                        requestContext = projectRequestContext contextProjection (requestContext parentRequest)
-                      }
-                pure (mapChildResponse routeMount (requestContext parentRequest) childResponse)
+              routeHandler =
+                case routeHandler childDefinition of
+                  PageRouteHandler renderChildPage ->
+                    PageRouteHandler $ \pageSecurity parentRequest ->
+                      mapPageResult (mapChildPage routeMount (requestContext parentRequest))
+                        <$> renderChildPage pageSecurity (childRequest parentRequest)
+                  ProtocolRouteHandler renderChildProtocol ->
+                    ProtocolRouteHandler $ \request parentRequest ->
+                      mapChildNonPageResponse routeMount (requestContext parentRequest)
+                        <$> renderChildProtocol request (childRequest parentRequest)
             }
 
 requiredMountedMetadata :: Either ModuleMountError metadata -> metadata
@@ -232,9 +242,19 @@ requiredMountedMetadata mountedMetadata =
     Right metadata -> metadata
     Left mountError -> error ("undeclared endpoint metadata used by an application module: " <> show mountError)
 
-mapChildResponse :: RouteMount parentRoute childRoute -> parentContext -> Response childRoute childContext -> Response parentRoute parentContext
-mapChildResponse routeMount parentContext =
-  mapResponsePage (mapChildPage routeMount parentContext)
+mapChildNonPageResponse ::
+  RouteMount parentRoute childRoute ->
+  parentContext ->
+  NonPageResponse childRoute childContext ->
+  NonPageResponse parentRoute parentContext
+mapChildNonPageResponse routeMount parentContext =
+  mapNonPageResponse
+    ( \childRequest ->
+        RouteRequest
+          { requestRoute = embedChildRoute routeMount (requestRoute childRequest),
+            requestContext = parentContext
+          }
+    )
 
 mapChildPage :: RouteMount parentRoute childRoute -> parentContext -> Page childRoute childContext -> Page parentRoute parentContext
 mapChildPage routeMount parentContext childPage =
@@ -244,21 +264,29 @@ mapChildPage routeMount parentContext childPage =
     }
 
 mountActionHandler ::
+  RouteMount parentRoute childRoute ->
   ActionMount parentTarget parentAction childTarget childAction ->
   ContextProjection parentContext childContext ->
-  (ClientActionRequest childAction childContext -> IO (Maybe ClientActionResponse)) ->
+  (ClientActionRequest childAction childContext -> IO (Maybe (ClientActionResponse childRoute childContext))) ->
   ClientActionRequest parentAction parentContext ->
-  IO (Maybe ClientActionResponse)
-mountActionHandler actionMount contextProjection childHandler parentRequest =
+  IO (Maybe (ClientActionResponse parentRoute parentContext))
+mountActionHandler routeMount actionMount contextProjection childHandler parentRequest =
   case projectChildAction actionMount (clientAction parentRequest) of
     Nothing -> pure Nothing
     Just childAction ->
-      childHandler
-        ClientActionRequest
-          { clientAction = childAction,
-            clientActionRequestIdempotencyKey = clientActionRequestIdempotencyKey parentRequest,
-            clientActionContext = projectRequestContext contextProjection (clientActionContext parentRequest)
-          }
+      fmap (mapClientActionResponse mapChildDestination) <$> childHandler childRequest
+      where
+        childRequest =
+          ClientActionRequest
+            { clientAction = childAction,
+              clientActionRequestIdempotencyKey = clientActionRequestIdempotencyKey parentRequest,
+              clientActionContext = projectRequestContext contextProjection (clientActionContext parentRequest)
+            }
+        mapChildDestination childDestination =
+          RouteRequest
+            { requestRoute = embedChildRoute routeMount (requestRoute childDestination),
+              requestContext = clientActionContext parentRequest
+            }
 
 mountEndpointGuard ::
   RouteMount parentRoute childRoute ->
@@ -286,7 +314,7 @@ mountEndpointGuard routeMount contextProjection childDefinitions (EndpointGuard 
               }
         case childResult of
           ContinueEndpoint _ -> pure (ContinueEndpoint (requestContext (endpointRouteRequest parentRequest)))
-          HaltEndpoint childResponse -> pure (HaltEndpoint (mapChildResponse routeMount (requestContext (endpointRouteRequest parentRequest)) childResponse))
+          HaltEndpoint childResponse -> pure (HaltEndpoint (mapChildNonPageResponse routeMount (requestContext (endpointRouteRequest parentRequest)) childResponse))
 
 -- | Adapt a validated child action codec to its parent algebra.  The mapped
 -- codec remains in the root's one client-action interpreter: this function

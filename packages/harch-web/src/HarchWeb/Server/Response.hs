@@ -2,14 +2,22 @@
 
 -- | Private typed request and response contracts for the WAI server pipeline.
 module HarchWeb.Server.Response
-  ( ClientActionDecodeResult (..),
+  ( ActionNavigation (..),
+    ClientActionDecodeResult (..),
     ClientActionIdempotencyKey,
     ClientActionPayload (..),
     ClientActionRequest (..),
     ClientActionResponse (..),
+    HistoryMode (..),
     MiddlewareResult (..),
     RegionPatch,
     RequestMiddleware (..),
+    PageResult (..),
+    mapPageResult,
+    NonPageResponse (..),
+    nonPageResponse,
+    mapClientActionResponse,
+    mapNonPageResponse,
     Response (..),
     mapResponsePage,
     ResponseBody (..),
@@ -28,10 +36,12 @@ import HarchWeb.Action
     ClientActionIdempotencyKey,
     ClientActionPayload (..),
   )
+import HarchWeb.Csrf (PageSecurity, samePageSecurity)
 import HarchWeb.Database (DatabaseOperation)
 import HarchWeb.Document (Page)
 import HarchWeb.Markup (ElementId, RegionPatch)
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.Routing (RouteRequest)
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 
@@ -172,6 +182,22 @@ data ClientActionRequest action context = ClientActionRequest
   }
   deriving (Eq, Show)
 
+-- | History behavior for an action's typed internal destination. Rendering
+-- through the application's one root route codec is the only conversion to a
+-- browser URL.
+data HistoryMode
+  = PushHistory
+  | ReplaceHistory
+  deriving (Eq, Show)
+
+-- | A client action either remains on its current document or navigates to a
+-- typed internal route. Raw URL text is intentionally absent; an external
+-- redirect needs a separate, conspicuously named validated capability.
+data ActionNavigation route context
+  = StayOnCurrentRoute
+  | NavigateInternal HistoryMode (RouteRequest route context)
+  deriving (Eq, Show)
+
 -- | Client-action status shares the ordinary response boundary's exact HTTP
 -- status representation, including its reason phrase.
 --
@@ -179,46 +205,174 @@ data ClientActionRequest action context = ClientActionRequest
 -- 'ElementId' rather than an application string or a parallel focus command.
 -- The JSON encoder is the sole boundary that erases the ID to text, making a
 -- mismatch with typed field renderers harder to author.
-data ClientActionResponse = ClientActionResponse
+--
+-- Decision (AHI-4C, 2026-09-03): action navigation extends this same response
+-- with a typed 'RouteRequest', rather than a URL callback or raw JSON URL.
+-- The final encoder has the root 'RouteCodec', and mounted modules map their
+-- child destination while retaining local patches and diagnostics. This keeps
+-- routing first-class without giving actions a second URL authority.
+data ClientActionResponse route context = ClientActionResponse
   { clientActionStatus :: Http.Status,
     clientActionPatches :: [RegionPatch],
     clientActionFocusId :: Maybe ElementId,
+    clientActionNavigation :: ActionNavigation route context,
     clientActionHeaders :: Http.ResponseHeaders,
     clientActionObservabilityAttributes :: [Observability.ObservabilityAttribute],
     clientActionLogEntries :: [Text]
   }
   deriving (Eq, Show)
 
+-- | Map only an action response's typed destination while adapting a mounted
+-- child module. Patches, focus, headers, and diagnostics retain their local
+-- meaning; the parent remains the sole owner of its route algebra.
+mapClientActionResponse ::
+  (RouteRequest route context -> RouteRequest mappedRoute mappedContext) ->
+  ClientActionResponse route context ->
+  ClientActionResponse mappedRoute mappedContext
+mapClientActionResponse mapRoute actionResponse =
+  actionResponse
+    { clientActionNavigation =
+        case clientActionNavigation actionResponse of
+          StayOnCurrentRoute -> StayOnCurrentRoute
+          NavigateInternal historyMode routeRequest -> NavigateInternal historyMode (mapRoute routeRequest)
+    }
+
+-- | The outcome of an SSR page handler before request execution attaches the
+-- one pre-rendered 'PageSecurity' value.  Keeping this distinct from
+-- 'Response' makes it impossible for a page handler to invent a different
+-- nonce/CSRF pair after it has rendered its markup, while retaining the
+-- existing status, diagnostics, and database-operation metadata surface.
+data PageResult route context
+  = RenderedPage (Page route context)
+  | RenderedPageWithMetadata ResponseBody (Page route context)
+  deriving (Eq, Show)
+
+-- | Adapt only the page carried by a page-handler outcome.  Composition
+-- adapters use this closed total fold before the renderer attaches page
+-- security, rather than manufacturing a provisional 'Response'.
+mapPageResult :: (Page route context -> Page mappedRoute mappedContext) -> PageResult route context -> PageResult mappedRoute mappedContext
+mapPageResult mapPage pageResult =
+  case pageResult of
+    RenderedPage page -> RenderedPage (mapPage page)
+    RenderedPageWithMetadata responseBodyValue page -> RenderedPageWithMetadata responseBodyValue (mapPage page)
+
+-- | Every response form which cannot carry an SSR page. Route protocol
+-- handlers and post-match guards use this narrower result, leaving 'Site' as
+-- the sole interpreter which can combine a page-handler result with freshly
+-- prepared 'PageSecurity'. This extends the existing response boundary with a
+-- closed capability subset; it is not another request dispatcher.
+--
+-- AHI-4C relies on this distinction to prevent an API, asset, SSE, or guard
+-- from manufacturing a page response outside the pre-render security path.
+data NonPageResponse route context
+  = NonPageBodyResponse ResponseBody
+  | NonPageRedirectResponse ResponseBody Text
+  | -- | An application-owned redirect remains typed until the root renderer
+    -- writes its @Location@ header. This is the native counterpart of
+    -- 'NavigateInternal', not a second URL-routing mechanism.
+    NonPageInternalRedirectResponse ResponseBody (RouteRequest route context)
+  | -- | A typed internal redirect may carry application response headers such
+    -- as an issued host-only session cookie. The final renderer retains sole
+    -- ownership of @Location@: any supplied @Location@ header is discarded.
+    NonPageInternalRedirectResponseWithHeaders ResponseBody Http.ResponseHeaders (RouteRequest route context)
+  | NonPageClientActionBodyResponse (ClientActionResponse route context)
+  | NonPageEventStreamResponse ResponseBody ServerSentEventSource
+  | NonPageProtocolResponse ProtocolResponse
+
+instance (Eq route, Eq context) => Eq (NonPageResponse route context) where
+  left == right =
+    case (left, right) of
+      (NonPageBodyResponse leftBody, NonPageBodyResponse rightBody) -> leftBody == rightBody
+      (NonPageRedirectResponse leftBody leftLocation, NonPageRedirectResponse rightBody rightLocation) -> leftBody == rightBody && leftLocation == rightLocation
+      (NonPageInternalRedirectResponse leftBody leftRequest, NonPageInternalRedirectResponse rightBody rightRequest) -> leftBody == rightBody && leftRequest == rightRequest
+      (NonPageInternalRedirectResponseWithHeaders leftBody leftHeaders leftRequest, NonPageInternalRedirectResponseWithHeaders rightBody rightHeaders rightRequest) -> leftBody == rightBody && leftHeaders == rightHeaders && leftRequest == rightRequest
+      (NonPageClientActionBodyResponse leftAction, NonPageClientActionBodyResponse rightAction) -> leftAction == rightAction
+      (NonPageEventStreamResponse leftBody _, NonPageEventStreamResponse rightBody _) -> leftBody == rightBody
+      (NonPageProtocolResponse leftResponse, NonPageProtocolResponse rightResponse) -> leftResponse == rightResponse
+      _ -> False
+
+instance (Show route, Show context) => Show (NonPageResponse route context) where
+  showsPrec precedence response =
+    case response of
+      NonPageBodyResponse responseBodyValue -> showParen (precedence > 10) (showString "NonPageBodyResponse " . showsPrec 11 responseBodyValue)
+      NonPageRedirectResponse responseBodyValue location -> showParen (precedence > 10) (showString "NonPageRedirectResponse " . showsPrec 11 responseBodyValue . showChar ' ' . shows location)
+      NonPageInternalRedirectResponse responseBodyValue routeRequest -> showParen (precedence > 10) (showString "NonPageInternalRedirectResponse " . showsPrec 11 responseBodyValue . showChar ' ' . showsPrec 11 routeRequest)
+      NonPageInternalRedirectResponseWithHeaders responseBodyValue headers routeRequest -> showParen (precedence > 10) (showString "NonPageInternalRedirectResponseWithHeaders " . showsPrec 11 responseBodyValue . showChar ' ' . shows headers . showChar ' ' . showsPrec 11 routeRequest)
+      NonPageClientActionBodyResponse actionResponse -> showParen (precedence > 10) (showString "NonPageClientActionBodyResponse " . showsPrec 11 actionResponse)
+      NonPageEventStreamResponse responseBodyValue _ -> showParen (precedence > 10) (showString "NonPageEventStreamResponse " . showsPrec 11 responseBodyValue . showString " <event-source>")
+      NonPageProtocolResponse protocolResponse -> showParen (precedence > 10) (showString "NonPageProtocolResponse " . showsPrec 11 protocolResponse)
+
+-- | Interpret the non-page subset through the existing final response
+-- renderer. It is deliberately total because each non-page constructor has
+-- exactly one established full-response equivalent.
+nonPageResponse :: NonPageResponse route context -> Response route context
+nonPageResponse response =
+  case response of
+    NonPageBodyResponse responseBodyValue -> BodyResponse responseBodyValue
+    NonPageRedirectResponse responseBodyValue location -> RedirectResponse responseBodyValue location
+    NonPageInternalRedirectResponse responseBodyValue routeRequest -> InternalRedirectResponse responseBodyValue routeRequest
+    NonPageInternalRedirectResponseWithHeaders responseBodyValue headers routeRequest -> InternalRedirectResponseWithHeaders responseBodyValue headers routeRequest
+    NonPageClientActionBodyResponse actionResponse -> ClientActionBodyResponse actionResponse
+    NonPageEventStreamResponse responseBodyValue source -> EventStreamResponse responseBodyValue source
+    NonPageProtocolResponse protocolResponse -> ProtocolResponseResult protocolResponse
+
+-- | Adapt a non-page response across a mounted route/context algebra. The
+-- closed fold has no page branch by construction, so mounting a guard cannot
+-- accidentally regain the ability to manufacture a secured page.
+mapNonPageResponse ::
+  (RouteRequest route context -> RouteRequest mappedRoute mappedContext) ->
+  NonPageResponse route context ->
+  NonPageResponse mappedRoute mappedContext
+mapNonPageResponse mapRoute response =
+  case response of
+    NonPageBodyResponse responseBodyValue -> NonPageBodyResponse responseBodyValue
+    NonPageRedirectResponse responseBodyValue location -> NonPageRedirectResponse responseBodyValue location
+    NonPageInternalRedirectResponse responseBodyValue routeRequest -> NonPageInternalRedirectResponse responseBodyValue (mapRoute routeRequest)
+    NonPageInternalRedirectResponseWithHeaders responseBodyValue headers routeRequest -> NonPageInternalRedirectResponseWithHeaders responseBodyValue headers (mapRoute routeRequest)
+    NonPageClientActionBodyResponse actionResponse -> NonPageClientActionBodyResponse (mapClientActionResponse mapRoute actionResponse)
+    NonPageEventStreamResponse responseBodyValue source -> NonPageEventStreamResponse responseBodyValue source
+    NonPageProtocolResponse protocolResponse -> NonPageProtocolResponse protocolResponse
+
 data Response route context
-  = PageResponse (Page route context)
-  | PageResponseWithMetadata ResponseBody (Page route context)
+  = PageResponse PageSecurity (Page route context)
+  | PageResponseWithMetadata PageSecurity ResponseBody (Page route context)
   | BodyResponse ResponseBody
   | RedirectResponse ResponseBody Text
-  | ClientActionBodyResponse ClientActionResponse
+  | InternalRedirectResponse ResponseBody (RouteRequest route context)
+  | InternalRedirectResponseWithHeaders ResponseBody Http.ResponseHeaders (RouteRequest route context)
+  | ClientActionBodyResponse (ClientActionResponse route context)
   | EventStreamResponse ResponseBody ServerSentEventSource
   | ProtocolResponseResult ProtocolResponse
 
--- | Change the route and context carried by page responses while preserving
--- every response that has no page.  Route composition uses this one total
--- operation instead of each adapter repeating a partial-looking case split.
-mapResponsePage :: (Page route context -> Page mappedRoute mappedContext) -> Response route context -> Response mappedRoute mappedContext
-mapResponsePage mapPage response =
+-- | Change the route and context carried by page and action-response
+-- destinations. Route composition supplies both closed transformations so an
+-- internal navigation cannot retain a child route after mounting.
+mapResponsePage ::
+  (Page route context -> Page mappedRoute mappedContext) ->
+  (RouteRequest route context -> RouteRequest mappedRoute mappedContext) ->
+  Response route context ->
+  Response mappedRoute mappedContext
+mapResponsePage mapPage mapRoute response =
   case response of
-    PageResponse page -> PageResponse (mapPage page)
-    PageResponseWithMetadata responseBodyValue page -> PageResponseWithMetadata responseBodyValue (mapPage page)
+    PageResponse pageSecurity page -> PageResponse pageSecurity (mapPage page)
+    PageResponseWithMetadata pageSecurity responseBodyValue page -> PageResponseWithMetadata pageSecurity responseBodyValue (mapPage page)
     BodyResponse responseBodyValue -> BodyResponse responseBodyValue
     RedirectResponse responseBodyValue location -> RedirectResponse responseBodyValue location
-    ClientActionBodyResponse actionResponse -> ClientActionBodyResponse actionResponse
+    InternalRedirectResponse responseBodyValue routeRequest -> InternalRedirectResponse responseBodyValue (mapRoute routeRequest)
+    InternalRedirectResponseWithHeaders responseBodyValue headers routeRequest -> InternalRedirectResponseWithHeaders responseBodyValue headers (mapRoute routeRequest)
+    ClientActionBodyResponse actionResponse -> ClientActionBodyResponse (mapClientActionResponse mapRoute actionResponse)
     EventStreamResponse responseBodyValue source -> EventStreamResponse responseBodyValue source
     ProtocolResponseResult protocolResponse -> ProtocolResponseResult protocolResponse
 
 instance (Eq route, Eq context) => Eq (Response route context) where
   left == right =
     case (left, right) of
-      (PageResponse leftPage, PageResponse rightPage) -> leftPage == rightPage
-      (PageResponseWithMetadata leftBody leftPage, PageResponseWithMetadata rightBody rightPage) -> leftBody == rightBody && leftPage == rightPage
+      (PageResponse leftSecurity leftPage, PageResponse rightSecurity rightPage) -> samePageSecurity leftSecurity rightSecurity && leftPage == rightPage
+      (PageResponseWithMetadata leftSecurity leftBody leftPage, PageResponseWithMetadata rightSecurity rightBody rightPage) -> samePageSecurity leftSecurity rightSecurity && leftBody == rightBody && leftPage == rightPage
       (BodyResponse leftBody, BodyResponse rightBody) -> leftBody == rightBody
       (RedirectResponse leftBody leftLocation, RedirectResponse rightBody rightLocation) -> leftBody == rightBody && leftLocation == rightLocation
+      (InternalRedirectResponse leftBody leftRequest, InternalRedirectResponse rightBody rightRequest) -> leftBody == rightBody && leftRequest == rightRequest
+      (InternalRedirectResponseWithHeaders leftBody leftHeaders leftRequest, InternalRedirectResponseWithHeaders rightBody rightHeaders rightRequest) -> leftBody == rightBody && leftHeaders == rightHeaders && leftRequest == rightRequest
       (ClientActionBodyResponse leftAction, ClientActionBodyResponse rightAction) -> leftAction == rightAction
       (EventStreamResponse leftBody _, EventStreamResponse rightBody _) -> leftBody == rightBody
       (ProtocolResponseResult leftResponse, ProtocolResponseResult rightResponse) -> leftResponse == rightResponse
@@ -227,10 +381,12 @@ instance (Eq route, Eq context) => Eq (Response route context) where
 instance (Show route, Show context) => Show (Response route context) where
   showsPrec precedence response =
     case response of
-      PageResponse page -> showParen (precedence > 10) (showString "PageResponse " . showsPrec 11 page)
-      PageResponseWithMetadata responseBodyValue page -> showParen (precedence > 10) (showString "PageResponseWithMetadata " . showsPrec 11 responseBodyValue . showChar ' ' . showsPrec 11 page)
+      PageResponse pageSecurity page -> showParen (precedence > 10) (showString "PageResponse " . showsPrec 11 pageSecurity . showChar ' ' . showsPrec 11 page)
+      PageResponseWithMetadata pageSecurity responseBodyValue page -> showParen (precedence > 10) (showString "PageResponseWithMetadata " . showsPrec 11 pageSecurity . showChar ' ' . showsPrec 11 responseBodyValue . showChar ' ' . showsPrec 11 page)
       BodyResponse responseBodyValue -> showParen (precedence > 10) (showString "BodyResponse " . showsPrec 11 responseBodyValue)
       RedirectResponse responseBodyValue location -> showParen (precedence > 10) (showString "RedirectResponse " . showsPrec 11 responseBodyValue . showChar ' ' . shows location)
+      InternalRedirectResponse responseBodyValue routeRequest -> showParen (precedence > 10) (showString "InternalRedirectResponse " . showsPrec 11 responseBodyValue . showChar ' ' . showsPrec 11 routeRequest)
+      InternalRedirectResponseWithHeaders responseBodyValue headers routeRequest -> showParen (precedence > 10) (showString "InternalRedirectResponseWithHeaders " . showsPrec 11 responseBodyValue . showChar ' ' . shows headers . showChar ' ' . showsPrec 11 routeRequest)
       ClientActionBodyResponse actionResponse -> showParen (precedence > 10) (showString "ClientActionBodyResponse " . showsPrec 11 actionResponse)
       EventStreamResponse responseBodyValue _ -> showParen (precedence > 10) (showString "EventStreamResponse " . showsPrec 11 responseBodyValue . showString " <event-source>")
       ProtocolResponseResult protocolResponse -> showParen (precedence > 10) (showString "ProtocolResponseResult " . showsPrec 11 protocolResponse)

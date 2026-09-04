@@ -75,6 +75,7 @@ library
   exposed-modules:
     WebApi
     WebApi.Account
+    WebApi.AccountJwt
     WebApi.AccountPages
     WebApi.AccountPages.Actions
     WebApi.AccountPages.Actions.Common
@@ -83,6 +84,7 @@ library
     WebApi.AccountPages.Forms
     WebApi.AccountPages.Rendering
     WebApi.AccountPages.Validation
+    WebApi.AccountPrincipal
     WebApi.Api.Endpoints
     WebApi.App
     WebApi.App.Enhancements
@@ -152,11 +154,15 @@ library
     harch-web ^>=0.1.2.0,
     http-client ^>=0.7.19,
     http-types ^>=0.12.5,
+    jose ^>=0.12,
+    lens ^>=5.3,
     mtl ^>=2.3.1,
+    postgres-database-changes ^>=0.1.2.0,
     postgresql-libpq ^>=0.11.0.0,
     process ^>=1.6.26.1,
     stm ^>=2.5.3.1,
     text ^>=2.1.3,
+    time ^>=1.15,
     transformers ^>=0.6.1.2,
     wai ^>=3.2.5,
 
@@ -203,7 +209,9 @@ test-suite haskell-web-api-tests
   other-modules:
     E2E.WebApiSpec
     Integration.WebApiSpec
+    TestSupport.AccountJwt
     TestSupport.RealPostgres
+    Unit.WebApi.AccountJwtSpec
     Unit.WebApi.AccountPagesSpec
     Unit.WebApi.AccountSpec
     Unit.WebApi.App.EnhancementsSpec
@@ -260,6 +268,7 @@ test-suite haskell-web-api-tests
   build-depends:
     -- For testing framework:
     -- For running the executable in tests:
+    aeson ^>=2.3.1.0,
     base ^>=4.22.0.0,
     bytestring ^>=0.12.2.0,
     core ^>=0.1.2.0,
@@ -270,10 +279,14 @@ test-suite haskell-web-api-tests
     haskell-web-api ^>=0.1.2.0,
     hspec ^>=2.11.17,
     http-types ^>=0.12.5,
+    jose ^>=0.12,
+    lens ^>=5.3,
     network ^>=3.2.8.0,
+    postgres-database-changes ^>=0.1.2.0,
     postgresql-libpq ^>=0.11.0.0,
     process ^>=1.6.26.1,
     temporary ^>=1.3,
     test-core ^>=0.1.2.0,
     text ^>=2.1.3,
+    time ^>=1.15,
     wai ^>=3.2.5,

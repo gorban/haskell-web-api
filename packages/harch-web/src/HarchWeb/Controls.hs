@@ -22,6 +22,7 @@ module HarchWeb.Controls
     FieldValidity (..),
     FormMethod (..),
     NativeActionFallback (..),
+    RetainedActionLifetime,
     actionForm,
     actionIdempotency,
     actionIdempotencyKey,
@@ -32,9 +33,11 @@ module HarchWeb.Controls
     dialogControl,
     errorSummary,
     mkAccessibleName,
+    mkRetainedActionLifetime,
     requiredAccessibleNameOrDie,
     pageLink,
     renderActionForm,
+    retainedActionLifetimeMilliseconds,
     staticActionForm,
   )
 where
@@ -52,6 +55,7 @@ import HarchWeb.Action
     actionPath,
     staticActionPath,
   )
+import HarchWeb.Csrf (CsrfToken, csrfTokenText)
 import HarchWeb.Markup
 import HarchWeb.StaticAssets (CssClass)
 
@@ -358,15 +362,32 @@ actionIdempotency key
 data FormMethod = FormGet | FormPost
   deriving (Eq, Show)
 
--- | An explicitly authored non-JavaScript submission endpoint. Applications
--- provide the endpoint and CSRF field from their server-side form workflow;
--- enhancement continues to use the action codec's typed endpoint.
+-- | An explicitly authored non-JavaScript submission endpoint. Its CSRF field
+-- is the opaque token from the same pre-render 'PageSecurity' that sets the
+-- host cookie; enhancement continues to use the action codec's typed endpoint.
 data NativeActionFallback = NativeActionFallback
   { nativeActionFallbackPath :: Text,
     nativeActionFallbackMethod :: FormMethod,
-    nativeActionFallbackCsrfToken :: Text
+    nativeActionFallbackCsrfToken :: CsrfToken
   }
   deriving (Eq, Show)
+
+-- | A positive tab-memory lifetime for the one captured action that may wait
+-- for deliberate reauthentication.  The value is rendered only as framework
+-- control metadata; the captured fields themselves never leave the kernel.
+newtype RetainedActionLifetime = RetainedActionLifetime Int
+  deriving (Eq, Show)
+
+mkRetainedActionLifetime :: Int -> Maybe RetainedActionLifetime
+mkRetainedActionLifetime milliseconds
+  | milliseconds > 0 = Just (RetainedActionLifetime milliseconds)
+  | otherwise = Nothing
+
+retainedActionLifetimeMilliseconds :: RetainedActionLifetime -> Int
+retainedActionLifetimeMilliseconds (RetainedActionLifetime milliseconds) = milliseconds
+
+defaultRetainedActionLifetime :: RetainedActionLifetime
+defaultRetainedActionLifetime = RetainedActionLifetime 600000
 
 -- | The optional non-routing attributes of a client action form. Framework
 -- owned attributes are deliberately absent, so the target, method, capture
@@ -374,6 +395,7 @@ data NativeActionFallback = NativeActionFallback
 data ActionFormAttributes = ActionFormAttributes
   { actionFormAriaLabel :: Maybe Text,
     actionFormCapabilities :: [ActionCapability],
+    actionFormRetainedActionLifetime :: RetainedActionLifetime,
     actionFormRecoveryCopy :: ActionRecoveryCopy
   }
 
@@ -382,6 +404,7 @@ defaultActionFormAttributes =
   ActionFormAttributes
     { actionFormAriaLabel = Nothing,
       actionFormCapabilities = [ExclusiveClientHandler],
+      actionFormRetainedActionLifetime = defaultRetainedActionLifetime,
       actionFormRecoveryCopy = defaultActionRecoveryCopy
     }
 
@@ -431,7 +454,8 @@ renderCapturingActionForm targetPath targetMethod attributes children =
              dataAttribute "harch-action" "true",
              dataAttribute "harch-action-path" targetPath,
              dataAttribute "harch-action-method" (Text.toLower (actionMethodText targetMethod)),
-             dataAttribute "harch-action-capabilities" (renderCapabilities (actionFormCapabilities attributes))
+             dataAttribute "harch-action-capabilities" (renderCapabilities (actionFormCapabilities attributes)),
+             dataAttribute "harch-action-retention-ms" (Text.pack (show (retainedActionLifetimeMilliseconds (actionFormRetainedActionLifetime attributes))))
            ]
         <> maybe [] (pure . dataAttribute "harch-action-idempotency-key" . actionIdempotencyKey) idempotency
         <> [ dataAttribute "harch-action-ready-copy" (actionReadyCopy recoveryCopy),
@@ -517,7 +541,7 @@ nativeCsrfField =
         inputTag
         [ inputType "hidden",
           name "_harch_csrf",
-          value (nativeActionFallbackCsrfToken fallback)
+          value (csrfTokenText (nativeActionFallbackCsrfToken fallback))
         ]
     ]
 

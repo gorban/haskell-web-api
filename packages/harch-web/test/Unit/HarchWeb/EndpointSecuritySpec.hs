@@ -109,12 +109,12 @@ spec = do
             EndpointGuard $ \request -> do
               modifyIORef' visits (<> ["halt"])
               requestLanguage (requestContext (endpointRouteRequest request)) `shouldBe` "es"
-              pure (HaltEndpoint (BodyResponse deniedResponse))
+              pure (HaltEndpoint (NonPageBodyResponse deniedResponse))
           skipped = EndpointGuard $ \_ -> do
             modifyIORef' visits (<> ["skipped"])
             pure (ContinueEndpoint defaultContext)
       runEndpointGuardPipeline [enrich, halt, skipped] endpointRequest
-        `shouldReturn` HaltEndpoint (BodyResponse deniedResponse)
+        `shouldReturn` HaltEndpoint (NonPageBodyResponse deniedResponse)
       readIORef visits `shouldReturn` ["enrich", "halt"]
 
     it "exposes each root security phase without making disabled authentication implicit" $ do
@@ -137,7 +137,7 @@ spec = do
                  hasDerivedContract dispatchKinds `shouldBe` True,
                  hasDerivedContract
                    ( [ ContinueEndpoint defaultContext,
-                       HaltEndpoint (BodyResponse deniedResponse)
+                       HaltEndpoint (NonPageBodyResponse deniedResponse)
                      ] ::
                        [EndpointGuardResult TestRoute TestContext]
                    )

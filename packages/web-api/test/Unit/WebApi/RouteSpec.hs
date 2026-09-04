@@ -3,10 +3,15 @@
 {-# SPEC #-}
 
 import Control.Monad (forM_)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
+import HarchWeb.Session (mkSessionId)
+import Network.Wai qualified as Wai
+import TestCore.Wai (waiRequest)
 import Unit.WebApi.TestSupport hiding (databaseConfig)
+import WebApi.Config (AppConfig (..), defaultAppConfig)
 import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), PageRoute, RouteSelectionError (..), defaultRequestContext, renderRoutePath, renderRouteUrl)
 import WebApi.Route qualified
 
@@ -98,6 +103,32 @@ spec = do
       show LanguageRoute `shouldBe` "LanguageRoute"
       show HelpRoute `shouldBe` "HelpRoute"
       Page WebApi.Route.HomePage `shouldNotBe` Api ApiNotFound
+
+  describe "requestContextFromWaiRequest" $ do
+    it "accepts only a valid MFA-enrollment cookie while preserving the supplied context" $ do
+      let validSession = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+          validRequest =
+            (waiRequest ["mfa"])
+              { Wai.requestHeaders =
+                  [("Cookie", TextEncoding.encodeUtf8 ("__Host-harch-mfa-enrollment=" <> validSession))]
+              }
+          malformedUtf8Request =
+            (waiRequest ["mfa"])
+              { Wai.requestHeaders = [("Cookie", "__Host-harch-mfa-enrollment=\255")]
+              }
+          malformedValueRequest =
+            (waiRequest ["mfa"])
+              { Wai.requestHeaders = [("Cookie", "__Host-harch-mfa-enrollment=short")]
+              }
+          expectedSession = mkSessionId validSession
+          requestContextFromRequest = WebApi.Route.requestContextFromWaiRequest (requestPolicy defaultAppConfig)
+      expectAll
+        ( (requestMfaEnrollmentSessionId (requestContextFromRequest validRequest defaultRequestContext) `shouldBe` expectedSession)
+            :| [ requestMfaEnrollmentSessionId (requestContextFromRequest malformedUtf8Request defaultRequestContext) `shouldBe` Nothing,
+                 requestMfaEnrollmentSessionId (requestContextFromRequest malformedValueRequest defaultRequestContext) `shouldBe` Nothing,
+                 requestMfaEnrollmentSessionId (requestContextFromRequest (waiRequest ["mfa"]) defaultRequestContext) `shouldBe` Nothing
+               ]
+        )
 
   describe "parseRoute" $ do
     it "maps bare and default-locale paths to the same home route" $ do
@@ -251,9 +282,12 @@ spec = do
               (SecondApiRoute, "api.second", "/api/second", HarchWeb.ApiEndpoint),
               (ApiNotFoundRoute, "api.not-found", "/api/404", HarchWeb.ApiEndpoint)
             ]
+          expectedAccess route
+            | route `elem` [LogoutRoute, ProfileRoute] = HarchWeb.RequireAuthenticated
+            | otherwise = HarchWeb.AllowUnauthenticated
       forM_ expectedMetadata $ \(route, expectedName, template, protocol) ->
         endpointDeclarationFields (WebApi.Route.endpointMetadata route)
-          `shouldBe` (expectedName, template, protocol, HarchWeb.AllowUnauthenticated)
+          `shouldBe` (expectedName, template, protocol, expectedAccess route)
 
   describe "matchRoute" $ do
     it "remains available separately from HarchWeb.matchRoute" $

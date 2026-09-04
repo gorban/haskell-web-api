@@ -140,7 +140,7 @@ registerAccountNow actionRequest (_, _, displayNameValue, passwordValue, usernam
 parseRegistrationForm ::
   AccountActionRequest ->
   RegistrationSubmission ->
-  Either HarchWeb.ClientActionResponse ParsedRegistration
+  Either AccountActionResponse ParsedRegistration
 parseRegistrationForm actionRequest submission =
   let usernameValue = registrationUsernameValue submission
       emailValue = registrationEmailValue submission
@@ -238,7 +238,7 @@ interpretRegistrationResult actionRequest usernameValue emailValue displayNameVa
       RegistrationDeliveryClaimLost -> throwClientActionFailure unavailableRegistration RegistrationDeliveryClaimFailure "PendingRegistrationDeliveryClaimLost" "registration delivery claim was replaced before completion"
       RegistrationClockOverflow -> throwClientActionFailure unavailableRegistration RegistrationClockFailure "ClockOverflow" "verification expiry overflowed"
 
-registrationLifecycleResponse :: Text -> HarchWeb.ClientActionResponse -> HarchWeb.ClientActionResponse
+registrationLifecycleResponse :: Text -> AccountActionResponse -> AccountActionResponse
 registrationLifecycleResponse stage response =
   response
     { HarchWeb.clientActionObservabilityAttributes =
@@ -282,5 +282,5 @@ issueVerificationEnrollmentSession actionRequest now accountId = do
   let successResponse headers = verificationResponse (accountActionResponseContext actionRequest Http.status200 Nothing headers) (VerificationForm Text.empty (Just (localized actionRequest EmailVerifiedEnrollAuthenticator)) False)
   issued <- issueMfaEnrollmentSessionNow accountId now
   case issued of
-    Right opaqueSession -> pure (successResponse [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie mfaEnrollmentSessionCookiePolicy (sessionId opaqueSession)))])
+    Right opaqueSession -> pure (successResponse [HarchWeb.csrfClearCookieHeader, ("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie mfaEnrollmentSessionCookiePolicy (sessionId opaqueSession)))])
     Left storeError -> throwClientActionFailure (successResponse []) MfaEnrollmentSessionFailure "MfaEnrollmentSessionStoreError" (mfaEnrollmentSessionStoreErrorMessage storeError)

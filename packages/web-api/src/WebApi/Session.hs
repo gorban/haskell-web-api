@@ -22,7 +22,6 @@ import HarchWeb.Session
     SessionCookiePolicy (..),
     SessionId,
     defaultSessionCookiePolicy,
-    generateCsrfToken,
     generateSessionId,
     mkSessionCookieName,
     sessionCookieMaxAgeSeconds,
@@ -64,8 +63,8 @@ data MfaEnrollmentSessionStoreError
 -- only "this caller just verified an email or a password for this account,"
 -- never general sign-in. Kept as its own store, table, and cookie
 -- ('mfaEnrollmentSessionCookiePolicy') so a leaked or reused enrollment
--- token cannot be read back as an ordinary login session by
--- 'WebApi.Profile.loadProfile' or anything else keyed on
+-- token cannot be read back as an ordinary login session by the profile
+-- principal-establishment path or anything else keyed on
 -- 'AccountSessionStore' — see the AM decision record in
 -- @WebApi.AccountPages.Actions.Workflows@ for why reusing the login session
 -- mechanism here would have silently weakened what "signed in" means.
@@ -104,12 +103,10 @@ liftSessionStore = liftEitherWith id
 generateOpaqueSession :: AccountId -> UnixTimeNanoseconds -> UnixTimeNanoseconds -> IO (OpaqueSession AccountId)
 generateOpaqueSession accountId issuedAtNanoseconds expiresAtNanoseconds = do
   newSessionId <- generateSessionId
-  newCsrfToken <- generateCsrfToken
   pure
     OpaqueSession
       { sessionId = newSessionId,
         sessionPrincipal = accountId,
-        sessionCsrfToken = newCsrfToken,
         sessionIssuedAtNanoseconds = issuedAtNanoseconds,
         sessionExpiresAtNanoseconds = expiresAtNanoseconds
       }

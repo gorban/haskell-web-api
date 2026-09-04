@@ -82,9 +82,22 @@ Autocomplete values are application policy expressed with Harch's open
 | MFA enrollment confirmation | `one-time-code` | `numeric` | visible label; six-digit paste hint; linked field error | rendered after a server-confirmed enrollment start |
 | Generated recovery codes | n/a | n/a | heading, save-once instruction, and semantic list of code values | complete server content when issued |
 
-AHI-4 admission controls are not implemented. When that workflow lands, its
-principal and TOTP controls must be added as separate inventory rows rather
-than reusing account-MFA state or silently inheriting these semantics.
+### Composed-domain admission controls
+
+AHI-4C's `composed-domains` reference flow has a separate,
+application-owned admission workflow. It is deliberately not part of the
+`web-api` account/MFA matrix above: its principal, encrypted TOTP secret,
+durable session, and cookie are all distinct from account identity and MFA
+state.
+
+| Workflow and control | Autocomplete | Input mode | Accessible relationship | Scripts-disabled behavior |
+| --- | --- | --- | --- | --- |
+| Admission name | `username` | default text | visible label; form-level safe rejection | native fallback submits the same typed, CSRF-protected workflow |
+| Admission one-time code | `one-time-code` | `numeric` | visible label; six-digit paste-compatible input | native fallback preserves the field semantics and redirects only after a confirmed session write |
+
+The example's browser tests prove both enhanced and scripts-disabled submission.
+Do not reuse these controls for account MFA or silently inherit account-MFA
+semantics in a future admission workflow.
 
 ## Validation, focus, and secret handling
 

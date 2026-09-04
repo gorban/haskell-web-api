@@ -24,6 +24,11 @@ if grep -Fq './generate-code-coverage.sh' "$ci_workflow"; then
   exit 1
 fi
 
+if ! grep -Fq 'cabal configure --disable-backup --disable-optimization --ghc-options="-optl-fuse-ld=lld"' "$coverage_script"; then
+  printf '%s\n' 'Coverage configuration does not disable Cabal optimization before collecting HPC counters.' >&2
+  exit 1
+fi
+
 expect_failure() {
   local description="$1"
   local project_fraction="$2"
