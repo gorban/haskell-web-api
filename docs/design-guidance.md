@@ -3307,6 +3307,21 @@ assembly boundary rather than adding a second submission path, preserving the
 single route/action/guard interpreter and AHI-4C-AMH's separate proof/session
 ownership.
 
+### Decision record — direct protocol invocation is protocol-only (PR-F8, 2026-09-05)
+
+**Decision: remove the mixed `routeResponse` helper rather than make a valid
+page declaration enter an exception or optional-result domain.** A
+`ProtocolRouteHandler` already carries exactly the callable protocol function
+needed by focused adapters and tests. A `PageRouteHandler` instead requires
+fresh `PageSecurity`, which only the installed site's renderer may prepare.
+Keeping one helper typed over both constructors falsely advertised that direct
+page execution was valid and introduced an undocumented runtime exception.
+
+This does not add a test renderer or fallback page path. API-only site
+configuration continues to use the existing unavailable CSRF authority; an
+accidental page route therefore receives the renderer's safe 503 outcome, not
+invented page security or an SSR document outside the page-security rail.
+
 ## Example taxonomy
 
 The [examples index](../examples/README.md) uses four labels:

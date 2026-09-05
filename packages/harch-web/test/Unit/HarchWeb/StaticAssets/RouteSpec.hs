@@ -7,8 +7,8 @@ import Control.Exception (ErrorCall (..))
 import HarchWeb.EndpointMetadata (AccessRequirement (AllowUnauthenticated), EndpointMetadata, EndpointProtocol (AssetEndpoint), mkEndpointMetadata, requiredEndpointNameOrDie, requiredRouteTemplateOrDie)
 import HarchWeb.Routing (RouteCodec (..), RouteLocation (..), RouteMethod (RouteGet), RouteParseResult (..), RouteRequest (..), requiredPathSegment, routeMethodPolicy)
 import HarchWeb.Routing qualified as Routing
-import HarchWeb.Server (ProtocolResponse (..), ProtocolResponseBody (ProtocolResponseWai), Response (ProtocolResponseResult), unboundedRouteExecutionPolicy)
-import HarchWeb.Site (RouteDefinition (..), routeResponse)
+import HarchWeb.Server (ProtocolResponse (..), ProtocolResponseBody (ProtocolResponseWai), Response (ProtocolResponseResult), nonPageResponse, unboundedRouteExecutionPolicy)
+import HarchWeb.Site (RouteDefinition (..), RouteHandler (..))
 import HarchWeb.Site qualified as Site
 import HarchWeb.StaticAssets (StaticAssetRoot (..), StaticAssetsConfig (..), defaultStaticAssetContentTypes)
 import HarchWeb.StaticAssets.Route
@@ -48,7 +48,10 @@ spec = describe "Unit.HarchWeb.StaticAssets.Route" $ do
       routeMetadata definition `shouldBe` metadata
       Site.routeMethods definition `shouldBe` [RouteGet]
       routeExecutionPolicy definition `shouldBe` unboundedRouteExecutionPolicy
-      response <- routeResponse definition Wai.defaultRequest (RouteRequest (StaticAssetRoute (routePathSegments location)) ())
+      response <-
+        case routeHandler definition of
+          ProtocolRouteHandler renderProtocol -> nonPageResponse <$> renderProtocol Wai.defaultRequest (RouteRequest (StaticAssetRoute (routePathSegments location)) ())
+          PageRouteHandler _ -> expectationFailure "expected static asset protocol definition" >> fail "unreachable"
       case response of
         ProtocolResponseResult protocolResponse -> do
           protocolResponseStatus protocolResponse `shouldBe` Http.status200

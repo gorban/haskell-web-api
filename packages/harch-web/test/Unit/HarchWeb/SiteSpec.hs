@@ -4,7 +4,6 @@
 
 {-# SPEC #-}
 
-import Control.Exception (ErrorCall, try)
 import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
@@ -84,10 +83,6 @@ requiredSampleRouteTemplate route =
 
 spec = do
   describe "buildSiteApplication" $ do
-    it "refuses direct page-route invocation before page security is prepared" $ do
-      result <- try (Site.routeResponse homeRouteDefinition Wai.defaultRequest (RouteRequest HomeRoute (SampleContext ""))) :: IO (Either ErrorCall (Response SampleRoute SampleContext))
-      result `shouldSatisfy` either (("pre-render PageSecurity" `Text.isInfixOf`) . Text.pack . show) (const False)
-
     it "keeps the simpleSite defaults available when the composition root does not override them" $ do
       let siteApplication = buildSiteApplication sampleSite
           requestObservability =

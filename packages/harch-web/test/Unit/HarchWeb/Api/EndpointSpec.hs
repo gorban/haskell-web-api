@@ -19,8 +19,8 @@ import HarchWeb.Api qualified as Api
 import HarchWeb.Api.Multipart (MultipartConsumeError (..), MultipartScopedPart (..), defaultMultipartLimits, inMemoryMultipartStorage)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Routing (RouteRequest (..))
-import HarchWeb.Server (ProtocolResponse (..), ProtocolResponseBody (..), Response (..))
-import HarchWeb.Site (RouteDefinition (..), routeResponse)
+import HarchWeb.Server (ProtocolResponse (..), ProtocolResponseBody (..), Response (..), nonPageResponse)
+import HarchWeb.Site (RouteDefinition (..), RouteHandler (..))
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 import Numeric.Natural (Natural)
@@ -260,6 +260,15 @@ apiRouteResponseStream response =
 runApiRoute :: ApiRouteEndpoint fields body domainFailure response -> Wai.Request -> IO (Response () ())
 runApiRoute endpoint request =
   routeResponse (apiRouteDefinition testApiMetadata endpoint) request (RouteRequest () ())
+
+-- | The API declaration factories under test always produce a protocol
+-- handler. Keeping the case at this test boundary makes the direct invocation
+-- explicit without recreating the public mixed page/protocol helper.
+routeResponse :: RouteDefinition route context authorization -> Wai.Request -> RouteRequest route context -> IO (Response route context)
+routeResponse definition request routeRequest =
+  case routeHandler definition of
+    ProtocolRouteHandler renderProtocol -> nonPageResponse <$> renderProtocol request routeRequest
+    PageRouteHandler _ -> expectationFailure "expected API protocol definition" >> fail "unreachable"
 
 runApiRouteEndpointGroup :: ApiEndpointFamily -> ApiPath -> Wai.Request -> IO (Response ApiPath ())
 runApiRouteEndpointGroup family declaredPath request =

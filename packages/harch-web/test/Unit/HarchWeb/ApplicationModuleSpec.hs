@@ -22,8 +22,8 @@ import HarchWeb.Markup (safeUrlText, text)
 import HarchWeb.Routing
 import HarchWeb.Routing qualified as Routing
 import HarchWeb.SecurityEvent (ModuleName, mkModuleName)
-import HarchWeb.Server (ActionNavigation (StayOnCurrentRoute), ClientActionRequest (..), ClientActionResponse (..), NonPageResponse (..), PageResult (..), ProtocolResponse (..), ProtocolResponseBody (..), Response (..), ResponseBody (..), ServerSentEventSource (..), unboundedRouteExecutionPolicy)
-import HarchWeb.Site (RouteDefinition (..), RouteHandler (..), routeResponse)
+import HarchWeb.Server (ActionNavigation (StayOnCurrentRoute), ClientActionRequest (..), ClientActionResponse (..), NonPageResponse (..), PageResult (..), ProtocolResponse (..), ProtocolResponseBody (..), Response (..), ResponseBody (..), ServerSentEventSource (..), nonPageResponse, unboundedRouteExecutionPolicy)
+import HarchWeb.Site (RouteDefinition (..), RouteHandler (..))
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
@@ -248,7 +248,10 @@ spec =
                 }
             )
         let parentRequest = RouteRequest (CatalogRoute ChildItemRoute) 7
-        response <- routeResponse (moduleEndpoints mountedModule (CatalogRoute ChildItemRoute)) Wai.defaultRequest parentRequest
+        response <-
+          case routeHandler (moduleEndpoints mountedModule (CatalogRoute ChildItemRoute)) of
+            ProtocolRouteHandler renderProtocol -> nonPageResponse <$> renderProtocol Wai.defaultRequest parentRequest
+            PageRouteHandler _ -> expectationFailure "expected mounted non-page response definition" >> fail "unreachable"
         assertMountedResponse responseKind response
 
     it "preserves all declared access requirements and prefixes a child root endpoint exactly once" $ do

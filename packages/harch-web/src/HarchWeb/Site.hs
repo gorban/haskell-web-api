@@ -15,7 +15,6 @@ module HarchWeb.Site
     apiOnlySite,
     buildSiteApplication,
     pageRoute,
-    routeResponse,
     simpleSite,
   )
 where
@@ -96,16 +95,6 @@ data RouteDefinition route context authorization = RouteDefinition
     routeExecutionPolicy :: RouteExecutionPolicy,
     routeHandler :: RouteHandler route context
   }
-
--- | Transitional direct invocation helper.  Protocol tests and adapters can
--- exercise their handler without inventing page state.  A page must instead
--- travel through 'buildSiteApplication', which constructs its security value
--- before the page handler runs.
-routeResponse :: RouteDefinition route context authorization -> Wai.Request -> RouteRequest route context -> IO (Response route context)
-routeResponse routeDefinition request routeRequest =
-  case routeHandler routeDefinition of
-    ProtocolRouteHandler renderProtocol -> HarchWeb.nonPageResponse <$> renderProtocol request routeRequest
-    PageRouteHandler _ -> error "direct page response execution requires pre-render PageSecurity"
 
 data Site route action context authorization = Site
   { siteName :: Text,
@@ -193,8 +182,9 @@ simpleSite configuration =
 -- extends the ordinary 'Site' boundary rather than adding a second
 -- dispatcher: the supplied codec and definition remain the complete
 -- method/path table. API-only sites have no navigation runtime or navigation
--- routes. If a future route accidentally renders a page, the internal shell
--- still renders a minimal complete SSR document instead of failing.
+-- routes. Its unavailable CSRF authority means a page route is not a valid
+-- configuration: the one site renderer returns its ordinary safe 503 rather
+-- than inventing page security or a fallback document.
 apiOnlySite ::
   Text ->
   context ->
