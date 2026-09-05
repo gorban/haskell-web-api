@@ -353,9 +353,9 @@ withPostgresTlsFixtures action = do
 
 requireContainerRuntime :: IO FilePath
 requireContainerRuntime = do
-  podman <- findExecutable "podman"
   docker <- findExecutable "docker"
-  case podman <|> docker of
+  podman <- findExecutable "podman"
+  case docker <|> podman of
     Just executable -> pure executable
     Nothing -> ioError (userError "A podman or docker runtime is required for PostgreSQL TLS integration tests")
 
