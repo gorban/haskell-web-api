@@ -3265,6 +3265,29 @@ functions remain unchanged. The extraction closes the module-health/public
 surface review finding without changing the route dispatcher, introducing a
 second proof parser, or weakening the shared cookie grammar.
 
+### Decision record — action field, codec, and mount ownership (PR-F5, 2026-09-05)
+
+**Decision: retain `HarchWeb.Action` as the single public authoring facade,
+while separating private field decoding, validated codec declarations, and
+trusted mount adaptation.** The prior implementation combined field parsing,
+endpoint validation, rendering lookup, decoding, and mount transformation in
+one public implementation owner. These are cohesive concerns, but an
+application-specific mount wrapper or a second action router would duplicate
+the already validated `ActionCodec`/server interpreter boundary. The field
+owner therefore exposes only applicative field decoding; the codec owner keeps
+the opaque validated declaration and its one decoder; the mount owner invokes
+the codec's private transformation through an `ActionCodecMountAdapter` record.
+
+The adapter names child-target embedding, parent-context projection,
+authorization projection, and action embedding once at construction. It
+preserves declared path, metadata, target, decoder, and context projection and
+does not accept a raw request or handler continuation. Application-module
+composition uses this same adapter, so mounted actions remain under the root's
+sole action selection, guard, body-admission, and handler rails. The public
+facade remains comprehensible for ordinary declarations, and private modules
+avoid exposing the validated endpoint representation as a new construction
+path.
+
 ## Example taxonomy
 
 The [examples index](../examples/README.md) uses four labels:

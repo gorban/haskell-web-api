@@ -22,7 +22,7 @@ import Data.Text qualified as Text (isInfixOf, null, pack)
 import Data.Text.Encoding qualified as TextEncoding (encodeUtf8)
 import HarchWeb (ActionCapability (ConditionalLeaveConfirmation, HandlerSafeRetry, IdempotentMutationRetry, NativeFallback), ActionFormAttributes (actionFormCapabilities), ActionIdempotency (actionIdempotencyKey), ActionRecoveryCopy (actionCancelCopy, actionCancelledCopy, actionDelayedCopy, actionPendingCopy, actionReadyCopy, actionRecoverableCopy, actionRetryCopy), FormMethod (FormGet, FormPost), NativeActionFallback (NativeActionFallback, nativeActionFallbackCsrfToken, nativeActionFallbackMethod, nativeActionFallbackPath), actionForm, actionIdempotency, defaultActionFormAttributes, defaultActionRecoveryCopy, defaultCaptureKernelByteBudget, defaultCaptureKernelScript, defaultNavigationRuntimeScript, mkCsrfToken, mkRetainedActionLifetime, renderActionForm, renderHtml, retainedActionLifetimeMilliseconds, staticActionForm, text)
 import HarchWeb qualified as Web
-import HarchWeb.Action qualified as Action (ActionCodec, ActionCodecError (..), ActionDecoder, ActionMethod (ActionDelete, ActionGet, ActionPatch, ActionPost, ActionPut), ClientActionDecodeResult (..), ClientActionParseError (DuplicateActionField, InvalidActionField, MissingActionField), ClientActionPayload (ClientActionPayload, clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod, clientActionPath, clientActionPayloadContext), action, actionCodec, actionEndpointMetadata, actionEndpointTarget, actionMethod, actionMethodText, actionPath, combineActionCodecs, decodeAction, delete, deleteAt, emptyActionCodec, exactlyOne, formField, get, getAt, mapActionCodec, methodAt, mountActionCodecAtPrefix, optional, parseField, patch, patchAt, post, postAt, prefixActionCodecByContext, publicAction, put, putAt, required, singleActionCodec, singleActionCodecWithMetadata, singleOrDefault, staticActionEndpointMetadata, staticActionPath, textValue)
+import HarchWeb.Action qualified as Action (ActionCodec, ActionCodecError (..), ActionCodecMountAdapter (..), ActionDecoder, ActionMethod (ActionDelete, ActionGet, ActionPatch, ActionPost, ActionPut), ClientActionDecodeResult (..), ClientActionParseError (DuplicateActionField, InvalidActionField, MissingActionField), ClientActionPayload (ClientActionPayload, clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod, clientActionPath, clientActionPayloadContext), action, actionCodec, actionEndpointMetadata, actionEndpointTarget, actionMethod, actionMethodText, actionPath, combineActionCodecs, decodeAction, delete, deleteAt, emptyActionCodec, exactlyOne, formField, get, getAt, mapActionCodec, methodAt, mountActionCodecAtPrefix, optional, parseField, patch, patchAt, post, postAt, prefixActionCodecByContext, publicAction, put, putAt, required, singleActionCodec, singleActionCodecWithMetadata, singleOrDefault, staticActionEndpointMetadata, staticActionPath, textValue)
 import HarchWeb.ApplicationModule (ActionMount (..), AuthorizationProjection (..), ContextProjection (..), mountActionCodec)
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.EndpointMetadata qualified as EndpointMetadata
@@ -225,10 +225,12 @@ spec = do
       case Action.mountActionCodecAtPrefix
         (requiredPathSegment "catalog" :| [])
         "root.catalog"
-        (\ChildSaveTarget -> ParentCatalogActionTarget)
-        (const "child")
-        (\MaySaveCatalog -> MayManageCatalog)
-        ParentCatalogAction
+        Action.ActionCodecMountAdapter
+          { Action.actionMountEmbedTarget = \ChildSaveTarget -> ParentCatalogActionTarget,
+            Action.actionMountProjectContext = const "child",
+            Action.actionMountProjectAuthorization = \MaySaveCatalog -> MayManageCatalog,
+            Action.actionMountEmbedAction = ParentCatalogAction
+          }
         childCodec of
         Left codecError -> expectationFailure (show codecError)
         Right mountedCodec ->
@@ -263,10 +265,12 @@ spec = do
       case Action.mountActionCodecAtPrefix
         (requiredPathSegment "catalog" :| [])
         "root.catalog"
-        (\ChildSaveTarget -> ParentCatalogActionTarget)
-        (const "child")
-        (\MaySaveCatalog -> MayManageCatalog)
-        ParentCatalogAction
+        Action.ActionCodecMountAdapter
+          { Action.actionMountEmbedTarget = \ChildSaveTarget -> ParentCatalogActionTarget,
+            Action.actionMountProjectContext = const "child",
+            Action.actionMountProjectAuthorization = \MaySaveCatalog -> MayManageCatalog,
+            Action.actionMountEmbedAction = ParentCatalogAction
+          }
         childCodec of
         Left codecError -> expectationFailure (show codecError)
         Right mountedCodec ->

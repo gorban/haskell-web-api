@@ -110,6 +110,9 @@ library
     HarchWeb.Acme.Certbot.Options
     HarchWeb.Acme.Certbot.Runtime
     HarchWeb.Acme.Challenge
+    HarchWeb.Action.Codec
+    HarchWeb.Action.Field
+    HarchWeb.Action.Mount
     HarchWeb.Api.Endpoint
     HarchWeb.Api.Endpoint.Family
     HarchWeb.Api.Endpoint.Internal

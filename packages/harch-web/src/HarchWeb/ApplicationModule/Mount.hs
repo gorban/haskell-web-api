@@ -19,7 +19,7 @@ import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe (isJust)
 import Data.Text qualified as Text
-import HarchWeb.Action (ActionCodec, ActionCodecError, mapActionCodec, mountActionCodecAtPrefix)
+import HarchWeb.Action (ActionCodec, ActionCodecError, ActionCodecMountAdapter (..), mapActionCodec, mountActionCodecAtPrefix)
 import HarchWeb.ApplicationModule.Core (ApplicationModule (..))
 import HarchWeb.Document (Page (..))
 import HarchWeb.EndpointMetadata
@@ -126,10 +126,12 @@ mountApplicationModule moduleMount childModule = do
       mountActionCodecAtPrefix
         (routeMountPrefix routeMount)
         (moduleNameText (routeMountName routeMount))
-        (embedChildActionTarget actionMount)
-        (projectRequestContext contextProjection)
-        (projectChildAuthorization authorizationProjection)
-        (embedChildAction actionMount)
+        ActionCodecMountAdapter
+          { actionMountEmbedTarget = embedChildActionTarget actionMount,
+            actionMountProjectContext = projectRequestContext contextProjection,
+            actionMountProjectAuthorization = projectChildAuthorization authorizationProjection,
+            actionMountEmbedAction = embedChildAction actionMount
+          }
         (moduleActionCodec childModule)
   pure
     ApplicationModule
