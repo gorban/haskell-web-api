@@ -22,7 +22,7 @@ import Crypto.Random.Entropy (getEntropy)
 import Data.Bits ((.&.), (.|.))
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Base16 qualified as Base16
-import Data.Char (isDigit)
+import Data.Char (isAscii, isDigit)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -31,7 +31,7 @@ import Data.Word (Word8)
 -- | A canonical lower-case UUIDv4.  Its constructor remains private so a
 -- caller cannot use request correlation as an arbitrary text/header carrier.
 newtype RequestId = RequestId Text
-  deriving (Eq, Ord)
+  deriving (Eq)
 
 instance Show RequestId where
   showsPrec precedence requestId =
@@ -54,7 +54,9 @@ mkRequestId value
   where
     isCanonicalCharacter (index, character)
       | index `elem` [8, 13, 18, 23] = character == '-'
-      | otherwise = isDigit character || character `elem` ['a' .. 'f']
+      | otherwise = isAsciiDigit character || character `elem` ['a' .. 'f']
+
+    isAsciiDigit character = isAscii character && isDigit character
 
 -- | Generate an unpredictable canonical UUIDv4 from the operating system's
 -- CSPRNG.  The version and RFC 4122 variant bits are set after entropy is

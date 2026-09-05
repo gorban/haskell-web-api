@@ -27,10 +27,11 @@ import HarchWeb.Acme
 import HarchWeb.Acme.Certbot.Runtime (RuntimeAcmeServerEnvironment (..), runtimeAcmeBindPlans, startAcmeRuntimeServersWithRequestTransportLimits, stopAcmeRuntimeServers)
 import HarchWeb.Acme.Challenge (acmeChallengeRoutePath)
 import HarchWeb.Observability (planObservabilityStartup)
+import HarchWeb.RequestId (newRequestId)
 import HarchWeb.Security (requestHeadLimits, requestTransportLimits)
 import HarchWeb.Server.Application (Application (..))
 import HarchWeb.Server.Config
-import HarchWeb.Server.RequestExecution (reportEarlyRequestObservability, toWaiApplication)
+import HarchWeb.Server.RequestExecution (applyRequestIdResponseHeader, reportEarlyRequestObservability, toWaiApplication)
 import HarchWeb.Server.RequestObservability (requestObservabilityContext)
 import HarchWeb.Server.Transport
   ( RuntimeTransportDependencies (..),
@@ -168,16 +169,18 @@ respondAcmeChallenge ::
   Wai.Response ->
   IO Wai.ResponseReceived
 respondAcmeChallenge runtimeRequestEnvironment request requestStartedAt respond challengeResponse = do
+  requestId <- newRequestId
   let webApplication = runtimeTypedApplication runtimeRequestEnvironment
       requestPolicyConfig = applicationRequestPolicy webApplication
+      respondWithRequestId = respond . applyRequestIdResponseHeader requestId
   challengeResponseReportedAt <- challengeResponse `seq` getMonotonicTimeNSec
   reportEarlyRequestObservability
-    (requestObservabilityContext webApplication request requestPolicyConfig)
+    (requestObservabilityContext webApplication requestId request requestPolicyConfig)
     requestStartedAt
     challengeResponseReportedAt
     (acmeChallengeRoutePath requestPolicyConfig request)
     challengeResponse
-  respond challengeResponse
+  respondWithRequestId challengeResponse
 
 announceRuntimeStartup :: Handle -> ServerStartupPlan -> IO ()
 announceRuntimeStartup outputHandle startupPlan = do

@@ -17,10 +17,12 @@ module HarchWeb.RequestContext
     canonicalOriginErrorCode,
     canonicalOriginText,
     correlationContext,
+    correlationRequestId,
     correlationTraceContext,
     defaultContextProjection,
     mkCanonicalOrigin,
     requiredCanonicalOriginOrDie,
+    withCorrelationRequestId,
   )
 where
 
@@ -30,6 +32,7 @@ import Data.Text qualified as Text
 import HarchWeb.Localization (Locale)
 import HarchWeb.Observability (RequestTraceContext)
 import HarchWeb.PathPrefix (PathPrefix)
+import HarchWeb.RequestId (RequestId)
 import HarchWeb.SecurityEvent (RouteObservation)
 
 -- | A configured origin used for same-origin checks and browser-visible root
@@ -84,15 +87,26 @@ requiredCanonicalOriginOrDie :: Text -> CanonicalOrigin
 requiredCanonicalOriginOrDie value =
   either (error . ("invalid canonical origin declaration: " <>) . Text.unpack . canonicalOriginErrorCode) id (mkCanonicalOrigin value)
 
--- | The correlation data already validated by the observability boundary.
--- A missing incoming trace is an honest state, not a synthetic identifier.
-newtype CorrelationContext = CorrelationContext
-  { correlationTraceContext :: Maybe RequestTraceContext
+-- | Framework-owned request correlation and already validated trace context.
+-- An application root receives the opaque request ID created by the WAI
+-- ingress, while a missing incoming trace remains an honest state rather than
+-- a synthetic identifier. 'withCorrelationRequestId' preserves the trace
+-- value so the two independent correlation systems cannot overwrite one
+-- another during context enrichment.
+data CorrelationContext = CorrelationContext
+  { correlationRequestId :: Maybe RequestId,
+    correlationTraceContext :: Maybe RequestTraceContext
   }
   deriving (Eq, Show)
 
 correlationContext :: Maybe RequestTraceContext -> CorrelationContext
-correlationContext = CorrelationContext
+correlationContext = CorrelationContext Nothing
+
+-- | Attach the framework-owned request identifier while retaining any
+-- validated incoming trace context already selected by the root.
+withCorrelationRequestId :: RequestId -> CorrelationContext -> CorrelationContext
+withCorrelationRequestId requestId correlation =
+  correlation {correlationRequestId = Just requestId}
 
 data RequestIdentity principal
   = AnonymousIdentity

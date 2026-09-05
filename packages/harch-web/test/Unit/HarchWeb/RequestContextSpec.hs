@@ -11,6 +11,7 @@ import HarchWeb.EndpointMetadata qualified as EndpointMetadata
 import HarchWeb.Localization (locale)
 import HarchWeb.Observability (RequestTraceContext (..))
 import HarchWeb.RequestContext
+import HarchWeb.RequestId (RequestId, mkRequestId)
 import HarchWeb.Security (emptyPathPrefix)
 import HarchWeb.SecurityEvent (ModuleName, RouteObservation, mkModuleName, rootRouteObservation)
 
@@ -53,10 +54,12 @@ spec = describe "HarchWeb.RequestContext" $ do
              ]
       )
 
-  it "retains an absent or validated incoming trace without synthesizing one" $
+  it "retains an absent or validated incoming trace while adding an opaque framework request ID" $
     expectAll
       ( (correlationTraceContext (correlationContext Nothing) `shouldBe` Nothing)
-          :| [ correlationTraceContext (correlationContext (Just traceContext)) `shouldBe` Just traceContext
+          :| [ correlationTraceContext (correlationContext (Just traceContext)) `shouldBe` Just traceContext,
+               correlationRequestId (withCorrelationRequestId requestId (correlationContext Nothing)) `shouldBe` Just requestId,
+               correlationTraceContext (withCorrelationRequestId requestId (correlationContext (Just traceContext))) `shouldBe` Just traceContext
              ]
       )
 
@@ -149,6 +152,12 @@ traceContext =
       traceContextParentSpanId = "00f067aa0ba902b7",
       traceContextState = Just "vendor=value"
     }
+
+requestId :: RequestId
+requestId =
+  case mkRequestId "550e8400-e29b-41d4-a716-446655440000" of
+    Nothing -> error "invalid request ID test fixture"
+    Just parsedRequestId -> parsedRequestId
 
 routeObservation :: RouteObservation
 routeObservation =

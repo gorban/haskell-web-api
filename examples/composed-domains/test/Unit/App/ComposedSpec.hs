@@ -48,8 +48,10 @@ import HarchWeb.RequestContext
   ( CoreRequestContext (..),
     RequestContext (..),
     RequestIdentity (..),
+    correlationRequestId,
     requestLocale,
   )
+import HarchWeb.RequestId (RequestId, mkRequestId)
 import HarchWeb.Routing
   ( RouteCodec (..),
     RouteDecodeError (InvalidRouteTargetEncoding),
@@ -95,6 +97,10 @@ import Orders.Domain
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
 import TestCore.Wai (nextRequestBodyChunk, performWaiRequest, readResponseBody, waiRequest)
+
+testRequestId :: RequestId
+testRequestId =
+  fromMaybe (error "invalid composed test request identifier") (mkRequestId "550e8400-e29b-41d4-a716-446655440000")
 
 spec :: Spec
 spec = describe "Unit.App.Composed" $ do
@@ -626,7 +632,7 @@ spec = describe "Unit.App.Composed" $ do
     unavailableApplication <- toWaiApplication (Site.buildSiteApplication unavailableSite)
     expiredApplication <- toWaiApplication (Site.buildSiteApplication expiredSite)
     unavailableClockApplication <- toWaiApplication (Site.buildSiteApplication unavailableClockSite)
-    let requestAdaptedContext = Site.siteRequestContextFromRequest activeSite (waiRequest ["es", "catalog"]) defaultComposedContext
+    let requestAdaptedContext = Site.siteRequestContextFromRequest activeSite (waiRequest ["es", "catalog"]) testRequestId defaultComposedContext
         requestAdaptedClientAddress =
           case requestClient requestAdaptedContext of
             TrustedNetworkClient _ clientAddress -> Just (clientAddressText clientAddress)
@@ -668,6 +674,7 @@ spec = describe "Unit.App.Composed" $ do
                Wai.responseStatus malformedCookieResponse `shouldBe` Http.status303,
                Wai.responseStatus ambiguousCookieResponse `shouldBe` Http.status303,
                requestLocale (requestCore requestAdaptedContext) `shouldBe` locale "es",
+               correlationRequestId (requestCorrelation (requestCore requestAdaptedContext)) `shouldBe` Just testRequestId,
                requestAdaptedClientAddress `shouldSatisfy` maybe False (not . Text.null)
              ]
       )
@@ -1150,7 +1157,7 @@ spec = describe "Unit.App.Composed" $ do
     let customPolicy = LocalePolicy (locale "es" :| [locale "en"]) (locale "en")
         composedSite = buildComposedSite defaultComposedStaticAssets customPolicy testCsrfProtection catalogQueries catalogCommands ordersQueries ordersCommands
         requestFor path headers = Wai.defaultRequest {Wai.pathInfo = path, Wai.requestHeaders = headers}
-        requestContext = Site.siteRequestContextFromRequest composedSite
+        requestContext request = Site.siteRequestContextFromRequest composedSite request testRequestId defaultComposedContext
         shell = Site.sitePageShell composedSite (Page "Catalog" (Localized (locale "es") (Catalog CatalogIndex)) (spanishContext defaultComposedContext) (error "page body is not inspected") [])
     shellNavigationItems shell
       `shouldBe` [ NavigationItem "Sign in" (Localized (locale "es") (Public PublicLogin)),
@@ -1159,12 +1166,12 @@ spec = describe "Unit.App.Composed" $ do
                  ]
     shellNavigationLifecycle shell `shouldBe` Nothing
     Site.siteNavigationRuntime composedSite `shouldSatisfy` isJust
-    let prefixedContext = requestContext (requestFor ["es"] [(Http.hCookie, "locale=en"), (Http.hAcceptLanguage, "en-US")]) defaultComposedContext
+    let prefixedContext = requestContext (requestFor ["es"] [(Http.hCookie, "locale=en"), (Http.hAcceptLanguage, "en-US")])
     requestLocale (requestCore prefixedContext) `shouldBe` locale "es"
     requestLocaleFallbacks (requestCore prefixedContext) `shouldBe` [locale "es", locale "en"]
-    requestLocale (requestCore (requestContext (requestFor [] [(Http.hCookie, "locale=es; theme=dark")]) defaultComposedContext)) `shouldBe` locale "es"
-    requestLocale (requestCore (requestContext (requestFor [] [(Http.hAcceptLanguage, "es-MX,en;q=0.8")]) defaultComposedContext)) `shouldBe` locale "es"
-    requestLocale (requestCore (requestContext (requestFor [] [(Http.hCookie, ByteString.pack [108, 111, 99, 97, 108, 101, 61, 255]), (Http.hAcceptLanguage, ByteString.pack [255])]) defaultComposedContext)) `shouldBe` locale "en"
+    requestLocale (requestCore (requestContext (requestFor [] [(Http.hCookie, "locale=es; theme=dark")]))) `shouldBe` locale "es"
+    requestLocale (requestCore (requestContext (requestFor [] [(Http.hAcceptLanguage, "es-MX,en;q=0.8")]))) `shouldBe` locale "es"
+    requestLocale (requestCore (requestContext (requestFor [] [(Http.hCookie, ByteString.pack [108, 111, 99, 97, 108, 101, 61, 255]), (Http.hAcceptLanguage, ByteString.pack [255])]))) `shouldBe` locale "en"
 
   it "makes the public local module independently composable and rejects a sibling route" $ do
     let publicModule = buildPublicModule defaultComposedStaticAssets

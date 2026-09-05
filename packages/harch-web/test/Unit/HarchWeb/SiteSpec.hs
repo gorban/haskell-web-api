@@ -37,6 +37,10 @@ newtype SampleContext = SampleContext
 
 type SampleAuthorization = ()
 
+siteRequestId :: HarchWeb.RequestId
+siteRequestId =
+  fromMaybe (error "invalid site test request identifier") (HarchWeb.mkRequestId "550e8400-e29b-41d4-a716-446655440000")
+
 siteTestCsrfToken :: HarchWeb.CsrfToken
 siteTestCsrfToken = fromMaybe (error "invalid site test CSRF token") (HarchWeb.mkCsrfToken "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 
@@ -118,7 +122,7 @@ spec = do
                  length (siteRequestMiddleware sampleSite) `shouldBe` 0
                ]
         )
-      siteRequestContextFromRequest sampleSite (waiRequest ["second"]) (SampleContext "/app") `shouldBe` SampleContext "/app"
+      siteRequestContextFromRequest sampleSite (waiRequest ["second"]) siteRequestId (SampleContext "/app") `shouldBe` SampleContext "/app"
       siteHandleClientAction
         sampleSite
         ClientActionRequest

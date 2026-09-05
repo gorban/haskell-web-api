@@ -16,9 +16,9 @@ import Data.Functor.Compose (Compose (..))
 import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
-import Data.Text qualified as Text (isInfixOf, pack, replace)
+import Data.Text qualified as Text (breakOn, drop, isInfixOf, pack, replace, stripPrefix)
 import Data.Text.Encoding qualified as TextEncoding (decodeUtf8, encodeUtf8)
 import HarchWeb (ActionNavigation (NavigateInternal, StayOnCurrentRoute), Application (applicationNavigationRuntime, applicationRequestMiddleware, applicationRequestPolicy, csrfProtection, decodeClientAction, handleClientAction, pageShell, renderRequestResponse, reportApplicationLog, reportRequestObservability, requestContextFromRequest, routeCodec, routeExecutionPolicy), ClientActionDecodeResult (DecodedClientAction, UnrecognizedClientAction), ClientActionPayload (clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod), ClientActionRequest (ClientActionRequest, clientAction, clientActionContext, clientActionRequestIdempotencyKey), ClientActionResponse (ClientActionResponse, clientActionFocusId, clientActionHeaders, clientActionLogEntries, clientActionNavigation, clientActionObservabilityAttributes, clientActionPatches, clientActionStatus), CorsPolicyConfig (CorsPolicyConfig, corsAllowedHeaders, corsAllowedMethods, corsAllowedOrigins, corsMaxAgeSeconds), Document (documentRuntimeDescriptors), ForwardedHeaderTrust (NeverTrustForwarded), HistoryMode (ReplaceHistory), MiddlewareResult (ContinueMiddleware, HaltMiddleware), Page (pageRoute), ProtocolResponse (ProtocolResponse, protocolResponseBody, protocolResponseDatabaseOperations, protocolResponseHeaders, protocolResponseLogEntries, protocolResponseObservabilityAttributes, protocolResponseStatus), ProtocolResponseBody (ProtocolResponseBytes, ProtocolResponseStream, ProtocolResponseWai), RequestMiddleware (RequestMiddleware), RequestPolicyConfig (RequestPolicyConfig, corsPolicy, forwardedHeaderTrust, httpsRedirectAuthority, httpsRedirectPort, redirectHttpToHttps, requestConcurrencyLimit, requestHeadLimits, requestTransportLimits, responseSecurityHeaders, strictTransportSecurity), Response (BodyResponse, ClientActionBodyResponse, EventStreamResponse, PageResponse, PageResponseWithMetadata, ProtocolResponseResult), ResponseBody (ResponseBody, responseBody, responseContentType, responseDatabaseOperations, responseLogEntries, responseObservabilityAttributes, responseStatus), ResponseDiagnostics (diagnosticLogEntries, diagnosticObservabilityAttributes), ResponseSecurityHeadersConfig (ResponseSecurityHeadersConfig, contentSecurityPolicy, contentTypeOptionsNoSniff, frameOptions, permissionsPolicy, referrerPolicy, xssProtection), RouteExecutionPolicy (RouteExecutionPolicy), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (InlineBootstrap), ServerSentEvent (ServerSentEvent), StaticAssetRoot (StaticAssetRoot, staticDirectory, staticUrlPrefix), StaticAssetsConfig (StaticAssetsConfig, staticAssetContentTypes, staticAssetRoots, staticCacheControlSeconds), StrictTransportSecurityConfig (StrictTransportSecurityConfig, strictTransportSecurityIncludeSubDomains, strictTransportSecurityMaxAgeSeconds, strictTransportSecurityPreload), clientActionResponseBody, defaultContentSecurityPolicy, defaultCorsPolicyConfig, defaultNavigationRuntime, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, eventStreamResponse, internalRedirectResponse, isClientActionRequest, literalElementId, mkRequestConcurrencyLimit, parseClientActionFields, redirectResponse, responseDiagnostics, responseKind, responseStatusCode, serverSentEventSourceFromList, toWaiApplication, toWaiResponse, unboundedRequestHeadLimits, unboundedRouteExecutionPolicy, warpDefaultRequestTransportLimits)
 import HarchWeb qualified
@@ -29,7 +29,7 @@ import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
 import HarchWeb.Observability qualified as Observability (ObservabilityAttribute (ObservabilityAttribute, attributeName, attributeValue), ObservabilityAttributeValue (TextAttribute), RequestIdentity (RequestIdentity, requestIdentityMethod, requestIdentityPath, requestIdentityRoutePath, requestIdentityScheme), RequestObservability (observabilityRequestSpan), RequestSpan (requestSpanAttributes, requestSpanDisplayName), RequestTraceContext (RequestTraceContext, traceContextParentSpanId, traceContextState, traceContextTraceId), ResponseKind (BodyResponseKind, PageResponseKind), buildRequestObservability, mkSpanMethodLabel, mkSpanRoutePath, withDatabaseOperations, withRequestTraceContext)
 import HarchWeb.Security qualified as Security ()
 import Network.HTTP.Client qualified as HttpClient ()
-import Network.HTTP.Types qualified as Http (Status (statusCode, statusMessage), hAcceptRanges, hAllow, hCacheControl, hContentLength, hContentRange, hContentType, hETag, hIfModifiedSince, hIfNoneMatch, hLastModified, hLocation, hRange, status200, status201, status202, status204, status206, status302, status303, status304, status308, status400, status401, status403, status404, status405, status413, status415, status416, status422, status500, status503)
+import Network.HTTP.Types qualified as Http (ResponseHeaders, Status (statusCode, statusMessage), hAcceptRanges, hAllow, hCacheControl, hContentLength, hContentRange, hContentType, hETag, hIfModifiedSince, hIfNoneMatch, hLastModified, hLocation, hRange, status200, status201, status202, status204, status206, status302, status303, status304, status308, status400, status401, status403, status404, status405, status413, status415, status416, status422, status500, status503)
 import Network.Socket qualified as Socket (SockAddr (SockAddrInet, SockAddrUnix), tupleToHostAddress)
 import Network.Socket.ByteString qualified as SocketByteString ()
 import Network.Wai qualified as Wai (Request (isSecure, pathInfo, rawPathInfo, rawQueryString, requestHeaders, requestMethod), defaultRequest, responseHeaders, responseLBS, responseStatus, setRequestBodyChunks)
@@ -1982,8 +1982,7 @@ spec = do
                              ]
                        ]
       readIORef logEntriesReference
-        `shouldReturn` [ "[client.address=\"203.0.113.10\" network.peer.address=\"127.0.0.1\" harch.client.address.source=\"x-forwarded-for\" http.request.header.x_forwarded_for=\"203.0.113.10, 10.0.0.1\" http.request.header.x_forwarded_proto=\"https\" http.request.header.x_forwarded_prefix=\"/app\" url.scheme=\"https\"] Sample failure log"
-                       ]
+        >>= mapM_ (\logEntry -> stripRequestIdLogPrefix logEntry `shouldBe` "[client.address=\"203.0.113.10\" network.peer.address=\"127.0.0.1\" harch.client.address.source=\"x-forwarded-for\" http.request.header.x_forwarded_for=\"203.0.113.10, 10.0.0.1\" http.request.header.x_forwarded_proto=\"https\" http.request.header.x_forwarded_prefix=\"/app\" url.scheme=\"https\"] Sample failure log")
 
     it "enriches request observability with safe forwarded, user-agent, referrer, and request-source attributes" $ do
       requestObservabilityReference <- newIORef []
@@ -2081,8 +2080,7 @@ spec = do
                            ]
                        ]
       readIORef logEntriesReference
-        `shouldReturn` [ "[client.address=\"198.51.100.7\" network.peer.address=\"127.0.0.1\" harch.client.address.source=\"forwarded\" http.request.header.forwarded=\"for=\\\"198.51.100.7\\\";proto=\\\"https\\\"\" user_agent.original=\"curl/8.7.1\" http.request.header.referer=\"https://client.example.com/path\" http.request.header.x_requested_with=\"tiny-navigation\" harch.request.source=\"enhanced-navigation\" url.scheme=\"https\"] Enriched source log"
-                       ]
+        >>= mapM_ (\logEntry -> stripRequestIdLogPrefix logEntry `shouldBe` "[client.address=\"198.51.100.7\" network.peer.address=\"127.0.0.1\" harch.client.address.source=\"forwarded\" http.request.header.forwarded=\"for=\\\"198.51.100.7\\\";proto=\\\"https\\\"\" user_agent.original=\"curl/8.7.1\" http.request.header.referer=\"https://client.example.com/path\" http.request.header.x_requested_with=\"tiny-navigation\" harch.request.source=\"enhanced-navigation\" url.scheme=\"https\"] Enriched source log")
 
     it "parses unquoted Forwarded values and ignores empty trusted forwarded elements" $ do
       requestObservabilityReference <- newIORef []
@@ -2289,7 +2287,7 @@ spec = do
                            [clientAddressAttribute, peerAddressAttribute]
                        ]
       readIORef logEntriesReference
-        `shouldReturn` ["[client.address=\"127.0.0.1\" network.peer.address=\"127.0.0.1\" url.scheme=\"https\"] Direct peer log"]
+        >>= mapM_ (\logEntry -> stripRequestIdLogPrefix logEntry `shouldBe` "[client.address=\"127.0.0.1\" network.peer.address=\"127.0.0.1\" url.scheme=\"https\"] Direct peer log")
 
     it "preserves page response semantics while surfacing page-level failure status, observability, and logs" $ do
       requestObservabilityReference <- newIORef []
@@ -2356,7 +2354,7 @@ spec = do
                            [clientAddressAttribute, peerAddressAttribute, failureAttribute]
                        ]
       readIORef logEntriesReference
-        `shouldReturn` ["[client.address=\"127.0.0.1\" network.peer.address=\"127.0.0.1\" url.scheme=\"http\"] Sample page failure log"]
+        >>= mapM_ (\logEntry -> stripRequestIdLogPrefix logEntry `shouldBe` "[client.address=\"127.0.0.1\" network.peer.address=\"127.0.0.1\" url.scheme=\"http\"] Sample page failure log")
 
     it "retains measured request timing across page and body response variants" $ do
       requestObservabilityReference <- newIORef []
@@ -2765,7 +2763,14 @@ spec = do
         Wai.responseStatus firstResponse `shouldBe` Http.status200
         lookup Http.hContentType (Wai.responseHeaders firstResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "application/javascript; charset=utf-8")
         lookup Http.hCacheControl (Wai.responseHeaders firstResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "public, max-age=3600")
-        Wai.responseHeaders secondResponse `shouldBe` Wai.responseHeaders firstResponse
+        let firstResponseHeaders = Wai.responseHeaders firstResponse
+            secondResponseHeaders = Wai.responseHeaders secondResponse
+        expectAll
+          ( (responseHasCanonicalRequestId firstResponseHeaders `shouldBe` True)
+              :| [ responseHasCanonicalRequestId secondResponseHeaders `shouldBe` True,
+                   filter ((/= "X-Request-ID") . fst) secondResponseHeaders `shouldBe` filter ((/= "X-Request-ID") . fst) firstResponseHeaders
+                 ]
+          )
         readResponseBody firstResponse `shouldReturn` "console.log('asset');"
         readResponseBody secondResponse `shouldReturn` "console.log('asset');"
 
@@ -3158,6 +3163,25 @@ spec = do
         lookup Http.hCacheControl (Wai.responseHeaders rootResponse) `shouldBe` Nothing
         unsupportedExtensionResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "secret.bin"])
         lookup Http.hCacheControl (Wai.responseHeaders unsupportedExtensionResponse) `shouldBe` Nothing
+
+-- | Preserve the ordinary structured-log expectation while proving that its
+-- dynamic framework prefix is a canonical opaque identifier.
+stripRequestIdLogPrefix :: Text -> Text
+stripRequestIdLogPrefix message =
+  case Text.stripPrefix "request.id=" message of
+    Nothing -> message
+    Just identifierAndMessage ->
+      let (identifierText, messageWithSeparator) = Text.breakOn " " identifierAndMessage
+       in case HarchWeb.mkRequestId identifierText of
+            Nothing -> message
+            Just _ -> Text.drop 1 messageWithSeparator
+
+responseHasCanonicalRequestId :: Http.ResponseHeaders -> Bool
+responseHasCanonicalRequestId responseHeaders =
+  case lookup "X-Request-ID" responseHeaders of
+    Nothing -> False
+    Just headerValue ->
+      isJust (HarchWeb.mkRequestId (TextEncoding.decodeUtf8 headerValue))
 
 protectedEndpointMetadata :: HarchWeb.EndpointMetadata ()
 protectedEndpointMetadata =

@@ -28,6 +28,7 @@ import HarchWeb.Csrf (CsrfProtection)
 import HarchWeb.Document (Document, NavigationRuntime, Page, RuntimeAsset)
 import HarchWeb.EndpointSecurity (ApplicationSecurity, EndpointMetadata)
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.RequestId (RequestId)
 import HarchWeb.Routing (RouteCodec, RouteRequest)
 import HarchWeb.Security (RequestConcurrencyLimit, RequestPolicyConfig)
 import HarchWeb.SecurityEvent (ModuleName, SecurityEventRoot)
@@ -62,7 +63,10 @@ unboundedRouteExecutionPolicy = RouteExecutionPolicy {routeExecutionConcurrencyL
 data Application route action context authorization = Application
   { appName :: Text,
     defaultRequestContext :: context,
-    requestContextFromRequest :: Wai.Request -> context -> context,
+    -- | The framework supplies one opaque identifier before any application
+    -- middleware, routing, or endpoint guard runs. The application ingress
+    -- adapter may retain it in its typed context but cannot choose it.
+    requestContextFromRequest :: Wai.Request -> RequestId -> context -> context,
     applicationNavigationRuntime :: Maybe NavigationRuntime,
     -- | Ordered, application-selected behavior adapters served by the
     -- framework's early response boundary. The first asset owning a request

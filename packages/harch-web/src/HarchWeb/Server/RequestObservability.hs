@@ -30,6 +30,7 @@ import Data.Text.Encoding.Error qualified as TextEncodingError
 import Data.Word (Word64)
 import HarchWeb.Markup (safeUrlText)
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.RequestId (RequestId, requestIdText)
 import HarchWeb.Routing (RouteRequest, encodeRouteLocation, renderRoute)
 import HarchWeb.Security
   ( RequestPolicyConfig,
@@ -61,11 +62,12 @@ data RequestExecutionTimings = RequestExecutionTimings
 -- remain arguments to the reporting operations.
 data RequestObservabilityContext route action context authorization = RequestObservabilityContext
   { requestObservabilityApplication :: Application route action context authorization,
+    requestObservabilityRequestId :: RequestId,
     requestObservabilityWaiRequest :: Wai.Request,
     requestObservabilityPolicyConfig :: RequestPolicyConfig
   }
 
-requestObservabilityContext :: Application route action context authorization -> Wai.Request -> RequestPolicyConfig -> RequestObservabilityContext route action context authorization
+requestObservabilityContext :: Application route action context authorization -> RequestId -> Wai.Request -> RequestPolicyConfig -> RequestObservabilityContext route action context authorization
 requestObservabilityContext = RequestObservabilityContext
 
 reportRoutedResponseObservability ::
@@ -82,7 +84,7 @@ reportRoutedResponseObservability observabilityContext requestPath executionTimi
       request = requestObservabilityWaiRequest observabilityContext
       requestPolicyConfig = requestObservabilityPolicyConfig observabilityContext
       requestLogFields = requestLogContextFields requestPolicyConfig request
-      contextualizedLogs = map (prependRequestLogContext requestLogFields) (diagnosticLogEntries diagnosticValues)
+      contextualizedLogs = map (prependRequestIdLogContext (requestObservabilityRequestId observabilityContext) . prependRequestLogContext requestLogFields) (diagnosticLogEntries diagnosticValues)
       observabilityValue = buildRoutedRequestObservability observabilityContext requestPath executionTimings routeRequest response diagnosticValues
   Observability.forceRequestObservability observabilityValue `seq`
     reportRequestObservability webApplication observabilityValue
@@ -110,6 +112,7 @@ buildRoutedRequestObservability observabilityContext requestPath executionTiming
         (responseStatusCode webApplication response)
         (responseKind response)
         ( requestContextObservabilityAttributes requestPolicyConfig request
+            <> [requestIdObservabilityAttribute (requestObservabilityRequestId observabilityContext)]
             <> diagnosticObservabilityAttributes diagnosticValues
             <> requestTimingObservabilityAttributes
               (requestExecutionStartedAt executionTimings)
@@ -148,7 +151,10 @@ reportEarlyRequestObservability observabilityContext requestStartedAt requestCom
               }
             (Http.statusCode (Wai.responseStatus response))
             Observability.BodyResponseKind
-            (requestContextObservabilityAttributes requestPolicyConfig request <> requestTimingObservabilityAttributes requestStartedAt requestCompletedAt [])
+            ( requestContextObservabilityAttributes requestPolicyConfig request
+                <> [requestIdObservabilityAttribute (requestObservabilityRequestId observabilityContext)]
+                <> requestTimingObservabilityAttributes requestStartedAt requestCompletedAt []
+            )
    in Observability.forceRequestObservability requestObservability `seq`
         reportRequestObservability webApplication requestObservability
 
@@ -172,6 +178,20 @@ intObservabilityAttribute name value =
     { Observability.attributeName = name,
       Observability.attributeValue = Observability.IntAttribute value
     }
+
+-- | Request IDs remain span/log correlation only. The observability metrics
+-- constructor independently filters this non-whitelisted attribute, so it
+-- cannot become an unbounded metric label.
+requestIdObservabilityAttribute :: RequestId -> Observability.ObservabilityAttribute
+requestIdObservabilityAttribute requestId =
+  Observability.ObservabilityAttribute
+    { Observability.attributeName = "harch.request.id",
+      Observability.attributeValue = Observability.TextAttribute (requestIdText requestId)
+    }
+
+prependRequestIdLogContext :: RequestId -> Text -> Text
+prependRequestIdLogContext requestId message =
+  "request.id=" <> requestIdText requestId <> " " <> message
 
 requestMethodText :: Wai.Request -> Text
 requestMethodText = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode . Wai.requestMethod

@@ -3207,13 +3207,18 @@ make cross-application response and diagnostic behavior drift. The framework
 already depends on the operating system CSPRNG for sessions, tokens, and trace
 identifiers, so a sixteen-byte UUIDv4 is the narrowest reusable value.
 
-The kernel accepts only canonical lower-case UUIDv4 text and does not itself
-decide whether an inbound value is trusted. The following integration slice
-will generate one ID before every HTTP policy/route/application decision,
-attach it through `requestContextFromRequest`, replace conflicting response
-headers at the single WAI finalization boundary, and include it in private
-logs/spans but never metric labels. Trusted service propagation remains a
-separate capability, not an ordinary client header or a property of
+The kernel accepts only canonical lower-case ASCII UUIDv4 text and does not
+itself decide whether an inbound value is trusted. The integration extends the
+existing ingress, response-finalization, and observability paths: it mints one
+ID before global admission and request-head validation, attaches it through
+`requestContextFromRequest` (including the composed root's existing
+`CorrelationContext` rather than a parallel application field), replaces conflicting response headers for both
+ordinary and ACME protocol responses, and includes it in private logs/spans
+but never metric labels.  Reapplying the existing shared global-admission
+middleware per request preserves its single server-scoped gate while allowing
+the already-minted identifier to wrap even a 503 admission rejection; no
+second dispatcher or request vault is introduced. Trusted service propagation
+remains a separate capability, not an ordinary client header or a property of
 authentication alone.
 
 ## Example taxonomy

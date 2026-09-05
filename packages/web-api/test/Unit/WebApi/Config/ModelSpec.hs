@@ -3,11 +3,18 @@
 {-# SPEC #-}
 
 import Data.Text qualified as Text
+import HarchWeb qualified
 import WebApi.AccountPages (AccountActionTarget (..), MfaEnrollmentForm (..), VerificationForm (..), emptyLoginForm, emptyRegistrationForm)
 import WebApi.Config (AcmeConfig (..), AppConfig (..), CertbotConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), SharedTlsCertificateFiles (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), defaultAppConfig, defaultStaticAssetContentTypes, defaultTlsPolicy)
 import WebApi.Page (AppPageModel (..), CallToAction (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), SpacesPageModel (..), UnavailableProfilePageDetails (..))
 import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), RouteSelectionError (..), defaultRequestContext)
 import WebApi.Route qualified
+
+requestIdFixture :: HarchWeb.RequestId
+requestIdFixture =
+  case HarchWeb.mkRequestId "550e8400-e29b-41d4-a716-446655440000" of
+    Nothing -> error "test request identifier must be canonical UUIDv4"
+    Just requestId -> requestId
 
 spec = do
   describe "config model values" $ do
@@ -114,7 +121,7 @@ spec = do
             AppRequestContext
               { requestLocale = Spanish,
                 requestLocaleIsExplicit = False,
-                requestCorrelationId = Just "req-456",
+                requestCorrelationId = Just requestIdFixture,
                 requestClientAddress = requestClientAddress defaultRequestContext,
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
@@ -181,7 +188,7 @@ spec = do
       staticAssets appConfig `shouldBe` staticConfig
       observability appConfig `shouldBe` observabilityConfig
       requestLocale requestContext `shouldBe` Spanish
-      requestCorrelationId requestContext `shouldBe` Just "req-456"
+      requestCorrelationId requestContext `shouldBe` Just requestIdFixture
       callToActionLabel callToAction `shouldBe` "Return home"
       callToActionRoute callToAction `shouldBe` HomeRoute
       callToActionHref callToAction `shouldBe` "/es"
@@ -302,7 +309,7 @@ spec = do
         ( AppRequestContext
             { requestLocale = Spanish,
               requestLocaleIsExplicit = False,
-              requestCorrelationId = Just "req-789",
+              requestCorrelationId = Just requestIdFixture,
               requestClientAddress = requestClientAddress defaultRequestContext,
               requestPathPrefix = requestPathPrefix defaultRequestContext,
               requestQueryParameters = [],
@@ -310,7 +317,7 @@ spec = do
               requestMfaEnrollmentSessionId = Nothing
             }
         )
-        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-789\", requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestAccountPrincipal = Nothing, requestMfaEnrollmentSessionId = Nothing}"
+        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just (RequestId \"550e8400-e29b-41d4-a716-446655440000\"), requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestAccountPrincipal = Nothing, requestMfaEnrollmentSessionId = Nothing}"
       show
         ( CallToAction
             { callToActionLabel = "Return home",
@@ -435,7 +442,7 @@ spec = do
             AppRequestContext
               { requestLocale = Spanish,
                 requestLocaleIsExplicit = False,
-                requestCorrelationId = Just "req-123",
+                requestCorrelationId = Just requestIdFixture,
                 requestClientAddress = requestClientAddress defaultRequestContext,
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
@@ -576,7 +583,7 @@ spec = do
             AppRequestContext
               { requestLocale = Spanish,
                 requestLocaleIsExplicit = False,
-                requestCorrelationId = Just "req-999",
+                requestCorrelationId = Just requestIdFixture,
                 requestClientAddress = requestClientAddress defaultRequestContext,
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
@@ -706,7 +713,7 @@ spec = do
             AppRequestContext
               { requestLocale = Spanish,
                 requestLocaleIsExplicit = False,
-                requestCorrelationId = Just "req-list",
+                requestCorrelationId = Just requestIdFixture,
                 requestClientAddress = requestClientAddress defaultRequestContext,
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
@@ -762,7 +769,8 @@ spec = do
       show [Page WebApi.Route.HomePage, Api WebApi.Route.StatusApi]
         `shouldBe` "[HomeRoute,StatusApiRoute]"
       show [requestContext]
-        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-list\", requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestAccountPrincipal = Nothing, requestMfaEnrollmentSessionId = Nothing}]"
+        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just (RequestId \"550e8400-e29b-41d4-a716-446655440000\"), requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestAccountPrincipal = Nothing, requestMfaEnrollmentSessionId = Nothing}]"
+
       show [callToAction]
         `shouldBe` "[CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = SafeUrl \"/\"}]"
       show [secondPageModel]

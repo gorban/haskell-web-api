@@ -15,7 +15,8 @@ spec = describe "HarchWeb.RequestId" $ do
                mkRequestId "550e8400-e29b-41d4-c716-446655440000" `shouldBe` Nothing,
                mkRequestId "550e8400-e29b-41d4-a716-44665544000" `shouldBe` Nothing,
                mkRequestId "550e8400xe29b-41d4-a716-446655440000" `shouldBe` Nothing,
-               mkRequestId "550e8400-e29b-41d4-a716-44665544000g" `shouldBe` Nothing
+               mkRequestId "550e8400-e29b-41d4-a716-44665544000g" `shouldBe` Nothing,
+               mkRequestId "٥50e8400-e29b-41d4-a716-446655440000" `shouldBe` Nothing
              ]
       )
 
@@ -27,7 +28,8 @@ spec = describe "HarchWeb.RequestId" $ do
       ( (mkRequestId (requestIdText first) `shouldBe` Just first)
           :| [ mkRequestId (requestIdText second) `shouldBe` Just second,
                first `shouldNotBe` second,
-               show canonical `shouldBe` "RequestId \"550e8400-e29b-41d4-a716-446655440000\""
+               show canonical `shouldBe` "RequestId \"550e8400-e29b-41d4-a716-446655440000\"",
+               show [canonical] `shouldBe` "[RequestId \"550e8400-e29b-41d4-a716-446655440000\"]"
              ]
       )
 

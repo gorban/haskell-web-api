@@ -40,6 +40,7 @@ import HarchWeb
     PageResult (..),
     PageShell (..),
     PathPrefix,
+    RequestId,
     RequestMiddleware,
     RequestPolicyConfig (..),
     Response (..),
@@ -109,7 +110,7 @@ routeResponse routeDefinition request routeRequest =
 data Site route action context authorization = Site
   { siteName :: Text,
     siteDefaultRequestContext :: context,
-    siteRequestContextFromRequest :: Wai.Request -> context -> context,
+    siteRequestContextFromRequest :: Wai.Request -> RequestId -> context -> context,
     siteStaticAssets :: StaticAssetsConfig,
     siteNavigationRuntime :: Maybe NavigationRuntime,
     -- | Replaceable behavior modules paired with the shell descriptors that
@@ -163,7 +164,7 @@ simpleSite configuration =
   Site
     { siteName = simpleSiteName configuration,
       siteDefaultRequestContext = simpleSiteDefaultRequestContext configuration,
-      siteRequestContextFromRequest = \_ requestContext -> requestContext,
+      siteRequestContextFromRequest = \_ _ requestContext -> requestContext,
       siteStaticAssets = emptyStaticAssetsConfig,
       siteNavigationRuntime = Just defaultNavigationRuntime,
       siteRuntimeAssets = [],

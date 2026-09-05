@@ -16,7 +16,7 @@ import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import TestCore.Wai (waiRequest)
-import Unit.WebApi.TestSupport (pureApplication)
+import Unit.WebApi.TestSupport (pureApplication, testRequestId)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStoreError (..))
 import WebApi.AccountPrincipal (mkAccountPrincipal)
 import WebApi.App (unavailableAccountWorkflow)
@@ -47,10 +47,11 @@ spec =
               { Wai.requestHeaders =
                   [("Cookie", TextEncoding.encodeUtf8 ("__Host-harch-session=" <> replayedCookieValue))]
               }
-      let replayContext = HarchWeb.requestContextFromRequest pureApplication rawReplayRequest defaultRequestContext
+      let replayContext = HarchWeb.requestContextFromRequest pureApplication rawReplayRequest testRequestId defaultRequestContext
       replayContext
         `shouldBe` defaultRequestContext
-          { WebApi.Route.requestClientAddress = HarchWeb.requestClientAddress (HarchWeb.applicationRequestPolicy pureApplication) rawReplayRequest,
+          { WebApi.Route.requestCorrelationId = Just testRequestId,
+            WebApi.Route.requestClientAddress = HarchWeb.requestClientAddress (HarchWeb.applicationRequestPolicy pureApplication) rawReplayRequest,
             WebApi.Route.requestAccountPrincipal = Nothing
           }
       assertProfileResult

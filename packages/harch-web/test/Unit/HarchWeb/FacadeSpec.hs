@@ -45,7 +45,7 @@ import System.Process ()
 import TestCore.CustomAssertions ()
 import TestCore.Wai ()
 import Text.Read ()
-import Unit.HarchWeb.TestSupport (TestContext, TestRoute (DataRoute, KnownRoute, MissingRoute), defaultContext, emptyStaticAssets, renderDocument, routeLocationText, sampleApplication, samplePage, spanishContext, testPageSecurity, testPathPrefix, testRegionPatch, testRouteLocation, trustedMarkup)
+import Unit.HarchWeb.TestSupport (TestContext, TestRoute (DataRoute, KnownRoute, MissingRoute), defaultContext, emptyStaticAssets, renderDocument, routeLocationText, sampleApplication, samplePage, sampleRequestId, spanishContext, testPageSecurity, testPathPrefix, testRegionPatch, testRouteLocation, trustedMarkup)
 
 movedSpec :: Spec
 movedSpec = do
@@ -238,7 +238,7 @@ movedSpec = do
       localServerPort localTestServer `shouldBe` 5001
       localServerBaseUrl localTestServer `shouldBe` "http://127.0.0.1:5001"
       defaultRequestContext sampleApplication `shouldBe` defaultContext
-      requestContextFromRequest sampleApplication Wai.defaultRequest defaultContext `shouldBe` defaultContext
+      requestContextFromRequest sampleApplication Wai.defaultRequest sampleRequestId defaultContext `shouldBe` defaultContext
       applicationNavigationRuntime sampleApplication `shouldBe` Nothing
       length (applicationRequestMiddleware sampleApplication) `shouldBe` 0
       responseStatus responseBodyValue `shouldBe` Http.status202
@@ -470,7 +470,7 @@ movedSpec = do
 
       appName sampleApplication `shouldBe` "sample"
       defaultRequestContext sampleApplication `shouldBe` defaultContext
-      requestContextFromRequest sampleApplication Wai.defaultRequest defaultContext `shouldBe` defaultContext
+      requestContextFromRequest sampleApplication Wai.defaultRequest sampleRequestId defaultContext `shouldBe` defaultContext
       applicationStaticAssets sampleApplication `shouldBe` emptyStaticAssets
       decodeClientAction
         sampleApplication

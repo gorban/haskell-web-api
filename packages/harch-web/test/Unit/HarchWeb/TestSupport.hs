@@ -213,12 +213,18 @@ applyTestPathPrefix pathPrefix path
   | path == "/" = pathPrefix
   | otherwise = pathPrefix <> path
 
-sampleRequestContextFromRequest :: RequestPolicyConfig -> Wai.Request -> TestContext -> TestContext
-sampleRequestContextFromRequest requestPolicyConfig request requestContext =
+sampleRequestContextFromRequest :: RequestPolicyConfig -> Wai.Request -> RequestId -> TestContext -> TestContext
+sampleRequestContextFromRequest requestPolicyConfig request _requestId requestContext =
   requestContext
     { testContextPathPrefix =
         pathPrefixText (requestPathPrefix requestPolicyConfig request)
     }
+
+sampleRequestId :: RequestId
+sampleRequestId =
+  case mkRequestId "550e8400-e29b-41d4-a716-446655440000" of
+    Nothing -> error "test request identifier must be canonical UUIDv4"
+    Just requestId -> requestId
 
 samplePage :: RouteRequest TestRoute TestContext -> Page TestRoute TestContext
 samplePage request =
@@ -965,7 +971,7 @@ stripVolatileRequestTiming requestObservability =
         (Observability.observabilityHttpServerMetrics requestObservability)
           { Observability.httpServerMetricAttributes =
               filter
-                (not . isVolatileRequestTimingAttribute)
+                (not . isVolatileRequestExecutionAttribute)
                 (Observability.httpServerMetricAttributes (Observability.observabilityHttpServerMetrics requestObservability))
           }
     }
@@ -975,14 +981,19 @@ stripVolatileRequestSpanTiming requestSpan =
   requestSpan
     { Observability.requestSpanAttributes =
         filter
-          (not . isVolatileRequestTimingAttribute)
+          (not . isVolatileRequestExecutionAttribute)
           (Observability.requestSpanAttributes requestSpan)
     }
 
-isVolatileRequestTimingAttribute :: Observability.ObservabilityAttribute -> Bool
-isVolatileRequestTimingAttribute attribute =
+-- | Strip values generated independently on every request so assertions about
+-- the stable response contract do not accidentally compare a prior request's
+-- timing or correlation value. Dedicated request-ID tests retain and validate
+-- the value before using this helper.
+isVolatileRequestExecutionAttribute :: Observability.ObservabilityAttribute -> Bool
+isVolatileRequestExecutionAttribute attribute =
   Observability.attributeName attribute
-    `elem` [ "harch.request.start_monotonic_ns",
+    `elem` [ "harch.request.id",
+             "harch.request.start_monotonic_ns",
              "harch.request.duration_ns",
              "harch.phase.request-policy.start_offset_ns",
              "harch.phase.request-policy.duration_ns",

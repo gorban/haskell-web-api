@@ -123,10 +123,10 @@ spec = do
           expectedSession = mkSessionId validSession
           requestContextFromRequest = WebApi.Route.requestContextFromWaiRequest (requestPolicy defaultAppConfig)
       expectAll
-        ( (requestMfaEnrollmentSessionId (requestContextFromRequest validRequest defaultRequestContext) `shouldBe` expectedSession)
-            :| [ requestMfaEnrollmentSessionId (requestContextFromRequest malformedUtf8Request defaultRequestContext) `shouldBe` Nothing,
-                 requestMfaEnrollmentSessionId (requestContextFromRequest malformedValueRequest defaultRequestContext) `shouldBe` Nothing,
-                 requestMfaEnrollmentSessionId (requestContextFromRequest (waiRequest ["mfa"]) defaultRequestContext) `shouldBe` Nothing
+        ( (requestMfaEnrollmentSessionId (requestContextFromRequest validRequest testRequestId defaultRequestContext) `shouldBe` expectedSession)
+            :| [ requestMfaEnrollmentSessionId (requestContextFromRequest malformedUtf8Request testRequestId defaultRequestContext) `shouldBe` Nothing,
+                 requestMfaEnrollmentSessionId (requestContextFromRequest malformedValueRequest testRequestId defaultRequestContext) `shouldBe` Nothing,
+                 requestMfaEnrollmentSessionId (requestContextFromRequest (waiRequest ["mfa"]) testRequestId defaultRequestContext) `shouldBe` Nothing
                ]
         )
 
@@ -209,7 +209,7 @@ spec = do
       let middlewareContext =
             defaultRequestContext
               { requestLocale = English,
-                requestCorrelationId = Just "req-123"
+                requestCorrelationId = Just testRequestId
               }
       parseRoute middlewareContext "/es"
         `shouldBe` Just (HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb.requestContext = middlewareContext {requestLocale = Spanish, requestLocaleIsExplicit = True}})

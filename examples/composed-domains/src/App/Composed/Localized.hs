@@ -21,7 +21,8 @@ import HarchWeb.Document (Page (..))
 import HarchWeb.EndpointMetadata (EndpointMetadata (..), requiredRouteTemplateOrDie, routeTemplateText)
 import HarchWeb.EndpointSecurity (EndpointGuard (..), EndpointGuardResult (..), EndpointRequest (..))
 import HarchWeb.Localization (Locale, localeText)
-import HarchWeb.RequestContext (CoreRequestContext (..), RequestContext (..))
+import HarchWeb.RequestContext (CoreRequestContext (..), RequestContext (..), withCorrelationRequestId)
+import HarchWeb.RequestId (RequestId)
 import HarchWeb.Routing (RouteCodec (..), RouteLocation (..), RouteParseResult (..), RouteRequest (..), pathSegmentText, requiredPathSegment)
 import HarchWeb.Routing qualified as Routing
 import HarchWeb.Security (RequestPolicyConfig, requestClientAddress)
@@ -167,10 +168,14 @@ setRequestLocale fallbackLocale selectedLocale requestContext =
           }
     }
 
-requestContextFromWai :: LocalePolicy -> RequestPolicyConfig -> Wai.Request -> ComposedContext -> ComposedContext
-requestContextFromWai localePolicy requestPolicy request requestContext =
-  (setRequestLocale (defaultLocale localePolicy) selectedLocale requestContext)
-    { requestClient = TrustedNetworkClient (requestClient requestContext) (requestClientAddress requestPolicy request)
+requestContextFromWai :: LocalePolicy -> RequestPolicyConfig -> Wai.Request -> RequestId -> ComposedContext -> ComposedContext
+requestContextFromWai localePolicy requestPolicy request requestId requestContext =
+  localizedContext
+    { requestCore =
+        (requestCore localizedContext)
+          { requestCorrelation = withCorrelationRequestId requestId (requestCorrelation (requestCore requestContext))
+          },
+      requestClient = TrustedNetworkClient (requestClient requestContext) (requestClientAddress requestPolicy request)
     }
   where
     selectedLocale =
@@ -182,6 +187,7 @@ requestContextFromWai localePolicy requestPolicy request requestContext =
             localeAcceptLanguage = lookupHeaderText Http.hAcceptLanguage request,
             localeIdentity = requestIdentity requestContext
           }
+    localizedContext = setRequestLocale (defaultLocale localePolicy) selectedLocale requestContext
 
 lookupLocaleCookie :: Wai.Request -> Maybe Text
 lookupLocaleCookie request = do

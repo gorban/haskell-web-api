@@ -14,6 +14,7 @@
 -- timing, and final response reporting stay here.
 module HarchWeb.Server.RequestExecution
   ( concurrencyLimitedMiddleware,
+    applyRequestIdResponseHeader,
     navigationRuntimeResponse,
     runtimeAssetResponse,
     reportEarlyRequestObservability,
@@ -47,6 +48,7 @@ import HarchWeb.EndpointSecurity
     EndpointRequest (..),
     runEndpointGuardPipeline,
   )
+import HarchWeb.RequestId (RequestId, newRequestId, requestIdText)
 import HarchWeb.Routing
   ( RouteDispatch (..),
     RouteLocation,
@@ -170,6 +172,7 @@ data RoutedRequestExecution route action context authorization = RoutedRequestEx
     routedRequestWaiRequest :: Wai.Request,
     routedRequestRespond :: Wai.Response -> IO Wai.ResponseReceived,
     routedRequestPolicyConfig :: RequestPolicyConfig,
+    routedRequestId :: RequestId,
     routedRequestPath :: Text,
     routedRequestLocation :: RouteLocation
   }
@@ -189,6 +192,7 @@ routedRequestObservabilityContext :: RoutedRequestExecution route action context
 routedRequestObservabilityContext routedRequestExecution =
   requestObservabilityContext
     (routedRequestApplication routedRequestExecution)
+    (routedRequestId routedRequestExecution)
     (routedRequestWaiRequest routedRequestExecution)
     (routedRequestPolicyConfig routedRequestExecution)
 
@@ -207,19 +211,28 @@ toWaiApplication :: (Eq route) => Application route action context authorization
 toWaiApplication webApplication = do
   gateMiddleware <- concurrencyLimitedMiddleware (requestConcurrencyLimit (applicationRequestPolicy webApplication)) id
   routeGateCache <- newRouteConcurrencyGateCache
-  pure (gateMiddleware (headLimitedWaiApplication routeGateCache webApplication))
+  pure (requestIdentifiedWaiApplication gateMiddleware routeGateCache webApplication)
 
-headLimitedWaiApplication :: (Eq route) => RouteConcurrencyGateCache route -> Application route action context authorization -> Wai.Application
-headLimitedWaiApplication routeGateCache webApplication request respond =
+-- | Mint the request correlation identifier before request-head validation so
+-- even framework rejections use the same response-header path as a routed
+-- request. The generated value is then fixed for the rest of this request.
+requestIdentifiedWaiApplication :: (Eq route) => Wai.Middleware -> RouteConcurrencyGateCache route -> Application route action context authorization -> Wai.Application
+requestIdentifiedWaiApplication gateMiddleware routeGateCache webApplication request respond = do
+  requestId <- newRequestId
+  let respondWithRequestId = respond . applyRequestIdResponseHeader requestId
+  gateMiddleware (headLimitedWaiApplication routeGateCache webApplication requestId) request respondWithRequestId
+
+headLimitedWaiApplication :: (Eq route) => RouteConcurrencyGateCache route -> Application route action context authorization -> RequestId -> Wai.Application
+headLimitedWaiApplication routeGateCache webApplication requestId request respond =
   case validateRequestHead (requestHeadLimits (applicationRequestPolicy webApplication)) request of
     Left limitFailure -> respond (requestHeadLimitResponse limitFailure)
-    Right () -> toValidatedWaiApplication routeGateCache webApplication request respond
+    Right () -> toValidatedWaiApplication routeGateCache webApplication requestId request respond
 
 -- | Only valid, budgeted request heads reach the ordinary request pipeline.
 -- This keeps malformed target bytes and oversized metadata out of route
 -- parsing, application middleware, logs, and observability extraction.
-toValidatedWaiApplication :: (Eq route) => RouteConcurrencyGateCache route -> Application route action context authorization -> Wai.Application
-toValidatedWaiApplication routeGateCache webApplication request respond = do
+toValidatedWaiApplication :: (Eq route) => RouteConcurrencyGateCache route -> Application route action context authorization -> RequestId -> Wai.Application
+toValidatedWaiApplication routeGateCache webApplication requestId request respond = do
   let requestPolicyConfig = applicationRequestPolicy webApplication
   case decodeRouteLocation (waiRequestRouteTarget requestPolicyConfig request) of
     Left _ -> respond routeLocationDecodeResponse
@@ -233,7 +246,7 @@ toValidatedWaiApplication routeGateCache webApplication request respond = do
             responseReportedAt <- earlyResponseValue `seq` getMonotonicTimeNSec
             responseReceived <- respond earlyResponseValue
             reportEarlyRequestObservability
-              (requestObservabilityContext webApplication request requestPolicyConfig)
+              (requestObservabilityContext webApplication requestId request requestPolicyConfig)
               requestStartedAt
               responseReportedAt
               earlyResponsePath
@@ -248,6 +261,7 @@ toValidatedWaiApplication routeGateCache webApplication request respond = do
                   routedRequestWaiRequest = request,
                   routedRequestRespond = respond,
                   routedRequestPolicyConfig = requestPolicyConfig,
+                  routedRequestId = requestId,
                   routedRequestPath = requestPath,
                   routedRequestLocation = routeLocation
                 }
@@ -284,6 +298,15 @@ requestHeadLimitResponse limitFailure =
         TooManyQueryFields -> Http.status414
         RequestQueryFieldTooLarge -> Http.status414
 
+-- | The WAI boundary owns replacement rather than addition so an application
+-- response cannot shadow the framework's correlation value with a conflicting
+-- or client-derived header.
+applyRequestIdResponseHeader :: RequestId -> Wai.Response -> Wai.Response
+applyRequestIdResponseHeader requestId =
+  Wai.mapResponseHeaders $ \headers ->
+    ("X-Request-ID", TextEncoding.encodeUtf8 (requestIdText requestId))
+      : filter ((/= "X-Request-ID") . fst) headers
+
 handleRoutedRequest ::
   (Eq route) =>
   RoutedRequestExecution route action context authorization ->
@@ -294,7 +317,7 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
   let webApplication = routedRequestApplication routedRequestExecution
       request = routedRequestWaiRequest routedRequestExecution
   middlewareStartedAt <- getMonotonicTimeNSec
-  middlewareResult <- runRequestMiddlewarePipeline (applicationRequestMiddleware webApplication) request (requestContextFromRequest webApplication request (defaultRequestContext webApplication))
+  middlewareResult <- runRequestMiddlewarePipeline (applicationRequestMiddleware webApplication) request (requestContextFromRequest webApplication request (routedRequestId routedRequestExecution) (defaultRequestContext webApplication))
   middlewareCompletedAt <- middlewareResult `seq` getMonotonicTimeNSec
   let requestContext = middlewareResultContext middlewareResult
       middlewareTiming = middlewareTimingEntry webApplication middlewareStartedAt middlewareCompletedAt

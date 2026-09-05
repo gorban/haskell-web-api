@@ -6,9 +6,9 @@ import Control.Concurrent (forkIO, killThread, readMVar, threadDelay)
 import Control.Exception (IOException, SomeException, bracket, displayException, throwIO, try)
 import Control.Monad (forM_)
 import Data.ByteString qualified as ByteString
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
-import Data.Maybe (isNothing)
+import Data.Maybe (isJust, isNothing)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import GHC.Clock (getMonotonicTimeNSec)
@@ -72,6 +72,86 @@ spec = do
       actualResponse <- HarchWeb.renderResponse application secondRequest
       assertRenderedPageResult expectedResponse actualResponse
 
+    it "uses one framework-owned request ID in context and replaces a public or application-supplied header" $ do
+      observedRequestId <- newIORef Nothing
+      observedRequestObservability <- newIORef []
+      observedLogs <- newIORef []
+      waiApplication <-
+        HarchWeb.toWaiApplication
+          pureApplication
+            { HarchWeb.applicationRequestMiddleware =
+                [ HarchWeb.RequestMiddleware $ \_ requestContext -> do
+                    writeIORef observedRequestId (requestCorrelationId requestContext)
+                    pure (HarchWeb.ContinueMiddleware requestContext)
+                ],
+              HarchWeb.renderRequestResponse =
+                \_ _ ->
+                  pure
+                    ( HarchWeb.ProtocolResponseResult
+                        HarchWeb.ProtocolResponse
+                          { HarchWeb.protocolResponseStatus = Http.status200,
+                            HarchWeb.protocolResponseHeaders = [("x-request-id", "application-supplied")],
+                            HarchWeb.protocolResponseBody = HarchWeb.ProtocolResponseBytes "ok",
+                            HarchWeb.protocolResponseObservabilityAttributes = [],
+                            HarchWeb.protocolResponseLogEntries = ["handled"],
+                            HarchWeb.protocolResponseDatabaseOperations = []
+                          }
+                    ),
+              HarchWeb.reportRequestObservability = \requestObservabilityValue ->
+                modifyIORef' observedRequestObservability (<> [requestObservabilityValue]),
+              HarchWeb.reportApplicationLog = \message -> modifyIORef' observedLogs (<> [message])
+            }
+      response <- performWaiRequest (pure waiApplication) ((waiRequest []) {Wai.requestHeaders = [("X-Request-ID", "public-spoof")]})
+      headRejectedResponse <- performWaiRequest (pure waiApplication) ((waiRequest []) {Wai.rawPathInfo = ByteString.pack [255]})
+      case lookup "X-Request-ID" (Wai.responseHeaders response) of
+        Nothing -> expectationFailure "framework response lacked X-Request-ID"
+        Just responseRequestId ->
+          case TextEncoding.decodeUtf8' responseRequestId of
+            Left failure -> expectationFailure (show failure)
+            Right responseRequestIdText ->
+              case HarchWeb.mkRequestId responseRequestIdText of
+                Nothing -> expectationFailure "response request ID was not UUIDv4"
+                Just parsedRequestId -> do
+                  readIORef observedRequestId `shouldReturn` Just parsedRequestId
+                  expectAll
+                    ( (HarchWeb.requestIdText parsedRequestId `shouldNotBe` "public-spoof")
+                        :| [ HarchWeb.requestIdText parsedRequestId `shouldNotBe` "application-supplied",
+                             HarchWeb.requestIdText parsedRequestId `shouldBe` responseRequestIdText
+                           ]
+                    )
+                  observedValues <- readIORef observedRequestObservability
+                  case observedValues of
+                    [observabilityValue] -> do
+                      let requestIdAttribute =
+                            Observability.ObservabilityAttribute
+                              { Observability.attributeName = "harch.request.id",
+                                Observability.attributeValue = Observability.TextAttribute responseRequestIdText
+                              }
+                          spanAttributes =
+                            Observability.requestSpanAttributes
+                              (Observability.observabilityRequestSpan observabilityValue)
+                          metricAttributes =
+                            Observability.httpServerMetricAttributes
+                              (Observability.observabilityHttpServerMetrics observabilityValue)
+                      expectAll
+                        ( (requestIdAttribute `elem` spanAttributes `shouldBe` True)
+                            :| [requestIdAttribute `elem` metricAttributes `shouldBe` False]
+                        )
+                    _ -> expectationFailure "expected exactly one routed request observability value"
+                  observedLogMessages <- readIORef observedLogs
+                  case observedLogMessages of
+                    [observedLogMessage] ->
+                      expectAll
+                        ( (Text.isPrefixOf ("request.id=" <> responseRequestIdText <> " ") observedLogMessage `shouldBe` True)
+                            :| [Text.isInfixOf "handled" observedLogMessage `shouldBe` True]
+                        )
+                    _ -> expectationFailure "expected exactly one contextualized application log message"
+      case lookup "X-Request-ID" (Wai.responseHeaders headRejectedResponse) of
+        Nothing -> expectationFailure "request-head rejection lacked X-Request-ID"
+        Just rejectedRequestId -> do
+          case TextEncoding.decodeUtf8' rejectedRequestId of
+            Left failure -> expectationFailure (show failure)
+            Right rejectedRequestIdText -> HarchWeb.mkRequestId rejectedRequestIdText `shouldSatisfy` isJust
     it "stores the account action decoder used by the WAI adapter" $ do
       let recognized =
             case HarchWeb.decodeClientAction
@@ -139,15 +219,16 @@ spec = do
               }
           contextFor request =
             defaultRequestContext
-              { requestClientAddress = HarchWeb.requestClientAddress (HarchWeb.applicationRequestPolicy pureApplication) request
+              { requestCorrelationId = Just testRequestId,
+                requestClientAddress = HarchWeb.requestClientAddress (HarchWeb.applicationRequestPolicy pureApplication) request
               }
-      HarchWeb.requestContextFromRequest pureApplication forwardedPrefixRequest defaultRequestContext
+      HarchWeb.requestContextFromRequest pureApplication forwardedPrefixRequest testRequestId defaultRequestContext
         `shouldBe` contextFor forwardedPrefixRequest
-      HarchWeb.requestContextFromRequest pureApplication emptyForwardedPrefixRequest defaultRequestContext
+      HarchWeb.requestContextFromRequest pureApplication emptyForwardedPrefixRequest testRequestId defaultRequestContext
         `shouldBe` contextFor emptyForwardedPrefixRequest
-      HarchWeb.requestContextFromRequest pureApplication cookieRequest defaultRequestContext
+      HarchWeb.requestContextFromRequest pureApplication cookieRequest testRequestId defaultRequestContext
         `shouldBe` contextFor cookieRequest
-      HarchWeb.requestContextFromRequest pureApplication invalidCookieRequest defaultRequestContext
+      HarchWeb.requestContextFromRequest pureApplication invalidCookieRequest testRequestId defaultRequestContext
         `shouldBe` contextFor invalidCookieRequest
 
     it "derives normalized forwarded path prefixes when forwarded headers are trusted" $ do
@@ -165,13 +246,14 @@ spec = do
               }
           contextFor request =
             defaultRequestContext
-              { requestClientAddress = HarchWeb.requestClientAddress (HarchWeb.applicationRequestPolicy trustedForwardedApplication) request
+              { requestCorrelationId = Just testRequestId,
+                requestClientAddress = HarchWeb.requestClientAddress (HarchWeb.applicationRequestPolicy trustedForwardedApplication) request
               }
-      HarchWeb.requestContextFromRequest trustedForwardedApplication forwardedPrefixRequest defaultRequestContext
+      HarchWeb.requestContextFromRequest trustedForwardedApplication forwardedPrefixRequest testRequestId defaultRequestContext
         `shouldBe` (contextFor forwardedPrefixRequest) {requestPathPrefix = testPathPrefix "/app"}
-      HarchWeb.requestContextFromRequest trustedForwardedApplication emptyForwardedPrefixRequest defaultRequestContext
+      HarchWeb.requestContextFromRequest trustedForwardedApplication emptyForwardedPrefixRequest testRequestId defaultRequestContext
         `shouldBe` contextFor emptyForwardedPrefixRequest
-      HarchWeb.requestContextFromRequest trustedForwardedApplication invalidForwardedPrefixRequest defaultRequestContext
+      HarchWeb.requestContextFromRequest trustedForwardedApplication invalidForwardedPrefixRequest testRequestId defaultRequestContext
         `shouldBe` contextFor invalidForwardedPrefixRequest
 
     it "stores the configured static assets used by the WAI adapter" $

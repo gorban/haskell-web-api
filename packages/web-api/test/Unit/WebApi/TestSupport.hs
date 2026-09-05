@@ -16,6 +16,7 @@ module Unit.WebApi.TestSupport
     databaseConfig,
     accountId,
     emailAddress,
+    testRequestId,
     testSessionId,
     sessionIdValue,
     csrfTokenValue,
@@ -281,6 +282,12 @@ productionTotpEncryptionKey =
     (error "expected a valid production TOTP encryption key fixture")
     (Secret.mkSecretEncryptionKey "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI")
 {-# NOINLINE productionTotpEncryptionKey #-}
+
+testRequestId :: HarchWeb.RequestId
+testRequestId =
+  case HarchWeb.mkRequestId "550e8400-e29b-41d4-a716-446655440000" of
+    Nothing -> error "test request identifier must be canonical UUIDv4"
+    Just requestId -> requestId
 
 loadSecondPageForRequest :: PageRepository -> AppRequestContext -> IO (DatabaseResult SecondPageData)
 loadSecondPageForRequest pageRepository requestContext =

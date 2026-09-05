@@ -7,7 +7,7 @@ import Control.Exception (AsyncException (ThreadKilled), Exception (displayExcep
 import Control.Monad (when)
 import Data.ByteString qualified as ByteString (empty, isInfixOf)
 import Data.ByteString.Builder qualified as Builder ()
-import Data.ByteString.Char8 qualified as ByteStringChar8 ()
+import Data.ByteString.Char8 qualified as ByteStringChar8 (pack)
 import Data.ByteString.Lazy qualified as LazyByteString ()
 import Data.Char ()
 import Data.Either (isLeft, isRight)
@@ -46,7 +46,7 @@ import System.Process ()
 import TestCore.CustomAssertions ()
 import TestCore.Wai ()
 import Text.Read ()
-import Unit.HarchWeb.TestSupport (acmeHttpsListener, acmeHttpsListenerWithContacts, acmeHttpsListenerWithDomains, acmeHttpsListenerWithDomainsAndChallengePort, certbotHttp01Backend, certbotHttp01BackendWithExecutable, connectAndCloseLoopbackSocket, connectAndCloseLoopbackSocketFrom, defaultRequestPolicy, expectLoopbackPortReusable, expectMeasuredRootRequestTiming, fakeCertbotScriptPreamble, hasTextAttribute, httpRuntimeListener, manualTlsCertificatePem, manualTlsPrivateKeyPem, readLoopbackHttpResponse, readLoopbackHttpResponseBytesWithHostAndHeadersResult, readLoopbackHttpResponseBytesWithHostResult, readLoopbackHttpResponseBytesWithHostResultFrom, readLoopbackHttpsResponse, readLoopbackHttpsResponseResult, runtimeAcmePlanWithCertbotConfig, sampleApplication, sampleRequestContextFromRequest, serverConfigWithListeners, sharedHttpsListener, stripVolatileRequestTiming, testTrustedForwardedProxy, waitForConnectionObservability, waitForHttpsServerResponse, waitForServerExit, waitForServerResponse, withCustomFakeCertbotExecutable, withEmptyExecutablePath, withFailingFakeCertbotExecutable, withFakeCertbotExecutable, withManualTlsFiles, withOccupiedLoopbackPort, withUnusedLoopbackPort)
+import Unit.HarchWeb.TestSupport (acmeHttpsListener, acmeHttpsListenerWithContacts, acmeHttpsListenerWithDomains, acmeHttpsListenerWithDomainsAndChallengePort, certbotHttp01Backend, certbotHttp01BackendWithExecutable, connectAndCloseLoopbackSocket, connectAndCloseLoopbackSocketFrom, defaultRequestPolicy, expectLoopbackPortReusable, expectMeasuredRootRequestTiming, fakeCertbotScriptPreamble, hasTextAttribute, httpRuntimeListener, manualTlsCertificatePem, manualTlsPrivateKeyPem, readLoopbackHttpResponse, readLoopbackHttpResponseBytesWithHostAndHeadersResult, readLoopbackHttpResponseBytesWithHostResult, readLoopbackHttpResponseBytesWithHostResultFrom, readLoopbackHttpsResponse, readLoopbackHttpsResponseResult, readRawLoopbackHttpResponse, runtimeAcmePlanWithCertbotConfig, sampleApplication, sampleRequestContextFromRequest, serverConfigWithListeners, sharedHttpsListener, stripVolatileRequestTiming, testTrustedForwardedProxy, waitForConnectionObservability, waitForHttpsServerResponse, waitForServerExit, waitForServerResponse, withCustomFakeCertbotExecutable, withEmptyExecutablePath, withFailingFakeCertbotExecutable, withFakeCertbotExecutable, withManualTlsFiles, withOccupiedLoopbackPort, withUnusedLoopbackPort)
 
 spec = do
   describe "waitForShutdownSignalWith" $
@@ -1391,7 +1391,14 @@ spec = do
                         IO (Either SomeException ())
                     writeIORef completionReference (Just result)
                   challengeResponseBytes <- waitForChallengeResponse (500 :: Int)
-                  challengeResponseBytes `shouldSatisfy` ByteString.isInfixOf "loopback-token-response"
+                  rawChallengeResponse <-
+                    readRawLoopbackHttpResponse
+                      challengePort
+                      (ByteStringChar8.pack "GET /.well-known/acme-challenge/loopback-token HTTP/1.1\r\nHost: loopback.example\r\nConnection: close\r\n\r\n")
+                  expectAll
+                    ( (challengeResponseBytes `shouldSatisfy` ByteString.isInfixOf "loopback-token-response")
+                        :| [rawChallengeResponse `shouldSatisfy` ByteString.isInfixOf "X-Request-ID: "]
+                    )
                   prefixedChallengeResponseBytes <- waitForPrefixedChallengeResponse (500 :: Int)
                   prefixedChallengeResponseBytes `shouldSatisfy` ByteString.isInfixOf "loopback-token-response"
                   let expectedChallengeRequestObservability =
