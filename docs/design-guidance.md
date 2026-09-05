@@ -3288,6 +3288,25 @@ facade remains comprehensible for ordinary declarations, and private modules
 avoid exposing the validated endpoint representation as a new construction
 path.
 
+### Decision record — composed application assembly dependencies (PR-F4, 2026-09-05)
+
+**Decision: name the composed root's stable deployment and domain capabilities
+as narrow assembly records, while retaining request-specific inputs at their
+protocol boundary.** `ComposedSiteDependencies` owns the static-asset,
+locale-policy, CSRF, and nested `ComposedDomainCapabilities` selections that
+are installed once to construct the root. The nested record names the Catalog
+and Orders query/command capabilities without making domains import an ambient
+application state or allowing a root service locator to escape into handlers.
+
+The related native-admission fallback follows the same rule:
+`NativeAdmissionFallbackDependencies` contains only its installed CSRF,
+session, proof, and action-codec collaborators. The WAI request and typed
+route request remain explicit invocation inputs, so untrusted data cannot be
+mistaken for deployment configuration. This extends the existing composed-root
+assembly boundary rather than adding a second submission path, preserving the
+single route/action/guard interpreter and AHI-4C-AMH's separate proof/session
+ownership.
+
 ## Example taxonomy
 
 The [examples index](../examples/README.md) uses four labels:

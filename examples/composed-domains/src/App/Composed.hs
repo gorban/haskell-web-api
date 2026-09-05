@@ -11,6 +11,14 @@
 -- not become a service locator or a second routing architecture: domains
 -- still cannot import the root, route/action algebras remain closed, and this
 -- root remains the only site/security/observation owner.
+--
+-- Decision record (PR-F4, 2026-09-05): the root's durable deployment
+-- collaborators travel in 'ComposedSiteDependencies', with independently
+-- packaged domain query/command capabilities nested in
+-- 'ComposedDomainCapabilities'.  This replaces positional assembly lists
+-- without creating ambient application state.  Per-request WAI and typed route
+-- values stay explicit at their protocol boundary; the native admission
+-- fallback likewise groups only its installed stable capabilities.
 module App.Composed
   ( ComposedContext,
     AdmissionPrincipal,
@@ -55,18 +63,20 @@ module App.Composed
     RootRoute (..),
     StoredAdmissionCredential (..),
     ComposedDatabaseConnectionString (..),
+    ComposedDomainCapabilities (..),
+    ComposedSiteDependencies (..),
     SynchronizerTokenDigest,
     SynchronizerTokenStore (..),
     SynchronizerTokenStoreError (..),
     SynchronizerStoragePolicy,
-    buildComposedModule,
+    buildComposedModuleWithDependencies,
     buildPostgresAdmissionSessionStoreWithRunner,
     buildPostgresAdmissionCredentialStoreWithRunner,
     buildPostgresAdmissionAttemptStoreWithRunner,
     defaultAdmissionAttemptStoragePolicy,
-    buildComposedSite,
-    buildComposedSiteWithAdmissionSecurity,
-    buildComposedSiteWithSecurity,
+    buildComposedSiteWithDependencies,
+    buildComposedSiteWithAdmissionSecurityDependencies,
+    buildComposedSiteWithSecurityDependencies,
     buildPublicModule,
     catalogModuleMount,
     defaultComposedStaticAssets,
@@ -214,31 +224,51 @@ import HarchWeb.Site qualified as Site
 import HarchWeb.StaticAssets (StaticAssetsConfig)
 import Orders.Domain (OrdersCommands, OrdersQueries, OrdersRoute (OrdersIndex), buildOrdersModule)
 
-buildComposedSite :: StaticAssetsConfig -> LocalePolicy -> CsrfProtection ComposedContext -> CatalogQueries -> CatalogCommands -> OrdersQueries -> OrdersCommands -> Site RootRoute RootAction ComposedContext RootAuthorization
-buildComposedSite staticAssetsConfig localePolicy csrfProtection =
-  buildComposedSiteWithAdmissionWorkflow staticAssetsConfig localePolicy csrfProtection Nothing (AuthenticationDisabled [])
+-- | The Catalog and Orders capabilities installed by this composed root.
+-- They are grouped because they are selected once at assembly and then mounted
+-- together, while each domain remains independently packaged.
+data ComposedDomainCapabilities = ComposedDomainCapabilities
+  { composedCatalogQueries :: CatalogQueries,
+    composedCatalogCommands :: CatalogCommands,
+    composedOrdersQueries :: OrdersQueries,
+    composedOrdersCommands :: OrdersCommands
+  }
+
+-- | Stable root assembly dependencies.  Request and route values deliberately
+-- do not belong here: they are created per invocation and remain explicit at
+-- their respective boundary.
+data ComposedSiteDependencies = ComposedSiteDependencies
+  { composedStaticAssets :: StaticAssetsConfig,
+    composedLocalePolicy :: LocalePolicy,
+    composedCsrfProtection :: CsrfProtection ComposedContext,
+    composedDomainCapabilities :: ComposedDomainCapabilities
+  }
+
+buildComposedSiteWithDependencies :: ComposedSiteDependencies -> Site RootRoute RootAction ComposedContext RootAuthorization
+buildComposedSiteWithDependencies dependencies =
+  buildComposedSiteWithAdmissionWorkflow dependencies Nothing (AuthenticationDisabled [])
 
 -- | Compose the application-owned admission policy before the root account
 -- authentication guard.  A caller cannot enable admission while selecting a
 -- public-only security configuration: 'applyAdmissionPolicy' returns the
 -- explicit assembly error instead of silently weakening the route matrix.
-buildComposedSiteWithAdmissionSecurity :: StaticAssetsConfig -> LocalePolicy -> CsrfProtection ComposedContext -> AdmissionPolicy -> ApplicationSecurity RootRoute ComposedContext RootAuthorization -> CatalogQueries -> CatalogCommands -> OrdersQueries -> OrdersCommands -> Either AdmissionCompositionError (Site RootRoute RootAction ComposedContext RootAuthorization)
-buildComposedSiteWithAdmissionSecurity staticAssetsConfig localePolicy csrfProtection admissionPolicy rootSecurity catalogQueries catalogCommands ordersQueries ordersCommands = do
+buildComposedSiteWithAdmissionSecurityDependencies :: ComposedSiteDependencies -> AdmissionPolicy -> ApplicationSecurity RootRoute ComposedContext RootAuthorization -> Either AdmissionCompositionError (Site RootRoute RootAction ComposedContext RootAuthorization)
+buildComposedSiteWithAdmissionSecurityDependencies dependencies admissionPolicy rootSecurity = do
   securedRoot <- applyAdmissionPolicy admissionPolicy rootSecurity
-  pure (buildComposedSiteWithAdmissionWorkflow staticAssetsConfig localePolicy csrfProtection (admissionWorkflow admissionPolicy) securedRoot catalogQueries catalogCommands ordersQueries ordersCommands)
+  pure (buildComposedSiteWithAdmissionWorkflow dependencies (admissionWorkflow admissionPolicy) securedRoot)
 
 -- | The root chooses deployment security explicitly.  The runnable example
 -- stays public-only until AHI-4C supplies login; tests may supply a bounded
 -- authenticated policy without pretending it is a deployment credential.
-buildComposedSiteWithSecurity :: StaticAssetsConfig -> LocalePolicy -> CsrfProtection ComposedContext -> ApplicationSecurity RootRoute ComposedContext RootAuthorization -> CatalogQueries -> CatalogCommands -> OrdersQueries -> OrdersCommands -> Site RootRoute RootAction ComposedContext RootAuthorization
-buildComposedSiteWithSecurity staticAssetsConfig localePolicy csrfProtection =
-  buildComposedSiteWithAdmissionWorkflow staticAssetsConfig localePolicy csrfProtection Nothing
+buildComposedSiteWithSecurityDependencies :: ComposedSiteDependencies -> ApplicationSecurity RootRoute ComposedContext RootAuthorization -> Site RootRoute RootAction ComposedContext RootAuthorization
+buildComposedSiteWithSecurityDependencies dependencies =
+  buildComposedSiteWithAdmissionWorkflow dependencies Nothing
 
-buildComposedSiteWithAdmissionWorkflow :: StaticAssetsConfig -> LocalePolicy -> CsrfProtection ComposedContext -> Maybe (AdmissionConfig, AdmissionProofConfig) -> ApplicationSecurity RootRoute ComposedContext RootAuthorization -> CatalogQueries -> CatalogCommands -> OrdersQueries -> OrdersCommands -> Site RootRoute RootAction ComposedContext RootAuthorization
-buildComposedSiteWithAdmissionWorkflow staticAssetsConfig localePolicy csrfProtection maybeAdmissionWorkflow rootSecurity catalogQueries catalogCommands ordersQueries ordersCommands =
+buildComposedSiteWithAdmissionWorkflow :: ComposedSiteDependencies -> Maybe (AdmissionConfig, AdmissionProofConfig) -> ApplicationSecurity RootRoute ComposedContext RootAuthorization -> Site RootRoute RootAction ComposedContext RootAuthorization
+buildComposedSiteWithAdmissionWorkflow dependencies maybeAdmissionWorkflow rootSecurity =
   initialSite
-    { Site.siteRequestContextFromRequest = requestContextFromWai localePolicy (Site.siteRequestPolicy initialSite),
-      Site.siteCsrfProtection = csrfProtection,
+    { Site.siteRequestContextFromRequest = requestContextFromWai (composedLocalePolicy dependencies) (Site.siteRequestPolicy initialSite),
+      Site.siteCsrfProtection = composedCsrfProtection dependencies,
       Site.siteNavigationRuntime = Just defaultNavigationRuntime,
       Site.sitePageShell = composedPageShell,
       Site.siteAttachRouteObservation = \routeValue metadata requestContext ->
@@ -263,7 +293,7 @@ buildComposedSiteWithAdmissionWorkflow staticAssetsConfig localePolicy csrfProte
         defaultComposedContext
         rootSecurity
         rootModule
-    rootModule = buildComposedModuleWithAdmissionWorkflow staticAssetsConfig localePolicy csrfProtection maybeAdmissionWorkflow catalogQueries catalogCommands ordersQueries ordersCommands
+    rootModule = buildComposedModuleWithAdmissionWorkflow dependencies maybeAdmissionWorkflow
 
 composedPageShell :: Page RootRoute ComposedContext -> PageShell RootRoute ComposedContext
 composedPageShell page =
@@ -284,22 +314,23 @@ composedPageShell page =
   where
     selectedLocale = requestLocale (requestCore (pageContext page))
 
-buildComposedModule :: StaticAssetsConfig -> LocalePolicy -> CatalogQueries -> CatalogCommands -> OrdersQueries -> OrdersCommands -> ApplicationModule RootRoute RootActionTarget RootAction ComposedContext RootAuthorization
-buildComposedModule staticAssetsConfig localePolicy =
-  buildComposedModuleWithPublicModule localePolicy (buildPublicModule staticAssetsConfig)
+buildComposedModuleWithDependencies :: ComposedSiteDependencies -> ApplicationModule RootRoute RootActionTarget RootAction ComposedContext RootAuthorization
+buildComposedModuleWithDependencies dependencies =
+  buildComposedModuleWithPublicModule dependencies (buildPublicModule (composedStaticAssets dependencies))
 
-buildComposedModuleWithAdmissionWorkflow :: StaticAssetsConfig -> LocalePolicy -> CsrfProtection ComposedContext -> Maybe (AdmissionConfig, AdmissionProofConfig) -> CatalogQueries -> CatalogCommands -> OrdersQueries -> OrdersCommands -> ApplicationModule RootRoute RootActionTarget RootAction ComposedContext RootAuthorization
-buildComposedModuleWithAdmissionWorkflow staticAssetsConfig localePolicy csrfProtection maybeAdmissionWorkflow =
-  buildComposedModuleWithPublicModule localePolicy publicModule
+buildComposedModuleWithAdmissionWorkflow :: ComposedSiteDependencies -> Maybe (AdmissionConfig, AdmissionProofConfig) -> ApplicationModule RootRoute RootActionTarget RootAction ComposedContext RootAuthorization
+buildComposedModuleWithAdmissionWorkflow dependencies maybeAdmissionWorkflow =
+  buildComposedModuleWithPublicModule dependencies publicModule
   where
-    publicModule = buildPublicModuleWithAdmissionWorkflow staticAssetsConfig csrfProtection maybeAdmissionWorkflow
+    publicModule = buildPublicModuleWithAdmissionWorkflow (composedStaticAssets dependencies) (composedCsrfProtection dependencies) maybeAdmissionWorkflow
 
-buildComposedModuleWithPublicModule :: LocalePolicy -> ApplicationModule LocalizedRoute RootActionTarget RootAction ComposedContext RootAuthorization -> CatalogQueries -> CatalogCommands -> OrdersQueries -> OrdersCommands -> ApplicationModule RootRoute RootActionTarget RootAction ComposedContext RootAuthorization
-buildComposedModuleWithPublicModule localePolicy publicModule catalogQueries catalogCommands ordersQueries ordersCommands =
-  requiredModuleConfiguration (localizeApplicationModule localePolicy localizedModule)
+buildComposedModuleWithPublicModule :: ComposedSiteDependencies -> ApplicationModule LocalizedRoute RootActionTarget RootAction ComposedContext RootAuthorization -> ApplicationModule RootRoute RootActionTarget RootAction ComposedContext RootAuthorization
+buildComposedModuleWithPublicModule dependencies publicModule =
+  requiredModuleConfiguration (localizeApplicationModule (composedLocalePolicy dependencies) localizedModule)
   where
-    catalogModule = requiredModuleConfiguration (mountApplicationModule catalogModuleMount (buildCatalogModule catalogQueries catalogCommands))
-    ordersModule = requiredModuleConfiguration (mountApplicationModule ordersModuleMount (buildOrdersModule ordersQueries ordersCommands))
+    domainCapabilities = composedDomainCapabilities dependencies
+    catalogModule = requiredModuleConfiguration (mountApplicationModule catalogModuleMount (buildCatalogModule (composedCatalogQueries domainCapabilities) (composedCatalogCommands domainCapabilities)))
+    ordersModule = requiredModuleConfiguration (mountApplicationModule ordersModuleMount (buildOrdersModule (composedOrdersQueries domainCapabilities) (composedOrdersCommands domainCapabilities)))
     localizedModule = requiredModuleConfiguration (combineApplicationModules (publicModule :| [catalogModule, ordersModule]))
 
 admissionWorkflow :: AdmissionPolicy -> Maybe (AdmissionConfig, AdmissionProofConfig)

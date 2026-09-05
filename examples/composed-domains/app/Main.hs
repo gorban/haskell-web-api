@@ -28,14 +28,13 @@ main = do
         Nothing -> ioError (userError "invalid composed-domains development CSRF key ring")
         Just keyring -> do
           let site =
-                buildComposedSite
-                  defaultComposedStaticAssets
-                  defaultLocalePolicy
-                  (HarchWeb.signedCsrfProtection keyring HarchWeb.defaultSignedCsrfPolicy currentUnixTimeNanoseconds (const (pure HarchWeb.AnonymousCsrfBinding)))
-                  catalogQueries
-                  catalogCommands
-                  ordersQueries
-                  ordersCommands
+                buildComposedSiteWithDependencies
+                  ComposedSiteDependencies
+                    { composedStaticAssets = defaultComposedStaticAssets,
+                      composedLocalePolicy = defaultLocalePolicy,
+                      composedCsrfProtection = HarchWeb.signedCsrfProtection keyring HarchWeb.defaultSignedCsrfPolicy currentUnixTimeNanoseconds (const (pure HarchWeb.AnonymousCsrfBinding)),
+                      composedDomainCapabilities = ComposedDomainCapabilities catalogQueries catalogCommands ordersQueries ordersCommands
+                    }
               catalogQueries = CatalogQueries (const (pure "Catalog"))
               catalogCommands = CatalogCommands (const (pure "refreshed"))
               ordersQueries = OrdersQueries (const (pure "Orders"))

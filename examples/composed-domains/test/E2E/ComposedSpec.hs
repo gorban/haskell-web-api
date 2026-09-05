@@ -168,7 +168,7 @@ withAdmissionBrowserAndServer action = do
 
 composedBrowserApplication :: Application RootRoute RootAction ComposedContext RootAuthorization
 composedBrowserApplication =
-  Site.buildSiteApplication (buildComposedSiteWithSecurity defaultComposedStaticAssets defaultLocalePolicy browserCsrfProtection browserSecurity catalogQueries catalogCommands ordersQueries ordersCommands)
+  Site.buildSiteApplication (buildComposedSiteWithSecurityDependencies (browserDependencies browserCsrfProtection) browserSecurity)
 
 admissionBrowserApplication :: IO (Application RootRoute RootAction ComposedContext RootAuthorization)
 admissionBrowserApplication = do
@@ -225,7 +225,7 @@ admissionBrowserApplication = do
     case mkAdmissionConfig defaultAdmissionSessionCookiePolicy sessionStore (pure (Right now)) of
       Left _ -> expectationFailure "expected browser admission session configuration" >> fail "unreachable"
       Right config -> pure config
-  case buildComposedSiteWithAdmissionSecurity defaultComposedStaticAssets defaultLocalePolicy admissionBrowserCsrfProtection (AdmissionEnabled sessionConfig proofConfig) browserSecurity catalogQueries catalogCommands ordersQueries ordersCommands of
+  case buildComposedSiteWithAdmissionSecurityDependencies (browserDependencies admissionBrowserCsrfProtection) (AdmissionEnabled sessionConfig proofConfig) browserSecurity of
     Left _ -> expectationFailure "expected admission-enabled browser site" >> fail "unreachable"
     Right site -> pure (Site.buildSiteApplication site)
 
@@ -233,6 +233,15 @@ browserAdmissionCode :: Text
 browserAdmissionCode =
   totpCodeText
     (totpCode (unixTimeSeconds 123456) (requiredBrowser "browser admission TOTP secret" (mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")))
+
+browserDependencies :: Csrf.CsrfProtection ComposedContext -> ComposedSiteDependencies
+browserDependencies csrfProtection =
+  ComposedSiteDependencies
+    { composedStaticAssets = defaultComposedStaticAssets,
+      composedLocalePolicy = defaultLocalePolicy,
+      composedCsrfProtection = csrfProtection,
+      composedDomainCapabilities = ComposedDomainCapabilities catalogQueries catalogCommands ordersQueries ordersCommands
+    }
 
 browserCsrfProtection :: Csrf.CsrfProtection ComposedContext
 browserCsrfProtection =

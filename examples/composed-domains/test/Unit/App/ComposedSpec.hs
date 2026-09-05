@@ -350,15 +350,7 @@ spec = describe "Unit.App.Composed" $ do
             (AuthenticationGuard (pure . ContinueEndpoint . authenticatedRootContext . endpointRouteRequest))
             []
         authenticatedSite =
-          buildComposedSiteWithSecurity
-            defaultComposedStaticAssets
-            defaultLocalePolicy
-            testCsrfProtection
-            authenticatedSecurity
-            catalogQueries
-            catalogCommands
-            ordersQueries
-            ordersCommands
+          buildComposedSiteWithSecurityDependencies defaultComposedSiteDependencies authenticatedSecurity
     waiApplication <- toWaiApplication (Site.buildSiteApplication authenticatedSite)
     catalogResponse <- performWaiRequest (pure waiApplication) (waiRequest ["es", "catalog"])
     ordersResponse <- performWaiRequest (pure waiApplication) (waiRequest ["es", "orders"])
@@ -496,7 +488,7 @@ spec = describe "Unit.App.Composed" $ do
   it "installs one site with the supplied security choice and root module chain" $ do
     let suppliedSecurity = AuthenticationDisabled []
         rootRoute = Localized (locale "en") (Public PublicLogin)
-    let composedSite = buildComposedSiteWithSecurity defaultComposedStaticAssets defaultLocalePolicy testCsrfProtection suppliedSecurity catalogQueries catalogCommands ordersQueries ordersCommands
+    let composedSite = buildComposedSiteWithSecurityDependencies defaultComposedSiteDependencies suppliedSecurity
     Site.siteName composedSite `shouldBe` "composed-domains"
     Site.siteDefaultRequestContext composedSite `shouldBe` defaultComposedContext
     case Site.siteRouteModuleChain composedSite of
@@ -508,17 +500,7 @@ spec = describe "Unit.App.Composed" $ do
     disabledAdmissionSite <-
       requiredAdmission
         "disabled admission retains configured root security"
-        ( buildComposedSiteWithAdmissionSecurity
-            defaultComposedStaticAssets
-            defaultLocalePolicy
-            testCsrfProtection
-            AdmissionDisabled
-            suppliedSecurity
-            catalogQueries
-            catalogCommands
-            ordersQueries
-            ordersCommands
-        )
+        (buildComposedSiteWithAdmissionSecurityDependencies defaultComposedSiteDependencies AdmissionDisabled suppliedSecurity)
     Site.siteHandleClientAction disabledAdmissionSite (ClientActionRequest (OrdersAction SubmitOrder) Nothing defaultComposedContext)
       `shouldReturn` Just (clientActionResponse Http.status202)
     Site.siteHandleClientAction disabledAdmissionSite (ClientActionRequest (CatalogAction RefreshCatalog) Nothing defaultComposedContext)
@@ -563,69 +545,23 @@ spec = describe "Unit.App.Composed" $ do
     activeSite <-
       requiredAdmission
         "admission-enabled root"
-        ( buildComposedSiteWithAdmissionSecurity
-            defaultComposedStaticAssets
-            defaultLocalePolicy
-            admissionCsrfProtection
-            (AdmissionEnabled activeConfig unavailableAdmissionProofConfig)
-            authenticatedSecurity
-            catalogQueries
-            catalogCommands
-            ordersQueries
-            ordersCommands
-        )
+        (buildComposedSiteWithAdmissionSecurityDependencies (withCsrfProtection admissionCsrfProtection defaultComposedSiteDependencies) (AdmissionEnabled activeConfig unavailableAdmissionProofConfig) authenticatedSecurity)
     unavailableSite <-
       requiredAdmission
         "unavailable admission-enabled root"
-        ( buildComposedSiteWithAdmissionSecurity
-            defaultComposedStaticAssets
-            defaultLocalePolicy
-            admissionCsrfProtection
-            (AdmissionEnabled unavailableConfig unavailableAdmissionProofConfig)
-            authenticatedSecurity
-            catalogQueries
-            catalogCommands
-            ordersQueries
-            ordersCommands
-        )
+        (buildComposedSiteWithAdmissionSecurityDependencies (withCsrfProtection admissionCsrfProtection defaultComposedSiteDependencies) (AdmissionEnabled unavailableConfig unavailableAdmissionProofConfig) authenticatedSecurity)
     expiredSite <-
       requiredAdmission
         "expired admission-enabled root"
-        ( buildComposedSiteWithAdmissionSecurity
-            defaultComposedStaticAssets
-            defaultLocalePolicy
-            admissionCsrfProtection
-            (AdmissionEnabled expiredConfig unavailableAdmissionProofConfig)
-            authenticatedSecurity
-            catalogQueries
-            catalogCommands
-            ordersQueries
-            ordersCommands
-        )
+        (buildComposedSiteWithAdmissionSecurityDependencies (withCsrfProtection admissionCsrfProtection defaultComposedSiteDependencies) (AdmissionEnabled expiredConfig unavailableAdmissionProofConfig) authenticatedSecurity)
     unavailableClockSite <-
       requiredAdmission
         "clock-unavailable admission-enabled root"
-        ( buildComposedSiteWithAdmissionSecurity
-            defaultComposedStaticAssets
-            defaultLocalePolicy
-            admissionCsrfProtection
-            (AdmissionEnabled unavailableClockConfig unavailableAdmissionProofConfig)
-            authenticatedSecurity
-            catalogQueries
-            catalogCommands
-            ordersQueries
-            ordersCommands
-        )
-    case buildComposedSiteWithAdmissionSecurity
-      defaultComposedStaticAssets
-      defaultLocalePolicy
-      admissionCsrfProtection
+        (buildComposedSiteWithAdmissionSecurityDependencies (withCsrfProtection admissionCsrfProtection defaultComposedSiteDependencies) (AdmissionEnabled unavailableClockConfig unavailableAdmissionProofConfig) authenticatedSecurity)
+    case buildComposedSiteWithAdmissionSecurityDependencies
+      (withCsrfProtection admissionCsrfProtection defaultComposedSiteDependencies)
       (AdmissionEnabled activeConfig unavailableAdmissionProofConfig)
-      (AuthenticationDisabled [])
-      catalogQueries
-      catalogCommands
-      ordersQueries
-      ordersCommands of
+      (AuthenticationDisabled []) of
       Left AdmissionRequiresConfiguredAuthentication -> pure ()
       Right _ -> expectationFailure "enabled admission must require configured authentication"
     activeApplication <- toWaiApplication (Site.buildSiteApplication activeSite)
@@ -1052,7 +988,7 @@ spec = describe "Unit.App.Composed" $ do
         englishLoginRoute = Localized (locale "en") (Public PublicLogin)
         assetRoute = StaticAssetRoute [requiredPathSegment "public", requiredPathSegment "assets", requiredPathSegment "app.css"]
         englishAssetRoute = Localized (locale "en") (Public (PublicAsset assetRoute))
-        defaultSite = buildComposedSite defaultComposedStaticAssets defaultLocalePolicy testCsrfProtection catalogQueries catalogCommands ordersQueries ordersCommands
+        defaultSite = buildComposedSiteWithDependencies defaultComposedSiteDependencies
         shell = Site.sitePageShell defaultSite (Page "Login" rootRoute (spanishContext defaultComposedContext) (error "page body is not inspected") [])
     moduleName rootModule `shouldBe` requiredModuleName "root"
     moduleDeclaredRoutes rootModule
@@ -1155,7 +1091,7 @@ spec = describe "Unit.App.Composed" $ do
 
   it "uses the shell locale and parses only bounded locale candidates from WAI" $ do
     let customPolicy = LocalePolicy (locale "es" :| [locale "en"]) (locale "en")
-        composedSite = buildComposedSite defaultComposedStaticAssets customPolicy testCsrfProtection catalogQueries catalogCommands ordersQueries ordersCommands
+        composedSite = buildComposedSiteWithDependencies (withLocalePolicy customPolicy defaultComposedSiteDependencies)
         requestFor path headers = Wai.defaultRequest {Wai.pathInfo = path, Wai.requestHeaders = headers}
         requestContext request = Site.siteRequestContextFromRequest composedSite request testRequestId defaultComposedContext
         shell = Site.sitePageShell composedSite (Page "Catalog" (Localized (locale "es") (Catalog CatalogIndex)) (spanishContext defaultComposedContext) (error "page body is not inspected") [])
@@ -1273,20 +1209,10 @@ spec = describe "Unit.App.Composed" $ do
     enabledSite <-
       requiredAdmission
         "admission-enabled public routes"
-        ( buildComposedSiteWithAdmissionSecurity
-            defaultComposedStaticAssets
-            defaultLocalePolicy
-            admissionCsrfProtection
-            (AdmissionEnabled sessionConfig unavailableAdmissionProofConfig)
-            authenticatedSecurity
-            catalogQueries
-            catalogCommands
-            ordersQueries
-            ordersCommands
-        )
+        (buildComposedSiteWithAdmissionSecurityDependencies (withCsrfProtection admissionCsrfProtection defaultComposedSiteDependencies) (AdmissionEnabled sessionConfig unavailableAdmissionProofConfig) authenticatedSecurity)
     let enabledNativeRoute = Localized (locale "en") (Public PublicAdmissionNativeFallback)
         enabledAdmissionRoute = Localized (locale "en") (Public PublicAdmission)
-        disabledSite = buildComposedSite defaultComposedStaticAssets defaultLocalePolicy testCsrfProtection catalogQueries catalogCommands ordersQueries ordersCommands
+        disabledSite = buildComposedSiteWithDependencies defaultComposedSiteDependencies
         admissionDefinition = Site.siteRouteDefinition enabledSite enabledAdmissionRoute
         nativeDefinition = Site.siteRouteDefinition enabledSite enabledNativeRoute
         localizedNativeLocation = RouteLocation (requiredPathSegment "en" : routePathSegments nativeLocation) []
@@ -1375,73 +1301,23 @@ spec = describe "Unit.App.Composed" $ do
     enabledSite <-
       requiredAdmission
         "admission-enabled native fallback"
-        ( buildComposedSiteWithAdmissionSecurity
-            defaultComposedStaticAssets
-            defaultLocalePolicy
-            testCsrfProtection
-            (AdmissionEnabled sessionConfig proofConfig)
-            authenticatedSecurity
-            catalogQueries
-            catalogCommands
-            ordersQueries
-            ordersCommands
-        )
+        (buildComposedSiteWithAdmissionSecurityDependencies defaultComposedSiteDependencies (AdmissionEnabled sessionConfig proofConfig) authenticatedSecurity)
     rejectedSite <-
       requiredAdmission
         "admission rejection native fallback"
-        ( buildComposedSiteWithAdmissionSecurity
-            defaultComposedStaticAssets
-            defaultLocalePolicy
-            testCsrfProtection
-            (AdmissionEnabled sessionConfig rejectedProofConfig)
-            authenticatedSecurity
-            catalogQueries
-            catalogCommands
-            ordersQueries
-            ordersCommands
-        )
+        (buildComposedSiteWithAdmissionSecurityDependencies defaultComposedSiteDependencies (AdmissionEnabled sessionConfig rejectedProofConfig) authenticatedSecurity)
     unavailableSite <-
       requiredAdmission
         "admission unavailable native fallback"
-        ( buildComposedSiteWithAdmissionSecurity
-            defaultComposedStaticAssets
-            defaultLocalePolicy
-            testCsrfProtection
-            (AdmissionEnabled sessionConfig unavailableAdmissionProofConfig)
-            authenticatedSecurity
-            catalogQueries
-            catalogCommands
-            ordersQueries
-            ordersCommands
-        )
+        (buildComposedSiteWithAdmissionSecurityDependencies defaultComposedSiteDependencies (AdmissionEnabled sessionConfig unavailableAdmissionProofConfig) authenticatedSecurity)
     csrfRejectedSite <-
       requiredAdmission
         "admission CSRF rejection native fallback"
-        ( buildComposedSiteWithAdmissionSecurity
-            defaultComposedStaticAssets
-            defaultLocalePolicy
-            (testCsrfProtection {Csrf.verifyCsrfToken = \_ _ -> pure Csrf.CsrfRejected})
-            (AdmissionEnabled sessionConfig proofConfig)
-            authenticatedSecurity
-            catalogQueries
-            catalogCommands
-            ordersQueries
-            ordersCommands
-        )
+        (buildComposedSiteWithAdmissionSecurityDependencies (withCsrfProtection (testCsrfProtection {Csrf.verifyCsrfToken = \_ _ -> pure Csrf.CsrfRejected}) defaultComposedSiteDependencies) (AdmissionEnabled sessionConfig proofConfig) authenticatedSecurity)
     csrfUnavailableSite <-
       requiredAdmission
         "admission CSRF unavailable native fallback"
-        ( buildComposedSiteWithAdmissionSecurity
-            defaultComposedStaticAssets
-            defaultLocalePolicy
-            (testCsrfProtection {Csrf.verifyCsrfToken = \_ _ -> pure Csrf.CsrfVerificationUnavailable})
-            (AdmissionEnabled sessionConfig proofConfig)
-            authenticatedSecurity
-            catalogQueries
-            catalogCommands
-            ordersQueries
-            ordersCommands
-        )
+        (buildComposedSiteWithAdmissionSecurityDependencies (withCsrfProtection (testCsrfProtection {Csrf.verifyCsrfToken = \_ _ -> pure Csrf.CsrfVerificationUnavailable}) defaultComposedSiteDependencies) (AdmissionEnabled sessionConfig proofConfig) authenticatedSecurity)
     issuance <- Csrf.issueCsrfToken testCsrfProtection publicContext
     csrfToken <-
       case issuance of
@@ -1747,11 +1623,42 @@ requiredRootModuleWith = requiredRootModuleWithPolicy defaultLocalePolicy
 
 requiredRootModuleWithPolicy :: LocalePolicy -> CatalogQueries -> CatalogCommands -> OrdersQueries -> OrdersCommands -> IO (ApplicationModule RootRoute RootActionTarget RootAction ComposedContext RootAuthorization)
 requiredRootModuleWithPolicy localePolicy queryDependencies commandDependencies orderQueryDependencies orderCommandDependencies =
-  pure (buildComposedModule defaultComposedStaticAssets localePolicy queryDependencies commandDependencies orderQueryDependencies orderCommandDependencies)
+  pure
+    ( buildComposedModuleWithDependencies
+        ( withDomainCapabilities
+            queryDependencies
+            commandDependencies
+            orderQueryDependencies
+            orderCommandDependencies
+            (withLocalePolicy localePolicy defaultComposedSiteDependencies)
+        )
+    )
+
+defaultComposedSiteDependencies :: ComposedSiteDependencies
+defaultComposedSiteDependencies =
+  ComposedSiteDependencies
+    { composedStaticAssets = defaultComposedStaticAssets,
+      composedLocalePolicy = defaultLocalePolicy,
+      composedCsrfProtection = testCsrfProtection,
+      composedDomainCapabilities = ComposedDomainCapabilities catalogQueries catalogCommands ordersQueries ordersCommands
+    }
+
+withLocalePolicy :: LocalePolicy -> ComposedSiteDependencies -> ComposedSiteDependencies
+withLocalePolicy localePolicy dependencies = dependencies {composedLocalePolicy = localePolicy}
+
+withCsrfProtection :: Csrf.CsrfProtection ComposedContext -> ComposedSiteDependencies -> ComposedSiteDependencies
+withCsrfProtection csrfProtection dependencies = dependencies {composedCsrfProtection = csrfProtection}
+
+withDomainCapabilities :: CatalogQueries -> CatalogCommands -> OrdersQueries -> OrdersCommands -> ComposedSiteDependencies -> ComposedSiteDependencies
+withDomainCapabilities queryDependencies commandDependencies orderQueryDependencies orderCommandDependencies dependencies =
+  dependencies
+    { composedDomainCapabilities =
+        ComposedDomainCapabilities queryDependencies commandDependencies orderQueryDependencies orderCommandDependencies
+    }
 
 requiredComposedSite :: IO (Site.Site RootRoute RootAction ComposedContext RootAuthorization)
 requiredComposedSite =
-  pure (buildComposedSite defaultComposedStaticAssets defaultLocalePolicy testCsrfProtection catalogQueries catalogCommands ordersQueries ordersCommands)
+  pure (buildComposedSiteWithDependencies defaultComposedSiteDependencies)
 
 testCsrfProtection :: Csrf.CsrfProtection ComposedContext
 testCsrfProtection =

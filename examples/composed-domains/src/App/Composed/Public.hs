@@ -241,7 +241,16 @@ publicRouteDefinition staticAssetsConfig csrfProtection maybeAdmissionWorkflow a
               routeMetadata = mkEndpointMetadata (requiredEndpointNameOrDie "root.public.admission.native") (requiredRouteTemplateOrDie "/public/admission/native") ApiEndpoint AllowUnauthenticated,
               routeMethods = [Routing.RoutePost],
               routeExecutionPolicy = unboundedRouteExecutionPolicy,
-              routeHandler = ProtocolRouteHandler (nativeAdmissionFallbackHandler csrfProtection sessionConfig proofConfig admissionActions)
+              routeHandler =
+                ProtocolRouteHandler
+                  ( nativeAdmissionFallbackHandler
+                      NativeAdmissionFallbackDependencies
+                        { nativeAdmissionCsrfProtection = csrfProtection,
+                          nativeAdmissionSessionConfig = sessionConfig,
+                          nativeAdmissionProofConfig = proofConfig,
+                          nativeAdmissionActions = admissionActions
+                        }
+                  )
             }
         Nothing -> error "admission native fallback selected while admission is disabled"
     Public PublicLogin ->
@@ -356,8 +365,19 @@ admissionInput controlId labelText inputAttributes =
       }
     (\derived -> voidElement inputTag (Controls.fieldControlIdAttribute derived : Controls.fieldControlRelationshipAttributes derived <> inputAttributes))
 
-nativeAdmissionFallbackHandler :: CsrfProtection ComposedContext -> AdmissionConfig -> AdmissionProofConfig -> ActionCodec RootActionTarget ComposedContext RootAuthorization RootAction -> Wai.Request -> RouteRequest LocalizedRoute ComposedContext -> IO (NonPageResponse LocalizedRoute ComposedContext)
-nativeAdmissionFallbackHandler csrfProtection sessionConfig proofConfig admissionActions request routeRequest = do
+-- | Stable collaborators of the native-admission protocol handler.  The WAI
+-- request and parsed route request remain explicit because they are one
+-- invocation's untrusted input; grouping them here would blur their ownership
+-- with the installed CSRF/session/proof/action capabilities.
+data NativeAdmissionFallbackDependencies = NativeAdmissionFallbackDependencies
+  { nativeAdmissionCsrfProtection :: CsrfProtection ComposedContext,
+    nativeAdmissionSessionConfig :: AdmissionConfig,
+    nativeAdmissionProofConfig :: AdmissionProofConfig,
+    nativeAdmissionActions :: ActionCodec RootActionTarget ComposedContext RootAuthorization RootAction
+  }
+
+nativeAdmissionFallbackHandler :: NativeAdmissionFallbackDependencies -> Wai.Request -> RouteRequest LocalizedRoute ComposedContext -> IO (NonPageResponse LocalizedRoute ComposedContext)
+nativeAdmissionFallbackHandler dependencies request routeRequest = do
   requestBodyResult <- readRequestBodyUpTo admissionNativeFallbackBodyBytes request
   case requestBodyResult of
     Left RequestBodyLimitExceeded -> pure (admissionNativeFallbackResponse Http.status413 "Admission request body is too large.")
@@ -370,16 +390,16 @@ nativeAdmissionFallbackHandler csrfProtection sessionConfig proofConfig admissio
               case validateActionCsrfTransport request formFields of
                 Left _ -> pure (admissionNativeFallbackResponse Http.status403 "Admission CSRF validation failed.")
                 Right csrfToken -> do
-                  verification <- verifyCsrfToken csrfProtection (requestContext routeRequest) csrfToken
+                  verification <- verifyCsrfToken (nativeAdmissionCsrfProtection dependencies) (requestContext routeRequest) csrfToken
                   case verification of
                     CsrfRejected -> pure (admissionNativeFallbackResponse Http.status403 "Admission CSRF validation failed.")
                     CsrfVerificationUnavailable -> pure (admissionNativeFallbackResponse Http.status503 "Admission CSRF protection is unavailable.")
                     CsrfVerified ->
-                      case decodeAdmissionSubmission admissionActions (requestContext routeRequest) formFields of
+                      case decodeAdmissionSubmission (nativeAdmissionActions dependencies) (requestContext routeRequest) formFields of
                         Nothing -> pure (admissionNativeFallbackResponse Http.status422 "Admission request is invalid.")
                         Just (loginName, code, returnTarget) -> do
-                          submissionResult <- submitAdmission sessionConfig proofConfig (rootClientAddress (requestClient (requestContext routeRequest))) loginName code
-                          pure (admissionNativeSubmissionResponse sessionConfig routeRequest returnTarget submissionResult)
+                          submissionResult <- submitAdmission (nativeAdmissionSessionConfig dependencies) (nativeAdmissionProofConfig dependencies) (rootClientAddress (requestClient (requestContext routeRequest))) loginName code
+                          pure (admissionNativeSubmissionResponse (nativeAdmissionSessionConfig dependencies) routeRequest returnTarget submissionResult)
 
 decodeAdmissionSubmission :: ActionCodec RootActionTarget ComposedContext RootAuthorization RootAction -> ComposedContext -> [(Text.Text, Text.Text)] -> Maybe (AdmissionLoginName, TotpCode, AdmissionReturnTarget)
 decodeAdmissionSubmission admissionActions requestContext formFields =
