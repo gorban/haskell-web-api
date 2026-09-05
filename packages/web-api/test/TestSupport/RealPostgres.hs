@@ -102,7 +102,7 @@ postgresImageBuildScriptLines :: [String]
 postgresImageBuildScriptLines =
   [ "build_postgres_pgcron_image() {",
     "  repo_root=\"$(git rev-parse --show-toplevel)\"",
-    "  WEB_API_CONTAINER_RUNTIME=\"$runtime\" \"$repo_root/tools/build-postgres-pgcron-test-image.sh\"",
+    "  WEB_API_CONTAINER_RUNTIME=\"$runtime\" bash \"$repo_root/tools/build-postgres-pgcron-test-image.sh\"",
     "}"
   ]
 

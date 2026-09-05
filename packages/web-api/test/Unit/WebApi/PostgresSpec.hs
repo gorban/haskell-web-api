@@ -1174,7 +1174,7 @@ spec = do
       ensureDefaultPostgresAvailableScript `shouldContain'` "for candidate in docker podman; do"
       ensureDefaultPostgresAvailableScript `shouldContain'` "elif runtime=$(runtime_with_existing_container); then"
       ensureDefaultPostgresAvailableScript `shouldContain'` "build_postgres_pgcron_image()"
-      ensureDefaultPostgresAvailableScript `shouldContain'` "WEB_API_CONTAINER_RUNTIME=\"$runtime\" \"$repo_root/tools/build-postgres-pgcron-test-image.sh\""
+      ensureDefaultPostgresAvailableScript `shouldContain'` "WEB_API_CONTAINER_RUNTIME=\"$runtime\" bash \"$repo_root/tools/build-postgres-pgcron-test-image.sh\""
       ensureDefaultPostgresAvailableScript `shouldContain'` "build_postgres_pgcron_image"
       ensureDefaultPostgresAvailableScript `shouldContain'` "\"$runtime\" start web-api-postgres >/dev/null 2>&1 && return 0"
 

@@ -44,7 +44,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          tools/build-postgres-pgcron-test-image.sh
+          bash tools/build-postgres-pgcron-test-image.sh
           docker run --detach --name web-api-postgres \
             --env POSTGRES_USER=web_api_owner \
             --env POSTGRES_PASSWORD=web_api_owner \

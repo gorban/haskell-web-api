@@ -85,6 +85,7 @@ library
     WebApi.AccountPages.Rendering
     WebApi.AccountPages.Validation
     WebApi.AccountPrincipal
+    WebApi.ActivityAudit
     WebApi.Api.Endpoints
     WebApi.App
     WebApi.App.Enhancements
@@ -214,6 +215,7 @@ test-suite haskell-web-api-tests
     Unit.WebApi.AccountJwtSpec
     Unit.WebApi.AccountPagesSpec
     Unit.WebApi.AccountSpec
+    Unit.WebApi.ActivityAuditSpec
     Unit.WebApi.App.EnhancementsSpec
     Unit.WebApi.AppEffectSpec
     Unit.WebApi.AppSpec
