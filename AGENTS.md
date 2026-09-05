@@ -48,6 +48,18 @@ and the follow-up task that closes it, in both places.
   integration/regression test for that relied-upon behavior, and preserve coverage for any dependency
   defect or unsafe hook discovered here, as with the WarpTLS pre-handshake peer hook.
 
+# Ignored task records
+
+An ignored path is an instruction to leave it untracked, not an invitation to
+override the rule. Never use `git add -f`, `git add --force`, or an equivalent
+index operation for an ignored path. In particular, keep `TASKS/` and
+`TASKS.md` as local task-planning material: do not add, force-add, amend, or
+restore either into a commit. Before staging a new task-related file, check it
+with `git check-ignore -v`; if any local, repository, or global rule ignores
+it, leave it untracked. If a future repository decision genuinely requires a
+versioned replacement, first agree and commit a reviewed path/ignore-policy
+change; do not bypass the existing ignore rule.
+
 # CI-equivalent checks
 
 Before pushing, run the same checks that CI runs from the repository root. Ensure the local PostgreSQL,
