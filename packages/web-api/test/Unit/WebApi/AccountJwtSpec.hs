@@ -35,17 +35,17 @@ import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (Accou
 spec =
   describe "WebApi.AccountJwt" $ do
     it "rejects incomplete account-JWT configuration before reading deployment key files" $ do
-      let valid = mkAccountJwtConfiguration "https://accounts.example.test" "web-api-account" "account-key-v1" "private.jwk" "verification.jwks" "__Host-harch-session" 28800
+      let valid = mkAccountJwtConfiguration validRawConfiguration
       expectAll
         ( (valid `shouldSatisfy` isRight)
-            :| [ mkAccountJwtConfiguration "" "web-api-account" "account-key-v1" "private.jwk" "verification.jwks" "__Host-harch-session" 28800 `shouldBe` Left AccountJwtIssuerInvalid,
-                 mkAccountJwtConfiguration "https://accounts.example.test\NUL" "web-api-account" "account-key-v1" "private.jwk" "verification.jwks" "__Host-harch-session" 28800 `shouldBe` Left AccountJwtIssuerInvalid,
-                 mkAccountJwtConfiguration "https://accounts.example.test" "" "account-key-v1" "private.jwk" "verification.jwks" "__Host-harch-session" 28800 `shouldBe` Left AccountJwtAudienceInvalid,
-                 mkAccountJwtConfiguration "https://accounts.example.test" "web-api-account" "" "private.jwk" "verification.jwks" "__Host-harch-session" 28800 `shouldBe` Left AccountJwtActiveKeyIdInvalid,
-                 mkAccountJwtConfiguration "https://accounts.example.test" "web-api-account" (Text.replicate 129 "a") "private.jwk" "verification.jwks" "__Host-harch-session" 28800 `shouldBe` Left AccountJwtActiveKeyIdInvalid,
-                 mkAccountJwtConfiguration "https://accounts.example.test" "web-api-account" "account-key-v1" "" "verification.jwks" "__Host-harch-session" 28800 `shouldBe` Left AccountJwtSigningJwkFileInvalid,
-                 mkAccountJwtConfiguration "https://accounts.example.test" "web-api-account" "account-key-v1" "private.jwk" "" "__Host-harch-session" 28800 `shouldBe` Left AccountJwtVerificationJwkSetFileInvalid,
-                 mkAccountJwtConfiguration "https://accounts.example.test" "web-api-account" "account-key-v1" "private.jwk" "verification.jwks" "session" 28800 `shouldBe` Left AccountJwtCookiePolicyInvalid,
+            :| [ mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtIssuer = ""}) `shouldBe` Left AccountJwtIssuerInvalid,
+                 mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtIssuer = "https://accounts.example.test\NUL"}) `shouldBe` Left AccountJwtIssuerInvalid,
+                 mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtAudience = ""}) `shouldBe` Left AccountJwtAudienceInvalid,
+                 mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtActiveKeyId = ""}) `shouldBe` Left AccountJwtActiveKeyIdInvalid,
+                 mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtActiveKeyId = Text.replicate 129 "a"}) `shouldBe` Left AccountJwtActiveKeyIdInvalid,
+                 mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtSigningJwkFile = ""}) `shouldBe` Left AccountJwtSigningJwkFileInvalid,
+                 mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtVerificationJwkSetFile = ""}) `shouldBe` Left AccountJwtVerificationJwkSetFileInvalid,
+                 mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtCookieName = "session"}) `shouldBe` Left AccountJwtCookiePolicyInvalid,
                  hasDerivedContract [AccountJwtIssuerInvalid, AccountJwtAudienceInvalid] `shouldBe` True,
                  show AccountJwtIssuerInvalid `shouldBe` "AccountJwtIssuerInvalid",
                  showsPrec 11 AccountJwtIssuerInvalid "" `shouldBe` "AccountJwtIssuerInvalid",
@@ -478,9 +478,26 @@ expectLoadFailure load expected = do
 
 requiredConfiguration :: FilePath -> FilePath -> AccountJwtConfiguration
 requiredConfiguration signingFile verificationFile =
-  case mkAccountJwtConfiguration "https://accounts.example.test" "web-api-account" "account-key-v1" signingFile verificationFile "__Host-harch-session" 28800 of
+  case mkAccountJwtConfiguration
+    ( validRawConfiguration
+        { rawAccountJwtSigningJwkFile = signingFile,
+          rawAccountJwtVerificationJwkSetFile = verificationFile
+        }
+    ) of
     Right configuration -> configuration
     Left configurationError -> error ("test JWT configuration is invalid: " <> show configurationError)
+
+validRawConfiguration :: AccountJwtRawConfiguration
+validRawConfiguration =
+  AccountJwtRawConfiguration
+    { rawAccountJwtIssuer = "https://accounts.example.test",
+      rawAccountJwtAudience = "web-api-account",
+      rawAccountJwtActiveKeyId = "account-key-v1",
+      rawAccountJwtSigningJwkFile = "private.jwk",
+      rawAccountJwtVerificationJwkSetFile = "verification.jwks",
+      rawAccountJwtCookieName = "__Host-harch-session",
+      rawAccountJwtCookieMaxAgeSeconds = 28800
+    }
 
 protectedEndpointRequest :: Text.Text -> HarchWeb.EndpointRequest AppRoute AppRequestContext ()
 protectedEndpointRequest = endpointRequestWithAccess HarchWeb.RequireAuthenticated

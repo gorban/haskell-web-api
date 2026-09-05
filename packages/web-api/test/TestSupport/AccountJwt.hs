@@ -19,7 +19,7 @@ import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
-import WebApi.AccountJwt (mkAccountJwtConfiguration)
+import WebApi.AccountJwt (AccountJwtRawConfiguration (..), mkAccountJwtConfiguration)
 import WebApi.Config (AppEnvironmentConfig (..), defaultAppEnvironmentConfig)
 
 withTestAccountJwtFixture :: (AppEnvironmentConfig -> [String] -> IO value) -> IO value
@@ -30,7 +30,16 @@ withTestAccountJwtFixture action =
         signingFile = directory </> "private.jwk"
         verificationFile = directory </> "verification.jwks"
         configuration =
-          case mkAccountJwtConfiguration "http://127.0.0.1:5001" "web-api-account" "test-account-key-v1" signingFile verificationFile "__Host-harch-session" 28800 of
+          case mkAccountJwtConfiguration
+            AccountJwtRawConfiguration
+              { rawAccountJwtIssuer = "http://127.0.0.1:5001",
+                rawAccountJwtAudience = "web-api-account",
+                rawAccountJwtActiveKeyId = "test-account-key-v1",
+                rawAccountJwtSigningJwkFile = signingFile,
+                rawAccountJwtVerificationJwkSetFile = verificationFile,
+                rawAccountJwtCookieName = "__Host-harch-session",
+                rawAccountJwtCookieMaxAgeSeconds = 28800
+              } of
             Right value -> value
             Left _ -> error "expected a valid test account-JWT configuration"
         configLines =

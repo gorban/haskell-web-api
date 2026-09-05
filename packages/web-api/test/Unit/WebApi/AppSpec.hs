@@ -30,7 +30,7 @@ import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPost
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi (buildApp, run)
 import WebApi.Account (AccountStore (createPendingAccount), CreatePendingAccountOutcome (PendingAccountDeliveryClaimed), PendingAccount (..), defaultPendingRegistrationStoragePolicy)
-import WebApi.AccountJwt (AccountJwtIssuer (..), accountJwtIssuerFromRuntime, loadAccountJwtRuntime, mkAccountJwtConfiguration)
+import WebApi.AccountJwt (AccountJwtIssuer (..), AccountJwtRawConfiguration (..), accountJwtIssuerFromRuntime, loadAccountJwtRuntime, mkAccountJwtConfiguration)
 import WebApi.Api.Endpoints (noApiRequestFields)
 import WebApi.App (buildAppWithDatabase, buildAppWithDatabaseAndAccountWorkflowAndSecurity, buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwtRuntime, buildRuntimeAppWithAccountJwt, buildRuntimeAppWithDatabaseBuilder, otlpExportFailureMessage, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Observability (runOtlpExportAction)
@@ -1125,7 +1125,16 @@ spec = do
     it "fails startup before allocating a listener when account JWT key material is unreadable" $
       withSystemTempFile "web-api-runtime-output.txt" $ \_ outputHandle -> do
         let unreadableAccountJwtConfiguration =
-              case mkAccountJwtConfiguration "https://accounts.example.test" "web-api-account" "account-key-v1" "/tmp/web-api-missing-private.jwk" "/tmp/web-api-missing-verification.jwks" "__Host-harch-session" 28800 of
+              case mkAccountJwtConfiguration
+                AccountJwtRawConfiguration
+                  { rawAccountJwtIssuer = "https://accounts.example.test",
+                    rawAccountJwtAudience = "web-api-account",
+                    rawAccountJwtActiveKeyId = "account-key-v1",
+                    rawAccountJwtSigningJwkFile = "/tmp/web-api-missing-private.jwk",
+                    rawAccountJwtVerificationJwkSetFile = "/tmp/web-api-missing-verification.jwks",
+                    rawAccountJwtCookieName = "__Host-harch-session",
+                    rawAccountJwtCookieMaxAgeSeconds = 28800
+                  } of
                 Right configuration -> configuration
                 Left configurationError -> error ("expected a valid account JWT configuration: " <> show configurationError)
             runtimeEnvironmentConfig =

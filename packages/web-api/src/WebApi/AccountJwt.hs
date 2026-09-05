@@ -27,6 +27,7 @@
 -- than being dynamically re-parsed as a possible URI.
 module WebApi.AccountJwt
   ( AccountJwtConfiguration,
+    AccountJwtRawConfiguration (..),
     AccountJwtSignerBuilder,
     AccountJwtConfigurationError (..),
     AccountJwtIssueError (..),
@@ -79,6 +80,25 @@ data AccountJwtConfiguration = AccountJwtConfiguration
     accountJwtSigningJwkFile :: FilePath,
     accountJwtVerificationJwkSetFile :: FilePath,
     accountJwtCookiePolicy :: HarchWeb.AuthenticationCookiePolicy
+  }
+
+-- | Deployment-authored inputs before validation.  Keeping each role named
+-- prevents issuer/audience, signing/verification location, and cookie values
+-- from being transposed at a call site while retaining one pure validation
+-- rail into 'AccountJwtConfiguration'.
+--
+-- Decision (AHI-4C/PR-F3, 2026-09-05): this is a cohesive application
+-- configuration value, not ambient startup state.  The account-JWT adapter
+-- already owns all seven inputs and their validation; grouping them here
+-- extends that owner instead of putting a second parser in the config loader.
+data AccountJwtRawConfiguration = AccountJwtRawConfiguration
+  { rawAccountJwtIssuer :: Text,
+    rawAccountJwtAudience :: Text,
+    rawAccountJwtActiveKeyId :: Text,
+    rawAccountJwtSigningJwkFile :: FilePath,
+    rawAccountJwtVerificationJwkSetFile :: FilePath,
+    rawAccountJwtCookieName :: Text,
+    rawAccountJwtCookieMaxAgeSeconds :: Word64
   }
 
 instance Eq AccountJwtConfiguration where
@@ -171,15 +191,15 @@ data AccountJwtIssuer = AccountJwtIssuer
 -- request-path parse while account identifiers keep their separate domain
 -- validation boundary. The fixed cookie policy itself validates its host-only
 -- attributes in Harch.
-mkAccountJwtConfiguration :: Text -> Text -> Text -> FilePath -> FilePath -> Text -> Word64 -> Either AccountJwtConfigurationError AccountJwtConfiguration
-mkAccountJwtConfiguration issuer audience activeKeyId signingJwkFile verificationJwkSetFile cookieName cookieMaxAgeSeconds = do
-  validIssuer <- requireStringOrUri AccountJwtIssuerInvalid issuer
-  validAudience <- requireStringOrUri AccountJwtAudienceInvalid audience
-  validKeyId <- requireBounded AccountJwtActiveKeyIdInvalid activeKeyId
-  validSigningFile <- requireFilePath AccountJwtSigningJwkFileInvalid signingJwkFile
-  validVerificationFile <- requireFilePath AccountJwtVerificationJwkSetFileInvalid verificationJwkSetFile
+mkAccountJwtConfiguration :: AccountJwtRawConfiguration -> Either AccountJwtConfigurationError AccountJwtConfiguration
+mkAccountJwtConfiguration rawConfiguration = do
+  validIssuer <- requireStringOrUri AccountJwtIssuerInvalid (rawAccountJwtIssuer rawConfiguration)
+  validAudience <- requireStringOrUri AccountJwtAudienceInvalid (rawAccountJwtAudience rawConfiguration)
+  validKeyId <- requireBounded AccountJwtActiveKeyIdInvalid (rawAccountJwtActiveKeyId rawConfiguration)
+  validSigningFile <- requireFilePath AccountJwtSigningJwkFileInvalid (rawAccountJwtSigningJwkFile rawConfiguration)
+  validVerificationFile <- requireFilePath AccountJwtVerificationJwkSetFileInvalid (rawAccountJwtVerificationJwkSetFile rawConfiguration)
   cookiePolicy <-
-    case HarchWeb.mkAuthenticationCookiePolicy cookieName cookieMaxAgeSeconds of
+    case HarchWeb.mkAuthenticationCookiePolicy (rawAccountJwtCookieName rawConfiguration) (rawAccountJwtCookieMaxAgeSeconds rawConfiguration) of
       Left _ -> Left AccountJwtCookiePolicyInvalid
       Right value -> Right value
   pure

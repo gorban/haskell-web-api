@@ -146,7 +146,7 @@ import HarchWeb.Csrf
 import HarchWeb.Secret (SecretEncryptionKey, mkSecretEncryptionKey)
 import System.Environment (getEnvironment)
 import Text.Read (readMaybe)
-import WebApi.AccountJwt (AccountJwtConfiguration, AccountJwtConfigurationError (..), mkAccountJwtConfiguration)
+import WebApi.AccountJwt (AccountJwtConfiguration, AccountJwtConfigurationError (..), AccountJwtRawConfiguration (..), mkAccountJwtConfiguration)
 
 data AppMode
   = Development
@@ -418,13 +418,15 @@ defaultDatabasePoolCapacity = DatabasePoolCapacity 10
 defaultAccountJwtConfiguration :: AccountJwtConfiguration
 defaultAccountJwtConfiguration =
   case mkAccountJwtConfiguration
-    "http://127.0.0.1:5001"
-    "web-api-account"
-    "development-v1"
-    "account-jwt-private.jwk"
-    "account-jwt-verification.jwks"
-    "__Host-harch-session"
-    28800 of
+    AccountJwtRawConfiguration
+      { rawAccountJwtIssuer = "http://127.0.0.1:5001",
+        rawAccountJwtAudience = "web-api-account",
+        rawAccountJwtActiveKeyId = "development-v1",
+        rawAccountJwtSigningJwkFile = "account-jwt-private.jwk",
+        rawAccountJwtVerificationJwkSetFile = "account-jwt-verification.jwks",
+        rawAccountJwtCookieName = "__Host-harch-session",
+        rawAccountJwtCookieMaxAgeSeconds = 28800
+      } of
     Right configuration -> configuration
     Left _ -> error "default account JWT configuration is invalid"
 
@@ -585,13 +587,15 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
           jwtCookieName
       )
       ( mkAccountJwtConfiguration
-          jwtIssuer
-          jwtAudience
-          jwtActiveKeyId
-          (Text.unpack jwtSigningJwkFile)
-          (Text.unpack jwtVerificationJwkSetFile)
-          jwtCookieName
-          jwtCookieMaxAgeSeconds
+          AccountJwtRawConfiguration
+            { rawAccountJwtIssuer = jwtIssuer,
+              rawAccountJwtAudience = jwtAudience,
+              rawAccountJwtActiveKeyId = jwtActiveKeyId,
+              rawAccountJwtSigningJwkFile = Text.unpack jwtSigningJwkFile,
+              rawAccountJwtVerificationJwkSetFile = Text.unpack jwtVerificationJwkSetFile,
+              rawAccountJwtCookieName = jwtCookieName,
+              rawAccountJwtCookieMaxAgeSeconds = jwtCookieMaxAgeSeconds
+            }
       )
   pure
     AppEnvironmentConfig
