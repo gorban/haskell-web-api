@@ -3241,6 +3241,30 @@ accounting path now have one exact grammar while retaining their distinct
 responsibilities: exact-one credential extraction, response-cookie rendering,
 and untrusted request budgeting.
 
+### Decision record — authentication transport and pipeline ownership (PR-F6, 2026-09-05)
+
+**Decision: retain `HarchWeb.Authentication` as the sole public authoring
+facade, while separating its internal transport/policy and proof-to-principal
+owners.** The existing module had accumulated bounded request proof parsing,
+host-only cookie rendering, verification, principal establishment,
+authorization, telemetry, and endpoint-guard interpretation. A new
+application-facing extractor or another guard would duplicate an existing
+security rail, so the implementation is instead divided below the unchanged
+facade: `Authentication.Transport` owns the validated cookie policy, opaque
+JWT bytes, bounded cookie/bearer extractors, and their ambiguity/malformed
+outcomes; `Authentication.Pipeline` consumes that one extractor and owns the
+existing `ExceptT AuthenticationFailure IO` orchestration, authorization, and
+one guard result.
+
+The internal modules are Cabal-private owners rather than additional authored
+APIs. This keeps the familiar single import for applications and retains the
+distinction between rejected credentials and unavailable dependencies. JWT
+verification continues to import the same opaque transport proof and pipeline
+verification contract; application-owned authorization and challenge response
+functions remain unchanged. The extraction closes the module-health/public
+surface review finding without changing the route dispatcher, introducing a
+second proof parser, or weakening the shared cookie grammar.
+
 ## Example taxonomy
 
 The [examples index](../examples/README.md) uses four labels:
