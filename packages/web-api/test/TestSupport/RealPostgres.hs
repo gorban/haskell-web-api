@@ -27,8 +27,14 @@ import System.IO.Temp (withSystemTempDirectory)
 import System.Process (callProcess)
 import WebApi.Config (AppEnvironmentConfig (..), DatabaseConfig (..), DatabaseSslMode (DatabaseSslVerifyFull), DatabaseTransportSecurity (DatabaseTransportSsl), defaultAppEnvironmentConfig)
 
+-- | The AHI-5 test image has PostgreSQL 17 and the reviewed pg_cron package.
+--
+-- The audit implementation owns its PostgreSQL schema and maintenance routine;
+-- this fixture proves only the deployment configuration the repository relies
+-- on. Tests call repository-owned routines directly rather than waiting for a
+-- third-party scheduler clock.
 defaultPostgresContainerImage :: String
-defaultPostgresContainerImage = "docker.io/library/postgres:17"
+defaultPostgresContainerImage = "localhost/haskell-web-api/postgres-pgcron:17-1.6.7"
 
 supportedPostgresMajorVersions :: [Int]
 supportedPostgresMajorVersions = [17]
@@ -90,6 +96,14 @@ containerRuntimeSelectionScriptLines =
     "  echo 'No supported container runtime found' >&2",
     "  exit 1",
     "fi"
+  ]
+
+postgresImageBuildScriptLines :: [String]
+postgresImageBuildScriptLines =
+  [ "build_postgres_pgcron_image() {",
+    "  repo_root=\"$(git rev-parse --show-toplevel)\"",
+    "  WEB_API_CONTAINER_RUNTIME=\"$runtime\" \"$repo_root/tools/build-postgres-pgcron-test-image.sh\"",
+    "}"
   ]
 
 defaultRealPostgresConfig :: DatabaseConfig
@@ -182,6 +196,7 @@ ensureDefaultPostgresAvailableScript =
            "fi"
          ]
       <> containerRuntimeSelectionScriptLines
+      <> postgresImageBuildScriptLines
       <> [ "container_is_running() {",
            "  [ \"$($runtime inspect --format '{{.State.Running}}' web-api-postgres 2>/dev/null || true)\" = \"true\" ]",
            "}",
@@ -190,6 +205,7 @@ ensureDefaultPostgresAvailableScript =
            "    return 0",
            "  fi",
            "  \"$runtime\" start web-api-postgres >/dev/null 2>&1 && return 0",
+           "  build_postgres_pgcron_image",
            "  \"$runtime\" run --name web-api-postgres -e POSTGRES_USER=web_api_owner -e POSTGRES_PASSWORD=web_api_owner -e POSTGRES_DB=web_api_dev -p 127.0.0.1:5432:5432 -d " <> defaultPostgresContainerImage <> " >/dev/null",
            "}",
            "wait_until_ready() {",

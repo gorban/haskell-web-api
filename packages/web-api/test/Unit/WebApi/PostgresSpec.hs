@@ -24,7 +24,7 @@ import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
 import Postgres.DatabaseChange qualified as DatabaseChanges
 import System.Exit (ExitCode (..))
-import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath, withPostgresTlsFixtures)
+import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultPostgresContainerImage, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath, withPostgresTlsFixtures)
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), VerificationResendAdmission (..), VerificationResendClaim (..), VerificationResendClaimSettlement (..), VerificationResendSuppression (..), defaultPendingRegistrationStoragePolicy, defaultVerificationResendPolicy, mkPendingRegistrationStoragePolicy, mkVerificationResendPolicy)
 import WebApi.App (buildAppWithDatabase)
@@ -1164,6 +1164,7 @@ spec = do
       containerizedPsqlScriptContents `shouldContain'` "exec \"$runtime\" exec -e PGPASSWORD=\"${PGPASSWORD:-}\" web-api-postgres psql \"$@\""
 
     it "prefers a runtime that is already running the named postgres container before trying to start or create one" $ do
+      defaultPostgresContainerImage `shouldBe` "localhost/haskell-web-api/postgres-pgcron:17-1.6.7"
       ensureDefaultPostgresAvailableScript `shouldContain'` "database_endpoint_is_reachable()"
       ensureDefaultPostgresAvailableScript `shouldContain'` "host_psql_is_available()"
       ensureDefaultPostgresAvailableScript `shouldContain'` "owner_is_superuser_via_host_psql()"
@@ -1172,6 +1173,9 @@ spec = do
       ensureDefaultPostgresAvailableScript `shouldContain'` "runtime_with_running_container()"
       ensureDefaultPostgresAvailableScript `shouldContain'` "for candidate in docker podman; do"
       ensureDefaultPostgresAvailableScript `shouldContain'` "elif runtime=$(runtime_with_existing_container); then"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "build_postgres_pgcron_image()"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "WEB_API_CONTAINER_RUNTIME=\"$runtime\" \"$repo_root/tools/build-postgres-pgcron-test-image.sh\""
+      ensureDefaultPostgresAvailableScript `shouldContain'` "build_postgres_pgcron_image"
       ensureDefaultPostgresAvailableScript `shouldContain'` "\"$runtime\" start web-api-postgres >/dev/null 2>&1 && return 0"
 
     it "loads seeded page data through the concrete postgres adapter against real PostgreSQL" $

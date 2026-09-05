@@ -3166,6 +3166,37 @@ framework without a tested declaration boundary. The helpers extend Harch's
 existing `requiredSafeUrlOrDie`/`requiredAccessibleNameOrDie` convention; they
 do not authorize applications to convert untrusted data into a crash.
 
+### Decision record — AHI-5 preparation: PostgreSQL-owned audit retention (2026-09-05)
+
+**Decision: keep durable account activity in the existing web-api PostgreSQL
+database, under an isolated `account_audit` schema, rather than adding an
+audit API to Harch Web or introducing a second database.** The framework
+continues to own structured, telemetry-safe event capture; the application
+will own the durable event vocabulary, its transaction policy, PostgreSQL RLS
+roles, retention routine, and reader scope. This extends the existing native
+PostgreSQL migration/test boundary, so the implementation can compose it with
+account state transitions without inventing a second service or a fake generic
+storage abstraction. The still-unimplemented follow-up is the AHI-5 schema,
+repository, transactional workflows, and example audit reader; this record
+does not claim they have landed.
+
+Monthly partitions and a repository-owned maintenance function are selected
+for bounded retention. PostgreSQL does not provide the required general table
+TTL semantics; a named pg_cron job will invoke only the no-argument safe
+maintenance wrapper. Tests will verify the extension/configuration, exact
+owned schedules, roles, and invocation, then call the deterministic
+maintenance routine directly at supplied timestamps. They will not wait for
+pg_cron's clock or reproduce its upstream scheduler tests.
+
+The prerequisite experiment uses a repository Dockerfile pinned to PostgreSQL
+17.10's image digest and `postgresql-17-cron` 1.6.7. It successfully proved
+that preload, `cron.database_name = web_api_dev`, UTC, and bounded
+background-worker settings permit `CREATE EXTENSION pg_cron` and creation of a
+named job. CI and local test bootstrap now build that same image. A production
+deployment may choose a different image version, worker budget, or schedule,
+but must review its corresponding preload, database, timezone, and scheduler
+authentication configuration rather than inheriting test defaults blindly.
+
 ## Example taxonomy
 
 The [examples index](../examples/README.md) uses four labels:
