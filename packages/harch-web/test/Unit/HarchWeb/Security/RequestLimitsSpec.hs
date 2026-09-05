@@ -103,6 +103,7 @@ spec = do
                  validateRequestHead cookieValueLimits (requestFor "/ok" [("Cookie", "a=long")]) `shouldBe` Left RequestCookieValueTooLarge,
                  validateRequestHead cookieCountLimits (requestFor "/ok" [("Cookie", "malformed; bad name=ignored; Empty=")]) `shouldBe` Right (),
                  validateRequestHead cookieCountLimits (requestFor "/ok" [("X-Ignored", "one=1"), ("Cookie", "!#$%&'*+-.0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ^_`abcdefghijklmnopqrstuvwxyz|~=value")]) `shouldBe` Right (),
+                 validateRequestHead (unboundedRequestHeadLimits {requestCookieCountLimit = requestItemCountLimit 0}) (requestFor "/ok" [("Cookie", "__Host-account!#$%&'*+-.^_`|~=value")]) `shouldBe` Left TooManyRequestCookies,
                  validateRequestHead
                    (unboundedRequestHeadLimits {requestHeaderValueByteLimit = requestByteLimit 3, requestCookieValueByteLimit = requestByteLimit 100})
                    (requestFor "/ok" [("Cookie", "a=long")])

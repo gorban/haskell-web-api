@@ -19,10 +19,13 @@ spec = do
   describe "authentication proof extractors" $ do
     it "distinguishes absent, duplicate, malformed, and oversized cookie proofs" $ do
       let extractor = cookieJwtExtractor (requiredCookieName "__Host-session") (requiredProofMaximumBytes 8)
+          punctuationExtractor = cookieJwtExtractor (requiredCookieName "__Host-session!#$%&'*+-.^_`|~") (requiredProofMaximumBytes 8)
           extract headers = fmap (fmap encodedJwtBytes) (extractAuthenticationProof extractor (endpointRequest AllowUnauthenticated headers))
+          extractPunctuation headers = fmap (fmap encodedJwtBytes) (extractAuthenticationProof punctuationExtractor (endpointRequest AllowUnauthenticated headers))
       expectAll
         ( (extract [] `shouldBe` Right Nothing)
             :| [ extract [("Cookie", "__Host-session=good")] `shouldBe` Right (Just "good"),
+                 extractPunctuation [("Cookie", "__Host-session!#$%&'*+-.^_`|~=good")] `shouldBe` Right (Just "good"),
                  extract [("Cookie", "__Host-session=one; __Host-session=two")] `shouldBe` Left ProofAmbiguous,
                  extract [("Cookie", "__Host-session=toolong-token")] `shouldBe` Left ProofTooLarge,
                  extract [("Cookie", "other=value")] `shouldBe` Right Nothing,
@@ -75,6 +78,12 @@ spec = do
       expectAll
         ( (mkAuthenticationCookieName "" `shouldBe` Left "authentication cookie name cannot be empty")
             :| [ mkAuthenticationCookieName "bad;name" `shouldBe` Left "authentication cookie name has invalid characters",
+                 mkAuthenticationCookieName "bad:name" `shouldBe` Left "authentication cookie name has invalid characters",
+                 mkAuthenticationCookieName "bad\"name" `shouldBe` Left "authentication cookie name has invalid characters",
+                 mkAuthenticationCookieName "bad\\name" `shouldBe` Left "authentication cookie name has invalid characters",
+                 mkAuthenticationCookieName "bad\DELname" `shouldBe` Left "authentication cookie name has invalid characters",
+                 mkAuthenticationCookieName "b\233d-name" `shouldBe` Left "authentication cookie name has invalid characters",
+                 mkAuthenticationCookieName "__Host-account!#$%&'*+-.^_`|~" `shouldSatisfy` either (const False) (const True),
                  mkAuthenticationCookieName (Text.replicate 129 "a") `shouldBe` Left "authentication cookie name is too long",
                  mkAuthenticationProofMaximumBytes 0 `shouldBe` Left "authentication proof maximum bytes must be positive",
                  mkSecurityFailureCode "" `shouldBe` Left "security failure code cannot be empty",
@@ -96,6 +105,7 @@ spec = do
 
     it "renders and clears only host-only safe JWT cookies" $ do
       let policy = fromRight (error "expected authentication cookie policy") (mkAuthenticationCookiePolicy "__Host-account-session" 28800)
+          punctuationPolicy = fromRight (error "expected punctuation cookie policy") (mkAuthenticationCookiePolicy "__Host-account!#$%&'*+-.^_`|~" 28800)
       expectAll
         ( ( renderAuthenticationCookie policy (encodedJwtFromBytes "header.payload.signature")
               `shouldBe` Just "__Host-account-session=header.payload.signature; Path=/; Max-Age=28800; HttpOnly; Secure; SameSite=Strict"
@@ -106,7 +116,11 @@ spec = do
                  mkAuthenticationCookiePolicy "__Host-account-session" 0 `shouldBe` Left "authentication cookie max age must be positive",
                  renderAuthenticationCookie policy (encodedJwtFromBytes "header;payload") `shouldBe` Nothing,
                  renderAuthenticationCookie policy (encodedJwtFromBytes "header\npayload") `shouldBe` Nothing,
-                 renderAuthenticationCookie policy (encodedJwtFromBytes (ByteString.singleton 255)) `shouldBe` Nothing
+                 renderAuthenticationCookie policy (encodedJwtFromBytes (ByteString.singleton 255)) `shouldBe` Nothing,
+                 renderAuthenticationCookie punctuationPolicy (encodedJwtFromBytes "header.payload.signature")
+                   `shouldBe` Just "__Host-account!#$%&'*+-.^_`|~=header.payload.signature; Path=/; Max-Age=28800; HttpOnly; Secure; SameSite=Strict",
+                 clearAuthenticationCookie punctuationPolicy
+                   `shouldBe` "__Host-account!#$%&'*+-.^_`|~=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict"
                ]
         )
 

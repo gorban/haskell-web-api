@@ -85,6 +85,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
+import HarchWeb.Cookie (isCookieTokenCharacter)
 import HarchWeb.EndpointSecurity
   ( AccessRequirement (..),
     AuthenticationGuard (..),
@@ -134,10 +135,8 @@ mkAuthenticationCookieName :: Text -> Either Text AuthenticationCookieName
 mkAuthenticationCookieName value
   | Text.null value = Left "authentication cookie name cannot be empty"
   | Text.length value > 128 = Left "authentication cookie name is too long"
-  | Text.all validCookieCharacter value = Right (AuthenticationCookieName (TextEncoding.encodeUtf8 value))
+  | Text.all isCookieTokenCharacter value = Right (AuthenticationCookieName (TextEncoding.encodeUtf8 value))
   | otherwise = Left "authentication cookie name has invalid characters"
-  where
-    validCookieCharacter character = character > ' ' && character /= ';' && character /= '=' && character /= ','
 
 -- | The only browser-session cookie policy supplied by Harch's JWT boundary.
 -- A policy is deliberately host-only: the @__Host-@ prefix plus the fixed

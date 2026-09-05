@@ -117,7 +117,11 @@ spec = do
                    `shouldBe` "__Host-account=0123456789abcdef0123456789abcdef; Path=/; Max-Age=900; HttpOnly; Secure; SameSite=Strict",
                  mkSessionCookieName "" `shouldBe` Nothing,
                  mkSessionCookieName "account session" `shouldBe` Nothing,
-                 mkSessionCookieName "account;session" `shouldBe` Nothing
+                 mkSessionCookieName "account;session" `shouldBe` Nothing,
+                 mkSessionCookieName "__Host-account!#$%&'*+-.^_`|~" `shouldSatisfy` isJust,
+                 mkSessionCookieName "__Host-account:alternate" `shouldBe` Nothing,
+                 mkSessionCookieName "__Host-account\DEL" `shouldBe` Nothing,
+                 mkSessionCookieName "__Host-acco\233unt" `shouldBe` Nothing
                ]
         )
 

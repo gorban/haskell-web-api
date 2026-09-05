@@ -125,6 +125,7 @@ library
     HarchWeb.ApplicationModule.Composition
     HarchWeb.ApplicationModule.Core
     HarchWeb.ApplicationModule.Mount
+    HarchWeb.Cookie
     HarchWeb.Markup.Attributes
     HarchWeb.Markup.Elements
     HarchWeb.Markup.Implementation

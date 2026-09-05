@@ -38,6 +38,7 @@ import Data.CaseInsensitive qualified as CaseInsensitive
 import Data.Maybe (isNothing)
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word8)
+import HarchWeb.Cookie (isCookieTokenByte)
 import Network.Wai qualified as Wai
 
 -- | A non-negative byte bound used for untrusted request metadata.  Construct it
@@ -244,7 +245,7 @@ validateRequestCookies limits requestHeaders
     validateCookieSegment cookieCount rawCookie =
       case ByteString.break (== 61) (ByteString.dropWhile isCookieWhitespace rawCookie) of
         (cookieName, valueWithSeparator)
-          | ByteString.null cookieName || ByteString.null valueWithSeparator || not (ByteString.all isCookieNameByte cookieName) -> Right cookieCount
+          | ByteString.null cookieName || ByteString.null valueWithSeparator || not (ByteString.all isCookieTokenByte cookieName) -> Right cookieCount
           | exceedsByteLimit (requestCookieNameByteLimit limits) (ByteString.length cookieName) -> Left RequestCookieNameTooLarge
           | exceedsByteLimit (requestCookieValueByteLimit limits) (ByteString.length (ByteString.drop 1 valueWithSeparator)) -> Left RequestCookieValueTooLarge
           | exceedsItemCountLimit (requestCookieCountLimit limits) (cookieCount + 1) -> Left TooManyRequestCookies
@@ -303,17 +304,3 @@ exceedsDelimitedFieldByteLimit maybeLimit delimiter =
 
 isCookieWhitespace :: Word8 -> Bool
 isCookieWhitespace byte = byte == 32 || byte == 9
-
-isCookieNameByte :: Word8 -> Bool
-isCookieNameByte byte =
-  byte == 33
-    || (byte >= 35 && byte <= 39)
-    || byte == 42
-    || byte == 43
-    || byte == 45
-    || byte == 46
-    || (byte >= 48 && byte <= 57)
-    || (byte >= 65 && byte <= 90)
-    || (byte >= 94 && byte <= 122)
-    || byte == 124
-    || byte == 126

@@ -31,6 +31,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
+import HarchWeb.Cookie (isCookieTokenCharacter)
 import HarchWeb.Time (UnixTimeNanoseconds)
 import Network.HTTP.Types qualified as Http
 
@@ -200,11 +201,6 @@ generateOpaqueToken = TextEncoding.decodeUtf8 . Base64Url.encodeUnpadded <$> get
 
 isOpaqueTokenCharacter :: Char -> Bool
 isOpaqueTokenCharacter character =
-  isAscii character
-    && (character == '-' || character == '_' || isAsciiLower character || isAsciiUpper character || isDigit character)
-
-isCookieTokenCharacter :: Char -> Bool
-isCookieTokenCharacter character =
   isAscii character
     && (character == '-' || character == '_' || isAsciiLower character || isAsciiUpper character || isDigit character)
 

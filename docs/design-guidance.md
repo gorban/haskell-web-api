@@ -3221,6 +3221,26 @@ second dispatcher or request vault is introduced. Trusted service propagation
 remains a separate capability, not an ordinary client header or a property of
 authentication alone.
 
+### Decision record — AHI-4C: one ASCII cookie-token grammar (2026-09-05)
+
+**Decision: extract the existing cookie-name token predicate into a small
+Harch-owned leaf module and use it for session configuration, authentication
+cookie configuration, and request-head cookie accounting.** Authentication
+configuration had accepted a broader ad-hoc set of characters than either
+the session parser or the raw request scanner, allowing a startup declaration
+to issue names that other framework boundaries would not accept. The shared
+grammar permits the intentional ASCII HTTP token punctuation and rejects
+separators, colon, quote, backslash, DEL, and non-ASCII text; the
+authentication policy retains its independent 128-character limit,
+`__Host-` requirement, and fixed host-only attributes.
+
+This extends the already-existing cookie-name validation boundary rather than
+adding an authentication-local sanitizer or widening the pre-routing scanner
+to accommodate invalid configuration. The parser, issuer/clearer, and resource
+accounting path now have one exact grammar while retaining their distinct
+responsibilities: exact-one credential extraction, response-cookie rendering,
+and untrusted request budgeting.
+
 ## Example taxonomy
 
 The [examples index](../examples/README.md) uses four labels:
