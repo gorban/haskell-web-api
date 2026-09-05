@@ -10,6 +10,7 @@ module HarchWeb
     module HarchWeb.Markup,
     module HarchWeb.Localization,
     module HarchWeb.Observability,
+    module HarchWeb.RequestId,
     module HarchWeb.Routing,
     module HarchWeb.Security,
     module HarchWeb.SecurityEvent,
@@ -29,6 +30,7 @@ import HarchWeb.EndpointSecurity
 import HarchWeb.Localization
 import HarchWeb.Markup hiding (RegionPatch)
 import HarchWeb.Observability hiding (attributeName, attributeValue)
+import HarchWeb.RequestId
 import HarchWeb.Routing
 import HarchWeb.Security
 import HarchWeb.SecurityEvent

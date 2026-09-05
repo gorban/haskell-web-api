@@ -91,6 +91,7 @@ library
     HarchWeb.Password
     HarchWeb.RecoveryCode
     HarchWeb.RequestContext
+    HarchWeb.RequestId
     HarchWeb.Routing
     HarchWeb.Secret
     HarchWeb.Security
@@ -265,6 +266,7 @@ test-suite harch-web-tests
     Unit.HarchWeb.PathPrefixSpec
     Unit.HarchWeb.RecoveryCodeSpec
     Unit.HarchWeb.RequestContextSpec
+    Unit.HarchWeb.RequestIdSpec
     Unit.HarchWeb.RoutingSpec
     Unit.HarchWeb.SecretSpec
     Unit.HarchWeb.Security.ForwardedTrustSpec

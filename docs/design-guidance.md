@@ -3197,6 +3197,25 @@ deployment may choose a different image version, worker budget, or schedule,
 but must review its corresponding preload, database, timezone, and scheduler
 authentication configuration rather than inheriting test defaults blindly.
 
+### Decision record — AHI-5-RID: opaque UUIDv4 request-correlation kernel (2026-09-05)
+
+**Decision: make `RequestId` a small Harch-owned opaque UUIDv4 type before
+wiring it through the existing request ingress and response-finalization
+boundaries.** A plain `Text` field would allow arbitrary public header values
+to become a correlation identifier, while an application-owned generator would
+make cross-application response and diagnostic behavior drift. The framework
+already depends on the operating system CSPRNG for sessions, tokens, and trace
+identifiers, so a sixteen-byte UUIDv4 is the narrowest reusable value.
+
+The kernel accepts only canonical lower-case UUIDv4 text and does not itself
+decide whether an inbound value is trusted. The following integration slice
+will generate one ID before every HTTP policy/route/application decision,
+attach it through `requestContextFromRequest`, replace conflicting response
+headers at the single WAI finalization boundary, and include it in private
+logs/spans but never metric labels. Trusted service propagation remains a
+separate capability, not an ordinary client header or a property of
+authentication alone.
+
 ## Example taxonomy
 
 The [examples index](../examples/README.md) uses four labels:
