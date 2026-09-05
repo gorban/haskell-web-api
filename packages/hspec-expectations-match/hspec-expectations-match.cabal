@@ -104,6 +104,8 @@ test-suite hspec-expectations-th-test-suite
       TypeApplications
       TypeOperators
   ghc-options: -Wall -rtsopts -threaded -with-rtsopts=-N
+  build-tool-depends:
+      test-spec-preprocessor:spec-preprocessor ^>=0.1.2.0
   build-depends:
       base
     , hspec

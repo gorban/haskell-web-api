@@ -3,608 +3,903 @@
 
 {-# E2E_SPEC #-}
 
-import qualified Data.Text as Text
-import qualified HarchWeb
-import qualified Language.Haskell.TH.Syntax as TH
-import System.FilePath ((</>))
+import Data.Aeson qualified as Aeson
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.Text (Text)
+import Data.Text qualified as Text
+import HarchWeb qualified
+import HarchWeb.Account qualified as Account
+import HarchWeb.Email qualified as Email
+import HarchWeb.Password qualified as Password
+import HarchWeb.Session qualified as Session
+import Network.HTTP.Types qualified as Http
+import System.Directory (copyFile, createDirectory, doesFileExist, getCurrentDirectory)
+import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
-import WebApi (buildApp)
+import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..), VerificationResendAdmission (..), VerificationResendClaim (..), VerificationResendClaimSettlement (..))
+import WebApi.AccountPages (AccountAction)
+import WebApi.AccountPrincipal (mkAccountPrincipal)
+import WebApi.App (buildApp, buildAppWithDatabaseAndAccountWorkflow, buildAppWithDatabaseAndAccountWorkflowAndSecurity, unavailableAccountWorkflow)
+import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
+import WebApi.Database (defaultPageRepository)
+import WebApi.Mfa (MfaStore (..))
+import WebApi.Route (AppRoute (LoginRoute))
+import WebApi.Route qualified
+import WebApi.Session (AccountSessionStore (..), MfaEnrollmentSessionStore (..), mfaEnrollmentSessionCookiePolicy)
 
 spec =
-  describe "browser e2e" $ do
-    it "loads the home page through a real local HTTP listener and asserts SSR content" $
-      withNodeBrowserRunner $ \browserConfig ->
-        withE2EAppConfig $ \appConfig ->
-          HarchWeb.withLocalTestServer (buildApp appConfig) $ \localTestServer ->
-            runBrowserScript
-              browserConfig
-              [ VisitUrl (Text.unpack (HarchWeb.localServerBaseUrl localTestServer) <> "/"),
-                AssertTextEquals "[data-page-title=\"true\"]" "Home"
-              ]
-              `shouldReturn` Right ()
+  describe "stacked application real-browser smoke coverage" $ do
+    it "redirects the root route to the complete Spaces SSR document" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
+          runBrowserScenario
+            browser
+            ( do
+                visit homeUrl
+                assertAll
+                  ((,) <$> currentUrl <*> textContent (byRole Heading))
+                  (\(url, heading) -> (url `shouldBe` (HarchWeb.localServerBaseUrl server <> "/spaces")) :| [heading `shouldBe` "Site under construction"])
+            )
+            `shouldReturn` Right ()
 
-    it "fetches same-origin HTML through the tiny runtime without a hard document navigation" $
-      withNodeBrowserRunner $ \browserConfig ->
-        withE2EAppConfig $ \appConfig ->
-          HarchWeb.withLocalTestServer (buildApp appConfig) $ \localTestServer ->
-            runBrowserScript browserConfig (sameOriginNavigationActions (Text.unpack (HarchWeb.localServerBaseUrl localTestServer)))
-              `shouldReturn` Right ()
+    it "keeps direct second-page loads and script-disabled root redirects usable" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
+              secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
+          runBrowserScenario
+            browser
+            ( do
+                visit secondUrl
+                assertText (byRole Heading) (`shouldBe` "Second")
+                visitWithoutScripts homeUrl
+                assertAll
+                  ((,) <$> currentUrl <*> textContent (byRole Heading))
+                  (\(url, heading) -> (url `shouldBe` (HarchWeb.localServerBaseUrl server <> "/spaces")) :| [heading `shouldBe` "Site under construction"])
+            )
+            `shouldReturn` Right ()
 
-    it "uses the enhanced navigation path for browser Back and Forward" $
-      withNodeBrowserRunner $ \browserConfig ->
-        withE2EAppConfig $ \appConfig ->
-          HarchWeb.withLocalTestServer (buildApp appConfig) $ \localTestServer ->
-            runBrowserScript browserConfig (sameOriginBackForwardActions (Text.unpack (HarchWeb.localServerBaseUrl localTestServer)))
-              `shouldReturn` Right ()
+    it "redirects Spanish roots to localized Spaces SSR content while scripts are disabled" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let spanishHomeUrl = HarchWeb.localServerBaseUrl server <> "/es"
+          runBrowserScenario
+            browser
+            ( do
+                visitWithoutScripts spanishHomeUrl
+                assertAll
+                  ((,) <$> currentUrl <*> textContent (byRole Heading))
+                  (\(url, heading) -> (url `shouldBe` (HarchWeb.localServerBaseUrl server <> "/es/spaces")) :| [heading `shouldBe` "Sitio en construcción"])
+            )
+            `shouldReturn` Right ()
 
-    it "loads the second page directly through a real local HTTP listener and asserts SSR content" $
-      withNodeBrowserRunner $ \browserConfig ->
-        withE2EAppConfig $ \appConfig ->
-          HarchWeb.withLocalTestServer (buildApp appConfig) $ \localTestServer ->
-            runBrowserScript
-              browserConfig
-              [ VisitUrl (Text.unpack (HarchWeb.localServerBaseUrl localTestServer) <> "/second"),
-                AssertTextEquals "title" "web-api: Second",
-                AssertTextEquals "[data-page-title=\"true\"]" "Second"
-              ]
-              `shouldReturn` Right ()
+    it "serves the app-home spaces placeholder through SSR and enhanced navigation" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
+              secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
+              spacesUrl = HarchWeb.localServerBaseUrl server <> "/spaces"
+              spanishSpacesUrl = HarchWeb.localServerBaseUrl server <> "/es/spaces"
+          runBrowserScenario
+            browser
+            ( do
+                visit homeUrl
+                assertAll
+                  ((,) <$> currentUrl <*> textContent (byRole Heading))
+                  (\(url, heading) -> (url `shouldBe` spacesUrl) :| [heading `shouldBe` "Site under construction"])
+                visit secondUrl
+                click (byRole Link `named` "Spaces")
+                assertAll
+                  ((,,) <$> currentUrl <*> textContent (byRole Heading) <*> browserMetrics)
+                  ( \(url, heading, metrics) ->
+                      (url `shouldBe` spacesUrl)
+                        :| [ heading `shouldBe` "Site under construction",
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                           ]
+                  )
+                visitWithoutScripts spanishSpacesUrl
+                assertAll
+                  ((,) <$> textContent (byRole Heading) <*> textContent (byText "Sigan este espacio."))
+                  (\(heading, body) -> (heading `shouldBe` "Sitio en construcción") :| [body `shouldBe` "Sigan este espacio."])
+            )
+            `shouldReturn` Right ()
 
-withE2EAppConfig :: (AppConfig -> IO a) -> IO a
-withE2EAppConfig action =
-  withSystemTempDirectory "web-api-e2e-assets" $ \assetDirectory -> do
-    writeFile (assetDirectory </> "navigation.js") embeddedNavigationRuntimeSource
-    let appConfig =
-          defaultAppConfig
-            { staticAssets =
-                StaticAssetsConfig
-                  { staticAssetRoots =
-                      [ StaticAssetRoot
-                          { staticUrlPrefix = "/assets",
-                            staticDirectory = assetDirectory
-                          }
-                      ],
-                    staticAssetContentTypes = defaultStaticAssetContentTypes,
-                    staticCacheControlSeconds = Nothing
-                  }
-            }
-    action appConfig
+    it "serves the app-home profile landing through SSR and enhanced navigation" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (challengedBrowserApp appConfig) $ \server -> do
+          let secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
+              loginUrl = HarchWeb.localServerBaseUrl server <> "/login"
+              profileUrl = HarchWeb.localServerBaseUrl server <> "/profile"
+              spanishProfileUrl = HarchWeb.localServerBaseUrl server <> "/es/profile"
+          runBrowserScenario
+            browser
+            ( do
+                visit secondUrl
+                _ <-
+                  runPageScript
+                    "const link = document.querySelector('nav a'); link.focus(); const style = getComputedStyle(link); link.dataset.testFocusVisibleStyle = String(link.matches(':focus-visible') && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0); true"
+                assertAttribute (byRole Link `named` "Home") "data-test-focus-visible-style" (`shouldBe` Just "true")
+                click (byRole Link `named` "Profile")
+                assertAll
+                  ((,,) <$> currentUrl <*> textContent (byRole Heading) <*> browserMetrics)
+                  ( \(url, heading, metrics) ->
+                      (url `shouldBe` loginUrl)
+                        :| [ heading `shouldBe` "Sign in",
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                           ]
+                  )
+                visitWithoutScripts profileUrl
+                assertText (byRole Heading) (`shouldBe` "Sign in")
+                visitWithoutScripts spanishProfileUrl
+                assertText (byRole Heading) (`shouldBe` "Iniciar sesion")
+            )
+            `shouldReturn` Right ()
 
-embeddedNavigationRuntimeSource :: String
-embeddedNavigationRuntimeSource =
-  $( do
-       navigationPath <- TH.makeRelativeToProject "public/navigation.js"
-       TH.addDependentFile navigationPath
-       navigationSource <- TH.runIO (readFile navigationPath)
-       TH.lift navigationSource
-   )
+    it "opens the language picker accessibly and navigates its typed choices" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let baseUrl = HarchWeb.localServerBaseUrl server
+              secondUrl = baseUrl <> "/second"
+              spanishLanguageUrl = baseUrl <> "/es/language"
+              languageTrigger = byRole Link `named` "Language"
+              englishChoice = byRole Link `named` "English"
+              spanishChoice = byRole Link `named` "Spanish"
+              closeControl = byRole Button `named` "Close language picker"
+          runBrowserScenario
+            browser
+            ( do
+                visit secondUrl
+                click languageTrigger
+                assertAttribute (css "#language-dialog") "open" (`shouldBe` Just "")
+                assertFocused englishChoice (`shouldBe` True)
+                _ <-
+                  runPageScript
+                    "const dialog = document.querySelector('#language-dialog'); document.querySelector('nav a').focus(); dialog.dataset.testBackgroundContained = String(dialog.contains(document.activeElement)); true"
+                assertAttribute (css "#language-dialog") "data-test-background-contained" (`shouldBe` Just "true")
+                press englishChoice "Tab"
+                assertFocused spanishChoice (`shouldBe` True)
+                press spanishChoice "Tab"
+                assertFocused closeControl (`shouldBe` True)
+                press closeControl "Tab"
+                assertFocused englishChoice (`shouldBe` True)
+                press (css "#language-dialog") "Escape"
+                assertFocused languageTrigger (`shouldBe` True)
+                click languageTrigger
+                click spanishChoice
+                assertAll
+                  ((,,,) <$> currentUrl <*> textContent (byRole Heading `named` "Elige un idioma") <*> textContent (byRole Status) <*> browserMetrics)
+                  ( \(url, heading, announcement, metrics) ->
+                      (url `shouldBe` spanishLanguageUrl)
+                        :| [ heading `shouldBe` "Elige un idioma",
+                             announcement `shouldBe` "web-api: Language",
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                           ]
+                  )
+                assertAttribute (css "#language-dialog") "open" (`shouldBe` Nothing)
+            )
+            `shouldReturn` Right ()
 
-withNodeBrowserRunner :: (BrowserConfig -> IO a) -> IO a
-withNodeBrowserRunner action =
-  withSystemTempDirectory "web-api-browser-runner" $ \tempDirectory -> do
-    let scriptPath = tempDirectory <> "/web-api-browser-runner.js"
-        browserConfig =
-          defaultBrowserConfig
-            { browserRunnerCommand = "node",
-              browserRunnerArguments = [scriptPath]
-            }
-    writeFile scriptPath nodeBrowserRunnerSource
-    action browserConfig
+    it "keeps language selection and dialog startup failure complete without enhanced behavior" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (challengedBrowserApp appConfig) $ \server -> do
+          let baseUrl = HarchWeb.localServerBaseUrl server
+              secondUrl = baseUrl <> "/second"
+              languageUrl = baseUrl <> "/language"
+              spanishLanguageUrl = baseUrl <> "/es/language"
+          runBrowserScenario
+            browser
+            ( do
+                blockRequestsMatching "**/assets/dialog.js"
+                visit secondUrl
+                click (byRole Link `named` "Language")
+                failBlockedRequestsMatching "**/assets/dialog.js"
+                assertAll
+                  ((,) <$> currentUrl <*> browserMetrics)
+                  ( \(url, metrics) ->
+                      (url `shouldBe` languageUrl)
+                        :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 1}|])]
+                  )
+                visitWithoutScripts secondUrl
+                press (byRole Link `named` "Language") "Enter"
+                assertAll
+                  ((,) <$> currentUrl <*> textContent (byRole Heading))
+                  (\(url, heading) -> (url `shouldBe` languageUrl) :| [heading `shouldBe` "Choose a language"])
+                press (byRole Link `named` "Spanish") "Enter"
+                assertAll
+                  ((,) <$> currentUrl <*> textContent (byRole Heading))
+                  (\(url, heading) -> (url `shouldBe` spanishLanguageUrl) :| [heading `shouldBe` "Elige un idioma"])
+            )
+            `shouldReturn` Right ()
 
-sameOriginNavigationActions :: String -> [BrowserAction]
-sameOriginNavigationActions baseUrl =
-  [ VisitUrl (baseUrl <> "/"),
-    ClickLinkWithText "Browse the second page",
-    AssertTextEquals "title" "web-api: Second",
-    AssertTextEquals "[data-page-title=\"true\"]" "Second",
-    AssertNavigationMetricEquals EnhancedFetchCount 1,
-    AssertNavigationMetricEquals HardNavigationCount 0
-  ]
+    it "keeps the Help FAB usable, unobstructive, and absent at its destination" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let baseUrl = HarchWeb.localServerBaseUrl server
+              secondUrl = baseUrl <> "/second"
+              helpUrl = baseUrl <> "/help"
+              helpFab = byRole Link `named` "Help and support"
+          runBrowserScenario
+            browser
+            ( do
+                setViewportSize 320 480
+                visit secondUrl
+                _ <-
+                  runPageScript
+                    "document.documentElement.style.zoom = '2'; const fab = document.querySelector('[data-help-fab]'); fab.focus(); const box = fab.getBoundingClientRect(); const overlaps = [...document.querySelectorAll('#app-main a, #app-main button, #app-main input, #app-main select')].filter((control) => control !== fab && !control.closest('dialog')).some((control) => { const other = control.getBoundingClientRect(); return box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top; }); fab.dataset.testGeometry = String(box.width >= 44 && box.height >= 44 && box.right <= window.innerWidth && box.bottom <= window.innerHeight && !overlaps && getComputedStyle(fab).outlineStyle !== 'none'); true"
+                assertAttribute helpFab "data-test-geometry" (`shouldBe` Just "true")
+                press helpFab "Enter"
+                assertAll
+                  ((,,) <$> currentUrl <*> textContent (byRole Heading `named` "Help and support") <*> browserMetrics)
+                  ( \(url, heading, metrics) ->
+                      (url `shouldBe` helpUrl)
+                        :| [ heading `shouldBe` "Help and support",
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                           ]
+                  )
+                _ <- runPageScript "document.body.dataset.testNoHelpFab = String(!document.querySelector('[data-help-fab]')); true"
+                assertAttribute (css "body") "data-test-no-help-fab" (`shouldBe` Just "true")
+                visitWithoutScripts secondUrl
+                press helpFab "Enter"
+                assertAll
+                  ((,) <$> currentUrl <*> textContent (byRole Heading))
+                  (\(url, heading) -> (url `shouldBe` helpUrl) :| [heading `shouldBe` "Help and support"])
+            )
+            `shouldReturn` Right ()
 
-sameOriginBackForwardActions :: String -> [BrowserAction]
-sameOriginBackForwardActions baseUrl =
-  [ VisitUrl (baseUrl <> "/"),
-    ClickLinkWithText "Browse the second page",
-    NavigateHistoryBack,
-    AssertTextEquals "title" "web-api: Home",
-    AssertTextEquals "[data-page-title=\"true\"]" "Home",
-    NavigateHistoryForward,
-    AssertTextEquals "title" "web-api: Second",
-    AssertTextEquals "[data-page-title=\"true\"]" "Second"
-  ]
+    it "focuses and announces one lifecycle for keyboard navigation, history, and final redirected URLs" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let baseUrl = HarchWeb.localServerBaseUrl server
+              secondUrl = baseUrl <> "/second"
+              spacesUrl = baseUrl <> "/spaces"
+              mainContent = css "#app-main"
+              routeStatus = css "[data-navigation-route-status]"
+          runBrowserScenario
+            browser
+            ( do
+                setViewportSize 320 480
+                visit secondUrl
+                assertText routeStatus (`shouldBe` "")
+                _ <-
+                  runPageScript
+                    "window.__ahi8HistoryLength = history.length; const status = document.querySelector('[data-navigation-route-status]'); let count = 0; status.dataset.testMutationCount = '0'; new MutationObserver((records) => { count += records.filter((record) => record.type === 'childList' || record.type === 'characterData').length; status.dataset.testMutationCount = String(count); }).observe(status, { childList: true, characterData: true, subtree: true }); document.documentElement.style.zoom = '2'; true"
+                press (byRole Link `named` "Spaces") "Enter"
+                assertAll
+                  ((,) <$> currentUrl <*> isFocused mainContent)
+                  (\(url, mainFocused) -> (url `shouldBe` spacesUrl) :| [mainFocused `shouldBe` True])
+                _ <-
+                  runPageScript
+                    "const main = document.querySelector('#app-main'); const box = main.getBoundingClientRect(); const sampleX = Math.min(window.innerWidth - 1, Math.max(0, box.left + 1)); const sampleY = Math.min(window.innerHeight - 1, Math.max(0, box.top + 1)); const topElement = document.elementFromPoint(sampleX, sampleY); const style = getComputedStyle(main); main.dataset.testFocusUnobscured = String(document.activeElement === main && box.top >= 0 && box.top < window.innerHeight && (topElement === main || main.contains(topElement)) && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0); true"
+                assertAll
+                  ( (,,,,,,)
+                      <$> currentUrl
+                      <*> textContent (css "title")
+                      <*> textContent (byRole Heading)
+                      <*> textContent routeStatus
+                      <*> isFocused mainContent
+                      <*> attributeValue routeStatus "data-test-mutation-count"
+                      <*> attributeValue mainContent "data-test-focus-unobscured"
+                  )
+                  ( \(url, title, heading, announcement, mainFocused, mutationCount, unobscured) ->
+                      (url `shouldBe` spacesUrl)
+                        :| [ title `shouldBe` "web-api: Spaces",
+                             heading `shouldBe` "Site under construction",
+                             announcement `shouldBe` "web-api: Spaces",
+                             mainFocused `shouldBe` True,
+                             mutationCount `shouldBe` Just "1",
+                             unobscured `shouldBe` Just "true"
+                           ]
+                  )
+                historyBack
+                assertAll
+                  ((,,,) <$> currentUrl <*> textContent (css "title") <*> textContent routeStatus <*> attributeValue routeStatus "data-test-mutation-count")
+                  ( \(url, title, announcement, mutationCount) ->
+                      (url `shouldBe` secondUrl)
+                        :| [ title `shouldBe` "web-api: Second",
+                             announcement `shouldBe` "web-api: Second",
+                             mutationCount `shouldBe` Just "2"
+                           ]
+                  )
+                assertFocused mainContent (`shouldBe` True)
+                historyForward
+                assertAll
+                  ((,,,) <$> currentUrl <*> textContent routeStatus <*> attributeValue routeStatus "data-test-mutation-count" <*> attributeValue (byRole Link `named` "Spaces") "aria-current")
+                  ( \(url, announcement, mutationCount, activeRoute) ->
+                      (url `shouldBe` spacesUrl)
+                        :| [ announcement `shouldBe` "web-api: Spaces",
+                             mutationCount `shouldBe` Just "3",
+                             activeRoute `shouldBe` Just "page"
+                           ]
+                  )
+                _ <- runPageScript "document.querySelector('#app-main').dataset.testHistoryStable = String(history.length === window.__ahi8HistoryLength + 1); true"
+                assertAttribute mainContent "data-test-history-stable" (`shouldBe` Just "true")
+                visit secondUrl
+                press (byRole Link `named` "Home") "Enter"
+                assertAll
+                  ((,,,,) <$> currentUrl <*> textContent (css "title") <*> textContent routeStatus <*> isFocused mainContent <*> browserMetrics)
+                  ( \(url, title, announcement, mainFocused, metrics) ->
+                      (url `shouldBe` spacesUrl)
+                        :| [ title `shouldBe` "web-api: Spaces",
+                             announcement `shouldBe` "web-api: Spaces",
+                             mainFocused `shouldBe` True,
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                           ]
+                  )
+            )
+            `shouldReturn` Right ()
 
-nodeBrowserRunnerSource :: String
-nodeBrowserRunnerSource =
-  unlines
-    [ "const fs = require('fs');",
-      "const http = require('http');",
-      "const https = require('https');",
-      "const vm = require('vm');",
-      "const { URL } = require('url');",
-      "",
-      "async function main() {",
-      "  const [requestPath, responsePath] = process.argv.slice(2);",
-      "  const requestLines = fs.readFileSync(requestPath, 'utf8').split(/\\r?\\n/).filter(Boolean);",
-      "  let currentSession = null;",
-      "",
-      "  for (const line of requestLines) {",
-      "    const parts = line.split('\\t');",
-      "    if (parts[0] === 'headless' || parts[0] === 'keep-open-on-failure') {",
-      "      continue;",
-      "    }",
-      "    if (parts[0] !== 'action') {",
-      "      return writeError(responsePath, `Unexpected request line: ${line}`);",
-      "    }",
-      "",
-      "    const action = parts[1];",
-      "    switch (action) {",
-      "      case 'visit-url':",
-      "        currentSession = await BrowserSession.visit(parts[2]);",
-      "        break;",
-      "      case 'click-link-with-text':",
-      "        if (currentSession === null) {",
-      "          return writeError(responsePath, 'No page has been loaded yet.');",
-      "        }",
-      "        await currentSession.clickLinkWithText(parts.slice(2).join('\\t'));",
-      "        break;",
-      "      case 'history-back':",
-      "        if (currentSession === null) {",
-      "          return writeError(responsePath, 'No page has been loaded yet.');",
-      "        }",
-      "        await currentSession.window.history.back();",
-      "        break;",
-      "      case 'history-forward':",
-      "        if (currentSession === null) {",
-      "          return writeError(responsePath, 'No page has been loaded yet.');",
-      "        }",
-      "        await currentSession.window.history.forward();",
-      "        break;",
-      "      case 'assert-text-equals': {",
-      "        if (currentSession === null) {",
-      "          return writeError(responsePath, 'No page has been loaded yet.');",
-      "        }",
-      "        const selector = parts[2];",
-      "        const expected = parts.slice(3).join('\\t');",
-      "        const actual = currentSession.extractSelectorText(selector);",
-      "        if (actual !== expected) {",
-      "          return writeError(responsePath, `Expected ${selector} to equal ${expected}, but found ${actual}`);",
-      "        }",
-      "        break;",
-      "      }",
-      "      case 'assert-navigation-metric-equals': {",
-      "        if (currentSession === null) {",
-      "          return writeError(responsePath, 'No page has been loaded yet.');",
-      "        }",
-      "        const metricName = parts[2];",
-      "        const expectedCount = Number(parts[3]);",
-      "        if (!Number.isInteger(expectedCount)) {",
-      "          return writeError(responsePath, `Expected an integer navigation metric count for ${metricName}, but found ${parts[3]}`);",
-      "        }",
-      "        currentSession.assertNavigationMetricEquals(metricName, expectedCount);",
-      "        break;",
-      "      }",
-      "      default:",
-      "        return writeError(responsePath, `Unsupported action: ${action}`);",
-      "    }",
-      "  }",
-      "",
-      "  fs.writeFileSync(responsePath, 'ok\\n');",
-      "}",
-      "",
-      "class BrowserSession {",
-      "  static async visit(targetUrl) {",
-      "    const response = await fetchResponse(targetUrl);",
-      "    const session = new BrowserSession(targetUrl, parseHtml(response.body, `visit ${targetUrl}`));",
-      "    await session.loadExternalScripts();",
-      "    return session;",
-      "  }",
-      "",
-      "  constructor(targetUrl, page) {",
-      "    this.currentUrl = targetUrl;",
-      "    this.page = page;",
-      "    this.documentListeners = { click: [] };",
-      "    this.windowListeners = { popstate: [] };",
-      "    this.pendingPromises = new Set();",
-      "    this.historyEntries = [targetUrl];",
-      "    this.historyIndex = 0;",
-      "    this.navigationMetrics = {",
-      "      'enhanced-fetch-count': 0,",
-      "      'hard-navigation-count': 0,",
-      "    };",
-      "    this.assignedUrl = null;",
-      "    this.document = this.buildDocument();",
-      "    this.window = this.buildWindow();",
-      "  }",
-      "",
-      "  async loadExternalScripts() {",
-      "    for (const scriptSource of this.page.scriptSources) {",
-      "      const scriptResponse = await fetchResponse(resolveUrl(scriptSource, this.currentUrl));",
-      "      const context = {",
-      "        window: this.window,",
-      "        document: this.document,",
-      "        DOMParser: this.window.DOMParser,",
-      "        URL,",
-      "        Map,",
-      "        Array,",
-      "        console,",
-      "      };",
-      "      this.window.window = this.window;",
-      "      this.window.document = this.document;",
-      "      vm.runInNewContext(scriptResponse.body, context, { filename: scriptSource });",
-      "    }",
-      "  }",
-      "",
-      "  buildDocument() {",
-      "    const session = this;",
-      "    return {",
-      "      get title() {",
-      "        return session.page.title;",
-      "      },",
-      "      set title(value) {",
-      "        session.page.title = value;",
-      "      },",
-      "      get body() {",
-      "        return session.liveBodyElement();",
-      "      },",
-      "      addEventListener(eventName, listener) {",
-      "        if (!session.documentListeners[eventName]) {",
-      "          session.documentListeners[eventName] = [];",
-      "        }",
-      "        session.documentListeners[eventName].push(listener);",
-      "      },",
-      "      querySelector(selector) {",
-      "        return session.currentDocumentElement(selector);",
-      "      },",
-      "    };",
-      "  }",
-      "",
-      "  buildWindow() {",
-      "    const session = this;",
-      "    class SimpleDOMParser {",
-      "      parseFromString(html) {",
-      "        return session.parsedDocument(parseHtml(html, `dom-parser ${session.currentUrl}`));",
-      "      }",
-      "    }",
-      "",
-      "    return {",
-      "      get location() {",
-      "        return {",
-      "          get href() {",
-      "            return session.currentUrl;",
-      "          },",
-      "          get origin() {",
-      "            return new URL(session.currentUrl).origin;",
-      "          },",
-      "          assign(targetUrl) {",
-      "            session.assignedUrl = resolveUrl(targetUrl, session.currentUrl);",
-      "            session.trackPromise(session.hardNavigate(session.assignedUrl));",
-      "          },",
-      "        };",
-      "      },",
-      "      history: {",
-      "        pushState(_state, _title, targetUrl) {",
-      "          session.pushHistory(resolveUrl(targetUrl, session.currentUrl));",
-      "        },",
-      "        back() {",
-      "          return session.navigateHistoryDelta(-1);",
-      "        },",
-      "        forward() {",
-      "          return session.navigateHistoryDelta(1);",
-      "        },",
-      "      },",
-      "      addEventListener(eventName, listener) {",
-      "        if (!session.windowListeners[eventName]) {",
-      "          session.windowListeners[eventName] = [];",
-      "        }",
-      "        session.windowListeners[eventName].push(listener);",
-      "      },",
-      "      fetch(targetUrl) {",
-      "        session.navigationMetrics['enhanced-fetch-count'] += 1;",
-      "        return session.trackPromise(",
-      "          fetchResponse(resolveUrl(targetUrl, session.currentUrl)).then((response) => ({",
-      "            ok: response.statusCode >= 200 && response.statusCode < 300,",
-      "            text: () => session.trackPromise(Promise.resolve(response.body)),",
-      "          }))",
-      "        );",
-      "      },",
-      "      DOMParser: SimpleDOMParser,",
-      "    };",
-      "  }",
-      "",
-      "  liveBodyElement() {",
-      "    const session = this;",
-      "    return {",
-      "      get attributes() {",
-      "        return attributeEntries(session.page.bodyAttributes);",
-      "      },",
-      "      removeAttribute(name) {",
-      "        delete session.page.bodyAttributes[name];",
-      "      },",
-      "      setAttribute(name, value) {",
-      "        session.page.bodyAttributes[name] = value;",
-      "      },",
-      "    };",
-      "  }",
-      "",
-      "  parsedDocument(page) {",
-      "    return {",
-      "      body: {",
-      "        attributes: attributeEntries(page.bodyAttributes),",
-      "      },",
-      "      querySelector(selector) {",
-      "        switch (selector) {",
-      "          case 'title':",
-      "            return { textContent: page.title };",
-      "          case 'nav[data-navigation-region=\"primary\"]':",
-      "            return parsedRegionElement('nav', page);",
-      "          case 'main[data-navigation-content=\"true\"]':",
-      "            return parsedRegionElement('main', page);",
-      "          default:",
-      "            return null;",
-      "        }",
-      "      },",
-      "    };",
-      "  }",
-      "",
-      "  currentDocumentElement(selector) {",
-      "    switch (selector) {",
-      "      case 'nav[data-navigation-region=\"primary\"]':",
-      "        return currentRegionElement(this, 'nav');",
-      "      case 'main[data-navigation-content=\"true\"]':",
-      "        return currentRegionElement(this, 'main');",
-      "      default:",
-      "        return null;",
-      "    }",
-      "  }",
-      "",
-      "  extractSelectorText(selector) {",
-      "    switch (selector) {",
-      "      case '[data-page-title=\"true\"]':",
-      "        return this.page.pageTitle;",
-      "      case 'title':",
-      "        return this.page.title;",
-      "      default:",
-      "        throw new Error(`Unsupported selector: ${selector}`);",
-      "    }",
-      "  }",
-      "",
-      "  async clickLinkWithText(linkText) {",
-      "    const link = this.page.links.find((candidate) => candidate.text === linkText);",
-      "    if (!link) {",
-      "      throw new Error(`Could not find link with text: ${linkText}`);",
-      "    }",
-      "",
-      "    const event = {",
-      "      defaultPrevented: false,",
-      "      button: 0,",
-      "      metaKey: false,",
-      "      ctrlKey: false,",
-      "      shiftKey: false,",
-      "      altKey: false,",
-      "      target: anchorElement(link),",
-      "      preventDefault() {",
-      "        this.defaultPrevented = true;",
-      "      },",
-      "    };",
-      "",
-      "    for (const listener of this.documentListeners.click || []) {",
-      "      listener(event);",
-      "    }",
-      "",
-      "    if (!event.defaultPrevented) {",
-      "      await this.hardNavigate(link.href);",
-      "      return;",
-      "    }",
-      "",
-      "    await this.waitForSettled();",
-      "  }",
-      "",
-      "  async hardNavigate(targetUrl) {",
-      "    this.navigationMetrics['hard-navigation-count'] += 1;",
-      "    const resolvedTargetUrl = resolveUrl(targetUrl, this.currentUrl);",
-      "    const response = await fetchResponse(resolvedTargetUrl);",
-      "    this.pushHistory(resolvedTargetUrl);",
-      "    this.page = parseHtml(response.body, `hard-navigate ${targetUrl}`);",
-      "    this.assignedUrl = null;",
-      "    await this.loadExternalScripts();",
-      "  }",
-      "",
-      "  assertNavigationMetricEquals(metricName, expectedCount) {",
-      "    const actualCount = this.navigationMetrics[metricName];",
-      "    if (typeof actualCount !== 'number') {",
-      "      throw new Error(`Unsupported navigation metric: ${metricName}`);",
-      "    }",
-      "    if (actualCount !== expectedCount) {",
-      "      throw new Error(`Expected navigation metric ${metricName} to equal ${expectedCount}, but found ${actualCount}`);",
-      "    }",
-      "  }",
-      "",
-      "  pushHistory(targetUrl) {",
-      "    if (this.historyIndex < this.historyEntries.length - 1) {",
-      "      this.historyEntries = this.historyEntries.slice(0, this.historyIndex + 1);",
-      "    }",
-      "    this.historyEntries.push(targetUrl);",
-      "    this.historyIndex = this.historyEntries.length - 1;",
-      "    this.currentUrl = targetUrl;",
-      "  }",
-      "",
-      "  async navigateHistoryDelta(delta) {",
-      "    const nextIndex = this.historyIndex + delta;",
-      "    if (nextIndex < 0 || nextIndex >= this.historyEntries.length) {",
-      "      return;",
-      "    }",
-      "    this.historyIndex = nextIndex;",
-      "    this.currentUrl = this.historyEntries[this.historyIndex];",
-      "    for (const listener of this.windowListeners.popstate || []) {",
-      "      listener({});",
-      "    }",
-      "    await this.waitForSettled();",
-      "  }",
-      "",
-      "  trackPromise(promise) {",
-      "    const trackedPromise = Promise.resolve(promise).finally(() => {",
-      "      this.pendingPromises.delete(trackedPromise);",
-      "    });",
-      "    this.pendingPromises.add(trackedPromise);",
-      "    return trackedPromise;",
-      "  }",
-      "",
-      "  async waitForSettled() {",
-      "    while (this.pendingPromises.size > 0) {",
-      "      await Promise.all(Array.from(this.pendingPromises));",
-      "      await new Promise((resolve) => setImmediate(resolve));",
-      "    }",
-      "  }",
-      "}",
-      "",
-      "function writeError(responsePath, message) {",
-      "  fs.writeFileSync(responsePath, `error\\t${message}\\n`);",
-      "}",
-      "",
-      "function resolveUrl(targetUrl, baseUrl) {",
-      "  return new URL(targetUrl, baseUrl).href;",
-      "}",
-      "",
-      "function fetchResponse(targetUrl) {",
-      "  const parsedUrl = new URL(targetUrl);",
-      "  const client = parsedUrl.protocol === 'https:' ? https : http;",
-      "  return new Promise((resolve, reject) => {",
-      "    const request = client.get(parsedUrl, (response) => {",
-      "      let responseBody = '';",
-      "      response.setEncoding('utf8');",
-      "      response.on('data', (chunk) => {",
-      "        responseBody += chunk;",
-      "      });",
-      "      response.on('end', () => {",
-      "        resolve({",
-      "          statusCode: response.statusCode || 0,",
-      "          body: responseBody,",
-      "        });",
-      "      });",
-      "    });",
-      "    request.on('error', reject);",
-      "  });",
-      "}",
-      "",
-      "function parseHtml(html, sourceLabel) {",
-      "  return {",
-      "    title: extractElementText(html, /<title>([\\s\\S]*?)<\\/title>/i, sourceLabel),",
-      "    pageTitle: extractElementText(html, /<[^>]*data-page-title=\"true\"[^>]*>([\\s\\S]*?)<\\/[^>]+>/i, sourceLabel),",
-      "    navHtml: extractRequiredMatch(html, /<nav\\b[^>]*data-navigation-region=\"primary\"[^>]*>[\\s\\S]*?<\\/nav>/i, sourceLabel),",
-      "    mainHtml: extractRequiredMatch(html, /<main\\b[^>]*data-navigation-content=\"true\"[^>]*>[\\s\\S]*?<\\/main>/i, sourceLabel),",
-      "    bodyAttributes: extractBodyAttributes(html),",
-      "    links: extractLinks(html),",
-      "    scriptSources: extractScriptSources(html),",
-      "  };",
-      "}",
-      "",
-      "function currentRegionElement(session, kind) {",
-      "  return {",
-      "    replaceWith(nextElement) {",
-      "      if (kind === 'nav') {",
-      "        session.page.navHtml = nextElement.outerHTML;",
-      "        session.page.links = nextElement.page.links;",
-      "      } else {",
-      "        session.page.mainHtml = nextElement.outerHTML;",
-      "        session.page.pageTitle = nextElement.page.pageTitle;",
-      "      }",
-      "    },",
-      "  };",
-      "}",
-      "",
-      "function parsedRegionElement(kind, page) {",
-      "  return {",
-      "    outerHTML: kind === 'nav' ? page.navHtml : page.mainHtml,",
-      "    page,",
-      "  };",
-      "}",
-      "",
-      "function anchorElement(link) {",
-      "  return {",
-      "    href: link.href,",
-      "    target: link.target,",
-      "    hasAttribute(name) {",
-      "      return name === 'download' ? link.download : false;",
-      "    },",
-      "    closest(selector) {",
-      "      return selector === 'a[data-page-link=\"true\"]' && link.pageLink ? this : null;",
-      "    },",
-      "  };",
-      "}",
-      "",
-      "function extractLinks(html) {",
-      "  const linkPattern = /<a\\b([^>]*)>([\\s\\S]*?)<\\/a>/gi;",
-      "  const links = [];",
-      "  let match;",
-      "  while ((match = linkPattern.exec(html)) !== null) {",
-      "    const attributes = parseAttributes(match[1]);",
-      "    links.push({",
-      "      href: attributes.href || '',",
-      "      target: attributes.target || '',",
-      "      download: Object.prototype.hasOwnProperty.call(attributes, 'download'),",
-      "      pageLink: attributes['data-page-link'] === 'true',",
-      "      text: normalizeText(match[2]),",
-      "    });",
-      "  }",
-      "  return links;",
-      "}",
-      "",
-      "function extractScriptSources(html) {",
-      "  const scriptPattern = /<script\\b[^>]*src=\"([^\"]+)\"[^>]*><\\/script>/gi;",
-      "  const sources = [];",
-      "  let match;",
-      "  while ((match = scriptPattern.exec(html)) !== null) {",
-      "    sources.push(match[1]);",
-      "  }",
-      "  return sources;",
-      "}",
-      "",
-      "function extractBodyAttributes(html) {",
-      "  const match = html.match(/<body\\b([^>]*)>/i);",
-      "  return match ? parseAttributes(match[1]) : {};",
-      "}",
-      "",
-      "function parseAttributes(attributeSource) {",
-      "  const attributes = {};",
-      "  const attributePattern = /([^\\s=]+)(?:=\"([^\"]*)\")?/g;",
-      "  let match;",
-      "  while ((match = attributePattern.exec(attributeSource)) !== null) {",
-      "    attributes[match[1]] = match[2] || '';",
-      "  }",
-      "  return attributes;",
-      "}",
-      "",
-      "function attributeEntries(attributes) {",
-      "  return Object.entries(attributes).map(([name, value]) => ({ name, value }));",
-      "}",
-      "",
-      "function extractRequiredMatch(html, pattern, sourceLabel) {",
-      "  const match = html.match(pattern);",
-      "  if (!match) {",
-      "    throw new Error(`Expected selector to match rendered HTML for pattern ${pattern} from ${sourceLabel}. HTML prefix: ${html.slice(0, 200)}`);",
-      "  }",
-      "  return match[0];",
-      "}",
-      "",
-      "function extractElementText(html, pattern, sourceLabel) {",
-      "  const match = html.match(pattern);",
-      "  if (!match) {",
-      "    throw new Error(`Expected selector to match rendered HTML for pattern ${pattern} from ${sourceLabel}. HTML prefix: ${html.slice(0, 200)}`);",
-      "  }",
-      "  return normalizeText(match[1]);",
-      "}",
-      "",
-      "function normalizeText(htmlFragment) {",
-      "  return htmlFragment.replace(/<[^>]+>/g, '').replace(/\\s+/g, ' ').trim();",
-      "}",
-      "",
-      "main().catch((error) => {",
-      "  const [, responsePath] = process.argv.slice(2);",
-      "  if (responsePath) {",
-      "    writeError(responsePath, error.message);",
-      "    process.exit(0);",
-      "  }",
-      "  console.error(error);",
-      "  process.exit(1);",
-      "});"
-    ]
+    it "keeps only the newest overlapping enhanced navigation lifecycle" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (challengedBrowserApp appConfig) $ \server -> do
+          let baseUrl = HarchWeb.localServerBaseUrl server
+              spacesUrl = baseUrl <> "/spaces"
+              loginUrl = baseUrl <> "/login"
+              routeStatus = css "[data-navigation-route-status]"
+          runBrowserScenario
+            browser
+            ( do
+                visit spacesUrl
+                blockRequestsMatching "**/second"
+                _ <-
+                  runPageScript
+                    "const status = document.querySelector('[data-navigation-route-status]'); let count = 0; status.dataset.testMutationCount = '0'; new MutationObserver((records) => { count += records.filter((record) => record.type === 'childList' || record.type === 'characterData').length; status.dataset.testMutationCount = String(count); }).observe(status, { childList: true, characterData: true, subtree: true }); true"
+                press (byRole Link `named` "Second") "Enter"
+                press (byRole Link `named` "Profile") "Enter"
+                releaseRequestsMatching "**/second"
+                assertAll
+                  ((,,,,) <$> currentUrl <*> textContent (byRole Heading) <*> textContent routeStatus <*> attributeValue routeStatus "data-test-mutation-count" <*> browserMetrics)
+                  ( \(url, heading, announcement, mutationCount, metrics) ->
+                      (url `shouldBe` loginUrl)
+                        :| [ heading `shouldBe` "Sign in",
+                             announcement `shouldBe` "web-api: Sign in",
+                             mutationCount `shouldBe` Just "1",
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 2, hardNavigationCount = 0}|])
+                           ]
+                  )
+                assertFocused (css "#app-main") (`shouldBe` True)
+            )
+            `shouldReturn` Right ()
+
+    it "falls back natively for failed, incompatible, and unsafe final responses without announcing success" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let baseUrl = HarchWeb.localServerBaseUrl server
+              secondUrl = baseUrl <> "/second"
+              spacesUrl = baseUrl <> "/spaces"
+              routeStatus = byRole Status
+              assertNativeFallback =
+                assertAll
+                  ((,,,) <$> currentUrl <*> textContent (byRole Heading) <*> textContent routeStatus <*> browserMetrics)
+                  ( \(url, heading, announcement, metrics) ->
+                      (url `shouldBe` secondUrl)
+                        :| [ heading `shouldBe` "Second",
+                             announcement `shouldBe` "",
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
+                           ]
+                  )
+          runBrowserScenario
+            browser
+            ( do
+                visit spacesUrl
+                blockRequestsMatching "**/second"
+                press (byRole Link `named` "Second") "Enter"
+                failBlockedRequestsMatching "**/second"
+                assertNativeFallback
+                visit spacesUrl
+                _ <-
+                  runPageScript
+                    "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: response.url, text: async () => '<!DOCTYPE html><html><head><title>Incompatible</title></head><body><main>Missing lifecycle markers</main></body></html>' }; }; true"
+                press (byRole Link `named` "Second") "Enter"
+                assertNativeFallback
+                visit spacesUrl
+                _ <-
+                  runPageScript
+                    "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: 'https://outside.example/redirect', text: () => response.text() }; }; true"
+                press (byRole Link `named` "Second") "Enter"
+                assertNativeFallback
+                visit spacesUrl
+                _ <-
+                  runPageScript
+                    "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: '://malformed', text: () => response.text() }; }; true"
+                press (byRole Link `named` "Second") "Enter"
+                assertNativeFallback
+            )
+            `shouldReturn` Right ()
+
+    it "keeps delayed-runtime and scripts-disabled keyboard navigation native, including the skip link" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let baseUrl = HarchWeb.localServerBaseUrl server
+              secondUrl = baseUrl <> "/second"
+              spacesUrl = baseUrl <> "/spaces"
+              mainContent = css "#app-main"
+          runBrowserScenario
+            browser
+            ( do
+                blockRequestsMatching "**/assets/navigation.js"
+                visit secondUrl
+                press (byRole Link `named` "Spaces") "Enter"
+                assertAll
+                  ((,,) <$> currentUrl <*> textContent (byRole Status) <*> browserMetrics)
+                  ( \(url, announcement, metrics) ->
+                      (url `shouldBe` spacesUrl)
+                        :| [ announcement `shouldBe` "",
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
+                           ]
+                  )
+                releaseRequestsMatching "**/assets/navigation.js"
+                visitWithoutScripts secondUrl
+                press (css "body") "Tab"
+                assertFocused (byRole Link `named` "Skip to main content") (`shouldBe` True)
+                press (byRole Link `named` "Skip to main content") "Enter"
+                assertFocused mainContent (`shouldBe` True)
+                press (byRole Link `named` "Spaces") "Enter"
+                assertAll
+                  ((,,) <$> currentUrl <*> textContent (byRole Heading) <*> browserMetrics)
+                  ( \(url, heading, metrics) ->
+                      (url `shouldBe` spacesUrl)
+                        :| [ heading `shouldBe` "Site under construction",
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
+                           ]
+                  )
+            )
+            `shouldReturn` Right ()
+
+    it "preserves Spanish registration input until the delayed runtime sends its localized patch" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultPageRepository localizedRegistrationWorkflow) $ \server -> do
+          let registrationUrl = HarchWeb.localServerBaseUrl server <> "/es/register"
+              usernameField = byLabel "Nombre de usuario"
+              emailField = byLabel "Direccion de correo"
+              passwordField = byLabel "Contrasena"
+          runBrowserScenario
+            browser
+            ( do
+                blockRequestsMatching "**/assets/navigation.js"
+                visit registrationUrl
+                assertText (byRole Heading) (`shouldBe` "Crea tu cuenta")
+                fill usernameField "person_01"
+                _ <-
+                  runPageScript
+                    "const field = document.querySelector('#registration-email'); field.value = 'person@example.test'; field.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'person@example.test' })); true"
+                paste passwordField "correct horse battery staple"
+                click (byRole Button `named` "Crear cuenta")
+                assertAll
+                  ( (,,,,)
+                      <$> currentUrl
+                      <*> inputValue usernameField
+                      <*> inputValue emailField
+                      <*> inputValue passwordField
+                      <*> browserMetrics
+                  )
+                  ( \(url, username, email, password, metrics) ->
+                      (url `shouldBe` registrationUrl)
+                        :| [ username `shouldBe` "person_01",
+                             email `shouldBe` "person@example.test",
+                             password `shouldBe` "correct horse battery staple",
+                             $( [|metrics|]
+                                  `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 0}|]
+                              )
+                           ]
+                  )
+                releaseRequestsMatching "**/assets/navigation.js"
+                assertAll
+                  ((,,) <$> browserMetrics <*> textContent (byText "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") <*> inputValue passwordField)
+                  ( \(metrics, message, password) ->
+                      ($([|metrics|] `shouldMatch` [p|BrowserMetrics {mutationRequestCount = 1}|]))
+                        :| [ message `shouldBe` "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.",
+                             password `shouldBe` ""
+                           ]
+                  )
+            )
+            `shouldReturn` Right ()
+
+    it "accepts pasted and autofill-compatible login values, clears secrets, and keeps focus visible when narrow and zoomed" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let loginUrl = HarchWeb.localServerBaseUrl server <> "/login"
+              identifierField = byLabel "Email address or username"
+              passwordField = byLabel "Password"
+              proofField = byLabel "Verification method"
+              authenticatorField = byLabel "Authenticator code"
+              recoveryField = byLabel "Recovery code"
+          runBrowserScenario
+            browser
+            ( do
+                setViewportSize 320 480
+                visit loginUrl
+                _ <-
+                  runPageScript
+                    "const field = document.querySelector('#login-identifier'); field.value = 'not an identifier!'; field.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'not an identifier!' })); true"
+                paste passwordField "short"
+                paste authenticatorField "1"
+                press identifierField "Tab"
+                assertFocused passwordField (`shouldBe` True)
+                press passwordField "Tab"
+                assertFocused proofField (`shouldBe` True)
+                press proofField "Tab"
+                assertFocused authenticatorField (`shouldBe` True)
+                click (byRole Button `named` "Sign in")
+                assertFocused (css "#login-error-summary") (`shouldBe` True)
+                assertAll
+                  ((,,,) <$> inputValue identifierField <*> inputValue passwordField <*> inputValue authenticatorField <*> browserMetrics)
+                  ( \(identifier, password, authenticator, metrics) ->
+                      (identifier `shouldBe` "not an identifier!")
+                        :| [ password `shouldBe` "",
+                             authenticator `shouldBe` "",
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                           ]
+                  )
+                _ <-
+                  runPageScript
+                    "const proof = document.querySelector('#login-proof'); proof.value = 'recovery'; proof.dispatchEvent(new Event('change', { bubbles: true })); const identifier = document.querySelector('#login-identifier'); identifier.value = 'person@example.test'; identifier.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'person@example.test' })); document.documentElement.style.zoom = '2'; true"
+                paste passwordField "correct horse battery staple"
+                paste recoveryField "pasted-recovery"
+                _ <-
+                  runPageScript
+                    "const field = document.querySelector('#login-recovery-code'); field.focus(); field.scrollIntoView({ block: 'nearest' }); const box = field.getBoundingClientRect(); field.dataset.testFocusVisible = String(field === document.activeElement && box.top >= 0 && box.bottom <= window.innerHeight); field.dataset.testFocusVisible"
+                assertAttribute recoveryField "data-test-focus-visible" (`shouldBe` Just "true")
+                click (byRole Button `named` "Sign in")
+                assertAll
+                  ((,,,) <$> inputValue identifierField <*> inputValue passwordField <*> inputValue authenticatorField <*> inputValue recoveryField)
+                  ( \(identifier, password, authenticator, recovery) ->
+                      (identifier `shouldBe` "person@example.test")
+                        :| [password `shouldBe` "", authenticator `shouldBe` "", recovery `shouldBe` ""]
+                  )
+            )
+            `shouldReturn` Right ()
+
+    it "keeps client-only authentication forms semantically complete without scripts" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let baseUrl = HarchWeb.localServerBaseUrl server
+          runBrowserScenario
+            browser
+            ( do
+                visitWithoutScripts (baseUrl <> "/register")
+                assertAttribute (css "#registration-region form") "method" (`shouldBe` Just "dialog")
+                assertValue (byLabel "Password") (`shouldBe` "")
+                press (byLabel "Username") "Tab"
+                assertFocused (byLabel "Email address") (`shouldBe` True)
+                press (byLabel "Email address") "Tab"
+                assertFocused (byLabel "Display name (optional)") (`shouldBe` True)
+                press (byLabel "Display name (optional)") "Tab"
+                assertFocused (byLabel "Password") (`shouldBe` True)
+                visitWithoutScripts (baseUrl <> "/login")
+                assertAttribute (css "#login-region form") "method" (`shouldBe` Just "dialog")
+                assertText (byText "Choose Authenticator code above, then enter or paste its six-digit code.") (`shouldBe` "Choose Authenticator code above, then enter or paste its six-digit code.")
+                visitWithoutScripts (baseUrl <> "/verify?token=delivered-token")
+                assertAttribute (css "#verification-region form") "method" (`shouldBe` Just "dialog")
+                assertValue (byLabel "Verification token") (`shouldBe` "delivered-token")
+                press (byLabel "Verification token") "Tab"
+                assertFocused (byRole Button `named` "Verify email") (`shouldBe` True)
+                visitWithoutScripts (baseUrl <> "/mfa")
+                assertAttribute (css "#mfa-enrollment-region form") "method" (`shouldBe` Just "dialog")
+                assertText (byRole Button `named` "Start authenticator enrollment") (`shouldBe` "Start authenticator enrollment")
+            )
+            `shouldReturn` Right ()
+
+    it "keeps MFA confirmation keyboard- and paste-usable after its server patch" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultPageRepository mfaEnrollmentBrowserWorkflow) $ \server -> do
+          let mfaUrl = HarchWeb.localServerBaseUrl server <> "/mfa"
+              codeField = byLabel "Authenticator code"
+          runBrowserScenario
+            browser
+            ( do
+                setCookie mfaUrl mfaEnrollmentCookieName sessionToken
+                visit mfaUrl
+                csrfToken <- documentCsrfToken
+                setCookie mfaUrl "__Host-harch-csrf" csrfToken
+                click (byRole Button `named` "Start authenticator enrollment")
+                assertFocused codeField (`shouldBe` True)
+                press codeField "Tab"
+                assertFocused (byRole Button `named` "Confirm authenticator") (`shouldBe` True)
+                paste codeField "123"
+                click (byRole Button `named` "Confirm authenticator")
+                assertAll
+                  ((,) <$> inputValue codeField <*> browserMetrics)
+                  ( \(code, metrics) ->
+                      (code `shouldBe` "")
+                        :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])]
+                  )
+                assertFocused codeField (`shouldBe` True)
+            )
+            `shouldReturn` Right ()
+
+    it "focuses a multi-error registration summary and follows its field link by keyboard" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultPageRepository localizedRegistrationWorkflow) $ \server -> do
+          let registrationUrl = HarchWeb.localServerBaseUrl server <> "/register"
+              oversizedEmail = Text.replicate 245 "a" <> "@example.test"
+              usernameField = byLabel "Username"
+              emailField = byLabel "Email address"
+              passwordField = byLabel "Password"
+              usernameErrorLink = byRole Link `named` "Use a username with 3 to 20 letters, numbers, underscores, or hyphens."
+          runBrowserScenario
+            browser
+            ( do
+                visit registrationUrl
+                fill usernameField "no!"
+                fill emailField oversizedEmail
+                fill passwordField "correct horse battery staple"
+                click (byRole Button `named` "Create account")
+                assertFocused (css "#registration-error-summary") (`shouldBe` True)
+                assertText (byRole Heading `named` "Fix the following problems") (`shouldBe` "Fix the following problems")
+                assertAll
+                  ((,,,) <$> inputValue usernameField <*> inputValue emailField <*> inputValue passwordField <*> attributeValue passwordField "aria-describedby")
+                  ( \(username, email, password, describedBy) ->
+                      (username `shouldBe` "no!")
+                        :| [ email `shouldBe` oversizedEmail,
+                             password `shouldBe` "",
+                             describedBy `shouldBe` Just "registration-password-hint"
+                           ]
+                  )
+                press usernameErrorLink "Enter"
+                assertFocused usernameField (`shouldBe` True)
+            )
+            `shouldReturn` Right ()
+
+    it "resends a pending-profile verification email through the immediate capture path" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository pendingProfileWorkflow pendingProfileE2eSecurity) $ \server -> do
+          let profileUrl = HarchWeb.localServerBaseUrl server <> "/profile"
+          runBrowserScenario
+            browser
+            ( do
+                setCookie profileUrl sessionCookieName sessionToken
+                visit profileUrl
+                csrfToken <- documentCsrfToken
+                setCookie profileUrl "__Host-harch-csrf" csrfToken
+                assertAll
+                  ((,) <$> textContent (byRole Heading) <*> textContent (byText "person@example.test"))
+                  (\(heading, email) -> (heading `shouldBe` "Profile") :| [email `shouldBe` "person@example.test"])
+                click (byRole Button `named` "Resend verification email")
+                assertAll
+                  ((,) <$> textContent (byText "Check your inbox for a verification link.") <*> browserMetrics)
+                  ( \(message, metrics) ->
+                      (message `shouldBe` "Check your inbox for a verification link.")
+                        :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {mutationRequestCount = 1}|])]
+                  )
+            )
+            `shouldReturn` Right ()
+
+withBrowserApp :: (BrowserConfig -> AppConfig -> IO a) -> IO a
+withBrowserApp action = do
+  loadedConfig <- loadPlaywrightBrowserConfig
+  browser <-
+    case loadedConfig of
+      Left loadError -> expectationFailure loadError >> fail "unreachable"
+      Right config -> pure config
+  withSystemTempDirectory "web-api-e2e-assets" $ \assetDirectory ->
+    do
+      let stylesDirectory = assetDirectory </> "styles"
+      createDirectory stylesDirectory
+      sourceStylesheet <- findSourceStylesheet
+      copyFile sourceStylesheet (stylesDirectory </> "app.css")
+      action
+        browser
+        defaultAppConfig
+          { staticAssets =
+              StaticAssetsConfig
+                { staticAssetRoots =
+                    [ StaticAssetRoot
+                        { staticUrlPrefix = "/assets",
+                          staticDirectory = assetDirectory
+                        }
+                    ],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes,
+                  staticCacheControlSeconds = Nothing
+                }
+          }
+
+challengedBrowserApp :: AppConfig -> HarchWeb.Application AppRoute AccountAction WebApi.Route.AppRequestContext ()
+challengedBrowserApp appConfig =
+  buildAppWithDatabaseAndAccountWorkflowAndSecurity
+    appConfig
+    defaultPageRepository
+    unavailableAccountWorkflow
+    unauthenticatedProfileChallengeSecurity
+
+unauthenticatedProfileChallengeSecurity :: HarchWeb.ApplicationSecurity AppRoute WebApi.Route.AppRequestContext ()
+unauthenticatedProfileChallengeSecurity =
+  HarchWeb.AuthenticationEnabled
+    []
+    ( HarchWeb.AuthenticationGuard
+        ( \endpointRequest ->
+            let routeRequest = HarchWeb.endpointRouteRequest endpointRequest
+             in pure $
+                  case HarchWeb.endpointAccess (HarchWeb.endpointMetadata endpointRequest) of
+                    HarchWeb.AllowUnauthenticated -> HarchWeb.ContinueEndpoint (HarchWeb.requestContext routeRequest)
+                    _ -> HarchWeb.HaltEndpoint (HarchWeb.nonPageInternalRedirectResponse Http.status303 (HarchWeb.RouteRequest LoginRoute (HarchWeb.requestContext routeRequest)))
+        )
+    )
+    []
+
+documentCsrfToken :: BrowserScenario Text
+documentCsrfToken = do
+  value <- runPageScript "document.body.dataset.harchCsrfToken"
+  case Aeson.fromJSON value of
+    Aeson.Success token -> pure token
+    Aeson.Error _ -> error "browser fixture expected a CSRF token string"
+
+-- | Cabal can execute this suite from either the package directory, the
+-- workspace root, or a build directory.  Locate the checked-in stylesheet
+-- relative to an ancestor rather than making the browser fixture depend on
+-- the runner's working directory.
+findSourceStylesheet :: IO FilePath
+findSourceStylesheet = getCurrentDirectory >>= searchFrom
+  where
+    searchFrom directory = do
+      let candidates =
+            [ directory </> "public/styles/app.css",
+              directory </> "packages/web-api/public/styles/app.css"
+            ]
+      existing <- firstExisting candidates
+      case existing of
+        Just stylesheet -> pure stylesheet
+        Nothing ->
+          let parent = takeDirectory directory
+           in if parent == directory
+                then ioError (userError "could not locate packages/web-api/public/styles/app.css")
+                else searchFrom parent
+
+    firstExisting paths =
+      case paths of
+        [] -> pure Nothing
+        path : remaining -> do
+          exists <- doesFileExist path
+          if exists
+            then pure (Just path)
+            else firstExisting remaining
+
+pendingProfileWorkflow :: AccountWorkflow
+pendingProfileWorkflow =
+  unavailableAccountWorkflow
+    { accountWorkflowStore =
+        AccountStore
+          { createPendingAccount = \_ _ -> error "unexpected account creation",
+            completePendingRegistrationDelivery = \_ -> pure (Right True),
+            releasePendingRegistrationDelivery = \_ -> pure (Right True),
+            reserveVerificationResend = \_ verification _ -> pure (Right (VerificationResendReserved (VerificationResendClaim (Account.storedVerificationAccountId verification) (Account.storedVerificationTokenDigest verification)))),
+            completeVerificationResend = \_ _ -> pure (Right VerificationResendClaimSettled),
+            releaseVerificationResend = \_ -> pure (Right VerificationResendClaimSettled),
+            replaceEmailVerification = \_ -> pure (Right True),
+            findEmailVerification = \_ -> error "unexpected verification lookup",
+            consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
+          },
+      accountWorkflowEmailDelivery = Email.EmailDelivery (\_ -> pure ()),
+      accountWorkflowClock = pure 100,
+      accountWorkflowSessionStore =
+        AccountSessionStore
+          { saveAccountSession = \_ -> error "unexpected session save",
+            loadAccountSession = \receivedSessionId ->
+              pure (Right (if receivedSessionId == pendingProfileSessionId then Just pendingProfileSession else Nothing)),
+            invalidateAccountSession = \_ _ -> error "unexpected session invalidation"
+          },
+      accountWorkflowProfileStore =
+        AccountProfileStore
+          { findAccountProfile = \receivedAccountId ->
+              pure (Right (if receivedAccountId == pendingProfileAccountId then Just pendingProfile else Nothing))
+          },
+      accountWorkflowVerificationUrl = \_ _ -> "https://account.example.test/verify"
+    }
+
+-- The account-JWT unit/integration tests prove proof verification and durable
+-- revocation. This browser fixture starts after that admission boundary with a
+-- known principal so it can exercise the protected profile action's capture
+-- and patch behavior without putting test signing keys in browser state.
+pendingProfileE2eSecurity :: HarchWeb.ApplicationSecurity AppRoute WebApi.Route.AppRequestContext ()
+pendingProfileE2eSecurity =
+  HarchWeb.AuthenticationEnabled
+    []
+    ( HarchWeb.AuthenticationGuard
+        ( \endpointRequest ->
+            pure
+              ( HarchWeb.ContinueEndpoint
+                  ( (HarchWeb.requestContext (HarchWeb.endpointRouteRequest endpointRequest))
+                      { WebApi.Route.requestAccountPrincipal =
+                          Just
+                            ( mkAccountPrincipal
+                                pendingProfileAccountId
+                                pendingProfileSessionId
+                                (Session.sessionExpiresAtNanoseconds pendingProfileSession)
+                            )
+                      }
+                  )
+              )
+        )
+    )
+    []
+
+localizedRegistrationWorkflow :: AccountWorkflow
+localizedRegistrationWorkflow =
+  unavailableAccountWorkflow
+    { accountWorkflowStore =
+        (accountWorkflowStore unavailableAccountWorkflow)
+          { createPendingAccount = \_ _ -> pure (Right PendingAccountEmailTaken),
+            completePendingRegistrationDelivery = \_ -> pure (Right True),
+            releasePendingRegistrationDelivery = \_ -> pure (Right True)
+          },
+      accountWorkflowPasswordHasher = \_ _ -> pure (Just (Password.PasswordHash "test-password-hash"))
+    }
+
+mfaEnrollmentBrowserWorkflow :: AccountWorkflow
+mfaEnrollmentBrowserWorkflow =
+  unavailableAccountWorkflow
+    { accountWorkflowClock = pure 100,
+      accountWorkflowMfaEnrollmentSessionStore =
+        MfaEnrollmentSessionStore
+          { saveMfaEnrollmentSession = \_ -> error "unexpected MFA-enrollment session save",
+            loadMfaEnrollmentSession = \receivedSessionId -> pure (Right (if receivedSessionId == pendingProfileSessionId then Just mfaEnrollmentBrowserSession else Nothing)),
+            invalidateMfaEnrollmentSession = \_ _ -> error "unexpected MFA-enrollment session invalidation"
+          },
+      accountWorkflowMfaStore =
+        MfaStore
+          { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (Right True),
+            loadTotpEnrollment = \_ -> error "invalid browser code must not load the enrollment",
+            confirmTotpEnrollment = \_ _ _ -> error "invalid browser code must not confirm the enrollment",
+            loadUnusedRecoveryCodeHashes = \_ -> error "unexpected recovery-code load",
+            consumeRecoveryCodeHash = \_ _ _ -> error "unexpected recovery-code consumption",
+            markTotpCodeUsed = \_ _ -> error "unexpected TOTP replay write"
+          }
+    }
+
+mfaEnrollmentBrowserSession :: Session.OpaqueSession Account.AccountId
+mfaEnrollmentBrowserSession =
+  Session.OpaqueSession
+    { Session.sessionId = pendingProfileSessionId,
+      Session.sessionPrincipal = pendingProfileAccountId,
+      Session.sessionIssuedAtNanoseconds = 0,
+      Session.sessionExpiresAtNanoseconds = 1000
+    }
+
+pendingProfile :: AccountProfile
+pendingProfile = AccountProfile pendingProfileAccountId pendingProfileEmail Nothing Nothing False
+
+pendingProfileSession :: Session.OpaqueSession Account.AccountId
+pendingProfileSession =
+  Session.OpaqueSession
+    { Session.sessionId = pendingProfileSessionId,
+      Session.sessionPrincipal = pendingProfileAccountId,
+      Session.sessionIssuedAtNanoseconds = 0,
+      Session.sessionExpiresAtNanoseconds = 200
+    }
+
+pendingProfileAccountId :: Account.AccountId
+pendingProfileAccountId = requiredAccountId "account_01"
+
+pendingProfileEmail :: Email.EmailAddress
+pendingProfileEmail = requiredEmailAddress "person@example.test"
+
+pendingProfileSessionId :: Session.SessionId
+pendingProfileSessionId = requiredSessionId sessionToken
+
+sessionCookieName :: Text
+sessionCookieName = Session.sessionCookieNameText (Session.sessionCookieName Session.defaultSessionCookiePolicy)
+
+mfaEnrollmentCookieName :: Text
+mfaEnrollmentCookieName = Session.sessionCookieNameText (Session.sessionCookieName mfaEnrollmentSessionCookiePolicy)
+
+sessionToken :: Text
+sessionToken = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+
+requiredAccountId :: Text -> Account.AccountId
+requiredAccountId value =
+  case Account.mkAccountId value of
+    Just accountId -> accountId
+    Nothing -> error "expected a valid account id"
+
+requiredEmailAddress :: Text -> Email.EmailAddress
+requiredEmailAddress value =
+  case Email.mkEmailAddress value of
+    Just emailAddress -> emailAddress
+    Nothing -> error "expected a valid email address"
+
+requiredSessionId :: Text -> Session.SessionId
+requiredSessionId value =
+  case Session.mkSessionId value of
+    Just sessionIdValue -> sessionIdValue
+    Nothing -> error "expected a valid session id"

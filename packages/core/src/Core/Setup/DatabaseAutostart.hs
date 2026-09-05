@@ -2,30 +2,27 @@
 
 module Core.Setup.DatabaseAutostart
   ( ContainerRuntimeFailure (..),
+    ContainerAutostartOutcomes (..),
     DatabaseAutostartResult (..),
     attemptDatabaseAutostart,
     attemptDatabaseAutostartWith,
   )
 where
 
-import Control.Exception (IOException, try)
+import Core.Setup.ContainerRuntime
+  ( ContainerAutostartOutcomes (..),
+    ContainerRuntimeFailure (..),
+    attemptContainerAutostart,
+    runContainerRuntimeCommand,
+  )
 import Core.Setup.Prerequisite (TcpEndpoint (..))
 import Core.Setup.PrerequisiteConfig (SetupPrerequisiteConfig (..))
 import Core.Setup.PrerequisitePlan
   ( ContainerRuntime (..),
     DatabasePrerequisitePlan (..),
-    autostartRuntimes,
   )
 import Data.Text (Text)
 import Data.Text qualified as Text
-import System.Exit (ExitCode (..))
-import System.Process (proc, readCreateProcessWithExitCode)
-
-data ContainerRuntimeFailure = ContainerRuntimeFailure
-  { failedContainerRuntime :: ContainerRuntime,
-    containerRuntimeFailureMessage :: Text
-  }
-  deriving (Eq, Show)
 
 data DatabaseAutostartResult
   = DatabaseAutostartSkipped Text
@@ -46,26 +43,16 @@ attemptDatabaseAutostartWith ::
   DatabasePrerequisitePlan ->
   IO DatabaseAutostartResult
 attemptDatabaseAutostartWith runCommand setupConfig databasePlan =
-  case databaseAutostartPlan databasePlan of
-    Nothing ->
-      pure (DatabaseAutostartSkipped "database autostart is disabled for this setup plan")
-    Just autostartPlan ->
-      case databaseAutostartArguments setupConfig of
-        Left skipReason ->
-          pure (DatabaseAutostartSkipped skipReason)
-        Right commandArguments ->
-          let tryRuntimes failures [] =
-                pure (DatabaseAutostartFailed (reverse failures))
-              tryRuntimes failures (runtime : remainingRuntimes) = do
-                launchResult <- runCommand runtime commandArguments
-                case launchResult of
-                  Right () ->
-                    pure (DatabaseAutostartSucceeded runtime)
-                  Left failureMessage ->
-                    tryRuntimes
-                      (ContainerRuntimeFailure runtime failureMessage : failures)
-                      remainingRuntimes
-           in tryRuntimes [] (autostartRuntimes autostartPlan)
+  attemptContainerAutostart
+    runCommand
+    (databaseAutostartPlan databasePlan)
+    "database autostart is disabled for this setup plan"
+    (databaseAutostartArguments setupConfig)
+    ContainerAutostartOutcomes
+      { containerAutostartSkipped = DatabaseAutostartSkipped,
+        containerAutostartSucceeded = DatabaseAutostartSucceeded,
+        containerAutostartFailed = DatabaseAutostartFailed
+      }
 
 databaseAutostartArguments :: SetupPrerequisiteConfig -> Either Text [String]
 databaseAutostartArguments setupConfig = do
@@ -99,37 +86,3 @@ renderPortBinding endpoint =
       Left $
         "automatic database autostart only supports DATABASE_HOST values 127.0.0.1 or 0.0.0.0, but got "
           <> tcpEndpointHost endpoint
-
-runContainerRuntimeCommand :: ContainerRuntime -> [String] -> IO (Either Text ())
-runContainerRuntimeCommand runtime commandArguments = do
-  let executable = renderContainerRuntimeExecutable runtime
-  processResult <-
-    try (readCreateProcessWithExitCode (proc executable commandArguments) "") ::
-      IO (Either IOException (ExitCode, String, String))
-  pure $
-    case processResult of
-      Left processError ->
-        Left (Text.pack (show processError))
-      Right (ExitSuccess, _, _) ->
-        Right ()
-      Right (ExitFailure exitCode, stdoutText, stderrText) ->
-        Left (renderCommandFailure exitCode stdoutText stderrText)
-
-renderContainerRuntimeExecutable :: ContainerRuntime -> String
-renderContainerRuntimeExecutable containerRuntime =
-  case containerRuntime of
-    PodmanRuntime -> "podman"
-    DockerRuntime -> "docker"
-
-renderCommandFailure :: Int -> String -> String -> Text
-renderCommandFailure exitCode stdoutText stderrText =
-  let failureMessage = firstNonEmptyText [Text.pack stderrText, Text.pack stdoutText]
-   in if Text.null failureMessage
-        then "command failed with exit code " <> Text.pack (show exitCode)
-        else failureMessage
-
-firstNonEmptyText :: [Text] -> Text
-firstNonEmptyText textValues =
-  case filter (not . Text.null) (map Text.strip textValues) of
-    message : _ -> message
-    [] -> ""

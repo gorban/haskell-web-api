@@ -1,0 +1,380 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+-- | Private typed observability foundation shared by the public API and OTLP
+-- exporter implementation.
+module HarchWeb.Observability.Types
+  ( ConnectionObservability (..),
+    HttpServerMetrics (..),
+    ObservabilityConfig (..),
+    ObservabilityAttribute (..),
+    ObservabilityAttributeValue (..),
+    ObservabilityStartupPlan (..),
+    OtlpExporter (..),
+    OtlpExporterStartup (..),
+    RequestIdentity (..),
+    RequestTraceContext (..),
+    RequestObservability (..),
+    RequestSpan (..),
+    ResponseKind (..),
+    SpanMethodLabel,
+    SpanRoutePath,
+    TelemetrySignal (..),
+    buildConnectionObservability,
+    buildRequestObservability,
+    forceConnectionObservability,
+    forceRequestObservability,
+    mkSpanMethodLabel,
+    mkSpanRoutePath,
+    planObservabilityStartup,
+    requestObservabilityAttributes,
+    requestSpanName,
+    withDatabaseOperations,
+    withRequestTraceContext,
+  )
+where
+
+import Data.Text (Text)
+import Data.Text qualified as Text
+import HarchWeb.Database (DatabaseOperation (..))
+
+data ObservabilityAttributeValue
+  = TextAttribute Text
+  | IntAttribute Int
+  deriving (Eq, Show)
+
+data ObservabilityAttribute = ObservabilityAttribute
+  { attributeName :: Text,
+    attributeValue :: ObservabilityAttributeValue
+  }
+  deriving (Eq, Show)
+
+data ResponseKind
+  = PageResponseKind
+  | BodyResponseKind
+  deriving (Eq, Show)
+
+data OtlpExporter = OtlpExporter
+  { otlpEndpoint :: Text,
+    otlpHeaders :: [(Text, Text)]
+  }
+  deriving (Eq)
+
+data ObservabilityConfig = ObservabilityConfig
+  { tracingExporter :: Maybe OtlpExporter,
+    metricsExporter :: Maybe OtlpExporter
+  }
+  deriving (Eq, Show)
+
+data TelemetrySignal
+  = TracingSignal
+  | MetricsSignal
+  deriving (Eq, Show)
+
+data OtlpExporterStartup = OtlpExporterStartup
+  { startupSignal :: TelemetrySignal,
+    startupEndpoint :: Text,
+    startupHeaders :: [(Text, Text)]
+  }
+  deriving (Eq)
+
+newtype ObservabilityStartupPlan = ObservabilityStartupPlan
+  { startupExporters :: [OtlpExporterStartup]
+  }
+  deriving (Eq, Show)
+
+-- | OTLP endpoints and headers can carry collector credentials. Rendering
+-- configuration or startup plans is useful during startup failures, but it
+-- must never turn those values into application-log payloads. Keep only the
+-- stable fact that each field was configured; the exporter runtime still
+-- receives the original values (PR-SEC5, 2026-08-28).
+instance Show OtlpExporter where
+  showsPrec precedence exporter =
+    showParen
+      (precedence > 10)
+      ( showString "OtlpExporter {otlpEndpoint = <configured>, otlpHeaders = <redacted: "
+          . shows (length (otlpHeaders exporter))
+          . showString ">}"
+      )
+
+-- | See 'OtlpExporter'. The derived startup plan may be rendered through a
+-- top-level application startup error, so its copied transport parameters
+-- follow the same non-disclosure rule.
+instance Show OtlpExporterStartup where
+  showsPrec precedence exporter =
+    showParen
+      (precedence > 10)
+      ( showString "OtlpExporterStartup {startupSignal = "
+          . shows (startupSignal exporter)
+          . showString ", startupEndpoint = <configured>, startupHeaders = <redacted: "
+          . shows (length (startupHeaders exporter))
+          . showString ">}"
+      )
+
+-- | Convert configured exporters into the stable startup actions that the
+-- server runtime performs. This is pure so applications can validate and
+-- describe observability setup without starting any exporters.
+planObservabilityStartup :: ObservabilityConfig -> ObservabilityStartupPlan
+planObservabilityStartup observabilityConfig =
+  ObservabilityStartupPlan
+    { startupExporters =
+        maybe [] (pure . buildStartup TracingSignal) (tracingExporter observabilityConfig)
+          ++ maybe [] (pure . buildStartup MetricsSignal) (metricsExporter observabilityConfig)
+    }
+  where
+    buildStartup signal exporter =
+      OtlpExporterStartup
+        { startupSignal = signal,
+          startupEndpoint = otlpEndpoint exporter,
+          startupHeaders = otlpHeaders exporter
+        }
+
+data RequestSpan = RequestSpan
+  { requestSpanDisplayName :: Text,
+    requestSpanAttributes :: [ObservabilityAttribute]
+  }
+  deriving (Eq, Show)
+
+data HttpServerMetrics = HttpServerMetrics
+  { requestDurationMetricName :: Text,
+    activeRequestsMetricName :: Text,
+    httpServerMetricAttributes :: [ObservabilityAttribute]
+  }
+  deriving (Eq, Show)
+
+data RequestTraceContext = RequestTraceContext
+  { traceContextTraceId :: Text,
+    traceContextParentSpanId :: Text,
+    traceContextState :: Maybe Text
+  }
+  deriving (Eq, Show)
+
+data RequestObservability = RequestObservability
+  { observabilityRequestSpan :: RequestSpan,
+    observabilityHttpServerMetrics :: HttpServerMetrics,
+    observabilityTraceContext :: Maybe RequestTraceContext,
+    -- | Structured response-side database work. It remains separate from
+    -- generic span attributes until the OTLP exporter projects it as child
+    -- spans, so attribute order or unrelated attributes cannot change its
+    -- meaning.
+    observabilityDatabaseOperations :: [DatabaseOperation]
+  }
+  deriving (Eq, Show)
+
+newtype ConnectionObservability = ConnectionObservability
+  { observabilityConnectionSpan :: RequestSpan
+  }
+  deriving (Eq, Show)
+
+-- | The HTTP method label in an observability span display name. Opaque so
+-- it cannot be transposed with 'SpanRoutePath' at a 'requestSpanName' call
+-- site.
+newtype SpanMethodLabel = SpanMethodLabel Text
+
+mkSpanMethodLabel :: Text -> SpanMethodLabel
+mkSpanMethodLabel = SpanMethodLabel
+
+-- | The route path label in an observability span display name.
+newtype SpanRoutePath = SpanRoutePath Text
+
+mkSpanRoutePath :: Text -> SpanRoutePath
+mkSpanRoutePath = SpanRoutePath
+
+requestSpanName :: SpanMethodLabel -> SpanRoutePath -> Text
+requestSpanName (SpanMethodLabel method) (SpanRoutePath routePath) =
+  Text.concat [method, " ", requestSpanOperationName routePath]
+
+-- | The four values identifying one HTTP request for observability: its
+-- method and matched route path reuse this module's existing
+-- 'SpanMethodLabel'/'SpanRoutePath' newtypes so a caller cannot transpose
+-- them with the request's own scheme or raw path, which have no comparable
+-- adjacent-newtype risk with each other.
+data RequestIdentity = RequestIdentity
+  { requestIdentityMethod :: SpanMethodLabel,
+    requestIdentityScheme :: Text,
+    requestIdentityPath :: Text,
+    requestIdentityRoutePath :: SpanRoutePath
+  }
+
+requestObservabilityAttributes ::
+  RequestIdentity ->
+  Int ->
+  ResponseKind ->
+  [ObservabilityAttribute] ->
+  [ObservabilityAttribute]
+requestObservabilityAttributes identity statusCode responseKind extraAttributes =
+  commonAttributes ++ extraAttributes
+  where
+    SpanMethodLabel method = requestIdentityMethod identity
+    SpanRoutePath routePath = requestIdentityRoutePath identity
+    scheme = requestIdentityScheme identity
+    requestPath = requestIdentityPath identity
+    commonAttributes =
+      [ ObservabilityAttribute
+          { attributeName = "http.request.method",
+            attributeValue = TextAttribute method
+          },
+        ObservabilityAttribute
+          { attributeName = "url.scheme",
+            attributeValue = TextAttribute scheme
+          },
+        ObservabilityAttribute
+          { attributeName = "url.path",
+            attributeValue = TextAttribute requestPath
+          },
+        ObservabilityAttribute
+          { attributeName = "http.route",
+            attributeValue = TextAttribute routePath
+          },
+        ObservabilityAttribute
+          { attributeName = "http.response.status_code",
+            attributeValue = IntAttribute statusCode
+          },
+        ObservabilityAttribute
+          { attributeName = "harch.response.kind",
+            attributeValue = TextAttribute (responseKindText responseKind)
+          }
+      ]
+
+buildRequestObservability ::
+  RequestIdentity ->
+  Int ->
+  ResponseKind ->
+  [ObservabilityAttribute] ->
+  RequestObservability
+buildRequestObservability identity statusCode responseKind extraAttributes =
+  let attributes = requestObservabilityAttributes identity statusCode responseKind extraAttributes
+   in RequestObservability
+        { observabilityRequestSpan =
+            RequestSpan
+              { requestSpanDisplayName = requestSpanName (requestIdentityMethod identity) (requestIdentityRoutePath identity),
+                requestSpanAttributes = attributes
+              },
+          observabilityHttpServerMetrics =
+            HttpServerMetrics
+              { requestDurationMetricName = "http.server.request.duration",
+                activeRequestsMetricName = "http.server.active_requests",
+                httpServerMetricAttributes = metricSafeAttributes attributes
+              },
+          observabilityTraceContext = Nothing,
+          observabilityDatabaseOperations = []
+        }
+
+-- | Metric label cardinality must remain bounded. Request paths, network
+-- addresses, headers, diagnostic details, and timing measurements stay on
+-- spans and logs, but never become metric dimensions.
+metricSafeAttributes :: [ObservabilityAttribute] -> [ObservabilityAttribute]
+metricSafeAttributes = filter (isMetricSafeAttribute . attributeName)
+
+isMetricSafeAttribute :: Text -> Bool
+isMetricSafeAttribute attribute =
+  attribute
+    `elem` [ "http.request.method",
+             "url.scheme",
+             "http.route",
+             "http.response.status_code",
+             "harch.response.kind"
+           ]
+
+withRequestTraceContext :: RequestTraceContext -> RequestObservability -> RequestObservability
+withRequestTraceContext traceContext requestObservability =
+  requestObservability
+    { observabilityTraceContext = Just traceContext
+    }
+
+-- | Attach typed database work to an otherwise complete request observation.
+-- The response boundary calls this after it has collected response metadata;
+-- OTLP projection owns the later child-span encoding.
+withDatabaseOperations :: [DatabaseOperation] -> RequestObservability -> RequestObservability
+withDatabaseOperations databaseOperations requestObservability =
+  requestObservability
+    { observabilityDatabaseOperations = databaseOperations
+    }
+
+buildConnectionObservability :: Text -> [ObservabilityAttribute] -> ConnectionObservability
+buildConnectionObservability displayName attributes =
+  ConnectionObservability
+    { observabilityConnectionSpan =
+        RequestSpan
+          { requestSpanDisplayName = displayName,
+            requestSpanAttributes = attributes
+          }
+    }
+
+forceRequestObservability :: RequestObservability -> ()
+forceRequestObservability requestObservability =
+  forceRequestSpan (observabilityRequestSpan requestObservability) `seq`
+    forceHttpServerMetrics (observabilityHttpServerMetrics requestObservability) `seq`
+      forceTraceContext (observabilityTraceContext requestObservability) `seq`
+        forceDatabaseOperations (observabilityDatabaseOperations requestObservability)
+
+forceDatabaseOperations :: [DatabaseOperation] -> ()
+forceDatabaseOperations databaseOperations =
+  case databaseOperations of
+    [] -> ()
+    databaseOperation : remainingOperations ->
+      Text.length (databaseOperationSystem databaseOperation) `seq`
+        Text.length (databaseOperationName databaseOperation) `seq`
+          Text.length (databaseQueryTemplate databaseOperation) `seq`
+            databaseOperationStartedAtNanoseconds databaseOperation `seq`
+              databaseOperationEndedAtNanoseconds databaseOperation `seq`
+                forceDatabaseOperations remainingOperations
+
+forceConnectionObservability :: ConnectionObservability -> ()
+forceConnectionObservability =
+  forceRequestSpan . observabilityConnectionSpan
+
+forceTraceContext :: Maybe RequestTraceContext -> ()
+forceTraceContext maybeTraceContext =
+  case maybeTraceContext of
+    Nothing -> ()
+    Just traceContext ->
+      Text.length (traceContextTraceId traceContext) `seq`
+        Text.length (traceContextParentSpanId traceContext) `seq`
+          maybe () (\traceState -> Text.length traceState `seq` ()) (traceContextState traceContext)
+
+forceRequestSpan :: RequestSpan -> ()
+forceRequestSpan requestSpan =
+  Text.length (requestSpanDisplayName requestSpan) `seq`
+    forceAttributes (requestSpanAttributes requestSpan)
+
+forceHttpServerMetrics :: HttpServerMetrics -> ()
+forceHttpServerMetrics httpServerMetrics =
+  Text.length (requestDurationMetricName httpServerMetrics) `seq`
+    Text.length (activeRequestsMetricName httpServerMetrics) `seq`
+      forceAttributes (httpServerMetricAttributes httpServerMetrics)
+
+forceAttributes :: [ObservabilityAttribute] -> ()
+forceAttributes attributes =
+  case attributes of
+    [] -> ()
+    attribute : remainingAttributes ->
+      forceAttribute attribute `seq` forceAttributes remainingAttributes
+
+forceAttribute :: ObservabilityAttribute -> ()
+forceAttribute attribute =
+  Text.length (attributeName attribute) `seq`
+    forceAttributeValue (attributeValue attribute)
+
+forceAttributeValue :: ObservabilityAttributeValue -> ()
+forceAttributeValue attributeValue =
+  case attributeValue of
+    TextAttribute textValue -> Text.length textValue `seq` ()
+    IntAttribute intValue -> intValue `seq` ()
+
+responseKindText :: ResponseKind -> Text
+responseKindText responseKind =
+  case responseKind of
+    PageResponseKind -> "page"
+    BodyResponseKind -> "body"
+
+requestSpanOperationName :: Text -> Text
+requestSpanOperationName routePath =
+  if isNotFoundRoutePath routePath
+    then "not-found"
+    else routePath
+
+isNotFoundRoutePath :: Text -> Bool
+isNotFoundRoutePath routePath =
+  case filter (not . Text.null) (Text.splitOn "/" routePath) of
+    [] -> False
+    segments -> last segments == "404"

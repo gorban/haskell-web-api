@@ -1,15 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module WebApi.Database
-  ( DatabaseEffect (..),
+  ( PageRepository (..),
     DatabaseError (..),
     DatabaseOperation (..),
     DatabaseResult (..),
     DatabaseSeed (..),
-    HomePageData (..),
     SecondPageData (..),
-    buildSeededDatabaseEffect,
-    defaultDatabaseEffect,
+    buildSeededPageRepository,
+    defaultPageRepository,
     defaultDatabaseSeed,
   )
 where
@@ -18,24 +17,9 @@ import Data.Text (Text)
 import Data.Word (Word64)
 import WebApi.Route
   ( AppLocale (..),
-    AppRequestContext (..),
   )
 
-data DatabaseError
-  = HomePageDataError Text
-  | SecondPageDataError Text
-  deriving (Eq)
-
-instance Show DatabaseError where
-  showsPrec precedence databaseError =
-    showParen (precedence > 10) $
-      case databaseError of
-        HomePageDataError message -> showString "HomePageDataError " . shows message
-        SecondPageDataError message -> showString "SecondPageDataError " . shows message
-
-newtype HomePageData = HomePageData
-  { homePageDataSummary :: Text
-  }
+newtype DatabaseError = SecondPageDataError Text
   deriving (Eq, Show)
 
 data SecondPageData = SecondPageData
@@ -72,40 +56,25 @@ data DatabaseResult a = DatabaseResult
   deriving (Eq, Show)
 
 data DatabaseSeed = DatabaseSeed
-  { englishHomePageData :: Either DatabaseError HomePageData,
-    frenchHomePageData :: Either DatabaseError HomePageData,
-    englishSecondPageData :: Either DatabaseError SecondPageData,
-    frenchSecondPageData :: Either DatabaseError SecondPageData
+  { englishSecondPageData :: Either DatabaseError SecondPageData,
+    spanishSecondPageData :: Either DatabaseError SecondPageData
   }
   deriving (Eq, Show)
 
-data DatabaseEffect = DatabaseEffect
-  { loadHomePageData :: AppRequestContext -> IO (Either DatabaseError HomePageData),
-    loadHomePageDataWithObservability :: AppRequestContext -> IO (DatabaseResult HomePageData),
-    loadSecondPageData :: AppRequestContext -> IO (Either DatabaseError SecondPageData),
-    loadSecondPageDataWithObservability :: AppRequestContext -> IO (DatabaseResult SecondPageData)
+newtype PageRepository = PageRepository
+  { loadSecondPage :: AppLocale -> IO (DatabaseResult SecondPageData)
   }
 
 defaultDatabaseSeed :: DatabaseSeed
 defaultDatabaseSeed =
   DatabaseSeed
-    { englishHomePageData =
-        Right
-          HomePageData
-            { homePageDataSummary = "Server-rendered home page with stubbed content."
-            },
-      frenchHomePageData =
-        Right
-          HomePageData
-            { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
-            },
-      englishSecondPageData =
+    { englishSecondPageData =
         Right
           SecondPageData
             { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
               secondPageDataHighlights = []
             },
-      frenchSecondPageData =
+      spanishSecondPageData =
         Right
           SecondPageData
             { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
@@ -113,33 +82,21 @@ defaultDatabaseSeed =
             }
     }
 
-defaultDatabaseEffect :: DatabaseEffect
-defaultDatabaseEffect = buildSeededDatabaseEffect defaultDatabaseSeed
+defaultPageRepository :: PageRepository
+defaultPageRepository = buildSeededPageRepository defaultDatabaseSeed
 
-buildSeededDatabaseEffect :: DatabaseSeed -> DatabaseEffect
-buildSeededDatabaseEffect seed =
-  DatabaseEffect
-    { loadHomePageData = fmap databaseResultValue . loadSeededHomePageData,
-      loadHomePageDataWithObservability = loadSeededHomePageData,
-      loadSecondPageData = fmap databaseResultValue . loadSeededSecondPageData,
-      loadSecondPageDataWithObservability = loadSeededSecondPageData
+buildSeededPageRepository :: DatabaseSeed -> PageRepository
+buildSeededPageRepository seed =
+  PageRepository
+    { loadSecondPage = loadSeededSecondPage
     }
   where
-    loadSeededHomePageData requestContext =
+    loadSeededSecondPage locale =
       pure $
         DatabaseResult
           { databaseResultValue =
-              case requestLocale requestContext of
-                English -> englishHomePageData seed
-                French -> frenchHomePageData seed,
-            databaseResultOperations = []
-          }
-    loadSeededSecondPageData requestContext =
-      pure $
-        DatabaseResult
-          { databaseResultValue =
-              case requestLocale requestContext of
+              case locale of
                 English -> englishSecondPageData seed
-                French -> frenchSecondPageData seed,
+                Spanish -> spanishSecondPageData seed,
             databaseResultOperations = []
           }

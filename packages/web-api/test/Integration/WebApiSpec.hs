@@ -5,37 +5,51 @@
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (finally)
-import qualified Data.ByteString as ByteString
-import qualified Data.ByteString.Char8 as ByteStringChar8
-import qualified Data.Text as Text
-import qualified Data.Text.Encoding as TextEncoding
+import Data.ByteString qualified as ByteString
+import Data.ByteString.Char8 qualified as ByteStringChar8
+import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, socket, tupleToHostAddress)
-import qualified Network.Socket as NetworkSocket
-import qualified Network.Socket.ByteString as SocketByteString
+import Network.Socket qualified as NetworkSocket
+import Network.Socket.ByteString qualified as SocketByteString
 import Numeric (readHex)
-import System.Environment (getEnvironment, lookupEnv, setEnv, unsetEnv)
+import System.Directory (doesFileExist)
+import System.Environment (getEnvironment, getExecutablePath, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (ExitSuccess))
-import System.FilePath ((</>))
+import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose)
 import System.IO.Error (tryIOError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (ProcessHandle, StdStream (UseHandle), createProcess, cwd, env, getProcessExitCode, proc, readCreateProcessWithExitCode, readProcessWithExitCode, std_out, terminateProcess, waitForProcess)
+import TestSupport.AccountJwt (withTestAccountJwtFixture)
 import TestSupport.RealPostgres (databaseSetupEnvironment, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, supportedPostgresMajorVersions, withContainerizedPsqlOnPath)
 import WebApi.Config (DatabaseConfig (..))
-import WebApi.Database (DatabaseEffect (..), DatabaseError (..), HomePageData (..), SecondPageData (..))
-import WebApi.Postgres (buildPostgresDatabaseEffect, buildRuntimePostgresDatabaseEffect)
-import WebApi.Route (AppLocale (French), AppRequestContext (..), defaultRequestContext)
+import WebApi.Database (DatabaseError (..), DatabaseResult (..), PageRepository (..), SecondPageData (..))
+import WebApi.Postgres (buildPostgresPageRepository, buildRuntimePostgresPageRepository, newPostgresPool)
+import WebApi.Route (AppLocale (Spanish), AppRequestContext (..), defaultRequestContext)
+
+loadSecondPageValueForRequest :: PageRepository -> AppRequestContext -> IO (Either DatabaseError SecondPageData)
+loadSecondPageValueForRequest pageRepository requestContext =
+  databaseResultValue <$> loadSecondPage pageRepository (requestLocale requestContext)
 
 spec = do
   describe "main" $ do
-    it "stays running while idle, serves real HTTP traffic, and only stops when terminated" $ do
+    it "stays running while idle, serves real HTTP traffic, and only stops when terminated" $ withTestAccountJwtFixture $ \_ jwtConfigLines -> do
       withUnusedLoopbackPort $ \unusedPort ->
         withSystemTempDirectory "haskell-web-api-run" $ \workingDirectory -> do
-          writeFile (workingDirectory <> "/.env") ("LISTENER_0_PORT=" <> show unusedPort <> "\n")
+          writeFile
+            (workingDirectory <> "/.env")
+            ( "LISTENER_0_PORT="
+                <> show unusedPort
+                <> "\nDATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nCSRF_SIGNING_ACTIVE_KEY_ID=development-v1\nCSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+                <> unlines jwtConfigLines
+            )
+          webApiExecutable <- testBuildToolPath "haskell-web-api"
           withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
             (_, _, _, processHandle) <-
               createProcess
-                ( (proc "haskell-web-api" [])
+                ( (proc webApiExecutable [])
                     { cwd = Just workingDirectory,
                       std_out = UseHandle outputHandle
                     }
@@ -53,17 +67,21 @@ spec = do
                   terminateProcess processHandle
                   _ <- waitForProcess processHandle
                   hClose outputHandle
-            responseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
-            runningExitCode `shouldBe` Nothing
-            readFile outputPath
-              `shouldReturn` unlines
-                [ "Loaded config file: ./.env",
-                  "Config file missing: ./.env.local",
-                  "Parsed listener config: http://127.0.0.1:" <> show unusedPort,
-                  "HTTP Server listening at http://127.0.0.1:" <> show unusedPort
-                ]
+            output <- readFile outputPath
+            expectAll
+              ( (responseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}")
+                  :| [ runningExitCode `shouldBe` Nothing,
+                       output
+                         `shouldBe` unlines
+                           [ "Loaded config file: ./.env",
+                             "Config file missing: ./.env.local",
+                             "Parsed listener config: http://127.0.0.1:" <> show unusedPort,
+                             "HTTP Server listening at http://127.0.0.1:" <> show unusedPort
+                           ]
+                     ]
+              )
 
-    it "defaults plain HTTP traffic to HTTPS redirects when both HTTP and manual TLS listeners are configured" $
+    it "defaults plain HTTP traffic to HTTPS redirects when both HTTP and manual TLS listeners are configured" $ withTestAccountJwtFixture $ \_ jwtConfigLines ->
       withUnusedLoopbackPort $ \httpPort ->
         withUnusedLoopbackPort $ \httpsPort ->
           withManualTlsFiles $ \certificatePath privateKeyPath ->
@@ -71,21 +89,29 @@ spec = do
               writeFile
                 (workingDirectory <> "/.env")
                 ( unlines
-                    [ "LISTENER_0_HOST=127.0.0.1",
-                      "LISTENER_0_PORT=" <> show httpPort,
-                      "LISTENER_0_SCHEME=http",
-                      "LISTENER_1_HOST=127.0.0.1",
-                      "LISTENER_1_PORT=" <> show httpsPort,
-                      "LISTENER_1_SCHEME=https",
-                      "LISTENER_1_TLS_SOURCE=manual",
-                      "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
-                      "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath
-                    ]
+                    ( [ "LISTENER_0_HOST=127.0.0.1",
+                        "LISTENER_0_PORT=" <> show httpPort,
+                        "LISTENER_0_SCHEME=http",
+                        "LISTENER_1_HOST=127.0.0.1",
+                        "LISTENER_1_PORT=" <> show httpsPort,
+                        "LISTENER_1_SCHEME=https",
+                        "LISTENER_1_TLS_SOURCE=manual",
+                        "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
+                        "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath,
+                        "DATABASE_PASSWORD=web_api",
+                        "SMTP_PASSWORD=password",
+                        "TOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                        "CSRF_SIGNING_ACTIVE_KEY_ID=development-v1",
+                        "CSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                      ]
+                        <> jwtConfigLines
+                    )
                 )
+              webApiExecutable <- testBuildToolPath "haskell-web-api"
               withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
                 (_, _, _, processHandle) <-
                   createProcess
-                    ( (proc "haskell-web-api" [])
+                    ( (proc webApiExecutable [])
                         { cwd = Just workingDirectory,
                           std_out = UseHandle outputHandle
                         }
@@ -101,21 +127,25 @@ spec = do
                       terminateProcess processHandle
                       _ <- waitForProcess processHandle
                       hClose outputHandle
-                redirectHeaders `shouldContain` "308 Permanent Redirect"
-                redirectHeaders `shouldContain` ("Location: https://127.0.0.1:" <> show httpsPort <> "/api/status")
-                httpsResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
-                runningExitCode `shouldBe` Nothing
-                readFile outputPath
-                  `shouldReturn` unlines
-                    [ "Loaded config file: ./.env",
-                      "Config file missing: ./.env.local",
-                      "Parsed listener config: http://127.0.0.1:" <> show httpPort,
-                      "Parsed listener config: https://127.0.0.1:" <> show httpsPort,
-                      "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
-                      "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
-                    ]
+                output <- readFile outputPath
+                expectAll
+                  ( (redirectHeaders `shouldContain` "308 Permanent Redirect")
+                      :| [ redirectHeaders `shouldContain` ("Location: https://127.0.0.1:" <> show httpsPort <> "/api/status"),
+                           httpsResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}",
+                           runningExitCode `shouldBe` Nothing,
+                           output
+                             `shouldBe` unlines
+                               [ "Loaded config file: ./.env",
+                                 "Config file missing: ./.env.local",
+                                 "Parsed listener config: http://127.0.0.1:" <> show httpPort,
+                                 "Parsed listener config: https://127.0.0.1:" <> show httpsPort,
+                                 "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
+                                 "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
+                               ]
+                         ]
+                  )
 
-    it "lets REDIRECT_HTTP_TO_HTTPS=false keep both HTTP and HTTPS listeners serving traffic" $
+    it "lets REDIRECT_HTTP_TO_HTTPS=false keep both HTTP and HTTPS listeners serving traffic" $ withTestAccountJwtFixture $ \_ jwtConfigLines ->
       withUnusedLoopbackPort $ \httpPort ->
         withUnusedLoopbackPort $ \httpsPort ->
           withManualTlsFiles $ \certificatePath privateKeyPath ->
@@ -123,22 +153,30 @@ spec = do
               writeFile
                 (workingDirectory <> "/.env")
                 ( unlines
-                    [ "LISTENER_0_HOST=127.0.0.1",
-                      "LISTENER_0_PORT=" <> show httpPort,
-                      "LISTENER_0_SCHEME=http",
-                      "LISTENER_1_HOST=127.0.0.1",
-                      "LISTENER_1_PORT=" <> show httpsPort,
-                      "LISTENER_1_SCHEME=https",
-                      "LISTENER_1_TLS_SOURCE=manual",
-                      "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
-                      "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath,
-                      "REDIRECT_HTTP_TO_HTTPS=false"
-                    ]
+                    ( [ "LISTENER_0_HOST=127.0.0.1",
+                        "LISTENER_0_PORT=" <> show httpPort,
+                        "LISTENER_0_SCHEME=http",
+                        "LISTENER_1_HOST=127.0.0.1",
+                        "LISTENER_1_PORT=" <> show httpsPort,
+                        "LISTENER_1_SCHEME=https",
+                        "LISTENER_1_TLS_SOURCE=manual",
+                        "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
+                        "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath,
+                        "REDIRECT_HTTP_TO_HTTPS=false",
+                        "DATABASE_PASSWORD=web_api",
+                        "SMTP_PASSWORD=password",
+                        "TOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                        "CSRF_SIGNING_ACTIVE_KEY_ID=development-v1",
+                        "CSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                      ]
+                        <> jwtConfigLines
+                    )
                 )
+              webApiExecutable <- testBuildToolPath "haskell-web-api"
               withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
                 (_, _, _, processHandle) <-
                   createProcess
-                    ( (proc "haskell-web-api" [])
+                    ( (proc webApiExecutable [])
                         { cwd = Just workingDirectory,
                           std_out = UseHandle outputHandle
                         }
@@ -154,18 +192,22 @@ spec = do
                       terminateProcess processHandle
                       _ <- waitForProcess processHandle
                       hClose outputHandle
-                httpResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
-                httpsResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
-                runningExitCode `shouldBe` Nothing
-                readFile outputPath
-                  `shouldReturn` unlines
-                    [ "Loaded config file: ./.env",
-                      "Config file missing: ./.env.local",
-                      "Parsed listener config: http://127.0.0.1:" <> show httpPort,
-                      "Parsed listener config: https://127.0.0.1:" <> show httpsPort,
-                      "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
-                      "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
-                    ]
+                output <- readFile outputPath
+                expectAll
+                  ( (httpResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}")
+                      :| [ httpsResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}",
+                           runningExitCode `shouldBe` Nothing,
+                           output
+                             `shouldBe` unlines
+                               [ "Loaded config file: ./.env",
+                                 "Config file missing: ./.env.local",
+                                 "Parsed listener config: http://127.0.0.1:" <> show httpPort,
+                                 "Parsed listener config: https://127.0.0.1:" <> show httpsPort,
+                                 "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
+                                 "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
+                               ]
+                         ]
+                  )
 
   describe "database integration" $ do
     it
@@ -176,9 +218,10 @@ spec = do
           exitCode <-
             withSystemTempDirectory "haskell-web-api-db" $ \workingDirectory ->
               withSystemTempFile "haskell-web-api-db-stdout.txt" $ \outputPath outputHandle -> do
+                databaseSetupExecutable <- testBuildToolPath "haskell-web-api-db"
                 (_, _, _, processHandle) <-
                   createProcess
-                    ( (proc "haskell-web-api-db" ["migrate-and-seed"])
+                    ( (proc databaseSetupExecutable ["migrate-and-seed"])
                         { cwd = Just workingDirectory,
                           env = Just (databaseSetupEnvironment inheritedEnvironment),
                           std_out = UseHandle outputHandle
@@ -200,53 +243,39 @@ spec = do
           supportedVersionResult
             `shouldSatisfy` (`elem` fmap (\majorVersion -> (ExitSuccess, show majorVersion <> "\n", "")) supportedPostgresMajorVersions)
 
-          let postgresEffect = buildPostgresDatabaseEffect defaultRealPostgresConfig
-              frenchRequestContext = defaultRequestContext {requestLocale = French}
-          loadHomePageData postgresEffect defaultRequestContext
-            `shouldReturn` Right
-              HomePageData
-                { homePageDataSummary = "Server-rendered home page with stubbed content."
-                }
-          loadSecondPageData postgresEffect defaultRequestContext
+          let postgresEffect = buildPostgresPageRepository defaultRealPostgresConfig
+              spanishRequestContext = defaultRequestContext {requestLocale = Spanish}
+          loadSecondPageValueForRequest postgresEffect defaultRequestContext
             `shouldReturn` Right
               SecondPageData
                 { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
                   secondPageDataHighlights = []
                 }
-          loadHomePageData postgresEffect frenchRequestContext
-            `shouldReturn` Right
-              HomePageData
-                { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
-                }
-          loadSecondPageData postgresEffect frenchRequestContext
+          loadSecondPageValueForRequest postgresEffect spanishRequestContext
             `shouldReturn` Right
               SecondPageData
-                { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
+                { secondPageDataSummary = "Contenido de la segunda pagina con datos de ejemplo listos para futuros cargadores.",
                   secondPageDataHighlights = []
                 }
 
           withTemporaryEnvironment "PATH" (Just "") $ do
-            let runtimePostgresEffect = buildRuntimePostgresDatabaseEffect defaultRealPostgresConfig
-            loadHomePageData runtimePostgresEffect defaultRequestContext
-              `shouldReturn` Right
-                HomePageData
-                  { homePageDataSummary = "Server-rendered home page with stubbed content."
-                  }
-            loadSecondPageData runtimePostgresEffect frenchRequestContext
+            runtimePool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
+            let runtimePostgresEffect = buildRuntimePostgresPageRepository runtimePool
+            loadSecondPageValueForRequest runtimePostgresEffect spanishRequestContext
               `shouldReturn` Right
                 SecondPageData
-                  { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
+                  { secondPageDataSummary = "Contenido de la segunda pagina con datos de ejemplo listos para futuros cargadores.",
                     secondPageDataHighlights = []
                   }
 
           allowedSelect <-
             readCreateProcessWithExitCode
-              ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_runtime", "--no-password", "--set", "ON_ERROR_STOP=1", "--tuples-only", "--no-align", "--quiet", "--command", "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';"])
+              ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_runtime", "--no-password", "--set", "ON_ERROR_STOP=1", "--tuples-only", "--no-align", "--quiet", "--command", "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';"])
                   { env = Just (("PGPASSWORD", "web_api") : inheritedEnvironment)
                   }
               )
               ""
-          allowedSelect `shouldBe` (ExitSuccess, "Server-rendered home page with stubbed content.\n", "")
+          allowedSelect `shouldBe` (ExitSuccess, "Second page content with stubbed data ready for future loaders.\n", "")
 
           forbiddenInsert <-
             readCreateProcessWithExitCode
@@ -282,20 +311,18 @@ spec = do
     it "maps runtime PostgreSQL connection failures into database errors without shelling out to psql" $
       withUnusedLoopbackPort $ \unusedPort ->
         withTemporaryEnvironment "PATH" (Just "") $ do
-          let runtimePostgresEffect =
-                buildRuntimePostgresDatabaseEffect
-                  defaultRealPostgresConfig
-                    { databasePort = unusedPort
-                    }
-          loadHomePageData runtimePostgresEffect defaultRequestContext
+          let unreachableDatabaseConfig = defaultRealPostgresConfig {databasePort = unusedPort}
+          unreachablePool <- newPostgresPool (databasePoolCapacity unreachableDatabaseConfig) unreachableDatabaseConfig
+          let runtimePostgresEffect = buildRuntimePostgresPageRepository unreachablePool
+          loadSecondPageValueForRequest runtimePostgresEffect defaultRequestContext
             >>= \case
-              Left (HomePageDataError errorMessage) -> do
-                errorMessage `shouldSatisfy` (not . Text.null)
-                errorMessage `shouldSatisfy` (not . Text.isInfixOf "posix_spawnp")
-              Left otherError ->
-                expectationFailure ("expected HomePageDataError, got " <> show otherError)
-              Right homePageData ->
-                expectationFailure ("expected runtime connection failure, got " <> show homePageData)
+              Left (SecondPageDataError errorMessage) -> do
+                expectAll
+                  ( (errorMessage `shouldSatisfy` (not . Text.null))
+                      :| [errorMessage `shouldSatisfy` (not . Text.isInfixOf "posix_spawnp")]
+                  )
+              Right secondPageData ->
+                expectationFailure ("expected runtime connection failure, got " <> show secondPageData)
   where
     fst3 (firstValue, _, _) = firstValue
     thd3 (_, _, thirdValue) = thirdValue
@@ -447,6 +474,18 @@ decodeChunkedBody chunkedBytes =
                    in chunk <> decodeChunkedBody (ByteString.drop 2 withChunkSuffix)
             _ ->
               chunkedBytes
+
+-- | Cabal's build-tool path is available during compilation but some test
+-- runners do not preserve it in the child process environment.  Resolve the
+-- sibling executable built for this package and retain the normal PATH name
+-- for installed-suite runs.
+testBuildToolPath :: FilePath -> IO FilePath
+testBuildToolPath executableName = do
+  testExecutable <- getExecutablePath
+  let buildDirectory = takeDirectory (takeDirectory testExecutable)
+      siblingExecutable = buildDirectory </> executableName </> executableName
+  exists <- doesFileExist siblingExecutable
+  pure (if exists then siblingExecutable else executableName)
 
 withManualTlsFiles :: (FilePath -> FilePath -> IO a) -> IO a
 withManualTlsFiles action =

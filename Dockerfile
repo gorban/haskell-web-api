@@ -62,11 +62,12 @@ WORKDIR /app
 
 # Copy cabal files first for better layer caching
 COPY cabal.project ./
+COPY examples/two-pages/two-pages-example.cabal examples/two-pages/
 COPY packages/core/core.cabal packages/core/
 COPY packages/harch-web/harch-web.cabal packages/harch-web/
 COPY packages/hspec-expectations-match/hspec-expectations-match.cabal packages/hspec-expectations-match/
 COPY packages/test-core/test-core.cabal packages/test-core/
-COPY packages/web-api/web-api.cabal packages/web-api/
+COPY packages/web-api/haskell-web-api.cabal packages/web-api/
 
 # Download dependencies (cacheable layer)
 RUN <<EOF
@@ -82,9 +83,17 @@ COPY . .
 # =============================================================================
 FROM builder AS build-and-test
 
+# Install the test-only browser in this stage; release images remain browser-free.
+RUN <<EOF
+cd packages/test-core/playwright-runner
+npm ci
+npx playwright install chromium --with-deps
+EOF
+
 # Run coverage script (builds with -O0 for accurate coverage) then rebuild with -O2 for release
 RUN <<EOF
 ./generate-code-coverage.sh # Runs Unit tests and ensures 100% coverage
+cabal test two-pages-example-tests --test-show-details=direct --test-options="--match real-browser"
 cabal build all -O2
 cp dist-newstyle/build/x86_64-linux/ghc-*/haskell-web-api-*/opt/build/haskell-web-api/haskell-web-api /app/haskell-web-api-bin
 EOF

@@ -1,0 +1,1198 @@
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
+
+{-# SPEC #-}
+
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
+import Control.Exception (bracket_)
+import Control.Monad (replicateM, void)
+import Data.ByteString qualified as ByteString
+import Data.Foldable (for_)
+import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.Maybe (fromMaybe, isNothing)
+import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
+import HarchWeb qualified
+import HarchWeb.Account qualified as Account
+import HarchWeb.Email qualified as Email
+import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
+import HarchWeb.Password qualified as Password
+import HarchWeb.Username qualified as Username
+import Network.HTTP.Types qualified as Http
+import Postgres.DatabaseChange qualified as DatabaseChanges
+import System.Exit (ExitCode (..))
+import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultPostgresContainerImage, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath, withPostgresTlsFixtures)
+import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress)
+import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), VerificationResendAdmission (..), VerificationResendClaim (..), VerificationResendClaimSettlement (..), VerificationResendSuppression (..), defaultPendingRegistrationStoragePolicy, defaultVerificationResendPolicy, mkPendingRegistrationStoragePolicy, mkVerificationResendPolicy)
+import WebApi.App (buildAppWithDatabase)
+import WebApi.Components.AppControls (appControls)
+import WebApi.Config (DatabaseConfig (..), DatabaseSslMode (..), DatabaseTransportSecurity (..), defaultAppConfig)
+import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), SecondPageData (..))
+import WebApi.Mfa (MfaStore (..), StoredTotpEnrollment (..))
+import WebApi.Postgres (buildPostgresPageRepository)
+import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStore, buildRuntimePostgresPageRepositoryWithRunner, databaseTransportEnvironment, decodeRuntimeQueryValue, libpqConnectionValue, migrationStatementsFor, newPostgresPool, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRequiredScalarCommand, runRowsCommand, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, runtimeConnectionString, seedStatements)
+import WebApi.Route (AppRoute (..), defaultRequestContext)
+import WebApi.SetupPlan (TcpEndpoint (..))
+
+isConnectionFailure :: Either Text.Text Text.Text -> Bool
+isConnectionFailure = \case
+  Left _ -> True
+  Right _ -> False
+
+spec = do
+  describe "WebApi.Postgres" $ do
+    it "uses bound parameters for pending account and verification persistence" $ do
+      recordedQueriesReference <- newIORef []
+      let accountId = requiredAccountId "account_01"
+          emailAddress = requiredEmailAddress "person@example.test"
+          username = fromMaybe (error "Expected username") (Username.mkUsername "person_01")
+          token = requiredVerificationToken (Text.replicate 43 "a")
+          passwordHash = fromMaybe (error "Expected password hash") (Password.hashPasswordWithSalt testPasswordHashingPolicy "0123456789abcdef" (Password.mkPassword "correct horse battery staple"))
+          pendingAccount =
+            PendingAccount
+              { pendingAccountId = accountId,
+                pendingAccountEmail = emailAddress,
+                pendingAccountUsername = Just username,
+                pendingAccountDisplayName = Just "Person Example",
+                pendingAccountPasswordHash = passwordHash,
+                pendingAccountVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token,
+                pendingAccountCreatedAtNanoseconds = 100
+              }
+          runner config sql parameters =
+            config `seq` do
+              modifyIORef' recordedQueriesReference (<> [(sql, parameters)])
+              pure $
+                if "reserve_verification_resend" `Text.isInfixOf` sql
+                  then Right [["reserved", "account_01"]]
+                  else
+                    if "stage_pending_registration" `Text.isInfixOf` sql
+                      then Right [["created", "account_01"]]
+                      else
+                        if "INSERT INTO web_api.accounts" `Text.isInfixOf` sql
+                          then Right [["account_01"]]
+                          else
+                            if "SELECT account_id, email_normalized" `Text.isInfixOf` sql
+                              then Right [["account_01", "person@example.test", "500"]]
+                              else
+                                if "DELETE FROM web_api.email_verifications" `Text.isInfixOf` sql
+                                  then Right [["account_01"]]
+                                  else Left "unexpected query"
+          accountStore = buildRuntimePostgresAccountStoreWithRunner runner postgresTestConfig
+      createPendingAccount accountStore defaultPendingRegistrationStoragePolicy pendingAccount >>= \case
+        Right (PendingAccountDeliveryClaimed claim) -> do
+          pendingRegistrationClaimAccountId claim `shouldBe` accountId
+          pendingRegistrationClaimTokenDigest claim `shouldBe` Account.storedVerificationTokenDigest (pendingAccountVerification pendingAccount)
+          case pendingRegistrationClaimStage claim of
+            PendingRegistrationCreated -> pure ()
+            PendingRegistrationRetried -> expectationFailure "a created database row must produce a created claim"
+        _ -> expectationFailure "expected a created pending-registration claim"
+      assertAccountStoreSuccess
+        (findEmailVerification accountStore (Account.emailVerificationTokenDigest token))
+        (\case Just storedVerification -> storedVerification == pendingAccountVerification pendingAccount; Nothing -> False)
+      assertAccountStoreSuccess
+        (replaceEmailVerification accountStore (pendingAccountVerification pendingAccount))
+        id
+      assertAccountStoreSuccess
+        (consumeEmailVerification accountStore (Account.emailVerificationTokenDigest token) 499)
+        (\case Just consumedAccountId -> consumedAccountId == accountId; Nothing -> False)
+      assertAccountStoreSuccess
+        (reserveVerificationResend accountStore (required "verification resend policy" (mkVerificationResendPolicy 3 100 50 100)) (pendingAccountVerification pendingAccount) 100)
+        (\case VerificationResendReserved _ -> True; VerificationResendAdmissionSuppressed _ -> False)
+      recordedQueries <- readIORef recordedQueriesReference
+      let queryText = Text.intercalate "\n" (map fst recordedQueries)
+          parameterText = Text.intercalate "\n" (concatMap snd recordedQueries)
+      Text.isInfixOf (Password.passwordHashText passwordHash) queryText `shouldBe` False
+      Text.isInfixOf (Account.emailVerificationTokenDigestText (Account.emailVerificationTokenDigest token)) queryText `shouldBe` False
+      Text.isInfixOf (Password.passwordHashText passwordHash) parameterText `shouldBe` True
+      Text.isInfixOf (Account.emailVerificationTokenDigestText (Account.emailVerificationTokenDigest token)) parameterText `shouldBe` True
+      Text.isInfixOf (Username.usernameText username) parameterText `shouldBe` True
+      Text.isInfixOf "Person Example" parameterText `shouldBe` True
+      [parameters | (query, parameters) <- recordedQueries, "reserve_verification_resend" `Text.isInfixOf` query]
+        `shouldBe` [["account_01", Account.emailVerificationTokenDigestText (Account.emailVerificationTokenDigest token), "person@example.test", "500", "100", "0", "50", "3", "100"]]
+
+    it "delegates username and capacity decisions to one atomic pending-registration stage" $ do
+      recordedQueriesReference <- newIORef []
+      let accountId = requiredAccountId "account_01"
+          emailAddress = requiredEmailAddress "person@example.test"
+          username = fromMaybe (error "Expected username") (Username.mkUsername "person_01")
+          token = requiredVerificationToken (Text.replicate 43 "a")
+          passwordHash = fromMaybe (error "Expected password hash") (Password.hashPasswordWithSalt testPasswordHashingPolicy "0123456789abcdef" (Password.mkPassword "correct horse battery staple"))
+          pendingAccountWith maybeUsername =
+            PendingAccount
+              { pendingAccountId = accountId,
+                pendingAccountEmail = emailAddress,
+                pendingAccountUsername = maybeUsername,
+                pendingAccountDisplayName = Nothing,
+                pendingAccountPasswordHash = passwordHash,
+                pendingAccountVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token,
+                pendingAccountCreatedAtNanoseconds = 100
+              }
+          takenUsernameRunner _config sql parameters = do
+            modifyIORef' recordedQueriesReference (<> [(sql, parameters)])
+            pure $
+              if "stage_pending_registration" `Text.isInfixOf` sql
+                then Right [["username-taken", ""]]
+                else Left "unexpected query"
+          takenUsernameStore = buildRuntimePostgresAccountStoreWithRunner takenUsernameRunner postgresTestConfig
+      assertAccountStoreSuccess
+        (createPendingAccount takenUsernameStore defaultPendingRegistrationStoragePolicy (pendingAccountWith (Just username)))
+        (\case PendingAccountUsernameTaken -> True; _ -> False)
+      takenUsernameQueries <- readIORef recordedQueriesReference
+      length takenUsernameQueries `shouldBe` 1
+
+      noUsernameQueriesReference <- newIORef []
+      let noUsernameRunner _config sql parameters = do
+            modifyIORef' noUsernameQueriesReference (<> [(sql, parameters)])
+            pure (Right [["created", "account_01"]])
+          noUsernameStore = buildRuntimePostgresAccountStoreWithRunner noUsernameRunner postgresTestConfig
+      createPendingAccount noUsernameStore (required "pending-registration storage policy" (mkPendingRegistrationStoragePolicy 1 1)) (pendingAccountWith Nothing) >>= \case
+        Right (PendingAccountDeliveryClaimed claim) -> do
+          pendingRegistrationClaimAccountId claim `shouldBe` accountId
+          pendingRegistrationClaimTokenDigest claim `shouldBe` Account.emailVerificationTokenDigest token
+          case pendingRegistrationClaimStage claim of
+            PendingRegistrationCreated -> pure ()
+            PendingRegistrationRetried -> expectationFailure "a created database row must produce a created claim"
+        _ -> expectationFailure "expected a created pending-registration claim without a username"
+      noUsernameQueries <- readIORef noUsernameQueriesReference
+      length noUsernameQueries `shouldBe` 1
+      all (\(sql, _) -> "stage_pending_registration" `Text.isInfixOf` sql) noUsernameQueries `shouldBe` True
+      fmap snd noUsernameQueries `shouldBe` [["account_01", "person@example.test", Password.passwordHashText passwordHash, Account.emailVerificationTokenDigestText (Account.emailVerificationTokenDigest token), "500", "100", "", "", "1", "99"]]
+
+    it "maps malformed account-store query results to application-owned errors" $ do
+      let accountId = requiredAccountId "account_01"
+          emailAddress = requiredEmailAddress "person@example.test"
+          token = requiredVerificationToken (Text.replicate 43 "a")
+          passwordHash = fromMaybe (error "Expected password hash") (Password.hashPasswordWithSalt testPasswordHashingPolicy "0123456789abcdef" (Password.mkPassword "correct horse battery staple"))
+          pendingAccount =
+            PendingAccount
+              { pendingAccountId = accountId,
+                pendingAccountEmail = emailAddress,
+                pendingAccountUsername = Nothing,
+                pendingAccountDisplayName = Nothing,
+                pendingAccountPasswordHash = passwordHash,
+                pendingAccountVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token,
+                pendingAccountCreatedAtNanoseconds = 100
+              }
+          storeFor result = buildRuntimePostgresAccountStoreWithRunner (\_ _ _ -> pure result) postgresTestConfig
+          claim = PendingRegistrationClaim accountId (Account.emailVerificationTokenDigest token) PendingRegistrationCreated
+      assertAccountStoreError (createPendingAccount (storeFor (Left "connection failed")) defaultPendingRegistrationStoragePolicy pendingAccount) (isUnavailable "connection failed")
+      assertAccountStoreSuccess (createPendingAccount (storeFor (Right [["email-taken", ""]])) defaultPendingRegistrationStoragePolicy pendingAccount) (\case PendingAccountEmailTaken -> True; _ -> False)
+      assertAccountStoreSuccess (createPendingAccount (storeFor (Right [["storage-exhausted", ""]])) defaultPendingRegistrationStoragePolicy pendingAccount) (\case PendingAccountStorageExhausted -> True; _ -> False)
+      createPendingAccount (storeFor (Right [["retried", "account_01"]])) defaultPendingRegistrationStoragePolicy pendingAccount >>= \case
+        Right (PendingAccountDeliveryClaimed retryClaim) -> do
+          pendingRegistrationClaimAccountId retryClaim `shouldBe` accountId
+          pendingRegistrationClaimTokenDigest retryClaim `shouldBe` Account.emailVerificationTokenDigest token
+          case pendingRegistrationClaimStage retryClaim of
+            PendingRegistrationCreated -> expectationFailure "a retried database row must produce a retry claim"
+            PendingRegistrationRetried -> pure ()
+        _ -> expectationFailure "expected a retried pending-registration claim"
+      assertAccountStoreError (createPendingAccount (storeFor (Right [["created", "invalid id"]])) defaultPendingRegistrationStoragePolicy pendingAccount) (isCorrupt "pending-registration staging returned an invalid account id")
+      assertAccountStoreError (createPendingAccount (storeFor (Right [["retried", "invalid id"]])) defaultPendingRegistrationStoragePolicy pendingAccount) (isCorrupt "pending-registration staging returned an invalid account id")
+      assertAccountStoreError (createPendingAccount (storeFor (Right [["other_account"]])) defaultPendingRegistrationStoragePolicy pendingAccount) (isCorrupt "unexpected pending-registration staging result: row-count=1, column-counts=[1]")
+      assertAccountStoreSuccess (completePendingRegistrationDelivery (storeFor (Right [])) claim) not
+      assertAccountStoreSuccess (releasePendingRegistrationDelivery (storeFor (Right [])) claim) not
+      assertAccountStoreError (completePendingRegistrationDelivery (storeFor (Right [["other_account"]])) claim) (isCorrupt "unexpected pending-registration delivery update result: row-count=1, column-counts=[1]")
+      assertAccountStoreError (replaceEmailVerification (storeFor (Left "connection failed")) (pendingAccountVerification pendingAccount)) (isUnavailable "connection failed")
+      assertAccountStoreSuccess (replaceEmailVerification (storeFor (Right [])) (pendingAccountVerification pendingAccount)) not
+      assertAccountStoreError (replaceEmailVerification (storeFor (Right [["other_account"]])) (pendingAccountVerification pendingAccount)) (isCorrupt "unexpected email-verification replacement result: row-count=1, column-counts=[1]")
+      assertAccountStoreError (findEmailVerification (storeFor (Left "connection failed")) (Account.emailVerificationTokenDigest token)) (isUnavailable "connection failed")
+      assertAccountStoreSuccess (findEmailVerification (storeFor (Right [])) (Account.emailVerificationTokenDigest token)) (\case Nothing -> True; Just _ -> False)
+      assertAccountStoreError (findEmailVerification (storeFor (Right [["invalid id", "person@example.test", "500"]])) (Account.emailVerificationTokenDigest token)) (isCorrupt "email verification has an invalid account id")
+      assertAccountStoreError (findEmailVerification (storeFor (Right [["account_01", "invalid email", "500"]])) (Account.emailVerificationTokenDigest token)) (isCorrupt "email verification has an invalid email address")
+      assertAccountStoreError (findEmailVerification (storeFor (Right [["account_01", "person@example.test", "invalid"]])) (Account.emailVerificationTokenDigest token)) (isCorrupt "email verification has an invalid expiry")
+      assertAccountStoreError (findEmailVerification (storeFor (Right [["account_01"]])) (Account.emailVerificationTokenDigest token)) (isCorrupt "unexpected email-verification result: row-count=1, column-counts=[1]")
+      assertAccountStoreError (consumeEmailVerification (storeFor (Right [["invalid id"]])) (Account.emailVerificationTokenDigest token) 499) (isCorrupt "email verification was consumed for an invalid account id")
+      assertAccountStoreError (consumeEmailVerification (storeFor (Left "connection failed")) (Account.emailVerificationTokenDigest token) 499) (isUnavailable "connection failed")
+      assertAccountStoreSuccess (consumeEmailVerification (storeFor (Right [])) (Account.emailVerificationTokenDigest token) 499) (\case Nothing -> True; Just _ -> False)
+      assertAccountStoreError (consumeEmailVerification (storeFor (Right [["account_01", "extra"]])) (Account.emailVerificationTokenDigest token) 499) (isCorrupt "unexpected email-verification consumption result: row-count=1, column-counts=[2]")
+      let resendClaim = VerificationResendClaim accountId (Account.emailVerificationTokenDigest token)
+          resendVerification = pendingAccountVerification pendingAccount
+      assertAccountStoreSuccess
+        (reserveVerificationResend (storeFor (Right [["throttled", ""]])) defaultVerificationResendPolicy resendVerification 100)
+        (\case VerificationResendAdmissionSuppressed VerificationResendThrottled -> True; _ -> False)
+      assertAccountStoreSuccess
+        (reserveVerificationResend (storeFor (Right [["no-longer-pending", ""]])) defaultVerificationResendPolicy resendVerification 100)
+        (\case VerificationResendAdmissionSuppressed VerificationResendNoLongerPending -> True; _ -> False)
+      assertAccountStoreError
+        (reserveVerificationResend (storeFor (Right [["storage-exhausted", ""]])) defaultVerificationResendPolicy resendVerification 100)
+        (isUnavailable "verification resend storage is exhausted")
+      assertAccountStoreError
+        (reserveVerificationResend (storeFor (Right [["reserved", "invalid id"]])) defaultVerificationResendPolicy resendVerification 100)
+        (isCorrupt "verification resend reservation returned an invalid account id")
+      assertAccountStoreError
+        (reserveVerificationResend (storeFor (Right [["reserved", "other_account"]])) defaultVerificationResendPolicy resendVerification 100)
+        (isCorrupt "verification resend reservation returned a different account id")
+      assertAccountStoreError
+        (reserveVerificationResend (storeFor (Right [["reserved"]])) defaultVerificationResendPolicy resendVerification 100)
+        (isCorrupt "unexpected verification resend reservation result: row-count=1, column-counts=[1]")
+      assertAccountStoreSuccess
+        (completeVerificationResend (storeFor (Right [["lost", ""]])) resendClaim 100)
+        (\case VerificationResendClaimLost -> True; VerificationResendClaimSettled -> False)
+      assertAccountStoreSuccess
+        (releaseVerificationResend (storeFor (Right [["settled", "account_01"]])) resendClaim)
+        (\case VerificationResendClaimSettled -> True; VerificationResendClaimLost -> False)
+      assertAccountStoreError
+        (releaseVerificationResend (storeFor (Right [["settled", "other_account"]])) resendClaim)
+        (isCorrupt "unexpected verification resend claim settlement result: row-count=1, column-counts=[2]")
+
+    it "keeps the delivered token valid until a real PostgreSQL resend claim settles" $ do
+      ensureDefaultPostgresAvailable
+      runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig `shouldReturn` Right ()
+      let accountId = requiredAccountId "ahi2_resend_account"
+          emailAddress = requiredEmailAddress "ahi2-resend@example.test"
+          oldToken = requiredVerificationToken (Text.replicate 43 "a")
+          candidateToken = requiredVerificationToken (Text.replicate 43 "b")
+          concurrentTokens = fmap (requiredVerificationToken . Text.replicate 43) ["c", "d", "e", "f"]
+          deliveredTokens = fmap (requiredVerificationToken . Text.replicate 43) ["c", "d"]
+          oldVerification = Account.mkStoredEmailVerification accountId emailAddress 900 oldToken
+          candidateVerification = Account.mkStoredEmailVerification accountId emailAddress 1200 candidateToken
+      _ <- runRuntimeParameterizedRowsQuery defaultRealPostgresConfig "DELETE FROM web_api.accounts WHERE account_id = $1;" [Account.accountIdText accountId]
+      _ <- runRuntimeParameterizedRowsQuery defaultRealPostgresConfig "INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds) VALUES ($1, $2, 'test-hash', 1) RETURNING account_id;" [Account.accountIdText accountId, Email.emailAddressText emailAddress]
+      _ <- runRuntimeParameterizedRowsQuery defaultRealPostgresConfig "INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds, delivery_state) VALUES ($1, $2, $3, 900, 'delivered') RETURNING account_id;" [Account.emailVerificationTokenDigestText (Account.storedVerificationTokenDigest oldVerification), Account.accountIdText accountId, Email.emailAddressText emailAddress]
+      pool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
+      let store = buildRuntimePostgresAccountStore pool
+      reservedClaim <-
+        reserveVerificationResend store defaultVerificationResendPolicy candidateVerification 1000 >>= \case
+          Right (VerificationResendReserved claim) -> pure claim
+          _ -> expectationFailure "expected a durable resend claim" >> pure (VerificationResendClaim accountId (Account.storedVerificationTokenDigest candidateVerification))
+      findEmailVerification store (Account.emailVerificationTokenDigest oldToken) `shouldReturn` Right (Just oldVerification)
+      releaseVerificationResend store reservedClaim >>= \case
+        Right VerificationResendClaimSettled -> pure ()
+        _ -> expectationFailure "expected resend claim release"
+      findEmailVerification store (Account.emailVerificationTokenDigest oldToken) `shouldReturn` Right (Just oldVerification)
+      promotedClaim <-
+        reserveVerificationResend store defaultVerificationResendPolicy candidateVerification 1001 >>= \case
+          Right (VerificationResendReserved claim) -> pure claim
+          _ -> expectationFailure "expected a reclaimed resend claim" >> pure reservedClaim
+      completeVerificationResend store promotedClaim 1002 >>= \case
+        Right VerificationResendClaimSettled -> pure ()
+        _ -> expectationFailure "expected resend claim promotion"
+      findEmailVerification store (Account.emailVerificationTokenDigest candidateToken) `shouldReturn` Right (Just candidateVerification)
+      findEmailVerification store (Account.emailVerificationTokenDigest oldToken) `shouldReturn` Right Nothing
+      concurrentResults <- newEmptyMVar
+      for_ [0 .. 3] $ \index ->
+        let token = concurrentTokens !! index
+            verification = Account.mkStoredEmailVerification accountId emailAddress 1300 token
+         in forkIO (reserveVerificationResend store defaultVerificationResendPolicy verification 1003 >>= putMVar concurrentResults)
+      admissions <- replicateM 4 (takeMVar concurrentResults)
+      let concurrentClaims = [claim | Right (VerificationResendReserved claim) <- admissions]
+      case concurrentClaims of
+        [claim] ->
+          releaseVerificationResend store claim >>= \case
+            Right VerificationResendClaimSettled -> pure ()
+            _ -> expectationFailure "expected concurrent claim release"
+        _ -> expectationFailure "exactly one concurrent resend claim must be reserved"
+      for_ (zip deliveredTokens [1004, 1005]) $ \(token, now) -> do
+        let verification = Account.mkStoredEmailVerification accountId emailAddress 1400 token
+        reserveVerificationResend store defaultVerificationResendPolicy verification now >>= \case
+          Right (VerificationResendReserved claim) ->
+            completeVerificationResend store claim (now + 1) >>= \case
+              Right VerificationResendClaimSettled -> pure ()
+              _ -> expectationFailure "expected resend delivery settlement"
+          _ -> expectationFailure "expected delivery below the resend budget"
+      let throttledVerification = Account.mkStoredEmailVerification accountId emailAddress 1500 (requiredVerificationToken (Text.replicate 43 "g"))
+      reserveVerificationResend store defaultVerificationResendPolicy throttledVerification 1007 >>= \case
+        Right (VerificationResendAdmissionSuppressed VerificationResendThrottled) -> pure ()
+        _ -> expectationFailure "expected resend budget throttling"
+
+    it "reclaims resend claims and rolling delivery history at their retention boundaries" $ do
+      ensureDefaultPostgresAvailable
+      runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig `shouldReturn` Right ()
+      let accountId = requiredAccountId "ahi2_boundary_account"
+          emailAddress = requiredEmailAddress "ahi2-boundary@example.test"
+          policy = fromMaybe (error "expected resend policy") (mkVerificationResendPolicy 1 1 1 100000)
+          token value = requiredVerificationToken (Text.replicate 43 value)
+          verification value = Account.mkStoredEmailVerification accountId emailAddress 1000 (token value)
+      _ <- runRuntimeParameterizedRowsQuery defaultRealPostgresConfig "DELETE FROM web_api.accounts WHERE account_id = $1;" [Account.accountIdText accountId]
+      _ <- runRuntimeParameterizedRowsQuery defaultRealPostgresConfig "INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds) VALUES ($1, $2, 'test-hash', 1) RETURNING account_id;" [Account.accountIdText accountId, Email.emailAddressText emailAddress]
+      pool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
+      let store = buildRuntimePostgresAccountStore pool
+      firstClaim <-
+        reserveVerificationResend store policy (verification "a") 10 >>= \case
+          Right (VerificationResendReserved claim) -> pure claim
+          _ -> expectationFailure "expected first resend claim" >> pure (VerificationResendClaim accountId (Account.emailVerificationTokenDigest (token "a")))
+      completeVerificationResend store firstClaim 10 >>= \case
+        Right VerificationResendClaimSettled -> pure ()
+        _ -> expectationFailure "expected first delivery settlement"
+      secondClaim <-
+        reserveVerificationResend store policy (verification "b") 11 >>= \case
+          Right (VerificationResendReserved claim) -> pure claim
+          _ -> expectationFailure "delivery at the rolling-window boundary must have been pruned" >> pure firstClaim
+      releaseVerificationResend store secondClaim >>= \case
+        Right VerificationResendClaimSettled -> pure ()
+        _ -> expectationFailure "expected boundary claim release"
+      abandonedClaim <-
+        reserveVerificationResend store policy (verification "c") 20 >>= \case
+          Right (VerificationResendReserved claim) -> pure claim
+          _ -> expectationFailure "expected an abandoned resend claim" >> pure firstClaim
+      recovered <- reserveVerificationResend store policy (verification "d") 21
+      case recovered of
+        Right (VerificationResendReserved recoveredClaim) -> do
+          releaseVerificationResend store recoveredClaim >>= \case
+            Right VerificationResendClaimSettled -> pure ()
+            _ -> expectationFailure "expected recovered-claim release"
+          releaseVerificationResend store abandonedClaim >>= \case
+            Right VerificationResendClaimLost -> pure ()
+            _ -> expectationFailure "expired claim must remain lost"
+        _ -> expectationFailure "claim at the lease boundary must have been reclaimed"
+
+    it "loads safe account profiles and rejects malformed profile rows" $ do
+      let accountId = requiredAccountId "account_01"
+          profileStoreFor result = buildRuntimePostgresAccountProfileStoreWithRunner (\_ _ _ -> pure result) postgresTestConfig
+          username = fromMaybe (error "expected username") (Username.mkUsername "person_01")
+          expectedProfile = AccountProfile accountId (requiredEmailAddress "person@example.test") (Just username) (Just "Person Example") True
+      assertAccountStoreSuccess
+        (findAccountProfile (profileStoreFor (Right [["account_01", "person@example.test", "person_01", "Person Example", "500"]])) accountId)
+        ( \case
+            Just profile ->
+              accountProfileId profile == accountProfileId expectedProfile
+                && accountProfileEmail profile == accountProfileEmail expectedProfile
+                && accountProfileUsername profile == accountProfileUsername expectedProfile
+                && accountProfileDisplayName profile == accountProfileDisplayName expectedProfile
+                && accountProfileEmailVerified profile == accountProfileEmailVerified expectedProfile
+            Nothing -> False
+        )
+      accountProfileId expectedProfile `shouldBe` accountId
+      accountProfileEmail expectedProfile `shouldBe` requiredEmailAddress "person@example.test"
+      accountProfileUsername expectedProfile `shouldBe` Just username
+      accountProfileDisplayName expectedProfile `shouldBe` Just "Person Example"
+      accountProfileEmailVerified expectedProfile `shouldBe` True
+      assertAccountStoreSuccess
+        (findAccountProfile (profileStoreFor (Right [["account_01", "person@example.test", "", "", ""]])) accountId)
+        (\case Just profile -> not (accountProfileEmailVerified profile) && isNothing (accountProfileUsername profile) && isNothing (accountProfileDisplayName profile); Nothing -> False)
+      assertAccountStoreSuccess
+        (findAccountProfile (profileStoreFor (Right [])) accountId)
+        (\case Nothing -> True; Just _ -> False)
+      assertAccountStoreError (findAccountProfile (profileStoreFor (Left "connection failed")) accountId) (isUnavailable "connection failed")
+      assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["invalid id", "person@example.test", "", "", ""]])) accountId) (isCorrupt "account profile lookup has an invalid account id")
+      assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_01", "invalid email", "", "", ""]])) accountId) (isCorrupt "account profile lookup has an invalid email address")
+      assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_01", "person@example.test", "invalid username", "", ""]])) accountId) (isCorrupt "account profile lookup has an invalid username")
+      assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_02", "person@example.test", "", "", ""]])) accountId) (isCorrupt "account profile lookup returned a different account id")
+      assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_01"]])) accountId) (isCorrupt "unexpected account profile lookup result: row-count=1, column-counts=[1]")
+      testPool <- newPostgresPool (databasePoolCapacity postgresTestConfig) postgresTestConfig
+      buildRuntimePostgresAccountProfileStore testPool `seq` pure ()
+
+    it "executes the native account-profile adapter against a migrated PostgreSQL database" $ do
+      ensureDefaultPostgresAvailable
+      runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig `shouldReturn` Right ()
+      realPool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
+      assertAccountStoreSuccess
+        ( findAccountProfile
+            (buildRuntimePostgresAccountProfileStore realPool)
+            (requiredAccountId "profile_lookup_missing_01")
+        )
+        (\case Nothing -> True; Just _ -> False)
+
+    it "translates database config into psql commands for page queries" $ do
+      recordedCommandsReference <- newIORef []
+      let runner command = do
+            modifyIORef' recordedCommandsReference (<> [command])
+            pure $
+              case commandSql command of
+                sql
+                  | Text.isInfixOf "SELECT summary FROM web_api.page_content WHERE route_slug = 'second'" sql ->
+                      successfulPostgresResult $
+                        if Text.isInfixOf "locale = 'es'" sql
+                          then "Charge depuis PostgreSQL."
+                          else "Loaded from PostgreSQL."
+                  | Text.isInfixOf "SELECT highlight FROM web_api.page_highlights" sql ->
+                      successfulPostgresResult $
+                        if Text.isInfixOf "locale = 'es'" sql
+                          then "SSR rápido\nDatos compartidos"
+                          else "Fast SSR\nShared route data"
+                  | otherwise ->
+                      failingPostgresResult "unexpected query"
+          postgresEffect = buildPostgresPageRepositoryWithRunner runner postgresTestConfig
+      loadSecondPageValueForRequest postgresEffect defaultRequestContext
+        `shouldReturn` Right
+          SecondPageData
+            { secondPageDataSummary = "Loaded from PostgreSQL.",
+              secondPageDataHighlights = ["Fast SSR", "Shared route data"]
+            }
+      loadSecondPageValueForRequest postgresEffect spanishRequestContext
+        `shouldReturn` Right
+          SecondPageData
+            { secondPageDataSummary = "Charge depuis PostgreSQL.",
+              secondPageDataHighlights = ["SSR rápido", "Datos compartidos"]
+            }
+      timedSecondResult <- loadSecondPageForRequest postgresEffect spanishRequestContext
+      timedSecondResult
+        `shouldBe` DatabaseResult
+          { databaseResultValue =
+              Right
+                SecondPageData
+                  { secondPageDataSummary = "Charge depuis PostgreSQL.",
+                    secondPageDataHighlights = ["SSR rápido", "Datos compartidos"]
+                  },
+            databaseResultOperations =
+              [ DatabaseOperation
+                  { databaseOperationName = "load-second-page-summary",
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
+                  },
+                DatabaseOperation
+                  { databaseOperationName = "load-second-page-highlights",
+                    databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
+                  }
+              ]
+          }
+      case databaseResultOperations timedSecondResult of
+        [summaryOperation, highlightOperation] ->
+          mapM_
+            ( \operation ->
+                case (databaseOperationStartedAtNanoseconds operation, databaseOperationEndedAtNanoseconds operation) of
+                  (Just startedAt, Just endedAt) -> endedAt `shouldSatisfy` (>= startedAt)
+                  _ -> expectationFailure "expected completed PostgreSQL operation timestamps"
+            )
+            [summaryOperation, highlightOperation]
+        _ -> expectationFailure "expected two PostgreSQL operations"
+      recordedCommands <- readIORef recordedCommandsReference
+      let expectedQueryCommand sql =
+            PostgresCommand
+              { postgresExecutable = "psql",
+                postgresArguments =
+                  [ "--host",
+                    "db.internal",
+                    "--port",
+                    "6543",
+                    "--dbname",
+                    "web_api_prod",
+                    "--username",
+                    "web_api_app",
+                    "--no-password",
+                    "--set",
+                    "ON_ERROR_STOP=1",
+                    "--tuples-only",
+                    "--no-align",
+                    "--quiet",
+                    "--command",
+                    Text.unpack sql
+                  ],
+                postgresEnvironment = [("PGPASSWORD", "super-secret")]
+              }
+      recordedCommands
+        `shouldBe` map
+          expectedQueryCommand
+          [ "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';",
+            "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;",
+            "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'es';",
+            "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'es' ORDER BY position ASC;",
+            "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'es';",
+            "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'es' ORDER BY position ASC;"
+          ]
+
+    it "maps missing rows and command failures into database errors" $ do
+      let missingRunner _command =
+            pure (failingPostgresResult "relation does not exist")
+          postgresEffect = buildPostgresPageRepositoryWithRunner missingRunner postgresTestConfig
+      loadSecondPageValueForRequest postgresEffect defaultRequestContext
+        `shouldReturn` Left (SecondPageDataError "relation does not exist")
+      loadSecondPageForRequest postgresEffect defaultRequestContext
+        `shouldReturn` DatabaseResult
+          { databaseResultValue = Left (SecondPageDataError "relation does not exist"),
+            databaseResultOperations =
+              [ DatabaseOperation
+                  { databaseOperationName = "load-second-page-summary",
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
+                  }
+              ]
+          }
+
+    it "maps scalar query failures, malformed rows, and highlight query failures into explicit errors" $ do
+      let blankStderrFailureRunner command =
+            pure $
+              if Text.isInfixOf "route_slug = 'second'" (commandSql command)
+                then
+                  PostgresCommandResult
+                    { postgresExitCode = ExitFailure 2,
+                      postgresStdout = Text.empty,
+                      postgresStderr = Text.empty
+                    }
+                else successfulPostgresResult Text.empty
+          highlightFailureRunner command =
+            pure $
+              case commandSql command of
+                sql
+                  | Text.isInfixOf "SELECT summary FROM web_api.page_content WHERE route_slug = 'second'" sql ->
+                      successfulPostgresResult "Loaded from PostgreSQL."
+                  | Text.isInfixOf "SELECT highlight FROM web_api.page_highlights" sql ->
+                      failingPostgresResult "highlights unavailable"
+                  | otherwise ->
+                      successfulPostgresResult Text.empty
+      loadSecondPageValueForRequest (buildPostgresPageRepositoryWithRunner blankStderrFailureRunner postgresTestConfig) defaultRequestContext
+        `shouldReturn` Left (SecondPageDataError "psql command failed")
+      loadSecondPageValueForRequest (buildPostgresPageRepositoryWithRunner highlightFailureRunner postgresTestConfig) defaultRequestContext
+        `shouldReturn` Left (SecondPageDataError "highlights unavailable")
+      loadSecondPageForRequest (buildPostgresPageRepositoryWithRunner highlightFailureRunner postgresTestConfig) defaultRequestContext
+        `shouldReturn` DatabaseResult
+          { databaseResultValue = Left (SecondPageDataError "highlights unavailable"),
+            databaseResultOperations =
+              [ DatabaseOperation
+                  { databaseOperationName = "load-second-page-summary",
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
+                  },
+                DatabaseOperation
+                  { databaseOperationName = "load-second-page-highlights",
+                    databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
+                  }
+              ]
+          }
+
+    it "translates database config into runtime SQL queries for page queries" $ do
+      recordedScalarQueriesReference <- newIORef []
+      recordedRowsQueriesReference <- newIORef []
+      let scalarRunner databaseConfig sql = do
+            databaseConfig `shouldBe` postgresTestConfig
+            modifyIORef' recordedScalarQueriesReference (<> [sql])
+            pure $
+              case sql of
+                queryText
+                  | Text.isInfixOf "SELECT summary FROM web_api.page_content WHERE route_slug = 'second'" queryText ->
+                      Right $
+                        if Text.isInfixOf "locale = 'es'" queryText
+                          then "Charge depuis PostgreSQL."
+                          else "Loaded from PostgreSQL."
+                  | otherwise ->
+                      Left "unexpected query"
+          rowsRunner databaseConfig sql = do
+            databaseConfig `shouldBe` postgresTestConfig
+            modifyIORef' recordedRowsQueriesReference (<> [sql])
+            pure $
+              if Text.isInfixOf "locale = 'es'" sql
+                then Right ["SSR rápido", "Datos compartidos"]
+                else Right ["Fast SSR", "Shared route data"]
+          postgresEffect =
+            buildRuntimePostgresPageRepositoryWithRunner
+              scalarRunner
+              rowsRunner
+              postgresTestConfig
+      loadSecondPageValueForRequest postgresEffect defaultRequestContext
+        `shouldReturn` Right
+          SecondPageData
+            { secondPageDataSummary = "Loaded from PostgreSQL.",
+              secondPageDataHighlights = ["Fast SSR", "Shared route data"]
+            }
+      loadSecondPageForRequest postgresEffect spanishRequestContext
+        `shouldReturn` DatabaseResult
+          { databaseResultValue =
+              Right
+                SecondPageData
+                  { secondPageDataSummary = "Charge depuis PostgreSQL.",
+                    secondPageDataHighlights = ["SSR rápido", "Datos compartidos"]
+                  },
+            databaseResultOperations =
+              [ DatabaseOperation
+                  { databaseOperationName = "load-second-page-summary",
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
+                  },
+                DatabaseOperation
+                  { databaseOperationName = "load-second-page-highlights",
+                    databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
+                  }
+              ]
+          }
+      readIORef recordedScalarQueriesReference
+        `shouldReturn` [ "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';",
+                         "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'es';"
+                       ]
+      readIORef recordedRowsQueriesReference
+        `shouldReturn` [ "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;",
+                         "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'es' ORDER BY position ASC;"
+                       ]
+
+    it "maps runtime query failures into explicit database errors" $ do
+      let scalarRunner _ sql =
+            pure $
+              if Text.isInfixOf "route_slug = 'second'" sql
+                then Right "Loaded from PostgreSQL."
+                else Left "unexpected query"
+          rowsRunner _ _ =
+            pure (Left "highlights unavailable")
+          postgresEffect =
+            buildRuntimePostgresPageRepositoryWithRunner
+              scalarRunner
+              rowsRunner
+              postgresTestConfig
+      loadSecondPageValueForRequest postgresEffect defaultRequestContext
+        `shouldReturn` Left (SecondPageDataError "highlights unavailable")
+      loadSecondPageForRequest postgresEffect defaultRequestContext
+        `shouldReturn` DatabaseResult
+          { databaseResultValue = Left (SecondPageDataError "highlights unavailable"),
+            databaseResultOperations =
+              [ DatabaseOperation
+                  { databaseOperationName = "load-second-page-summary",
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
+                  },
+                DatabaseOperation
+                  { databaseOperationName = "load-second-page-highlights",
+                    databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
+                  }
+              ]
+          }
+
+    it "maps runtime second-page summary failures without attempting highlight queries" $ do
+      let scalarRunner _ sql =
+            pure $
+              if Text.isInfixOf "route_slug = 'second'" sql
+                then Left "summary unavailable"
+                else Right "unexpected query"
+          rowsRunner _ _ =
+            error "expected runtime highlight query to be skipped when the second-page summary fails"
+          postgresEffect =
+            buildRuntimePostgresPageRepositoryWithRunner
+              scalarRunner
+              rowsRunner
+              postgresTestConfig
+      loadSecondPageForRequest postgresEffect defaultRequestContext
+        `shouldReturn` DatabaseResult
+          { databaseResultValue = Left (SecondPageDataError "summary unavailable"),
+            databaseResultOperations =
+              [ DatabaseOperation
+                  { databaseOperationName = "load-second-page-summary",
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
+                  }
+              ]
+          }
+
+    it "covers runtime libpq helper decoding branches" $ do
+      decodeRuntimeQueryValue Nothing
+        `shouldBe` Left "unexpected NULL column value"
+      decodeRuntimeQueryValue (Just (ByteString.pack [115, 115, 114, 255]))
+        `shouldBe` Right (Text.pack ['s', 's', 'r', '\xfffd'])
+      renderRuntimeConnectionErrorMessage Nothing
+        `shouldBe` "libpq connection failed"
+      renderRuntimeConnectionErrorMessage (Just (ByteString.pack [32, 114, 117, 110, 255, 10]))
+        `shouldBe` Text.pack ['r', 'u', 'n', '\xfffd']
+      renderRuntimeResultErrorMessage Nothing
+        `shouldBe` "libpq query failed"
+      renderRuntimeResultErrorMessage (Just (ByteString.pack [32, 113, 117, 101, 114, 121, 255, 10]))
+        `shouldBe` Text.pack ['q', 'u', 'e', 'r', 'y', '\xfffd']
+
+    it "quotes libpq connection-string values so a quote or backslash cannot terminate them early" $
+      expectAll
+        ( (unescapeLibpqConnectionValue (libpqConnectionValue "o'brien") `shouldBe` Just "o'brien")
+            :| [ unescapeLibpqConnectionValue (libpqConnectionValue "back\\slash") `shouldBe` Just "back\\slash",
+                 unescapeLibpqConnectionValue (libpqConnectionValue "quote'then\\backslash") `shouldBe` Just "quote'then\\backslash",
+                 unescapeLibpqConnectionValue (libpqConnectionValue "' sslmode=disable host=attacker") `shouldBe` Just "' sslmode=disable host=attacker",
+                 unescapeLibpqConnectionValue (libpqConnectionValue "plain-password") `shouldBe` Just "plain-password",
+                 unescapeLibpqConnectionValue (libpqConnectionValue "") `shouldBe` Just ""
+               ]
+        )
+
+    it "omits TLS parameters for libpq defaults and encodes explicit TLS policy consistently" $ do
+      let defaultConninfo = TextEncoding.decodeUtf8 (runtimeConnectionString postgresTestConfig)
+          verifiedConfig =
+            postgresTestConfig
+              { databaseTransportSecurity =
+                  DatabaseTransportSsl DatabaseSslVerifyFull (Just "/run/secrets/postgres-ca.pem")
+              }
+          verifiedConninfo = TextEncoding.decodeUtf8 (runtimeConnectionString verifiedConfig)
+      Text.isInfixOf "sslmode=" defaultConninfo `shouldBe` False
+      Text.isInfixOf "sslrootcert=" defaultConninfo `shouldBe` False
+      Text.isInfixOf "sslmode=verify-full" verifiedConninfo `shouldBe` True
+      Text.isInfixOf "sslrootcert='/run/secrets/postgres-ca.pem'" verifiedConninfo `shouldBe` True
+      databaseTransportEnvironment DatabaseTransportLibpqDefault `shouldBe` []
+      for_
+        [ (DatabaseSslDisable, "disable"),
+          (DatabaseSslAllow, "allow"),
+          (DatabaseSslPrefer, "prefer"),
+          (DatabaseSslRequire, "require"),
+          (DatabaseSslVerifyCa, "verify-ca"),
+          (DatabaseSslVerifyFull, "verify-full")
+        ]
+        $ \(sslMode, identifier) -> do
+          let config = postgresTestConfig {databaseTransportSecurity = DatabaseTransportSsl sslMode Nothing}
+              conninfo = TextEncoding.decodeUtf8 (runtimeConnectionString config)
+          Text.isInfixOf ("sslmode=" <> identifier) conninfo `shouldBe` True
+          Text.isInfixOf "sslrootcert=" conninfo `shouldBe` False
+          databaseTransportEnvironment (DatabaseTransportSsl sslMode Nothing)
+            `shouldBe` [("PGSSLMODE", Text.unpack identifier)]
+      databaseTransportEnvironment (DatabaseTransportSsl DatabaseSslVerifyFull (Just "/run/secrets/postgres-ca.pem"))
+        `shouldBe` [("PGSSLMODE", "verify-full"), ("PGSSLROOTCERT", "/run/secrets/postgres-ca.pem")]
+
+    it "uses verify-full against a real PostgreSQL listener and fails closed for untrusted, mismatched, or TLS-disabled peers" $
+      withPostgresTlsFixtures $ \verifiedConfig untrustedCaConfig hostnameMismatchConfig tlsDisabledConfig -> do
+        verifiedResult <- runRuntimeScalarQuery verifiedConfig "SELECT ssl::text FROM pg_stat_ssl WHERE pid = pg_backend_pid();"
+        untrustedCaResult <- runRuntimeScalarQuery untrustedCaConfig "SELECT 'unreachable'::text;"
+        hostnameMismatchResult <- runRuntimeScalarQuery hostnameMismatchConfig "SELECT 'unreachable'::text;"
+        tlsDisabledResult <- runRuntimeScalarQuery tlsDisabledConfig "SELECT 'unreachable'::text;"
+        expectAll
+          ( (verifiedResult `shouldBe` Right "true")
+              :| [ untrustedCaResult `shouldSatisfy` isConnectionFailure,
+                   hostnameMismatchResult `shouldSatisfy` isConnectionFailure,
+                   tlsDisabledResult `shouldSatisfy` isConnectionFailure
+                 ]
+          )
+
+    it "runs direct runtime libpq queries and surfaces malformed-row, syntax, and connection failures explicitly" $ do
+      ensureDefaultPostgresAvailable
+      runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig
+        `shouldReturn` Right ()
+
+      runRuntimeScalarQuery defaultRealPostgresConfig "SELECT 'Loaded from PostgreSQL.'::text;"
+        `shouldReturn` Right "Loaded from PostgreSQL."
+      runRuntimeRowsQuery defaultRealPostgresConfig "SELECT value FROM (VALUES ('Fast SSR'::text), ('Shared route data'::text)) AS runtime_rows(value);"
+        `shouldReturn` Right ["Fast SSR", "Shared route data"]
+      runRuntimeScalarQuery defaultRealPostgresConfig "SELECT value FROM (VALUES ('first'::text), ('second'::text)) AS runtime_rows(value);"
+        `shouldReturn` Left "expected exactly one row: row-count=2"
+      runRuntimeRowsQuery defaultRealPostgresConfig "SELECT NULL::text;"
+        `shouldReturn` Left "unexpected NULL column value"
+      runRuntimeParameterizedRowsQuery defaultRealPostgresConfig "SELECT $1::text, $2::text;" ["first value", "second value"]
+        `shouldReturn` Right [["first value", "second value"]]
+      runRuntimeParameterizedRowsQuery defaultRealPostgresConfig "SELECT NULL::text;" []
+        `shouldReturn` Left "unexpected NULL column value"
+
+      accountId <- Account.generateAccountId
+      token <- Account.generateEmailVerificationToken
+      let emailAddress = requiredEmailAddress (Account.accountIdText accountId <> "@example.test")
+          passwordHash = fromMaybe (error "Expected password hash") (Password.hashPasswordWithSalt testPasswordHashingPolicy "0123456789abcdef" (Password.mkPassword "correct horse battery staple"))
+          pendingAccount =
+            PendingAccount
+              { pendingAccountId = accountId,
+                pendingAccountEmail = emailAddress,
+                pendingAccountUsername = Nothing,
+                pendingAccountDisplayName = Nothing,
+                pendingAccountPasswordHash = passwordHash,
+                pendingAccountVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token,
+                pendingAccountCreatedAtNanoseconds = 100
+              }
+      pool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
+      let accountStore = buildRuntimePostgresAccountStore pool
+      assertAccountStoreSuccess (createPendingAccount accountStore defaultPendingRegistrationStoragePolicy pendingAccount) (\case PendingAccountDeliveryClaimed _ -> True; _ -> False)
+      assertAccountStoreSuccess
+        (findEmailVerification accountStore (Account.emailVerificationTokenDigest token))
+        (\case Just storedVerification -> storedVerification == pendingAccountVerification pendingAccount; Nothing -> False)
+      assertAccountStoreSuccess
+        (consumeEmailVerification accountStore (Account.emailVerificationTokenDigest token) 499)
+        (\case Just consumedAccountId -> consumedAccountId == accountId; Nothing -> False)
+
+      retryAccountId <- Account.generateAccountId
+      initialRetryToken <- Account.generateEmailVerificationToken
+      retryToken <- Account.generateEmailVerificationToken
+      let retryEmailAddress = requiredEmailAddress (Account.accountIdText retryAccountId <> "@retry.example.test")
+          initialRetryPendingAccount =
+            PendingAccount
+              { pendingAccountId = retryAccountId,
+                pendingAccountEmail = retryEmailAddress,
+                pendingAccountUsername = Nothing,
+                pendingAccountDisplayName = Nothing,
+                pendingAccountPasswordHash = passwordHash,
+                pendingAccountVerification = Account.mkStoredEmailVerification retryAccountId retryEmailAddress 1500 initialRetryToken,
+                pendingAccountCreatedAtNanoseconds = 1000
+              }
+          retryPendingAccount =
+            initialRetryPendingAccount
+              { pendingAccountVerification = Account.mkStoredEmailVerification retryAccountId retryEmailAddress 1600 retryToken,
+                pendingAccountCreatedAtNanoseconds = 1100
+              }
+      initialClaim <- createPendingAccount accountStore defaultPendingRegistrationStoragePolicy initialRetryPendingAccount
+      initialClaimValue <-
+        case initialClaim of
+          Right (PendingAccountDeliveryClaimed claim) -> pure claim
+          _ -> expectationFailure "expected the initial pending registration claim" >> pure (error "unreachable")
+      assertAccountStoreSuccess (releasePendingRegistrationDelivery accountStore initialClaimValue) id
+      retriedClaim <- createPendingAccount accountStore defaultPendingRegistrationStoragePolicy retryPendingAccount
+      retriedClaimValue <-
+        case retriedClaim of
+          Right (PendingAccountDeliveryClaimed claim) -> pure claim
+          _ -> expectationFailure "expected a retryable pending registration claim" >> pure (error "unreachable")
+      assertAccountStoreSuccess (completePendingRegistrationDelivery accountStore retriedClaimValue) id
+      assertAccountStoreSuccess
+        (createPendingAccount accountStore defaultPendingRegistrationStoragePolicy retryPendingAccount)
+        (\case PendingAccountEmailTaken -> True; _ -> False)
+
+      let mfaStoreForAccount = buildRuntimePostgresMfaStore pool
+          assertMfaBoolResult label action expected = do
+            result <- action
+            case result of
+              Right actual | actual == expected -> pure ()
+              _ -> expectationFailure label
+      let recoveryCodeHash = Account.accountIdText accountId <> "-recovery-hash"
+      assertMfaBoolResult "expected the first enrollment start to succeed" (saveUnconfirmedTotpEnrollment mfaStoreForAccount accountId "encrypted-envelope" 600) True
+      assertMfaBoolResult "expected confirmation to succeed" (confirmTotpEnrollment mfaStoreForAccount accountId (recoveryCodeHash :| []) 700) True
+      assertMfaBoolResult "expected a restart against a confirmed enrollment to be rejected" (saveUnconfirmedTotpEnrollment mfaStoreForAccount accountId "attacker-supplied-envelope" 800) False
+      enrollmentAfterRejectedRestart <- loadTotpEnrollment mfaStoreForAccount accountId
+      case enrollmentAfterRejectedRestart of
+        Right (Just enrollment) -> do
+          storedTotpEncryptedSecret enrollment `shouldBe` "encrypted-envelope"
+          storedTotpConfirmedAtNanoseconds enrollment `shouldBe` Just 700
+        _ -> expectationFailure "expected the confirmed TOTP enrollment to survive a rejected restart"
+
+      syntaxResult <- runRuntimeRowsQuery defaultRealPostgresConfig "SELECT FROM"
+      syntaxResult
+        `shouldSatisfy` \case
+          Left runtimeError ->
+            Text.isInfixOf "syntax error" runtimeError
+          Right rows ->
+            error ("expected syntax failure, got rows: " <> show rows)
+
+      parameterSyntaxResult <- runRuntimeParameterizedRowsQuery defaultRealPostgresConfig "SELECT FROM" []
+      parameterSyntaxResult
+        `shouldSatisfy` \case
+          Left runtimeError -> Text.isInfixOf "syntax error" runtimeError
+          Right rows -> error ("expected parameterized syntax failure, got rows: " <> show rows)
+
+      withUnusedTcpEndpoint $ \unusedEndpoint -> do
+        refusedResult <-
+          runRuntimeScalarQuery
+            defaultRealPostgresConfig
+              { databasePort = tcpEndpointPort unusedEndpoint
+              }
+            "SELECT 1::text;"
+        refusedResult
+          `shouldSatisfy` \case
+            Left runtimeError ->
+              not (Text.null runtimeError)
+                && not (Text.isInfixOf "posix_spawnp" runtimeError)
+            Right value ->
+              error ("expected connection failure, got value: " <> show value)
+        parameterRefusedResult <-
+          runRuntimeParameterizedRowsQuery
+            defaultRealPostgresConfig
+              { databasePort = tcpEndpointPort unusedEndpoint
+              }
+            "SELECT $1::text;"
+            ["value"]
+        parameterRefusedResult
+          `shouldSatisfy` \case
+            Left runtimeError -> not (Text.null runtimeError)
+            Right rows -> error ("expected parameterized connection failure, got rows: " <> show rows)
+
+    it "records same-identity schema versions and safely handles libpq migration failures" $ do
+      ensureDefaultPostgresAvailable
+      runPostgresMigrations defaultMigrationPostgresConfig `shouldReturn` Right ()
+      runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT change_id FROM web_api.database_changes ORDER BY change_order ASC;"
+        `shouldReturn` Right ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1", "keyed-login-attempt-groups-v1", "remove-session-csrf-v1"]
+      runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT column_name FROM information_schema.columns WHERE table_schema = 'web_api' AND table_name IN ('account_sessions', 'mfa_enrollment_sessions') AND column_name = 'csrf_token';"
+        `shouldReturn` Right []
+      withUnusedTcpEndpoint $ \unusedEndpoint -> do
+        runPostgresMigrations
+          defaultMigrationPostgresConfig
+            { databasePort = tcpEndpointPort unusedEndpoint
+            }
+          `shouldReturn` Left (PostgresMigrationFailed "PostgreSQL database change command failed")
+      runPostgresMigrationsForRuntime
+        defaultMigrationPostgresConfig
+        defaultRealPostgresConfig {databaseName = "missing_ax_reconciliation_database"}
+        `shouldReturn` Left (PostgresMigrationFailed "PostgreSQL database change command failed")
+
+    it "cuts a legacy ledger over atomically without changing its applied timestamp" $ do
+      ensureDefaultPostgresAvailable
+      let schemaName = "ahi4c_database_change_cutover"
+          legacyChange = DatabaseChanges.DatabaseChange (DatabaseChanges.DatabaseChangeId "legacy-v1") ("CREATE TABLE \"ahi4c_database_change_cutover\".\"legacy_marker\" (id INTEGER);" :| [])
+          addedChange = DatabaseChanges.DatabaseChange (DatabaseChanges.DatabaseChangeId "new-v2") ("CREATE TABLE \"ahi4c_database_change_cutover\".\"new_marker\" (id INTEGER);" :| [])
+          ledger =
+            DatabaseChanges.DatabaseChangeLedger
+              { DatabaseChanges.databaseChangeLedgerSchema = schemaName,
+                DatabaseChanges.databaseChangeLedgerTable = "database_changes",
+                DatabaseChanges.databaseChangeLegacyTable = Just "schema_migrations",
+                DatabaseChanges.databaseChangeLedgerLockId = 782476312
+              }
+          setupSql =
+            "DROP SCHEMA IF EXISTS \"ahi4c_database_change_cutover\" CASCADE; "
+              <> "CREATE SCHEMA \"ahi4c_database_change_cutover\"; "
+              <> "CREATE TABLE \"ahi4c_database_change_cutover\".\"schema_migrations\" (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL); "
+              <> "INSERT INTO \"ahi4c_database_change_cutover\".\"schema_migrations\" (version, applied_at) VALUES ('legacy-v1', TIMESTAMPTZ '2001-02-03 04:05:06+00'); "
+              <> "SELECT 'ready';"
+          cleanupSql = "DROP SCHEMA IF EXISTS \"ahi4c_database_change_cutover\" CASCADE; SELECT 'removed';"
+          connection = DatabaseChanges.DatabaseChangeConnectionString (runtimeConnectionString defaultMigrationPostgresConfig)
+      bracket_
+        (runRuntimeRowsQuery defaultMigrationPostgresConfig setupSql `shouldReturn` Right ["ready"])
+        (void (runRuntimeRowsQuery defaultMigrationPostgresConfig cleanupSql))
+        $ do
+          DatabaseChanges.runDatabaseChanges connection ledger [legacyChange, addedChange] [] `shouldReturn` Right ()
+          runRuntimeRowsQuery
+            defaultMigrationPostgresConfig
+            ( "SELECT change_id || '|' || change_order::TEXT || '|' || sql_digest || '|' || to_char(applied_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') "
+                <> "FROM \"ahi4c_database_change_cutover\".\"database_changes\" WHERE change_id = 'legacy-v1';"
+            )
+            `shouldReturn` Right ["legacy-v1|1|" <> DatabaseChanges.databaseChangeDigest legacyChange <> "|2001-02-03T04:05:06Z"]
+          runRuntimeRowsQuery
+            defaultMigrationPostgresConfig
+            "SELECT change_id || '|' || change_order::TEXT || '|' || sql_digest FROM \"ahi4c_database_change_cutover\".\"database_changes\" WHERE change_id = 'new-v2';"
+            `shouldReturn` Right ["new-v2|2|" <> DatabaseChanges.databaseChangeDigest addedChange]
+
+    it "uses the durable database-change ledger and keeps application migration SQL out of a legacy ledger" $ do
+      ensureDefaultPostgresAvailable
+      runPostgresMigrations defaultMigrationPostgresConfig `shouldReturn` Right ()
+      runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT change_id FROM web_api.database_changes ORDER BY change_order ASC;"
+        `shouldReturn` Right ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1", "keyed-login-attempt-groups-v1", "remove-session-csrf-v1"]
+      runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT table_name FROM information_schema.tables WHERE table_schema = 'web_api' AND table_name = 'schema_migrations';"
+        `shouldReturn` Right []
+
+    it "creates account verification, MFA, and opaque-session storage without persisting raw bearer secrets" $ do
+      migrationStatementsFor
+        `shouldSatisfy` \statements ->
+          all
+            (`elem` statements)
+            [ "CREATE TABLE IF NOT EXISTS web_api.accounts (account_id TEXT PRIMARY KEY, email_normalized TEXT NOT NULL UNIQUE, username TEXT, display_name TEXT, password_hash TEXT NOT NULL, email_verified_at_nanoseconds BIGINT, created_at_nanoseconds BIGINT NOT NULL);",
+              "ALTER TABLE web_api.accounts ADD COLUMN IF NOT EXISTS username TEXT;",
+              "ALTER TABLE web_api.accounts ADD COLUMN IF NOT EXISTS display_name TEXT;",
+              "CREATE UNIQUE INDEX IF NOT EXISTS accounts_username_lower_unique ON web_api.accounts (lower(username)) WHERE username IS NOT NULL;",
+              "CREATE TABLE IF NOT EXISTS web_api.email_verifications (token_digest TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, email_normalized TEXT NOT NULL, expires_at_nanoseconds BIGINT NOT NULL);",
+              "CREATE TABLE IF NOT EXISTS web_api.account_totp (account_id TEXT PRIMARY KEY REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, encrypted_secret BYTEA NOT NULL, confirmed_at_nanoseconds BIGINT, created_at_nanoseconds BIGINT NOT NULL, last_used_totp_counter BIGINT);",
+              "ALTER TABLE web_api.account_totp ADD COLUMN IF NOT EXISTS last_used_totp_counter BIGINT;",
+              "CREATE TABLE IF NOT EXISTS web_api.account_recovery_codes (account_id TEXT NOT NULL REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, code_hash TEXT NOT NULL UNIQUE, created_at_nanoseconds BIGINT NOT NULL, used_at_nanoseconds BIGINT, PRIMARY KEY (account_id, code_hash));",
+              "CREATE TABLE IF NOT EXISTS web_api.account_sessions (session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, csrf_token TEXT NOT NULL, issued_at_nanoseconds BIGINT NOT NULL, expires_at_nanoseconds BIGINT NOT NULL, invalidated_at_nanoseconds BIGINT);"
+            ]
+
+    it "stops database setup when a migration or seed command fails" $ do
+      case seedStatements of
+        failingSeedStatement : _ -> do
+          let runner command =
+                pure $
+                  if commandSql command == failingSeedStatement
+                    then failingPostgresResult "seed failed"
+                    else successfulPostgresResult Text.empty
+          runPostgresSeedWithRunner runner postgresTestConfig
+            `shouldReturn` Left
+              ( PostgresCommandFailed
+                  PostgresCommand
+                    { postgresExecutable = "psql",
+                      postgresArguments =
+                        [ "--host",
+                          "db.internal",
+                          "--port",
+                          "6543",
+                          "--dbname",
+                          "web_api_prod",
+                          "--username",
+                          "web_api_app",
+                          "--no-password",
+                          "--set",
+                          "ON_ERROR_STOP=1",
+                          "--command",
+                          "DELETE FROM web_api.page_highlights;"
+                        ],
+                      postgresEnvironment = [("PGPASSWORD", "super-secret")]
+                    }
+                  PostgresCommandResult
+                    { postgresExitCode = ExitFailure 1,
+                      postgresStdout = Text.empty,
+                      postgresStderr = "seed failed"
+                    }
+              )
+        [] -> expectationFailure "expected at least one seed statement"
+
+    it "keeps postgres command, result, and error values serializable and stable" $ do
+      let command =
+            PostgresCommand
+              { postgresExecutable = "psql",
+                postgresArguments = ["--command", "SELECT 1;"],
+                postgresEnvironment = [("PGPASSWORD", "secret")]
+              }
+          commandResult =
+            PostgresCommandResult
+              { postgresExitCode = ExitSuccess,
+                postgresStdout = "1",
+                postgresStderr = Text.empty
+              }
+          failedCommandResult =
+            PostgresCommandResult
+              { postgresExitCode = ExitFailure 3,
+                postgresStdout = Text.empty,
+                postgresStderr = "boom"
+              }
+          runnerError = PostgresCommandFailed command commandResult
+          migrationError = PostgresMigrationFailed "migration protocol failed"
+          unexpectedRowsError = UnexpectedQueryRows "expected exactly one row" ["first", "second"]
+      command `shouldNotBe` command {postgresArguments = ["--command", "SELECT 2;"]}
+      commandResult `shouldNotBe` commandResult {postgresStdout = "2"}
+      runnerError `shouldNotBe` PostgresCommandFailed command failedCommandResult
+      migrationError `shouldNotBe` PostgresMigrationFailed "other migration failure"
+      unexpectedRowsError `shouldNotBe` UnexpectedQueryRows "expected exactly one row" ["first"]
+      show command
+        `shouldBe` "PostgresCommand {postgresExecutable = \"psql\", postgresArguments = <redacted>, postgresEnvironment = <redacted>}"
+      show command `shouldNotContain` "secret"
+      show command `shouldNotContain` "SELECT 1"
+      show commandResult
+        `shouldBe` "PostgresCommandResult {postgresExitCode = ExitSuccess, postgresStdout = \"1\", postgresStderr = \"\"}"
+      show failedCommandResult
+        `shouldBe` "PostgresCommandResult {postgresExitCode = ExitFailure 3, postgresStdout = \"\", postgresStderr = \"boom\"}"
+      show runnerError
+        `shouldBe` "PostgresCommandFailed (PostgresCommand {postgresExecutable = \"psql\", postgresArguments = <redacted>, postgresEnvironment = <redacted>}) (PostgresCommandResult {postgresExitCode = ExitSuccess, postgresStdout = \"1\", postgresStderr = \"\"})"
+      show runnerError `shouldNotContain` "secret"
+      show migrationError
+        `shouldBe` "PostgresMigrationFailed \"migration protocol failed\""
+      show unexpectedRowsError
+        `shouldBe` "UnexpectedQueryRows \"expected exactly one row\" \"row-count=2\""
+      show unexpectedRowsError `shouldNotContain` "first"
+      show unexpectedRowsError `shouldNotContain` "second"
+      showsPrec 11 runnerError ""
+        `shouldBe` "(PostgresCommandFailed (PostgresCommand {postgresExecutable = \"psql\", postgresArguments = <redacted>, postgresEnvironment = <redacted>}) (PostgresCommandResult {postgresExitCode = ExitSuccess, postgresStdout = \"1\", postgresStderr = \"\"}))"
+      showsPrec 11 migrationError ""
+        `shouldBe` "(PostgresMigrationFailed \"migration protocol failed\")"
+      showsPrec 11 unexpectedRowsError ""
+        `shouldBe` "(UnexpectedQueryRows \"expected exactly one row\" \"row-count=2\")"
+      show [command]
+        `shouldBe` "[PostgresCommand {postgresExecutable = \"psql\", postgresArguments = <redacted>, postgresEnvironment = <redacted>}]"
+      show [commandResult]
+        `shouldBe` "[PostgresCommandResult {postgresExitCode = ExitSuccess, postgresStdout = \"1\", postgresStderr = \"\"}]"
+      show [runnerError]
+        `shouldBe` "[PostgresCommandFailed (PostgresCommand {postgresExecutable = \"psql\", postgresArguments = <redacted>, postgresEnvironment = <redacted>}) (PostgresCommandResult {postgresExitCode = ExitSuccess, postgresStdout = \"1\", postgresStderr = \"\"})]"
+
+    it "embeds the failing query text in a structured runner error for both row and scalar queries" $ do
+      let failingResult =
+            PostgresCommandResult
+              { postgresExitCode = ExitFailure 1,
+                postgresStdout = Text.empty,
+                postgresStderr = "syntax error"
+              }
+          runner _ = pure failingResult
+      rowsResult <- runRowsCommand runner postgresTestConfig "SELECT bogus"
+      case rowsResult of
+        Left (PostgresCommandFailed failedCommand failedCommandResult) -> do
+          postgresExecutable failedCommand `shouldBe` "psql"
+          postgresArguments failedCommand `shouldContain` ["SELECT bogus"]
+          postgresEnvironment failedCommand `shouldBe` []
+          failedCommandResult `shouldBe` failingResult
+        _ -> expectationFailure "expected a structured PostgresCommandFailed error for the rows query"
+      scalarResult <- runRequiredScalarCommand runner postgresTestConfig "SELECT bogus"
+      case scalarResult of
+        Left (PostgresCommandFailed failedCommand failedCommandResult) -> do
+          postgresExecutable failedCommand `shouldBe` "psql"
+          postgresArguments failedCommand `shouldContain` ["SELECT bogus"]
+          postgresEnvironment failedCommand `shouldBe` []
+          failedCommandResult `shouldBe` failingResult
+        _ -> expectationFailure "expected a structured PostgresCommandFailed error for the scalar query"
+      malformedScalarResult <-
+        runRequiredScalarCommand
+          (\_ -> pure (successfulPostgresResult "first\nsecond"))
+          postgresTestConfig
+          "SELECT summary FROM web_api.page_content WHERE route_slug = 'second'"
+      malformedScalarResult
+        `shouldBe` Left (UnexpectedQueryRows "expected exactly one row" ["first", "second"])
+
+    it "uses the default psql runner for effect loading and seed setup when psql is on PATH"
+      $ withFakePsqlScript
+        ( [ ("SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';", "Second page content with stubbed data ready for future loaders."),
+            ("SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;", Text.empty)
+          ]
+            <> fmap (,Text.empty) seedStatements
+        )
+      $ \argsLogPath -> do
+        let application = buildAppWithDatabase defaultAppConfig (buildPostgresPageRepository postgresTestConfig)
+        fmap stripVolatileDatabaseTimingResponse (HarchWeb.renderResponse application secondRequest)
+          `shouldReturn` HarchWeb.PageResponseWithMetadata
+            testPageSecurity
+            HarchWeb.ResponseBody
+              { HarchWeb.responseStatus = Http.status200,
+                HarchWeb.responseContentType = "text/html; charset=utf-8",
+                HarchWeb.responseBody = "",
+                HarchWeb.responseObservabilityAttributes = [],
+                HarchWeb.responseLogEntries = [],
+                HarchWeb.responseDatabaseOperations = expectedSecondDatabaseOperations
+              }
+            ( HarchWeb.Page
+                { HarchWeb.pageTitle = "web-api: Second",
+                  HarchWeb.pageRoute = SecondRoute,
+                  HarchWeb.pageContext = defaultRequestContext,
+                  HarchWeb.pageBody =
+                    HarchWeb.fragment
+                      [ HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"second\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Second</h1><p class=\"harch-page-frame-summary\">Second page content with stubbed data ready for future loaders.</p><div class=\"harch-page-frame-content\"><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></div></section>"),
+                        appControls defaultRequestContext SecondRoute
+                      ],
+                  HarchWeb.pageBootstrapHooks = ["second-page"]
+                }
+            )
+        runPostgresSeed postgresTestConfig `shouldReturn` Right ()
+        let renderQueryLogEntry sql =
+              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --tuples-only --no-align --quiet --command "
+                <> Text.unpack sql
+            renderMutationLogEntry databaseConfig sql =
+              "--host "
+                <> Text.unpack (databaseHost databaseConfig)
+                <> " --port "
+                <> show (databasePort databaseConfig)
+                <> " --dbname "
+                <> Text.unpack (databaseName databaseConfig)
+                <> " --username "
+                <> Text.unpack (databaseUser databaseConfig)
+                <> " --no-password --set ON_ERROR_STOP=1 --command "
+                <> Text.unpack sql
+        readFile argsLogPath
+          `shouldReturn` unlines
+            ( [ renderQueryLogEntry "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';",
+                renderQueryLogEntry "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;"
+              ]
+                <> fmap (renderMutationLogEntry postgresTestConfig) seedStatements
+            )
+
+    it "uses stderr from the default psql runner when a command fails"
+      $ withFakePsqlScriptResults
+        [ ( "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';",
+            PostgresCommandResult
+              { postgresExitCode = ExitFailure 4,
+                postgresStdout = Text.empty,
+                postgresStderr = "default runner failed"
+              }
+          )
+        ]
+      $ \_ ->
+        loadSecondPageValueForRequest (buildPostgresPageRepository postgresTestConfig) defaultRequestContext
+          `shouldReturn` Left (SecondPageDataError "default runner failed")
+
+    it "prefers a runtime that is already running the named postgres container in the containerized psql wrapper" $ do
+      containerizedPsqlScriptContents `shouldContain'` "database_endpoint_is_reachable()"
+      containerizedPsqlScriptContents `shouldContain'` "host_psql_path=\"${WEB_API_REAL_PSQL_PATH:-}\""
+      containerizedPsqlScriptContents `shouldContain'` "if [ -n \"$host_psql_path\" ] && [ -x \"$host_psql_path\" ] && database_endpoint_is_reachable; then"
+      containerizedPsqlScriptContents `shouldContain'` "runtime_with_running_container()"
+      containerizedPsqlScriptContents `shouldContain'` "for candidate in docker podman; do"
+      containerizedPsqlScriptContents `shouldContain'` "elif runtime=$(runtime_with_existing_container); then"
+      containerizedPsqlScriptContents `shouldContain'` "exec \"$runtime\" exec -e PGPASSWORD=\"${PGPASSWORD:-}\" web-api-postgres psql \"$@\""
+
+    it "prefers a runtime that is already running the named postgres container before trying to start or create one" $ do
+      defaultPostgresContainerImage `shouldBe` "localhost/haskell-web-api/postgres-pgcron:17-1.6.7"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "database_endpoint_is_reachable()"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "host_psql_is_available()"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "owner_is_superuser_via_host_psql()"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "ensure_owner_superuser_via_host_psql()"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "if database_endpoint_is_reachable && host_psql_is_available; then"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "runtime_with_running_container()"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "for candidate in docker podman; do"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "elif runtime=$(runtime_with_existing_container); then"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "build_postgres_pgcron_image()"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "WEB_API_CONTAINER_RUNTIME=\"$runtime\" bash \"$repo_root/tools/build-postgres-pgcron-test-image.sh\""
+      ensureDefaultPostgresAvailableScript `shouldContain'` "build_postgres_pgcron_image"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "\"$runtime\" start web-api-postgres >/dev/null 2>&1 && return 0"
+
+    it "loads seeded page data through the concrete postgres adapter against real PostgreSQL" $
+      withContainerizedPsqlOnPath $ do
+        ensureDefaultPostgresAvailable
+        runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig `shouldReturn` Right ()
+        runPostgresSeed defaultMigrationPostgresConfig `shouldReturn` Right ()
+        let postgresEffect = buildPostgresPageRepository defaultRealPostgresConfig
+        loadSecondPageValueForRequest postgresEffect defaultRequestContext
+          `shouldReturn` Right
+            SecondPageData
+              { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
+                secondPageDataHighlights = []
+              }
+        loadSecondPageValueForRequest postgresEffect spanishRequestContext
+          `shouldReturn` Right
+            SecondPageData
+              { secondPageDataSummary = "Contenido de la segunda pagina con datos de ejemplo listos para futuros cargadores.",
+                secondPageDataHighlights = []
+              }

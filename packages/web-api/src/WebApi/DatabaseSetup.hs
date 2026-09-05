@@ -1,7 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+-- | Database migration and seeding command execution.
+--
+-- FQ9 makes loaders and runners one injected 'DatabaseSetupDependencies'
+-- record. Parsed commands and the output handle remain explicit operation
+-- inputs, preserving their command-specific ordering and error boundary.
 module WebApi.DatabaseSetup
   ( DatabaseSetupCommand (..),
+    DatabaseSetupDependencies (..),
     DatabaseSetupError (..),
     loadDatabaseSetupConfig,
     parseDatabaseSetupCommand,
@@ -14,17 +20,22 @@ module WebApi.DatabaseSetup
   )
 where
 
+import Control.Monad.Except (runExceptT)
 import Core.Config (ConfigParseError (..), parsePositiveInt)
+import Core.Control.Error (liftEitherWith)
 import Data.Bifunctor (bimap)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import System.Environment (getEnvironment)
 import System.IO (Handle, hPutStrLn)
-import WebApi.Config (AppEnvironmentConfig (..), DatabaseConfig (..), committedEnvDefaults, parseAppEnvironmentConfig)
-import WebApi.Postgres
-  ( PostgresRunnerError,
-    runPostgresMigrationsForRuntime,
+import WebApi.Config (DatabaseConfig (..), committedEnvDefaults, parseDatabaseTransportSecurity, parseRuntimeDatabaseConfig, singletonDatabasePoolCapacity)
+import WebApi.Postgres.Migration
+  ( runPostgresMigrationsForRuntime,
     runPostgresSeed,
+  )
+import WebApi.Postgres.Runtime
+  ( PostgresRunnerError,
+    renderRunnerError,
   )
 
 data DatabaseSetupCommand
@@ -41,6 +52,13 @@ data DatabaseSetupError
   | DatabaseSetupSeedError PostgresRunnerError
   deriving (Eq, Show)
 
+data DatabaseSetupDependencies = DatabaseSetupDependencies
+  { databaseSetupLoadMigrationConfig :: IO (Either ConfigParseError DatabaseConfig),
+    databaseSetupLoadRuntimeConfig :: IO (Either ConfigParseError DatabaseConfig),
+    databaseSetupRunMigrations :: DatabaseConfig -> DatabaseConfig -> IO (Either PostgresRunnerError ()),
+    databaseSetupRunSeed :: DatabaseConfig -> IO (Either PostgresRunnerError ())
+  }
+
 loadDatabaseSetupConfig :: IO (Either ConfigParseError DatabaseConfig)
 loadDatabaseSetupConfig =
   fmap
@@ -52,8 +70,7 @@ loadDatabaseSetupConfig =
 loadRuntimeDatabaseConfig :: IO (Either ConfigParseError DatabaseConfig)
 loadRuntimeDatabaseConfig =
   fmap
-    ( fmap databaseConfig
-        . parseAppEnvironmentConfig committedEnvDefaults []
+    ( parseRuntimeDatabaseConfig committedEnvDefaults []
         . map (bimap Text.pack Text.pack)
     )
     getEnvironment
@@ -66,11 +83,27 @@ parseDatabaseSetupConfig environmentEntries =
     <*> requiredConfigValue "WEB_API_MIGRATION_DATABASE_NAME"
     <*> requiredConfigValue "WEB_API_MIGRATION_DATABASE_USER"
     <*> requiredConfigValue "WEB_API_MIGRATION_DATABASE_PASSWORD"
+    -- Not sourced from the environment: one migration transaction has no
+    -- concurrent request thread to starve, but it does use the shared libpq
+    -- conninfo encoder.  Keep the bounded, committed default rather than
+    -- introducing a second migration-only timeout knob.
+    <*> pure migrationDatabaseConnectTimeoutSeconds
+    -- Migrations own one short-lived connection rather than the application's
+    -- runtime pool, so this required record field is inert on this path.
+    <*> pure singletonDatabasePoolCapacity
+    <*> parseDatabaseTransportSecurity
+      "WEB_API_MIGRATION_DATABASE_SSL_MODE"
+      "WEB_API_MIGRATION_DATABASE_SSL_ROOT_CERT"
+      (lookup "WEB_API_MIGRATION_DATABASE_SSL_MODE" environmentEntries)
+      (lookup "WEB_API_MIGRATION_DATABASE_SSL_ROOT_CERT" environmentEntries)
   where
     requiredConfigValue key =
       case lookup key environmentEntries of
         Just value -> Right value
         Nothing -> Left (MissingConfigValue key)
+
+migrationDatabaseConnectTimeoutSeconds :: Int
+migrationDatabaseConnectTimeoutSeconds = 10
 
 parseDatabaseSetupCommand :: [String] -> Either DatabaseSetupError DatabaseSetupCommand
 parseDatabaseSetupCommand arguments =
@@ -92,65 +125,53 @@ renderDatabaseSetupError setupError =
     DatabaseSetupRuntimeConfigLoadError loadError ->
       "Failed to load runtime database config: " <> show loadError
     DatabaseSetupMigrationError runnerError ->
-      "Failed to apply database migrations: " <> show runnerError
+      "Failed to apply database migrations: " <> Text.unpack (renderRunnerError runnerError)
     DatabaseSetupSeedError runnerError ->
-      "Failed to apply database seed data: " <> show runnerError
+      "Failed to apply database seed data: " <> Text.unpack (renderRunnerError runnerError)
 
 runDatabaseSetupArgs :: Handle -> [String] -> IO ()
 runDatabaseSetupArgs =
-  runDatabaseSetupArgsWith loadDatabaseSetupConfig loadRuntimeDatabaseConfig runPostgresMigrationsForRuntime runPostgresSeed
+  runDatabaseSetupArgsWith defaultDatabaseSetupDependencies
 
-runDatabaseSetupArgsWith ::
-  IO (Either ConfigParseError DatabaseConfig) ->
-  IO (Either ConfigParseError DatabaseConfig) ->
-  (DatabaseConfig -> DatabaseConfig -> IO (Either PostgresRunnerError ())) ->
-  (DatabaseConfig -> IO (Either PostgresRunnerError ())) ->
-  Handle ->
-  [String] ->
-  IO ()
-runDatabaseSetupArgsWith loadMigrationConfig loadRuntimeConfig runMigrations runSeed outputHandle arguments =
-  case parseDatabaseSetupCommand arguments of
-    Left setupError -> ioError (userError (renderDatabaseSetupError setupError))
-    Right setupCommand -> do
-      setupResult <- runDatabaseSetupCommandWith loadMigrationConfig loadRuntimeConfig runMigrations runSeed setupCommand
-      case setupResult of
-        Left setupError -> ioError (userError (renderDatabaseSetupError setupError))
-        Right () -> hPutStrLn outputHandle (successMessage setupCommand)
+runDatabaseSetupArgsWith :: DatabaseSetupDependencies -> Handle -> [String] -> IO ()
+runDatabaseSetupArgsWith dependencies outputHandle arguments =
+  either throwDatabaseSetupError runParsedCommand (parseDatabaseSetupCommand arguments)
+  where
+    throwDatabaseSetupError =
+      ioError . userError . renderDatabaseSetupError
+    runParsedCommand setupCommand =
+      runDatabaseSetupCommandWith dependencies setupCommand
+        >>= either throwDatabaseSetupError (const (hPutStrLn outputHandle (successMessage setupCommand)))
 
 runDatabaseSetupCommand :: DatabaseSetupCommand -> IO (Either DatabaseSetupError ())
 runDatabaseSetupCommand =
-  runDatabaseSetupCommandWith loadDatabaseSetupConfig loadRuntimeDatabaseConfig runPostgresMigrationsForRuntime runPostgresSeed
+  runDatabaseSetupCommandWith defaultDatabaseSetupDependencies
 
-runDatabaseSetupCommandWith ::
-  IO (Either ConfigParseError DatabaseConfig) ->
-  IO (Either ConfigParseError DatabaseConfig) ->
-  (DatabaseConfig -> DatabaseConfig -> IO (Either PostgresRunnerError ())) ->
-  (DatabaseConfig -> IO (Either PostgresRunnerError ())) ->
-  DatabaseSetupCommand ->
-  IO (Either DatabaseSetupError ())
-runDatabaseSetupCommandWith loadMigrationConfig loadRuntimeConfig runMigrations runSeed setupCommand = do
-  migrationConfigResult <- loadMigrationConfig
-  case migrationConfigResult of
-    Left loadError -> pure (Left (DatabaseSetupConfigLoadError loadError))
-    Right migrationDatabaseConfig -> do
-      runtimeConfigResult <- loadRuntimeConfig
-      case runtimeConfigResult of
-        Left loadError -> pure (Left (DatabaseSetupRuntimeConfigLoadError loadError))
-        Right runtimeDatabaseConfig ->
-          runCommandWithConfig migrationDatabaseConfig runtimeDatabaseConfig
+runDatabaseSetupCommandWith :: DatabaseSetupDependencies -> DatabaseSetupCommand -> IO (Either DatabaseSetupError ())
+runDatabaseSetupCommandWith dependencies setupCommand =
+  runExceptT $ do
+    migrationDatabaseConfig <- liftEitherWith DatabaseSetupConfigLoadError (databaseSetupLoadMigrationConfig dependencies)
+    runtimeDatabaseConfig <- liftEitherWith DatabaseSetupRuntimeConfigLoadError (databaseSetupLoadRuntimeConfig dependencies)
+    runCommandWithConfig migrationDatabaseConfig runtimeDatabaseConfig
   where
     runCommandWithConfig migrationDatabaseConfig runtimeDatabaseConfig =
       case setupCommand of
         MigrateDatabase ->
-          fmap (either (Left . DatabaseSetupMigrationError) Right) (runMigrations migrationDatabaseConfig runtimeDatabaseConfig)
+          liftEitherWith DatabaseSetupMigrationError (databaseSetupRunMigrations dependencies migrationDatabaseConfig runtimeDatabaseConfig)
         SeedDatabase ->
-          fmap (either (Left . DatabaseSetupSeedError) Right) (runSeed migrationDatabaseConfig)
-        MigrateAndSeedDatabase -> do
-          migrationsResult <- runMigrations migrationDatabaseConfig runtimeDatabaseConfig
-          case migrationsResult of
-            Left migrationError -> pure (Left (DatabaseSetupMigrationError migrationError))
-            Right () ->
-              fmap (either (Left . DatabaseSetupSeedError) Right) (runSeed migrationDatabaseConfig)
+          liftEitherWith DatabaseSetupSeedError (databaseSetupRunSeed dependencies migrationDatabaseConfig)
+        MigrateAndSeedDatabase ->
+          liftEitherWith DatabaseSetupMigrationError (databaseSetupRunMigrations dependencies migrationDatabaseConfig runtimeDatabaseConfig)
+            >> liftEitherWith DatabaseSetupSeedError (databaseSetupRunSeed dependencies migrationDatabaseConfig)
+
+defaultDatabaseSetupDependencies :: DatabaseSetupDependencies
+defaultDatabaseSetupDependencies =
+  DatabaseSetupDependencies
+    { databaseSetupLoadMigrationConfig = loadDatabaseSetupConfig,
+      databaseSetupLoadRuntimeConfig = loadRuntimeDatabaseConfig,
+      databaseSetupRunMigrations = runPostgresMigrationsForRuntime,
+      databaseSetupRunSeed = runPostgresSeed
+    }
 
 successMessage :: DatabaseSetupCommand -> String
 successMessage setupCommand =

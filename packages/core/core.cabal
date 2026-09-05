@@ -14,7 +14,7 @@ name: core
 -- PVP summary:     +-+------- breaking API changes
 --                  | | +----- non-breaking API additions
 --                  | | | +--- code changes with no API change
-version: 0.1.1.0
+version: 0.1.2.0
 -- A short (one-line) description of the package.
 synopsis: haskell core (utilities shared across application and tests)
 -- A longer description of the package.
@@ -34,20 +34,21 @@ maintainer: 1393236+gorban@users.noreply.github.com
 -- A copyright notice.
 copyright: (c) David Bruck
 category: Web
-build-type: Custom
+build-type: Simple
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
 extra-doc-files: CHANGELOG.md
 
-custom-setup
-  setup-depends:
-    base ^>=4.22.0.0,
-    Cabal,
-    directory,
-    filepath,
-
 common common
   -- Common warning flags.
-  ghc-options: -Wall
+  ghc-options:
+    -Wall
+    -Wcompat
+    -Wincomplete-uni-patterns
+    -Wincomplete-record-updates
+    -Wpartial-fields
+    -Wredundant-constraints
+    -Wunused-packages
+
   -- Common settings.
   default-language: GHC2024
 
@@ -59,8 +60,9 @@ library
   exposed-modules:
     Core.Config
     Core.Control.Error
+    Core.PageRoutes.Generator
     Core.Prelude
-    Core.Setup
+    Core.Setup.ContainerRuntime
     Core.Setup.DatabaseAutostart
     Core.Setup.Prerequisite
     Core.Setup.PrerequisiteConfig
@@ -75,63 +77,64 @@ library
   -- Other library packages from which modules are imported.
   build-depends:
     base ^>=4.22.0.0,
-    Cabal,
-    directory,
-    filepath,
-    mtl,
-    network,
-    process,
-    temporary,
-    text,
+    containers ^>=0.8,
+    directory ^>=1.3.10.0,
+    filepath ^>=1.5.4.0,
+    mtl ^>=2.3.1,
+    network ^>=3.2.8.0,
+    process ^>=1.6.26.1,
+    temporary ^>=1.3,
+    text ^>=2.1.3,
 
   -- Directories containing source files.
   hs-source-dirs: src
 
--- Internal spec-preprocessor that compiles test-core sources directly.
--- This avoids the package-level cycle that would occur if core-tests
--- depended on test-core:spec-preprocessor.
--- Sources are copied from test-core by Setup.hs at configure time.
-executable core-spec-preprocessor
+executable harch-page-routes
   import: common
-  main-is: SpecPreprocessor.hs
-  -- Modules included in this executable, other than Main.
-  other-modules: TestCore.SpecPreprocessor
-  -- LANGUAGE extensions used by modules in this package.
-  -- other-extensions:
-  hs-source-dirs:
-    test-core-src/app
-    test-core-src/src
-
+  main-is: PageRoutes.hs
+  hs-source-dirs: app
   build-depends:
     base ^>=4.22.0.0,
-    core,
-    directory,
-    filepath,
-    mtl,
+    core ^>=0.1.2.0,
 
 test-suite core-tests
   import: common
   -- Common test suite settings.
   type: exitcode-stdio-1.0
-  -- Include test-core/src (copied by Setup.hs) to get TestCore.Prelude and
+  -- Include the checked-in test-core snapshot to get TestCore.Prelude and
   -- TestCore.CustomAssertions without creating a package-level dependency cycle.
   hs-source-dirs:
     test
     test-core-src/src
 
+  -- hspec-discover imports every test module. The checked-in TestCore snapshot
+  -- is also a home-module dependency of those tests, so list both source roots.
+  other-modules:
+    TestCore.CustomAssertions
+    TestCore.Prelude
+    Unit.Core.ConfigSpec
+    Unit.Core.Control.ErrorSpec
+    Unit.Core.PageRoutes.GeneratorSpec
+    Unit.Core.Setup.DatabaseAutostartSpec
+    Unit.Core.Setup.PrerequisiteConfigSpec
+    Unit.Core.Setup.PrerequisitePlanSpec
+    Unit.Core.Setup.PrerequisiteReportSpec
+    Unit.Core.Setup.PrerequisiteSpec
+    Unit.Core.Setup.TestSupport
+    Unit.Core.Setup.TracingAutostartSpec
+    Unit.Core.System.PathSpec
+
   ghc-options:
     -F
-    -pgmF=core-spec-preprocessor
-    -Wno-missing-home-modules
+    -pgmF=spec-preprocessor
     -rtsopts
     -threaded
     -with-rtsopts=-N
     -- Discovers hspec *Spec.hs tests
 
   build-tool-depends:
-    -- Our internal spec-preprocessor
-    core:core-spec-preprocessor,
-    hspec-discover:hspec-discover,
+    hspec-discover:hspec-discover ^>=2.11.17,
+    test-spec-preprocessor:spec-preprocessor ^>=0.1.2.0,
 
   -- .hs or .lhs file containing the Main module.
   main-is: Main.hs
@@ -141,12 +144,14 @@ test-suite core-tests
   build-depends:
     -- For testing framework:
     base ^>=4.22.0.0,
-    core,
-    directory,
-    hspec,
-    hspec-expectations-match,
-    mtl,
-    network,
-    process,
-    temporary,
-    text,
+    core ^>=0.1.2.0,
+    directory ^>=1.3.10.0,
+    filepath ^>=1.5.4.0,
+    hspec ^>=2.11.17,
+    hspec-expectations-match ^>=0.2.0.0,
+    HUnit ^>=1.6.2.0,
+    mtl ^>=2.3.1,
+    network ^>=3.2.8.0,
+    process ^>=1.6.26.1,
+    temporary ^>=1.3,
+    text ^>=2.1.3,

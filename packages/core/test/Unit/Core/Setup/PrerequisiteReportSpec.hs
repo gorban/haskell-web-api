@@ -4,19 +4,19 @@
 
 import Control.Exception (finally)
 import Control.Monad (forM_)
-import qualified Core.Config as CoreConfig
-import qualified Core.Setup.DatabaseAutostart as DatabaseAutostart
-import qualified Core.Setup.Prerequisite as Prerequisite
-import qualified Core.Setup.PrerequisiteConfig as PrerequisiteConfig
-import qualified Core.Setup.PrerequisitePlan as PrerequisitePlan
-import qualified Core.Setup.PrerequisiteReport as PrerequisiteReport
-import qualified Core.Setup.TracingAutostart as TracingAutostart
-import qualified Data.Text as Text
+import Core.Config qualified as CoreConfig
+import Core.Setup.DatabaseAutostart qualified as DatabaseAutostart
+import Core.Setup.Prerequisite qualified as Prerequisite
+import Core.Setup.PrerequisiteConfig qualified as PrerequisiteConfig
+import Core.Setup.PrerequisitePlan qualified as PrerequisitePlan
+import Core.Setup.PrerequisiteReport qualified as PrerequisiteReport
+import Core.Setup.TracingAutostart qualified as TracingAutostart
+import Data.Text qualified as Text
 import GHC.IO.Handle (hDuplicate, hDuplicateTo)
 import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, listen, socket, tupleToHostAddress)
 import System.Directory (getCurrentDirectory, setCurrentDirectory)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
-import System.IO (hClose, hFlush, stdout)
+import System.IO (Handle, hClose, hFlush, stdout)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (callProcess)
 
@@ -25,6 +25,30 @@ withCurrentDirectory directory action = do
   previousDirectory <- getCurrentDirectory
   setCurrentDirectory directory
   action `finally` setCurrentDirectory previousDirectory
+
+reportSetupPrerequisitesWith :: IO (Either PrerequisiteConfig.SetupPrerequisiteConfigLoadError PrerequisiteConfig.SetupPrerequisiteConfig) -> (Prerequisite.TcpEndpoint -> IO Bool) -> (Text.Text -> IO (Either Prerequisite.TracingEndpointParseError Bool)) -> (PrerequisiteConfig.SetupPrerequisiteConfig -> PrerequisitePlan.DatabasePrerequisitePlan -> IO DatabaseAutostart.DatabaseAutostartResult) -> (PrerequisitePlan.TracingPrerequisitePlan -> IO TracingAutostart.TracingAutostartResult) -> Handle -> IO ()
+reportSetupPrerequisitesWith loadConfig checkDatabase checkTracing attemptDatabase attemptTracing outputHandle =
+  PrerequisiteReport.reportSetupPrerequisitesWith
+    PrerequisiteReport.SetupPrerequisiteReportDependencies
+      { PrerequisiteReport.setupPrerequisiteLoadConfig = loadConfig,
+        PrerequisiteReport.setupPrerequisiteCheckDatabase = checkDatabase,
+        PrerequisiteReport.setupPrerequisiteCheckTracing = checkTracing,
+        PrerequisiteReport.setupPrerequisiteAttemptDatabase = attemptDatabase,
+        PrerequisiteReport.setupPrerequisiteAttemptTracing = attemptTracing,
+        PrerequisiteReport.setupPrerequisiteOutputHandle = outputHandle
+      }
+
+reportSetupPrerequisitesWithResult :: IO (Either PrerequisiteConfig.SetupPrerequisiteConfigLoadError PrerequisiteConfig.SetupPrerequisiteConfig) -> (Prerequisite.TcpEndpoint -> IO Bool) -> (Text.Text -> IO (Either Prerequisite.TracingEndpointParseError Bool)) -> (PrerequisiteConfig.SetupPrerequisiteConfig -> PrerequisitePlan.DatabasePrerequisitePlan -> IO DatabaseAutostart.DatabaseAutostartResult) -> (PrerequisitePlan.TracingPrerequisitePlan -> IO TracingAutostart.TracingAutostartResult) -> Handle -> IO (Either PrerequisiteConfig.SetupPrerequisiteConfigLoadError PrerequisiteReport.SetupPrerequisiteReport)
+reportSetupPrerequisitesWithResult loadConfig checkDatabase checkTracing attemptDatabase attemptTracing outputHandle =
+  PrerequisiteReport.reportSetupPrerequisitesWithResult
+    PrerequisiteReport.SetupPrerequisiteReportDependencies
+      { PrerequisiteReport.setupPrerequisiteLoadConfig = loadConfig,
+        PrerequisiteReport.setupPrerequisiteCheckDatabase = checkDatabase,
+        PrerequisiteReport.setupPrerequisiteCheckTracing = checkTracing,
+        PrerequisiteReport.setupPrerequisiteAttemptDatabase = attemptDatabase,
+        PrerequisiteReport.setupPrerequisiteAttemptTracing = attemptTracing,
+        PrerequisiteReport.setupPrerequisiteOutputHandle = outputHandle
+      }
 
 withListeningTcpEndpoint :: (Prerequisite.TcpEndpoint -> IO a) -> IO a
 withListeningTcpEndpoint action = do
@@ -397,12 +421,14 @@ spec = do
               PrerequisiteConfig.SetupPrerequisiteConfigParseError
                 (CoreConfig.InvalidConfigValue "DATABASE_PORT" "bad")
         PrerequisiteReport.reportSetupPrerequisitesWith
-          (pure (Left loadError))
-          (\_ -> expectationFailure "database check should not run" >> pure False)
-          (\_ -> expectationFailure "tracing check should not run" >> pure (Right False))
-          (\_ _ -> expectationFailure "database autostart should not run" >> pure (DatabaseAutostart.DatabaseAutostartSkipped "database autostart should not run"))
-          unusedTracingAutostart
-          outputHandle
+          PrerequisiteReport.SetupPrerequisiteReportDependencies
+            { PrerequisiteReport.setupPrerequisiteLoadConfig = pure (Left loadError),
+              PrerequisiteReport.setupPrerequisiteCheckDatabase = \_ -> expectationFailure "database check should not run" >> pure False,
+              PrerequisiteReport.setupPrerequisiteCheckTracing = \_ -> expectationFailure "tracing check should not run" >> pure (Right False),
+              PrerequisiteReport.setupPrerequisiteAttemptDatabase = \_ _ -> expectationFailure "database autostart should not run" >> pure (DatabaseAutostart.DatabaseAutostartSkipped "database autostart should not run"),
+              PrerequisiteReport.setupPrerequisiteAttemptTracing = unusedTracingAutostart,
+              PrerequisiteReport.setupPrerequisiteOutputHandle = outputHandle
+            }
         hClose outputHandle
         readFile outputPath
           `shouldReturn` unlines
@@ -412,26 +438,18 @@ spec = do
     it "writes the rendered report to the supplied handle after applying database autostart" $
       withSystemTempFile "setup-prerequisite-report.txt" $ \outputPath outputHandle -> do
         PrerequisiteReport.reportSetupPrerequisitesWith
-          ( pure
-              ( Right
-                  PrerequisiteConfig.defaultSetupPrerequisiteConfig
-                    { PrerequisiteConfig.setupTracingEndpoint = Just "http://collector:4318/v1/traces"
-                    }
-              )
-          )
-          (\_ -> pure False)
-          (\_ -> pure (Right True))
-          ( \setupConfig databasePlan -> do
-              PrerequisiteConfig.setupDatabaseName setupConfig `shouldBe` "web_api_dev"
-              PrerequisitePlan.databaseCheckEndpoint databasePlan
-                `shouldBe` Prerequisite.TcpEndpoint
-                  { Prerequisite.tcpEndpointHost = "127.0.0.1",
-                    Prerequisite.tcpEndpointPort = 5432
-                  }
-              pure (DatabaseAutostart.DatabaseAutostartSucceeded PrerequisitePlan.PodmanRuntime)
-          )
-          unusedTracingAutostart
-          outputHandle
+          PrerequisiteReport.SetupPrerequisiteReportDependencies
+            { PrerequisiteReport.setupPrerequisiteLoadConfig = pure (Right PrerequisiteConfig.defaultSetupPrerequisiteConfig {PrerequisiteConfig.setupTracingEndpoint = Just "http://collector:4318/v1/traces"}),
+              PrerequisiteReport.setupPrerequisiteCheckDatabase = \_ -> pure False,
+              PrerequisiteReport.setupPrerequisiteCheckTracing = \_ -> pure (Right True),
+              PrerequisiteReport.setupPrerequisiteAttemptDatabase = \setupConfig databasePlan -> do
+                PrerequisiteConfig.setupDatabaseName setupConfig `shouldBe` "web_api_dev"
+                PrerequisitePlan.databaseCheckEndpoint databasePlan
+                  `shouldBe` Prerequisite.TcpEndpoint {Prerequisite.tcpEndpointHost = "127.0.0.1", Prerequisite.tcpEndpointPort = 5432}
+                pure (DatabaseAutostart.DatabaseAutostartSucceeded PrerequisitePlan.PodmanRuntime),
+              PrerequisiteReport.setupPrerequisiteAttemptTracing = unusedTracingAutostart,
+              PrerequisiteReport.setupPrerequisiteOutputHandle = outputHandle
+            }
         hClose outputHandle
         readFile outputPath
           `shouldReturn` unlines
@@ -443,18 +461,14 @@ spec = do
     it "leaves unreachable database reports unchanged when autostart is disabled in setup config" $
       withSystemTempFile "setup-prerequisite-report.txt" $ \outputPath outputHandle -> do
         PrerequisiteReport.reportSetupPrerequisitesWith
-          ( pure
-              ( Right
-                  PrerequisiteConfig.defaultSetupPrerequisiteConfig
-                    { PrerequisiteConfig.setupAutostartDatabase = False
-                    }
-              )
-          )
-          (\_ -> pure False)
-          (\_ -> pure (Right False))
-          (\_ _ -> expectationFailure "database autostart should not run" >> pure (DatabaseAutostart.DatabaseAutostartSkipped "database autostart should not run"))
-          unusedTracingAutostart
-          outputHandle
+          PrerequisiteReport.SetupPrerequisiteReportDependencies
+            { PrerequisiteReport.setupPrerequisiteLoadConfig = pure (Right PrerequisiteConfig.defaultSetupPrerequisiteConfig {PrerequisiteConfig.setupAutostartDatabase = False}),
+              PrerequisiteReport.setupPrerequisiteCheckDatabase = \_ -> pure False,
+              PrerequisiteReport.setupPrerequisiteCheckTracing = \_ -> pure (Right False),
+              PrerequisiteReport.setupPrerequisiteAttemptDatabase = \_ _ -> expectationFailure "database autostart should not run" >> pure (DatabaseAutostart.DatabaseAutostartSkipped "database autostart should not run"),
+              PrerequisiteReport.setupPrerequisiteAttemptTracing = unusedTracingAutostart,
+              PrerequisiteReport.setupPrerequisiteOutputHandle = outputHandle
+            }
         hClose outputHandle
         readFile outputPath
           `shouldReturn` unlines
@@ -464,12 +478,14 @@ spec = do
     it "writes skipped database autostart outcomes to the supplied handle" $
       withSystemTempFile "setup-prerequisite-report.txt" $ \outputPath outputHandle -> do
         PrerequisiteReport.reportSetupPrerequisitesWith
-          (pure (Right PrerequisiteConfig.defaultSetupPrerequisiteConfig))
-          (\_ -> pure False)
-          (\_ -> pure (Right False))
-          (\_ _ -> pure (DatabaseAutostart.DatabaseAutostartSkipped "unsupported host"))
-          unusedTracingAutostart
-          outputHandle
+          PrerequisiteReport.SetupPrerequisiteReportDependencies
+            { PrerequisiteReport.setupPrerequisiteLoadConfig = pure (Right PrerequisiteConfig.defaultSetupPrerequisiteConfig),
+              PrerequisiteReport.setupPrerequisiteCheckDatabase = \_ -> pure False,
+              PrerequisiteReport.setupPrerequisiteCheckTracing = \_ -> pure (Right False),
+              PrerequisiteReport.setupPrerequisiteAttemptDatabase = \_ _ -> pure (DatabaseAutostart.DatabaseAutostartSkipped "unsupported host"),
+              PrerequisiteReport.setupPrerequisiteAttemptTracing = unusedTracingAutostart,
+              PrerequisiteReport.setupPrerequisiteOutputHandle = outputHandle
+            }
         hClose outputHandle
         readFile outputPath
           `shouldReturn` unlines
@@ -480,20 +496,14 @@ spec = do
     it "writes failed database autostart outcomes to the supplied handle" $
       withSystemTempFile "setup-prerequisite-report.txt" $ \outputPath outputHandle -> do
         PrerequisiteReport.reportSetupPrerequisitesWith
-          (pure (Right PrerequisiteConfig.defaultSetupPrerequisiteConfig))
-          (\_ -> pure False)
-          (\_ -> pure (Right False))
-          ( \_ _ ->
-              pure $
-                DatabaseAutostart.DatabaseAutostartFailed
-                  [ DatabaseAutostart.ContainerRuntimeFailure
-                      { DatabaseAutostart.failedContainerRuntime = PrerequisitePlan.PodmanRuntime,
-                        DatabaseAutostart.containerRuntimeFailureMessage = "podman missing"
-                      }
-                  ]
-          )
-          unusedTracingAutostart
-          outputHandle
+          PrerequisiteReport.SetupPrerequisiteReportDependencies
+            { PrerequisiteReport.setupPrerequisiteLoadConfig = pure (Right PrerequisiteConfig.defaultSetupPrerequisiteConfig),
+              PrerequisiteReport.setupPrerequisiteCheckDatabase = \_ -> pure False,
+              PrerequisiteReport.setupPrerequisiteCheckTracing = \_ -> pure (Right False),
+              PrerequisiteReport.setupPrerequisiteAttemptDatabase = \_ _ -> pure $ DatabaseAutostart.DatabaseAutostartFailed [DatabaseAutostart.ContainerRuntimeFailure {DatabaseAutostart.failedContainerRuntime = PrerequisitePlan.PodmanRuntime, DatabaseAutostart.containerRuntimeFailureMessage = "podman missing"}],
+              PrerequisiteReport.setupPrerequisiteAttemptTracing = unusedTracingAutostart,
+              PrerequisiteReport.setupPrerequisiteOutputHandle = outputHandle
+            }
         hClose outputHandle
         readFile outputPath
           `shouldReturn` unlines
@@ -505,23 +515,14 @@ spec = do
     it "writes successful tracing autostart outcomes to the supplied handle" $
       withSystemTempFile "setup-prerequisite-report.txt" $ \outputPath outputHandle -> do
         PrerequisiteReport.reportSetupPrerequisitesWith
-          ( pure
-              ( Right
-                  PrerequisiteConfig.defaultSetupPrerequisiteConfig
-                    { PrerequisiteConfig.setupTracingEndpoint = Just "http://collector:4318/v1/traces",
-                      PrerequisiteConfig.setupAutostartJaeger = True
-                    }
-              )
-          )
-          (\_ -> pure True)
-          (\_ -> pure (Right False))
-          (\_ _ -> expectationFailure "database autostart should not run" >> pure (DatabaseAutostart.DatabaseAutostartSkipped "database autostart should not run"))
-          ( \tracingPlan -> do
-              PrerequisitePlan.tracingCheckEndpoint tracingPlan
-                `shouldBe` "http://collector:4318/v1/traces"
-              pure (TracingAutostart.TracingAutostartSucceeded PrerequisitePlan.PodmanRuntime)
-          )
-          outputHandle
+          PrerequisiteReport.SetupPrerequisiteReportDependencies
+            { PrerequisiteReport.setupPrerequisiteLoadConfig = pure (Right PrerequisiteConfig.defaultSetupPrerequisiteConfig {PrerequisiteConfig.setupTracingEndpoint = Just "http://collector:4318/v1/traces", PrerequisiteConfig.setupAutostartJaeger = True}),
+              PrerequisiteReport.setupPrerequisiteCheckDatabase = \_ -> pure True,
+              PrerequisiteReport.setupPrerequisiteCheckTracing = \_ -> pure (Right False),
+              PrerequisiteReport.setupPrerequisiteAttemptDatabase = \_ _ -> expectationFailure "database autostart should not run" >> pure (DatabaseAutostart.DatabaseAutostartSkipped "database autostart should not run"),
+              PrerequisiteReport.setupPrerequisiteAttemptTracing = \tracingPlan -> do PrerequisitePlan.tracingCheckEndpoint tracingPlan `shouldBe` "http://collector:4318/v1/traces"; pure (TracingAutostart.TracingAutostartSucceeded PrerequisitePlan.PodmanRuntime),
+              PrerequisiteReport.setupPrerequisiteOutputHandle = outputHandle
+            }
         hClose outputHandle
         readFile outputPath
           `shouldReturn` unlines
@@ -532,7 +533,7 @@ spec = do
 
     it "writes failed tracing autostart outcomes to the supplied handle" $
       withSystemTempFile "setup-prerequisite-report.txt" $ \outputPath outputHandle -> do
-        PrerequisiteReport.reportSetupPrerequisitesWith
+        reportSetupPrerequisitesWith
           ( pure
               ( Right
                   PrerequisiteConfig.defaultSetupPrerequisiteConfig
@@ -565,7 +566,7 @@ spec = do
 
     it "writes skipped tracing autostart outcomes to the supplied handle" $
       withSystemTempFile "setup-prerequisite-report.txt" $ \outputPath outputHandle -> do
-        PrerequisiteReport.reportSetupPrerequisitesWith
+        reportSetupPrerequisitesWith
           ( pure
               ( Right
                   PrerequisiteConfig.defaultSetupPrerequisiteConfig
@@ -589,7 +590,7 @@ spec = do
 
     it "leaves unreachable tracing reports unchanged when tracing autostart is disabled in setup config" $
       withSystemTempFile "setup-prerequisite-report.txt" $ \outputPath outputHandle -> do
-        PrerequisiteReport.reportSetupPrerequisitesWith
+        reportSetupPrerequisitesWith
           ( pure
               ( Right
                   PrerequisiteConfig.defaultSetupPrerequisiteConfig
@@ -612,7 +613,7 @@ spec = do
 
     it "leaves tracing reports unchanged when tracing is reachable or invalid" $
       withSystemTempFile "setup-prerequisite-report.txt" $ \outputPath outputHandle -> do
-        PrerequisiteReport.reportSetupPrerequisitesWith
+        reportSetupPrerequisitesWith
           ( pure
               ( Right
                   PrerequisiteConfig.defaultSetupPrerequisiteConfig
@@ -636,7 +637,7 @@ spec = do
     it "returns the rendered report after writing it to the supplied handle" $
       withSystemTempFile "setup-prerequisite-report.txt" $ \outputPath outputHandle -> do
         reportedPrerequisites <-
-          PrerequisiteReport.reportSetupPrerequisitesWithResult
+          reportSetupPrerequisitesWithResult
             (pure (Right PrerequisiteConfig.defaultSetupPrerequisiteConfig))
             (\_ -> pure False)
             (\_ -> pure (Right False))
@@ -921,9 +922,6 @@ spec = do
               }
       PrerequisiteReport.databasePrerequisiteStatus report `shouldBe` databaseStatus
       PrerequisiteReport.tracingPrerequisiteStatus report `shouldBe` Just tracingStatus
-      databaseStatus `shouldBe` databaseStatus
-      tracingStatus `shouldBe` tracingStatus
-      report `shouldBe` report
       tracingStatus
         `shouldNotBe` PrerequisiteReport.TracingPrerequisiteReachable "http://collector:4318/v1/traces"
       report

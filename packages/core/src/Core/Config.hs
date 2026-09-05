@@ -2,6 +2,7 @@
 
 module Core.Config
   ( ConfigOverridesFileError (..),
+    ConfigLayers (..),
     ConfigParseError (..),
     declaredIndices,
     indexedConfigKey,
@@ -11,17 +12,18 @@ module Core.Config
     parseBoolean,
     parseDelimitedTexts,
     parseDelimitedTextsUnsafe,
-    parseHeadersUnsafe,
+    parseHeaders,
     parseNonNegativeInt,
     parsePositiveInt,
   )
 where
 
-import Control.Applicative ((<|>))
 import Control.Exception (IOException, displayException, evaluate, try)
 import Data.Char (isDigit)
-import Data.List (nub, sort)
+import Data.Foldable (asum)
+import Data.List.NonEmpty (NonEmpty, nonEmpty)
 import Data.Maybe (mapMaybe)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as TextIO
@@ -31,6 +33,13 @@ import Text.Read (readMaybe)
 data ConfigParseError
   = MissingConfigValue Text
   | InvalidConfigValue Text Text
+  | -- | An invalid entry in a configuration value whose entries may contain
+    -- credentials. Unlike 'InvalidConfigValue', this keeps only the owning key
+    -- and one-based entry position so startup diagnostics cannot disclose a
+    -- valid earlier OTLP authorization header while explaining a later malformed
+    -- entry (PR-SEC5, 2026-08-28).
+    InvalidConfigEntry Text Int
+  | UnsupportedConfigValue Text
   deriving (Eq, Show)
 
 data ConfigOverridesFileError
@@ -38,11 +47,20 @@ data ConfigOverridesFileError
   | UnreadableConfigOverridesFile Text
   deriving (Eq, Show)
 
+data ConfigLayers = ConfigLayers
+  { configLayerCommittedDefaults :: [(Text, Text)],
+    configLayerLocalOverrides :: [(Text, Text)],
+    configLayerEnvironmentOverrides :: [(Text, Text)]
+  }
+
 loadConfigOverridesFile :: FilePath -> IO (Either ConfigOverridesFileError [(Text, Text)])
 loadConfigOverridesFile overridesPath = do
   overridesPathExists <- doesPathExist overridesPath
   if overridesPathExists
-    then do
+    then loadExistingOverridesFile
+    else pure (Right [])
+  where
+    loadExistingOverridesFile = do
       overridesReadResult <-
         ( try $ do
             fileContents <- TextIO.readFile overridesPath
@@ -51,14 +69,10 @@ loadConfigOverridesFile overridesPath = do
         ) ::
           IO (Either IOException Text)
       pure $
-        case overridesReadResult of
-          Left readError ->
-            Left
-              ( UnreadableConfigOverridesFile
-                  (Text.pack (displayException readError))
-              )
-          Right fileContents -> parseConfigOverridesFile fileContents
-    else pure (Right [])
+        either
+          (Left . UnreadableConfigOverridesFile . Text.pack . displayException)
+          parseConfigOverridesFile
+          overridesReadResult
 
 parseConfigOverridesFile :: Text -> Either ConfigOverridesFileError [(Text, Text)]
 parseConfigOverridesFile =
@@ -78,17 +92,18 @@ parseConfigOverridesFile =
                     then Left (InvalidConfigOverridesLine lineNumber rawLine)
                     else Right [(strippedKey, Text.strip (Text.drop 1 rawValueWithSeparator))]
 
-lookupConfigValue :: Text -> [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Maybe Text
-lookupConfigValue key committedDefaults localOverrides environmentOverrides =
-  lookupInLayer environmentOverrides
-    `orElse` lookupInLayer localOverrides
-    `orElse` lookupInLayer committedDefaults
-  where
-    lookupInLayer = lookup key . reverse
+configLayersByPrecedence :: ConfigLayers -> [[(Text, Text)]]
+configLayersByPrecedence
+  ConfigLayers
+    { configLayerCommittedDefaults = committedDefaults,
+      configLayerLocalOverrides = localOverrides,
+      configLayerEnvironmentOverrides = environmentOverrides
+    } =
+    [environmentOverrides, localOverrides, committedDefaults]
 
-orElse :: Maybe value -> Maybe value -> Maybe value
-orElse maybeValue fallbackValue =
-  maybeValue <|> fallbackValue
+lookupConfigValue :: Text -> ConfigLayers -> Maybe Text
+lookupConfigValue key =
+  asum . map (lookup key . reverse) . configLayersByPrecedence
 
 parsePositiveInt :: Text -> Text -> Either ConfigParseError Int
 parsePositiveInt key value =
@@ -115,11 +130,15 @@ parseBoolean key value =
     "no" -> Right False
     _ -> Left (InvalidConfigValue key value)
 
-parseDelimitedTexts :: Text -> Text -> Either ConfigParseError [Text]
+-- | Parse a comma-delimited configuration value into at least one non-empty,
+-- trimmed entry.  The non-empty result is part of the contract: callers need
+-- not recover from an empty list after this parser has accepted the input.
+parseDelimitedTexts :: Text -> Text -> Either ConfigParseError (NonEmpty Text)
 parseDelimitedTexts key value =
-  case parseDelimitedTextsUnsafe "," value of
-    [] -> Left (InvalidConfigValue key value)
-    parsedValues -> Right parsedValues
+  maybe
+    (Left (InvalidConfigValue key value))
+    Right
+    (nonEmpty (parseDelimitedTextsUnsafe "," value))
 
 parseDelimitedTextsUnsafe :: Text -> Text -> [Text]
 parseDelimitedTextsUnsafe delimiter =
@@ -127,19 +146,20 @@ parseDelimitedTextsUnsafe delimiter =
     . map Text.strip
     . Text.splitOn delimiter
 
-parseHeadersUnsafe :: Text -> [(Text, Text)]
-parseHeadersUnsafe value =
-  mapMaybe parseHeaderPair (parseDelimitedTextsUnsafe ";" value)
+parseHeaders :: Text -> Text -> Either ConfigParseError [(Text, Text)]
+parseHeaders key value =
+  traverse parseHeaderPair (zip [1 :: Int ..] (parseDelimitedTextsUnsafe ";" value))
   where
-    parseHeaderPair headerEntry =
-      let (headerName, headerValueWithSeparator) = Text.breakOn "=" headerEntry
+    parseHeaderPair (entryIndex, headerEntry) =
+      let (rawHeaderName, headerValueWithSeparator) = Text.breakOn "=" headerEntry
+          headerName = Text.strip rawHeaderName
        in if Text.null headerName || Text.null headerValueWithSeparator
-            then Nothing
-            else Just (Text.strip headerName, Text.strip (Text.drop 1 headerValueWithSeparator))
+            then Left (InvalidConfigEntry key entryIndex)
+            else Right (headerName, Text.strip (Text.drop 1 headerValueWithSeparator))
 
 declaredIndices :: Text -> [(Text, Text)] -> [Int]
 declaredIndices entryPrefix =
-  sort . nub . mapMaybe (extractIndexedKey entryPrefix . fst)
+  Set.toAscList . Set.fromList . mapMaybe (extractIndexedKey entryPrefix . fst)
 
 extractIndexedKey :: Text -> Text -> Maybe Int
 extractIndexedKey entryPrefix entryKey =

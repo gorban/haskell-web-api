@@ -4,15 +4,17 @@
 
 import Control.Exception (finally)
 import Control.Monad (forM_)
-import qualified Core.Setup.DatabaseAutostart as DatabaseAutostart
-import qualified Core.Setup.Prerequisite as Prerequisite
-import qualified Core.Setup.PrerequisiteConfig as PrerequisiteConfig
-import qualified Core.Setup.PrerequisitePlan as PrerequisitePlan
+import Core.Setup.DatabaseAutostart qualified as DatabaseAutostart
+import Core.Setup.Prerequisite qualified as Prerequisite
+import Core.Setup.PrerequisiteConfig qualified as PrerequisiteConfig
+import Core.Setup.PrerequisitePlan qualified as PrerequisitePlan
 import Data.IORef (modifyIORef', newIORef, readIORef)
-import qualified Data.Text as Text
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.Text qualified as Text
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (callProcess)
+import Unit.Core.Setup.TestSupport (withEmptyPath)
 
 withPathScripts :: [(FilePath, String)] -> IO a -> IO a
 withPathScripts scripts action =
@@ -28,21 +30,6 @@ withPathScripts scripts action =
             (\existingPath -> tempDirectory <> ":" <> existingPath)
             originalPath
     setEnv "PATH" updatedPath
-    action
-      `finally` maybe
-        (unsetEnv "PATH")
-        (setEnv "PATH")
-        originalPath
-
-withIsolatedPathScripts :: [(FilePath, String)] -> IO a -> IO a
-withIsolatedPathScripts scripts action =
-  withSystemTempDirectory "database-autostart-bin" $ \tempDirectory -> do
-    forM_ scripts $ \(scriptName, scriptBody) -> do
-      let scriptPath = tempDirectory <> "/" <> scriptName
-      writeFile scriptPath scriptBody
-      callProcess "chmod" ["+x", scriptPath]
-    originalPath <- lookupEnv "PATH"
-    setEnv "PATH" tempDirectory
     action
       `finally` maybe
         (unsetEnv "PATH")
@@ -240,7 +227,7 @@ spec = do
             ]
 
     it "surfaces missing runtime executables from the real runner explicitly" $
-      withIsolatedPathScripts [] $
+      withEmptyPath $
         do
           autostartResult <-
             DatabaseAutostart.attemptDatabaseAutostart
@@ -272,24 +259,14 @@ spec = do
             DatabaseAutostart.DatabaseAutostartSucceeded PrerequisitePlan.DockerRuntime
           failedResult =
             DatabaseAutostart.DatabaseAutostartFailed [failedRuntime]
-      failedRuntime `shouldBe` failedRuntime
-      failedRuntime
-        `shouldNotBe` failedRuntime
-          { DatabaseAutostart.containerRuntimeFailureMessage = "docker failed"
-          }
-      skippedResult `shouldBe` skippedResult
-      skippedResult `shouldNotBe` succeededResult
-      succeededResult `shouldBe` succeededResult
-      failedResult `shouldBe` failedResult
-      show failedRuntime
-        `shouldBe` "ContainerRuntimeFailure {failedContainerRuntime = PodmanRuntime, containerRuntimeFailureMessage = \"podman failed\"}"
-      show skippedResult
-        `shouldBe` "DatabaseAutostartSkipped \"automatic database autostart only supports DATABASE_HOST values 127.0.0.1 or 0.0.0.0, but got db.internal\""
-      show succeededResult
-        `shouldBe` "DatabaseAutostartSucceeded DockerRuntime"
-      show failedResult
-        `shouldBe` "DatabaseAutostartFailed [ContainerRuntimeFailure {failedContainerRuntime = PodmanRuntime, containerRuntimeFailureMessage = \"podman failed\"}]"
-      show [failedRuntime]
-        `shouldBe` "[ContainerRuntimeFailure {failedContainerRuntime = PodmanRuntime, containerRuntimeFailureMessage = \"podman failed\"}]"
-      show [skippedResult, succeededResult, failedResult]
-        `shouldBe` "[DatabaseAutostartSkipped \"automatic database autostart only supports DATABASE_HOST values 127.0.0.1 or 0.0.0.0, but got db.internal\",DatabaseAutostartSucceeded DockerRuntime,DatabaseAutostartFailed [ContainerRuntimeFailure {failedContainerRuntime = PodmanRuntime, containerRuntimeFailureMessage = \"podman failed\"}]]"
+      expectAll
+        ( (failedRuntime `shouldNotBe` failedRuntime {DatabaseAutostart.containerRuntimeFailureMessage = "docker failed"})
+            :| [ skippedResult `shouldNotBe` succeededResult,
+                 show failedRuntime `shouldBe` "ContainerRuntimeFailure {failedContainerRuntime = PodmanRuntime, containerRuntimeFailureMessage = \"podman failed\"}",
+                 show skippedResult `shouldBe` "DatabaseAutostartSkipped \"automatic database autostart only supports DATABASE_HOST values 127.0.0.1 or 0.0.0.0, but got db.internal\"",
+                 show succeededResult `shouldBe` "DatabaseAutostartSucceeded DockerRuntime",
+                 show failedResult `shouldBe` "DatabaseAutostartFailed [ContainerRuntimeFailure {failedContainerRuntime = PodmanRuntime, containerRuntimeFailureMessage = \"podman failed\"}]",
+                 show [failedRuntime] `shouldBe` "[ContainerRuntimeFailure {failedContainerRuntime = PodmanRuntime, containerRuntimeFailureMessage = \"podman failed\"}]",
+                 show [skippedResult, succeededResult, failedResult] `shouldBe` "[DatabaseAutostartSkipped \"automatic database autostart only supports DATABASE_HOST values 127.0.0.1 or 0.0.0.0, but got db.internal\",DatabaseAutostartSucceeded DockerRuntime,DatabaseAutostartFailed [ContainerRuntimeFailure {failedContainerRuntime = PodmanRuntime, containerRuntimeFailureMessage = \"podman failed\"}]]"
+               ]
+        )

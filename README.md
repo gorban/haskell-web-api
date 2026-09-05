@@ -1,369 +1,374 @@
-# haskell-web-api
+# Harch Web
 
-An opinionated template for a simple web api in Haskell.
-- Uses Cabal without Stack build support
-- Reduces boilerplate:
-  - Uses pre-processors to reduce boilerplate:
-    - `hspec-discover` (from Hackage) turns test/Main.hs into a test suite that automatically discovers and
-      runs all tests in the `test` directory.
-    - `spec-preprocessor` (defined in this repo) writes the module and common imports, making concise
-      tests.
-  - Rolls up common imports into `Core.Prelude` and `TestCore.Prelude` modules, to reduce all imports.
-- Runs tests in GitHub Actions as its CI/CD pipeline:
-  - Requires a clean `cabal-gild` to ensure .cabal files are well formatted and consistent.
-  - Requires a clean `ormulo` to ensure the code is well formatted and consistent.
-  - Requires a clean `hlint` to ensure no linting issues are present.
-  - Requires a warning-free build to ensure no warnings are present.
-  - Ensures that just Unit folder tests alone have 100% code coverage of their same package, and that
-    overall code coverage is also 100%, both top-level-expressions **and** alternations.
-  - Includes a local helper to generate a coverage report locally, combining every project's coverage
-    report in a custom root report. The coverage report is published (with slight modifications) to GitHub
-    Pages for easy access.
-  - Requires non-third party packages also pass some integration tests of their actual application
-    executables.
-- Dockerfile provides an alternative to produce the coverage report and run the actual application in a
-  consistent environment, without needing to set up the Haskell environment locally.
-- Supports only Linux and MacOS. Windows native was last fully supported in
-  [v0.1.0.0](https://github.com/gorban/haskell-web-api/tree/v0.1.0.0), but was later removed because, even
-  after an immense effort to produce JavaScript output from Haskell (e.g. from GHCJS or the newer GHC with
-  JavaScript backend), it just is not community-supported (see WIP PRs for unresolved issue
-  [ghcjs#830](https://github.com/ghcjs/ghcjs/issues/830), for
-  [ghcjs#1](https://github.com/ghcjs/ghcjs/issues/830) and its specific
-  [ghc#1](https://github.com/gorban/ghc/pull/1) version it needs). If you want to run this on Windows, you
-  can use WSL2 or Docker (configured for Linux containers).
+[![CI][ci-badge]][ci] [![Coverage][coverage-badge]][coverage]
 
-## Changelog
+Harch Web is an SSR-first, progressively enhanced web architecture for Haskell. Every supported page route
+returns a complete HTML document, while a deliberately small browser layer adds SPA-style navigation,
+typed client actions, region patches, and live updates after the first page is already useful.
 
-See [CHANGELOG](CHANGELOG.md) for a detailed changelog.
+Run the smallest application from the repository root:
 
-## Components
+```sh
+cabal run two-pages-example
+```
 
-packages/
-  - harch-web: Haskell Architecture Web - The SSR-first web framework package. It currently provides the
-    initial facade boundary that `web-api` composes against, and it is intended to grow into the shared
-    route, page shell, server adapter, and progressive enhancement infrastructure tracked in `TASKS.md`.
-  - web-api: The example application package and composition root that wires app-specific routes, pages,
-    config, and startup into the shared `HarchWeb` facade.
-  - core: Shared utility functions and setup helpers used across application and test packages.
-  - test-core: A library with shared test utilities and custom preprocessors.
-  - hspec-expectations-match: A fork of the third-party package `hspec-expectations-match` with local
-    changes to get it to work with current versions of Template Haskell.
-     - No public GitHub repo, so not sure if we can get these changes upstreamed to Hackage:\
-       <https://hackage.haskell.org/package/hspec-expectations-match>
+Then open <http://127.0.0.1:8080/>. See [SETUP.md](SETUP.md) for development prerequisites and the
+[two-pages guide](examples/two-pages/README.md) for the executable walkthrough.
 
-## Template Customization Map
+## How a request becomes an application
 
-If you copy `packages/web-api` as the starting point for a new app, these are the main app-owned seams to
-edit first:
+```mermaid
+flowchart LR
+  request[Request] --> route[Typed route]
+  route --> ssr[Complete SSR document]
+  ssr --> capture[Immediate capture and visible ownership]
+  capture --> paint[Browser paint]
+  paint --> modules[Deferred modules]
+  modules --> behavior[Enhanced navigation and actions]
+  behavior --> patches[Region patches]
+```
 
-| What you want to change | Edit here |
-| --- | --- |
-| Route parsing and route path rendering | `packages/web-api/src/WebApi/Route.hs` |
-| Page models and rendered page body HTML | `packages/web-api/src/WebApi/Page.hs` |
-| Shared layout, branding, and primary navigation shell | `packages/web-api/src/WebApi/App/Shell.hs` |
-| Client-only enhancement hook selection | `packages/web-api/src/WebApi/App/Enhancements.hs` |
-| Asset helper wiring for bundled app assets | `packages/web-api/src/WebApi/App/Assets.hs` |
-| Tiny navigation runtime | `packages/web-api/public/navigation.js` |
-| App stylesheet | `packages/web-api/public/styles/app.css` |
-| Font-face declarations and app-owned fonts | `packages/web-api/public/fonts/font-faces.css` and sibling files in `packages/web-api/public/fonts/` |
-| Other shipped browser resources such as icons | `packages/web-api/public/resources/` |
+Every supported page route is usable as HTML before the optional application runtime arrives. Native links remain
+links, and modeled framework forms have an event path as soon as their controls can be used. Deferred
+modules then upgrade navigation and mutations without recreating the component tree in the browser.
 
-To serve those bundled browser assets, point a static asset root at `packages/web-api/public` (or `public`
-when running from the package directory) and mount it at the URL prefix you want, such as `/assets`.
+That design is intended to improve first-content conditions, not to promise a benchmark result. SSR
+often improves First Contentful Paint by avoiding client-side data and templating round trips, but
+dynamic server work can increase Time to First Byte. Measure the application and deployment that you
+actually ship.
 
-### Build Status
+## What is included
 
-[![CI](https://github.com/gorban/haskell-web-api/actions/workflows/ci.yml/badge.svg)
-](https://github.com/gorban/haskell-web-api/actions/workflows/ci.yml)
+- Generated page-route algebras, exhaustive dispatch, explicit dynamic/API routes, and typed URL
+  rendering.
+- XML-like, escaping-by-default markup whose components are ordinary typed Haskell functions.
+- A nonce-protected immediate capture kernel, deferred navigation, declarative client-action codecs,
+  region patches, and Server-Sent Events (SSE).
+- Typed PostgreSQL effects and migrations, with an app-owned adapter seam for other databases or data
+  sources.
+- OTLP traces and metrics, low-cardinality route naming, and stable expected-error classification.
+- Opaque sessions, CSRF protection, Argon2id credentials, TOTP/MFA, email seams, and typed middleware.
+- Manual or shared certificates, ACME/Let's Encrypt through certbot, HSTS, CSP, CORS, redirects, and
+  constrained static-asset serving.
+- Localization, reverse-proxy and path-prefix handling, semantic accessibility conventions,
+  warning-free optimized builds, 100% per-package coverage, and real-browser tests.
 
-Coverage report:\
-<https://gorban.github.io/haskell-web-api/>
+## How Harch differs from common rendering architectures
 
-## Prerequisites
+> **A control that looks enabled has invited interaction. If its handler does not exist yet, a real
+> user can lose a click or submit—and an end-to-end test can fail for exactly the same reason.**
 
-The following is a detailed guide to set up a Haskell development environment on Windows, MacOS, and Linux
-(e.g. WSL2 / Ubuntu or Fedora).
+This is the practical hydration gap. The broader [web.dev rendering analysis][rendering-web] explains
+that hydrated SSR displays server HTML and
+then runs client code to add interactivity. On constrained devices, the visible page can therefore
+precede the handlers that make it interactive. The inference is specific: if a visible control depends
+only on a handler that hydration has not attached and has no native fallback, that control cannot yet
+perform its advertised action.
 
-- Haskell GHC Compiler and Cabal
-  - (recommended) GHCup, which provides an easy way to install and manage multiple versions of GHC and
-    Cabal. It also includes tools like HLS and hlint.
-- (recommended) IDE/editor with Haskell support (e.g. Visual Studio Code with Haskell extension)
-  - (recommended IDE-helpers) Haskell Language Server (HLS), hlint, Haskell debugger (hdb), and Haskell
-    Debugger
-- (optional) Stack (some third party projects might require it)
+### React Server Components and Next.js
 
-### Configuration
+React Server Component pages use Client Components where event handlers are needed. Next.js describes
+the initial HTML as a non-interactive preview and says hydration attaches event handlers to make it
+interactive in its [Server and Client Components guide][next-components]. It follows that an ordinary
+button backed only by a Client Component handler can be visible before that handler is available.
 
-The example application ships with committed localhost-friendly defaults, so you can run it for local
-development without setting any configuration first. When you do need to reconfigure it, the current app
-understands the following values:
+There is an important mitigation, not a universal loss condition: Next Server Actions, built on React
+Server Functions, and selected form integrations can progressively submit, redirect, queue, or replay
+submissions made before hydration. See [React Server Functions][react-functions]. That protects those
+modeled Server Action forms; it does not attach arbitrary client-only handlers early.
 
-| Config value | Description | Default |
+### SvelteKit
+
+SvelteKit makes the same useful distinction. Its native [form actions][svelte-actions] work without
+JavaScript and may then be progressively
+enhanced. Custom client event handlers still require hydration.
+
+A report from a SvelteKit project with 6,159 Playwright tests describes a test clicking a rendered
+button before hydration, while its event handler was still unattached, producing flakiness. See
+[SvelteKit discussion #13455][svelte-hydration-report]. Automation exposes
+the race reliably, but a real user can reach the same enabled control during the same interval.
+
+### Harch Web's capture contract
+
+> Once captured by the kernel, an action remains owned and visibly pending until its handler confirms
+> completion, reports a visible unresolved/recoverable outcome, or the user cancels it. Deferred behavior
+> may arrive arbitrarily late without silently losing the action.
+
+Harch does not ship a framework control until its immediate event path exists. The nonce-protected inline
+kernel captures a modeled form submission and its input snapshot before the deferred action module loads,
+keeps that envelope in memory, and updates only the originating control's accessible status region. A
+deferred module registers a handler, claims work without removing it, and must settle the claim with its
+identity; stale consumers cannot settle another handler's action. Exceptions, rejected promises, module
+load errors, and actions that outlive the liveness threshold become visible recoverable states rather than
+silent completion. Its rendered UTF-8 source is capped at 12 KiB by a unit-test regression budget; action
+transport and region patching remain in the deferred module. Native links remain ordinary navigation.
+
+This is a bounded ownership guarantee, not an eventual-execution or durable-delivery promise. It begins
+only after the inline kernel captures the event and ends on navigation, reload, tab/browser termination,
+or process failure. Time cannot distinguish slow loading from permanent failure, so the liveness threshold
+changes feedback only; it never retries, submits, cancels, or transfers work. Arbitrary client-only effects
+cannot have a universal native submission fallback without changing their meaning. Native submission is
+therefore an explicit per-action capability, not the default; `beforeunload` is likewise an opt-in,
+best-effort warning for unresolved actions, not a delivery mechanism. Retrying an indeterminate mutation
+requires a stable idempotency identity and a server deduplication boundary, otherwise the action remains
+visibly indeterminate rather than risking a duplicate effect.
+
+`HandlerSafeRetry` makes a retry button available only after a recoverable handler outcome; it reclaims
+the retained envelope only when a handler is present and never retries automatically. An
+`IdempotentMutationRetry` additionally requires `ActionIdempotency`; the same key is retained with the
+snapshot and forwarded as `Idempotency-Key` to `ClientActionRequest`, where the application must use it at
+its durable deduplication boundary. The browser lifecycle test proves both attempts see the same captured
+values and that an idempotent retry keeps its identity. Neither capability turns an indeterminate default
+mutation into a retryable one.
+
+An action declaring `NativeFallback` must also provide a `NativeActionFallback`: a server-owned endpoint,
+its HTML form method, and the CSRF form value from that endpoint's normal server-side workflow. The browser
+uses that endpoint only when JavaScript is unavailable; the capture kernel retains the codec's action path
+for the enhanced request. The [example's scripts-disabled browser test][capture-e2e] posts through such a
+fallback and proves its CSRF gate and complete SSR response.
+
+Future framework event types must extend this capture contract before a corresponding enabled control
+can be introduced. The [real-browser capture suite][capture-e2e] blocks the module, submits immediately,
+proves input preservation without a reload, delayed handler arrival, cancellation before late registration,
+handler exception/rejection/non-settlement, script-load failure, control-local multiple pending work, and
+the opt-in leave warning and retry capability policy. It proves immediate capture and bounded in-document ownership—not
+cross-navigation delivery or the reliability of arbitrary application effects.
+
+### Rendering trade-offs
+
+No rendering architecture is universally best. Harch deliberately combines a complete SSR baseline
+with a narrowly scoped enhancement layer.
+
+| Architecture | Legitimate strengths | Costs and Harch's choice |
 | --- | --- | --- |
-| `APP_MODE` | Application environment mode for app-level behavior. Supported values are `development`, `test`, and `production`. | (`development`) |
-| `DATABASE_HOST` | Database host for app environment config. Using loopback addresses such as `127.0.0.1` or `::1` keeps the database reachable only from the local machine, not from external clients. | (`127.0.0.1`) |
-| `DATABASE_PORT` | Database port for app environment config. | (`5432`) |
-| `DATABASE_NAME` | Database name for app environment config. | (`web_api_dev`) |
-| `DATABASE_USER` | Database username for app environment config. | (`web_api_runtime`) |
-| `DATABASE_PASSWORD` | Database password for app environment config. | (`web_api`) |
-| `APP_TITLE_PREFIX` | Prefix used in rendered HTML page titles. | (`web-api`) |
-| `LISTENER_<n>_HOST` | Host/interface to bind for listener `n`. | (`LISTENER_0_HOST=127.0.0.1`) |
-| `LISTENER_<n>_PORT` | Port to bind for listener `n`. | (`LISTENER_0_PORT=5001`) |
-| `LISTENER_<n>_SCHEME` | Listener scheme, either `http` or `https`. | (`LISTENER_0_SCHEME=http`) |
-| `LISTENER_<n>_TLS_SOURCE` | TLS source for HTTPS listeners: `manual`, `shared`, `shared-wait`, or `shared-fail-fast`. `shared` remains the legacy alias for the waiting mode. The older HTTPS `acme` shape is still accepted, but the preferred model is ACME on the HTTP listener plus `shared-wait` HTTPS consumers. | (`unset`) |
-| `LISTENER_<n>_TLS_CERTIFICATE_FILE` | Certificate file path for manual TLS. | (`unset`) |
-| `LISTENER_<n>_TLS_PRIVATE_KEY_FILE` | Private key file path for manual TLS. | (`unset`) |
-| `LISTENER_<n>_TLS_CERTIFICATE_DIRECTORY` | Certificate directory for `shared`, `shared-wait`, and `shared-fail-fast` TLS. Runtime HTTPS listeners load `<dir>/fullchain.pem` and `<dir>/privkey.pem`. When unset and exactly one ACME listener is configured, shared listeners reuse that ACME listener's effective certificate directory. | (`listener-aware`) |
-| `LISTENER_<n>_TLS_SHARED_WAIT_SECONDS` | Optional startup timeout for `shared` / `shared-wait` TLS. When unset, startup waits indefinitely for valid `fullchain.pem` and `privkey.pem`; `shared-fail-fast` rejects this setting and requires the files immediately. | (`unset`) |
-| `LISTENER_<n>_ACME_DIRECTORY_URL` | ACME directory URL for listeners that publish ACME-managed certificate files. When unset, runtime config defaults it to the production Let's Encrypt directory. Set it explicitly to use staging or another ACME server. Prefer this on the HTTP listener that serves `http-01` challenges. | (`https://acme-v02.api.letsencrypt.org/directory`) |
-| `LISTENER_<n>_ACME_CONTACT_EMAILS` | Comma-delimited ACME contact email list. | (`unset`) |
-| `LISTENER_<n>_ACME_DOMAINS` | Comma-delimited certificate domains for the ACME order. Certbot reuses it when `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` do not already declare domains. | (`unset`) |
-| `LISTENER_<n>_ACME_CERTIFICATE_DIRECTORY` | Optional certificate directory where ACME publishes `fullchain.pem` and `privkey.pem` for reuse by `shared` HTTPS listeners. When unset, runtime config defaults it to `./.tls/<cert-name>`; inside the runtime image the same relative default resolves under `/app/.tls/<cert-name>`. | (`./.tls/<cert-name>`) |
-| `LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` | Optional executable path override. When unset, runtime startup uses `certbot` from `PATH`. | (`certbot`) |
-| `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` | Comma-delimited extra arguments passed to certbot. When unset, runtime startup derives a working `certonly --non-interactive --agree-tos --webroot` invocation plus `--webroot-path` / `--server` / `--email` / `--domains` from the ACME config. Explicit values here still win for `--cert-name` / `-d` / `--domains` / `--http-01-port` and other certbot flags. | (`unset`) |
-| `STATIC_ASSET_ROOT_<n>_URL_PREFIX` | URL prefix served from static asset root `n`. | (`unset`) |
-| `STATIC_ASSET_ROOT_<n>_DIRECTORY` | Filesystem directory for static asset root `n`. | (`unset`) |
-| `STATIC_ASSET_CONTENT_TYPE_<n>_EXTENSION` | Extension allowlist entry for static assets, including the leading dot. Use an empty value to opt into extensionless files for that entry. | default `.css`, `.html`, `.js`, `.json`, `.svg`, `.txt` |
-| `STATIC_ASSET_CONTENT_TYPE_<n>_MIME_TYPE` | MIME type emitted for the matching `STATIC_ASSET_CONTENT_TYPE_<n>_EXTENSION`. | default MIME types for the default extensions |
-| `STATIC_CACHE_CONTROL_SECONDS` | Cache-Control max-age for configured static assets. | (`unset`) |
-| `REDIRECT_HTTP_TO_HTTPS` | Whether insecure requests should receive an HTTPS redirect before app/static handling. Supported values are `true` / `false`. When unset, runtime config defaults this to `true` if at least one HTTP listener and one HTTPS listener are configured together; otherwise it stays `false`. | (`listener-aware`) |
-| `HSTS_MAX_AGE_SECONDS` | Max-age used for `Strict-Transport-Security` on effective HTTPS requests. | (`unset`) |
-| `HSTS_INCLUDE_SUBDOMAINS` | Whether emitted HSTS headers should include `includeSubDomains`. Requires `HSTS_MAX_AGE_SECONDS`. Supported values are `true` / `false`. | (`false`) |
-| `HSTS_PRELOAD` | Whether emitted HSTS headers should include `preload`. Requires `HSTS_MAX_AGE_SECONDS`. Supported values are `true` / `false`. | (`false`) |
-| `CORS_ALLOWED_ORIGINS` | Comma-delimited exact origins allowed for browser cross-origin reads. When unset, no `Access-Control-Allow-Origin` header is emitted, preserving same-origin behavior. | (`unset`) |
-| `CORS_ALLOWED_METHODS` | Comma-delimited methods returned on allowed CORS preflight requests. | (`GET,HEAD,OPTIONS`) |
-| `CORS_ALLOWED_HEADERS` | Comma-delimited request headers returned on allowed CORS preflight requests. | (`Content-Type,X-Requested-With`) |
-| `CORS_MAX_AGE_SECONDS` | Optional `Access-Control-Max-Age` for allowed CORS preflight responses. | (`unset`) |
-| `CONTENT_SECURITY_POLICY` | Content-Security-Policy header. The default permits only same-origin scripts/styles/fonts/connects, same-origin plus `data:` images, and denies object embedding and frame ancestors. | strict same-origin policy |
-| `X_CONTENT_TYPE_OPTIONS_NOSNIFF` | Whether to emit `X-Content-Type-Options: nosniff`. Supported values use the shared boolean parser. | (`true`) |
-| `X_XSS_PROTECTION` | Compatibility `X-XSS-Protection` header value. | (`1; mode=block`) |
-| `REFERRER_POLICY` | Referrer-Policy header value. | (`strict-origin-when-cross-origin`) |
-| `PERMISSIONS_POLICY` | Permissions-Policy header value. | disables common powerful browser features |
-| `X_FRAME_OPTIONS` | Compatibility frame policy header value; CSP also includes `frame-ancestors 'none'` by default. | (`DENY`) |
-| `OTLP_TRACING_ENABLED` | Whether tracing export should be enabled. Supported values are `true` / `false` plus the existing boolean aliases accepted by the config parser. `true` uses the default local endpoint `http://127.0.0.1:4318/v1/traces` unless `OTLP_TRACING_ENDPOINT` overrides it; `false` disables tracing even if tracing endpoint/headers are set. | (`unset`) |
-| `OTLP_TRACING_ENDPOINT` | OTLP endpoint for tracing export. | (`unset`) |
-| `OTLP_TRACING_HEADERS` | Comma-delimited OTLP tracing headers in `name=value` form. | (`unset`) |
-| `OTLP_METRICS_ENDPOINT` | OTLP endpoint for metrics export. | (`unset`) |
-| `OTLP_METRICS_HEADERS` | Comma-delimited OTLP metrics headers in `name=value` form. | (`unset`) |
-| `SETUP_AUTOSTART_DATABASE` | Setup/prerequisite-planning flag for whether build/setup tooling should plan automatic local PostgreSQL startup when the configured database is unavailable. Supported values are `true` / `false` plus the existing boolean aliases accepted by the config parser. | (`true`) |
-| `SETUP_AUTOSTART_JAEGER` | Setup/prerequisite-planning flag for whether build/setup tooling should plan automatic local Jaeger startup when OTLP tracing is configured but unreachable. Supported values are `true` / `false` plus the existing boolean aliases accepted by the config parser. | (`false`) |
+| Client-rendered JavaScript SPA | Excellent post-start navigation; can support rich offline apps. | Initial content may wait for JavaScript, data, and templating, while growing bundles can hurt FCP, TBT, and INP. Google renders JavaScript in a queue and documents limitations; other bots may not run it. [Google's JavaScript SEO guidance][google-js-seo] recommends server or prerendering. Harch sends content, links, metadata, status, and normal navigation in the first response, then enhances them. |
+| Hydrated SSR framework | Better initial content than a pure SPA and access to rich client ecosystems. | It may render the application on both server and client, serialize overlapping state, ship substantial client code, and expose a pre-hydration interaction gap. Harch does not recreate its component tree in the browser; enhancement operates on declared navigation surfaces and typed regions. |
+| Blazor WebAssembly | A full .NET client environment, static hosting, and offline-capable PWAs. | The browser downloads and initializes the .NET runtime, Razor components, dependencies, and assemblies; Microsoft documents larger downloads and longer component startup. Blazor Server has a smaller initial payload, but every interaction crosses the network, every browser screen owns a server circuit, and interactivity fails when the connection does. See [Microsoft's hosting comparison][blazor-hosting]. Harch needs neither a browser language runtime nor a persistent per-tab UI circuit. |
+| Traditional pure SSR / multi-page app | Excellent no-JavaScript behavior, direct HTTP semantics, and crawler visibility. | Dynamic rendering can increase TTFB, and navigation or mutation normally requests and replaces a full document. Harch keeps that complete baseline while deferred navigation and typed region patches avoid routine full-page reloads. |
 
-OTLP request span names use the stable route value from `http.route` so Jaeger operations group by
-route. Unmatched requests now group under a stable `not-found` operation instead of route-looking names
-such as `/404`, while the concrete incoming URL remains available on the `url.path` span attribute for
-troubleshooting individual misses.
+### Portability and alternatives
 
-The runtime currently keeps its custom OTLP export layer instead of swapping to generic
-`hs-opentelemetry` / WAI middleware. That custom layer is what lets the app keep low-cardinality route
-names, trace early-return paths such as redirects, static assets, CORS preflight, and ACME challenge
-responses, and emit connection-level TLS failures plus ACME/certbot lifecycle diagnostics that happen
-outside ordinary WAI request handling.
+The SSR baseline, native-form fallback, capture-before-deferred-runtime rule, explicit input decoding,
+and safe failure boundaries are architectural choices—not guarantees unique to Haskell. Choose the
+implementation path that lets the application uphold them with acceptable opportunity cost and the
+ecosystem it needs.
 
-Static asset requests only serve files whose extension is present in the configured content-type
-allowlist, and hidden path segments such as `.env` or `.well-known` are rejected under configured asset
-roots. Extensionless files are disabled by default; add an empty-extension content-type entry when a
-specific deployment needs them.
+| Path | Closest fit and deliberate gap |
+| --- | --- |
+| Rust: Axum with Maud or Askama | Axum's `Form<T>` extracts URL-encoded HTML-form submissions into `Deserialize` types; Maud supplies a Rust macro HTML DSL, while Askama derives templates from typed structs with auto-escaping. Application Rust can meet an application-owned memory-safety requirement without `unsafe`, but that does not remove reviewed `unsafe`, FFI, native-library, or dependency boundaries. The app must still design native fallback, early-event capture, action dispatch, and patch envelopes. [Axum Form][axum-form] [Maud][maud] [Askama][askama] |
+| Rust: Leptos actions and islands | `ActionForm` connects a typed server action to a URL-encoded POST form; it degrades to a browser submit without JS/WASM and can avoid a reload with it. It is the nearest Rust full-stack action surface, but its hydration/islands and result ownership are a different runtime model from Harch's small capture kernel and region-patch protocol. [Leptos ActionForm][leptos-action-form] |
+| SvelteKit form actions | Native `POST` form actions work without JavaScript and `use:enhance` can progressively enhance them. SvelteKit supplies typed application scaffolding in TypeScript, but its client-runtime and action-result model remain distinct; it does not itself establish Harch's capture lifecycle or codec/parser-printer invariant. [SvelteKit form actions][svelte-actions] |
+| Phoenix LiveView | Function components and `phx-change`/`phx-submit` forms provide a mature server-driven interactive model. Its normal interaction path is a persistent LiveView process/socket rather than Harch's request/response patch protocol, so connection-loss and runtime-failure behavior must be evaluated on that model. [Phoenix form bindings][phoenix-forms] |
+| Yesod with Hamlet or Lucid | Yesod forms already pair parsing and rendering fields and expose applicative form construction; Hamlet/Lucid offer established Haskell markup paths. Adopting them trades this repository's codec/capture/patch design for their conventions and ecosystem, not for a weaker type discipline. [Yesod forms][yesod-forms] [Lucid][lucid] |
 
-Runtime responses emit default hardening headers for CSP, nosniff, XSS-protection compatibility, referrer
-policy, permissions policy, and frame denial. CORS stays same-origin by default: configure
-`CORS_ALLOWED_ORIGINS` only for explicit browser clients that must read this app from another origin.
+Rust macro and derive templates can retain an EDSL-like or typed template surface: Maud expands an
+`html!` macro and Askama generates a `Template` implementation. Stable Rust procedural macros operate
+on token streams and are unhygienic, however, so their authoring and diagnostics are not identical to
+Haskell quotation and reification; that is an ergonomics comparison, not a claim that either language
+is universally more expressive. [Rust procedural macros][rust-proc-macros]
 
-The `SETUP_AUTOSTART_*` values are part of the setup/prerequisite configuration seam rather than the
-runtime application config consumed by `cabal run exe:haskell-web-api`. They are intended for build and
-verification paths that need real prerequisite services, such as `cabal build haskell-web-api`,
-`cabal build all`, or targeted Unit tests for the concrete PostgreSQL adapter and similar components that
-must verify a real connection instead of a mock. They are parsed from the same layered `./.env` and
-`./.env.local` files, feed the shared setup config/planning helpers in `WebApi.SetupConfig` /
-`WebApi.SetupPlan`, and now drive `Setup.hs` database prerequisite detection plus local PostgreSQL
-autostart attempts. Tracing autostart and automatic migrate-and-seed after setup-created databases are
-still tracked in `TASKS.md`.
+None of these entries makes a throughput, latency, or memory-superiority claim. Compare real
+application benchmarks, failure recovery, existing-team experience, and integration requirements. In
+all cases, native dependencies, browser engines, foreign code, and transitive packages remain part of
+the security and maintenance boundary.
 
-For real database paths, the repository currently targets PostgreSQL `17.x`. The committed local autostart
-flow, the documented container examples, and the live PostgreSQL integration coverage all use and verify
-that major version today.
+### A smaller runtime dependency surface
 
-The runtime configuration model has three layers:
+The shipped browser modules have no npm dependency graph. Node is confined to Playwright and editor
+tooling, application libraries are compiled into the Haskell executable rather than fetched at
+startup, and the project does not use `pip`. This is a smaller exposed surface, not immunity: deployed
+systems still depend on OS packages and native libraries, and the ACME image path includes the
+Python-based certbot.
 
-1. Code defaults in source. The table above documents the committed defaults defined in the codebase. These
-   are the fallback values below the file-based overrides used by `cabal run exe:haskell-web-api`.
-2. `./.env` in the repository root. This file is intended to be checked in and used for shared, non-secret
-   development overrides when a project wants defaults that differ from the code-level values.
-3. `./.env.local` in the repository root. This file is intended for machine-specific or deployed
-   configuration, may contain secrets, and is excluded from git.
+Recent incidents show why dependency shape deserves attention. GitHub removed more than 500
+compromised npm packages during the 2025 Shai-Hulud response
+([GitHub's npm security report][npm-report]).
+PyPI reported more than 119,000 downloads of compromised LiteLLM versions during a 2026 exposure
+window ([PyPI incident report][pypi-report]). These
+are evidence-based examples, not evidence that Haskell has a measured lower attack rate.
 
-Both `./.env` and `./.env.local` use simple `KEY=value` lines. Blank lines are allowed, and lines starting
-with `#` are treated as comments.
+Hackage's [`hackage-security`][hackage-security] protects its
+index with The Update Framework and enables untrusted mirrors, but explicitly does not provide author
+package signing. Template Haskell, custom setup code, native libraries, and build dependencies can all
+execute or influence code and still require review, bounded versions, and reproducible pinning.
 
-When startup wiring reads those files, the intended precedence is:
+## Typed architecture
 
-1. Code defaults in source.
-2. `./.env` for checked-in development defaults.
-3. `./.env.local` for local or deployed overrides.
+### Routing is generated where it can be total
 
-`cabal run exe:haskell-web-api` now loads those files at startup with exactly that precedence, so local
-runtime overrides apply without rebuilding or editing the committed source defaults.
+The `two-pages` build hook discovers `App.Pages.*` modules and generates this closed route algebra:
 
-Example checked-in `./.env` body for shared, non-secret development overrides:
+```hs
+data PageRoute
+  = HomePage
+  | LiveDataPage
+  | PageNotFound
+  | SecondPage
+  deriving (Bounded, Enum, Eq, Show)
 
-```dotenv
-# Shared development defaults for this repository
-APP_MODE=development
-DATABASE_HOST=127.0.0.1
-DATABASE_PORT=5432
-DATABASE_NAME=web_api_dev
-DATABASE_USER=web_api_runtime
-DATABASE_PASSWORD=web_api
-APP_TITLE_PREFIX=web-api-dev
-LISTENER_0_HOST=127.0.0.1
-LISTENER_0_PORT=5001
-LISTENER_0_SCHEME=http
+allPageRoutes :: [PageRoute]
+allPageRoutes = [minBound .. maxBound]
+
+pageRouteDefinition :: PageRoute -> RouteDefinition TwoPageRoute ()
+pageRouteDefinition route =
+  case route of
+    HomePage -> App.Pages.Home.pageDefinition
+    LiveDataPage -> App.Pages.LiveData.pageDefinition
+    PageNotFound -> App.Pages.NotFound.pageDefinition
+    SecondPage -> App.Pages.Second.pageDefinition
 ```
 
-Example fully populated `./.env.local` body for machine-specific or deployed overrides:
+The application keeps other route families explicit:
 
-```dotenv
-# App environment values
-APP_MODE=production
-DATABASE_HOST=192.0.2.10
-DATABASE_PORT=55432
-DATABASE_NAME=web_api_prod
-DATABASE_USER=web_api_app
-DATABASE_PASSWORD=replace-me
-
-# App/runtime values
-APP_TITLE_PREFIX=web-api-prod
-
-# Listener 0: plain HTTP
-LISTENER_0_HOST=127.0.0.1
-LISTENER_0_PORT=5001
-LISTENER_0_SCHEME=http
-
-# Listener 1: HTTPS with manual certificate files
-LISTENER_1_HOST=0.0.0.0
-LISTENER_1_PORT=5443
-LISTENER_1_SCHEME=https
-LISTENER_1_TLS_SOURCE=manual
-LISTENER_1_TLS_CERTIFICATE_FILE=/etc/web-api/tls/fullchain.pem
-LISTENER_1_TLS_PRIVATE_KEY_FILE=/etc/web-api/tls/privkey.pem
-
-# Listener 2: HTTP listener that publishes ACME certificates
-LISTENER_2_HOST=0.0.0.0
-LISTENER_2_PORT=80
-LISTENER_2_SCHEME=http
-# Omit LISTENER_2_ACME_DIRECTORY_URL to use the production Let's Encrypt directory.
-# Set it explicitly only for staging or another ACME server.
-LISTENER_2_ACME_CONTACT_EMAILS=ops@example.com,security@example.com
-LISTENER_2_ACME_DOMAINS=example.com,www.example.com
-LISTENER_2_ACME_CERTIFICATE_DIRECTORY=/etc/web-api/acme/example.com
-
-# Listener 3: HTTPS that reuses ACME-published certificate files
-LISTENER_3_HOST=0.0.0.0
-LISTENER_3_PORT=8443
-LISTENER_3_SCHEME=https
-LISTENER_3_TLS_SOURCE=shared-wait
-LISTENER_3_TLS_CERTIFICATE_DIRECTORY=/etc/web-api/acme/example.com
-LISTENER_3_TLS_SHARED_WAIT_SECONDS=120
-
-# Use shared-wait (or the legacy shared alias) when another listener/process will
-# publish certificate files later. shared-fail-fast is for pre-provisioned cert
-# directories that must already contain fullchain.pem and privkey.pem at startup.
-# Later HTTPS handshakes still reload updated certificate files so renewals do not
-# require a restart.
-
-# If LISTENER_<n>_ACME_CERTIFICATE_DIRECTORY is omitted, ACME publishes into
-# ./.tls/<cert-name> for source runs. The runtime image keeps the same relative
-# default under /app/.tls/<cert-name>, and a lone shared listener can reuse that
-# path without its own LISTENER_<n>_TLS_CERTIFICATE_DIRECTORY override.
-#
-# Normal runtime PostgreSQL reads now use the bundled libpq-backed Haskell client
-# path instead of invoking the psql CLI inside the runtime image.
-
-# Static assets
-STATIC_ASSET_ROOT_0_URL_PREFIX=/assets
-STATIC_ASSET_ROOT_0_DIRECTORY=public
-STATIC_ASSET_ROOT_1_URL_PREFIX=/uploads
-STATIC_ASSET_ROOT_1_DIRECTORY=/var/lib/web-api/uploads
-STATIC_CACHE_CONTROL_SECONDS=3600
-
-# Reverse-proxy / TLS-offload policy
-REDIRECT_HTTP_TO_HTTPS=true
-HSTS_MAX_AGE_SECONDS=31536000
-HSTS_INCLUDE_SUBDOMAINS=true
-HSTS_PRELOAD=true
-
-# Observability
-OTLP_TRACING_ENABLED=true
-OTLP_TRACING_HEADERS=authorization=Bearer demo-token,x-service-name=web-api
-OTLP_METRICS_ENDPOINT=http://127.0.0.1:4318/v1/metrics
-OTLP_METRICS_HEADERS=authorization=Bearer demo-token,x-service-name=web-api
-
-# Setup/prerequisite planning
-SETUP_AUTOSTART_DATABASE=true
-SETUP_AUTOSTART_JAEGER=false
+```hs
+data TwoPageRoute
+  = Page PageRoute
+  | Api ApiRoute
+  | Custom CustomRoute
+  deriving (Eq, Show)
 ```
 
-For smaller starting points, the repository also includes scenario-oriented override templates under
-`examples/runtime-config/`. Each file is intended to be copied to `./.env.local` and layered on top of
-the committed defaults, for example:
+The route family now determines its response capability, so the old `RequestSurface` combination is
+gone. Generated static-page dispatch cannot omit a discovered page at runtime. Dynamic path parsing,
+query values, API endpoints, and custom pages remain explicit, typed branches in the app router. See
+[App.Routes](examples/two-pages/src/App/Routes.hs) and
+[App.App](examples/two-pages/src/App/App.hs).
 
-```bash
-cp examples/runtime-config/manual-tls.env ./.env.local
+### Invalid states are removed at boundaries
+
+- `Region -> RegionPatch` keeps a patch identifier and its replacement root together.
+- Database operations determine their result types instead of returning one loosely typed envelope.
+- Component record fields are required by their constructors and checked by the quasiquoter.
+- Text and attribute escaping is centralized in the `Html` renderer; trusted HTML is a separate API.
+- A single `ActionCodec target context action` owns each modeled action's target, method,
+  context-aware path printer, and applicative field decoder. `ActionForm` obtains its target and method
+  from that codec, preventing separately maintained form and dispatch routes from drifting.
+- The action boundary distinguishes an unknown path (`404`), known path with an undeclared method
+  (`405` with `Allow`), malformed matched fields (`400`), and decoded submissions rejected by ordinary
+  domain validation (`422` with a safe region patch). Field parse errors contain stable constructors and
+  field names, never submitted values.
+- Client actions use typed responses, same-origin transport, CSRF/session boundaries, and security
+  headers rather than page POSTs or full-page mutation reloads.
+
+### Components and pages use one typed markup language
+
+Components are ordinary functions. A record supplies named properties, a list supplies children, and
+an exceptional multi-argument function can opt into positional `props`:
+
+```hs
+data AuthorCardProps = AuthorCardProps
+  { authorName :: Text,
+    authorRole :: Text
+  }
+
+authorCard :: AuthorCardProps -> [Html] -> Html
 ```
 
-Those templates cover local HTTP-only, OTLP tracing with the default local Jaeger endpoint, OTLP
-endpoint-only implicit enablement, OTLP endpoint plus explicit disablement, manual TLS,
-shared-certificate fail-fast startup, ACME plus shared 80/443/5443 listeners, and reverse-proxy /
-TLS-offload setups.
+The XML-like syntax covers nullary components, dynamic named fields, nested or computed children, and
+heterogeneous positional arguments:
 
-When `REDIRECT_HTTP_TO_HTTPS` is left unset, `web-api` now derives a default from the listener plan:
+```hs
+[harch|
+  <SubscriptionEmailField />
 
-- HTTP-only listener sets keep redirects off.
-- Dual HTTP+HTTPS listener sets default redirects on and target the unique configured HTTPS port.
-- If more than one distinct HTTPS listener port exists, redirects stay on but omit an explicit port, so the redirect target falls back to the standard HTTPS authority on port `443`.
-- `REDIRECT_HTTP_TO_HTTPS=false` overrides that default and leaves both listeners serving real traffic.
-- `/.well-known/acme-challenge/*` stays exempt from redirects so ACME `http-01` requests can remain on HTTP.
+  <AuthorCard authorName={aboutAuthorName} authorRole={aboutAuthorRole}>
+    <p>This is an actual HTML child.</p>
+  </AuthorCard>
 
-ACME runtime startup is certbot-backed. The tracked runtime container image ships `certbot`, so the
-containerized `http-01` flow works without extra image customization. Ordinary source builds such as
-`cabal build all` or the default HTTP-only `cabal run exe:haskell-web-api` still do not require certbot to
-be preinstalled; install it locally only when you actually plan to run ACME issuance outside the container.
-
-### MacOS / Linux
-
-See [Setup](SETUP.md) for detailed instructions on setting up the Haskell environment on MacOS and Linux.
-
-### Alternative: Docker
-
-You can build and run the project including running tests and generating coverage report with Docker. The
-base image is Linux-based so will only work on Windows if the docker engine supports Linux containers (not
-Windows containers).
-
-### Windows
-
-- Install WSL2 (Windows Subsystem for Linux) and set up a Linux distribution (e.g. Ubuntu or Fedora) to run
-  the Haskell environment in a Linux-like environment, which is more compatible with Haskell tooling.
-- Alternatively, you can use Docker with Linux containers. Docker Desktop can be switched to use Linux
-  containers from its System Tray icon menu, "Switch to Linux Containers", if you set up Docker Desktop
-  correctly:\
-  <https://docs.docker.com/desktop/windows/wsl/>
-
-## Local Development Runtime
-
-With the default configuration, `cabal run exe:haskell-web-api` is enough to boot the example application
-locally. Startup loads code defaults first, then `./.env`, then `./.env.local` if those files exist. It
-uses the built-in page/API response stubs, and no external database, telemetry backend, TLS certificate,
-ACME service, or static-asset root is required unless you explicitly reconfigure one.
-
-In practice that means a fresh clone can usually be started with:
-
-```bash
-cabal run exe:haskell-web-api
+  <AuthorAvatar props={[AuthorIdentity "HW", CompactAvatar]}>
+    <p>Two distinct typed positional values, followed by children.</p>
+  </AuthorAvatar>
+|]
 ```
 
-By default the app binds an HTTP listener on `127.0.0.1:5001` and serves the example SSR/API behavior in
-place, so external dependencies only become necessary when you override the defaults for your own
-environment. The tracked runtime `Dockerfile` keeps running as the non-root `app` user while granting the
-binary `cap_net_bind_service`, but some container runtimes still require an explicit
-`--cap-add=NET_BIND_SERVICE` grant or host-network allowances before privileged listener ports such as `80`
-or `443` will actually bind. Prefer adding that runtime capability over switching the container to
-`--user root`.
+The quasiquoter lowers those calls to normal Haskell: record construction such as
+`authorCard (AuthorCardProps {authorName = aboutAuthorName, authorRole = aboutAuthorRole}) children`,
+or the direct call `authorAvatar (AuthorIdentity "HW") CompactAvatar children`. Components produce the
+`Html` AST; only
+the final renderer serializes tags, centrally escaped text, and centrally escaped attributes.
+
+Native elements lower to the same ordinary builders. For example, these two forms are equivalent:
+
+```hs
+[harch|<main lang={localeCode}><h1>{title}</h1></main>|]
+
+element mainTag [lang localeCode]
+  [element headingOneTag [] [text title]]
+```
+
+Both construct the same escaping-by-default `Html` AST: interpolation in element text becomes
+`text`, interpolation in `lang` becomes the typed `lang` attribute, and only `renderHtml` turns
+that AST into response text. Use the quasiquoter for ordinary page/component bodies; use the
+builder form when composition is more naturally expressed as Haskell data.
+
+Computed children are the same typed `[Html]` value in compiled quasiquoter coverage:
+
+```hs
+let computedChildren = [element paragraphTag [] [text "Computed child"]]
+    computedChildrenQuoted =
+      [harch|<Account.HeroCard heroTitle="Second page" children={computedChildren} />|]
+```
+
+A render prop needs no separate template subsystem. The following illustration is pseudocode only:
+
+```hs
+data ProductListProps = ProductListProps
+  { products :: [Product],
+    renderProduct :: Product -> Html
+  }
+
+productList props _ = fragment (map (renderProduct props) (products props))
+
+[harch|
+  <ProductList products={featuredProducts} renderProduct={productCard} />
+|]
+```
+
+Haskell functions are first-class values and `Html` is safely composable, so a component can receive a
+renderer and map it over a collection without framework-specific template registration.
+
+## Guides and repository map
+
+- [Examples](examples/README.md): a runnable-first feature ladder.
+- [Runtime configuration](docs/runtime-configuration.md): environment variables, listener modes,
+  security policy, assets, and OTLP settings.
+- [Setup](SETUP.md): compiler, services, browser tooling, local runtime, and container workflows.
+- [Design guidance](docs/design-guidance.md): read before starting Large/foundational/security-critical
+  work — the pre-build decision framework, current conventions, and intentionally future-facing design.
+- [Accessibility](docs/accessibility.md): semantic composition, authentication-control inventory,
+  validation/focus behavior, scripts-disabled policy, and browser proof.
+- [Changelog](CHANGELOG.md): release history.
+
+The main packages are:
+
+- `harch-web`: typed markup, site dispatch, server adapter, actions, regions, and progressive runtime.
+- `web-api`: the full-stack reference application and composition root.
+- `core`: shared generation, setup, and utility code.
+- `test-core`: Haskell-authored unit, integration, and Playwright browser support.
+- `hspec-expectations-match`: a local compatibility fork used by tests.
+
+The project targets Linux and macOS directly. On Windows, use WSL2 or Docker with Linux containers.
+
+[ci-badge]: https://github.com/gorban/haskell-web-api/actions/workflows/ci.yml/badge.svg
+[ci]: https://github.com/gorban/haskell-web-api/actions/workflows/ci.yml
+[coverage-badge]: https://img.shields.io/badge/package_coverage-100%25-brightgreen
+[coverage]: https://gorban.github.io/haskell-web-api/
+[rendering-web]: https://web.dev/articles/rendering-on-the-web
+[next-components]: https://nextjs.org/docs/app/getting-started/server-and-client-components
+[react-functions]: https://react.dev/reference/rsc/server-functions
+[svelte-actions]: https://svelte.dev/docs/kit/form-actions
+[axum-form]: https://docs.rs/axum/latest/axum/struct.Form.html
+[maud]: https://maud.lambda.xyz/
+[askama]: https://docs.rs/askama/latest/askama/
+[leptos-action-form]: https://book.leptos.dev/progressive_enhancement/action_form.html
+[phoenix-forms]: https://phoenix-live-view.hexdocs.pm/form-bindings.html
+[yesod-forms]: https://www.yesodweb.com/book/forms
+[lucid]: https://hackage.haskell.org/package/lucid
+[rust-proc-macros]: https://doc.rust-lang.org/reference/procedural-macros.html
+[svelte-hydration-report]: https://github.com/sveltejs/kit/discussions/13455
+[capture-e2e]: examples/two-pages/test/E2E/AppSpec.hs
+[google-js-seo]: https://developers.google.com/search/docs/crawling-indexing/javascript/javascript-seo-basics
+[blazor-hosting]: https://learn.microsoft.com/en-us/aspnet/core/blazor/hosting-models?view=aspnetcore-10.0
+[npm-report]: https://github.blog/security/supply-chain-security/our-plan-for-a-more-secure-npm-supply-chain/
+[pypi-report]: https://blog.pypi.org/posts/2026-04-02-incident-report-litellm-telnyx-supply-chain-attack/
+[hackage-security]: https://hackage.haskell.org/package/hackage-security

@@ -17,7 +17,7 @@ Commands to install prerequisites in Ubuntu. Also tested in WSL2 on Windows:
 ```bash
 sudo apt update
 sudo apt upgrade -y
-sudo apt install -y build-essential curl libffi-dev libffi8 libgmp-dev libgmp10 libncurses-dev libpq-dev pkg-config zlib1g-dev git dos2unix
+sudo apt install -y build-essential curl libffi-dev libffi8 libgmp-dev libgmp10 libncurses-dev libpq-dev pkg-config zlib1g-dev git dos2unix lld
 ```
 
 These Ubuntu packages already include the development libraries needed by the optional Haskell Debugger:
@@ -48,7 +48,7 @@ box you can handle that explicitly with `distrobox-host-exec sudo podman` when n
 Example Distrobox container definition, e.g. save as `distrobox.ini`:
 ```ini
 [haskellbox]
-additional_packages="gcc gcc-c++ gmp gmp-devel make ncurses ncurses-compat-libs ncurses-devel zlib-ng-compat-devel xz perl git vim-enhanced dos2unix podman-remote postgresql"
+additional_packages="gcc gcc-c++ gmp gmp-devel make ncurses ncurses-compat-libs ncurses-devel zlib-ng-compat-devel xz perl git vim-enhanced dos2unix lld podman-remote postgresql17 postgresql17-private-devel postgresql17-server-devel nodejs python3-pip"
 image="registry.fedoraproject.org/fedora:latest"
 root=false
 additional_flags="--env GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig"
@@ -64,8 +64,11 @@ init_hooks="ln -sf /usr/bin/podman-remote /usr/local/bin/podman 2>/dev/null || t
 - In that Fedora package list, `ncurses-devel` and `zlib-ng-compat-devel` are specifically needed for the
   optional Haskell Debugger. They are bundled into the example container definition so debugger setup works
   without an extra system package step later. `vim-enhanced` is included so git can always fall back to the
-  built-in `vimdiff` tool inside the container, and `postgresql` keeps the `psql` CLI available without a
-  separate install step.
+  built-in `vimdiff` tool inside the container, and `postgresql17` keeps a PostgreSQL 17 `psql` CLI
+  available without a separate install step. `postgresql17-private-devel` and `postgresql17-server-devel`
+  are also needed on current Fedora to provide a working `pg_config` and the `libpq` development link used
+  by local source builds; `nodejs` is required by the browser-harness e2e spec; and `lld` provides
+  `ld.lld`, required by the optimized and coverage diagnostic build wrappers.
 - The web-api project setup also tries to start missing prerequisites like PostgreSQL and Jaeger with
   `docker` or `podman`, so the example container definition also includes `podman-remote`, a socket
   symlink for it, and a symlink for the `podman` binary, so that the container can control host containers
@@ -108,6 +111,10 @@ init_hooks="ln -sf /usr/bin/podman-remote /usr/local/bin/podman 2>/dev/null || t
   `init_hooks` without permission to write `/var/run` or `/usr/local/bin`; in that case those lines now
   quietly skip instead of aborting `distrobox enter`. If they are skipped, host-container control from
   inside the box may still need separate manual setup.
+- Git's `git difftool --tool-help` can still list `bc` as unavailable because it only probes locally
+  installed GUI binaries. The bridge is working when `git difftool --no-prompt --tool=bc -- FILE` opens
+  host Beyond Compare through `/var/tmp/distrobox-git/bin/bcompare`; close Beyond Compare to let Git
+  continue.
 
 Then to assemble and run the container:
 ```bash
@@ -127,7 +134,8 @@ But, we also have a custom pre-commit hook that uses `dos2unix` for formatting c
 install that as well with Homebrew:
 
 ```bash
-brew install llvm dos2unix
+brew install llvm lld dos2unix
+ld.lld --version
 ```
 
 ## Install GHCup
@@ -144,13 +152,14 @@ curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
     "channel".
 4.  Answer 'N' to disable the pre-releases channel.
 5.  Answer 'Y' to enable the cross channel (GHCJS, WASM, etc.).
-6.  Answer 'P' to automatically add (prepend) the required PATH variable to "$HOME/.bashrc" (or
+6.  Answer 'Y' to enable the 3rdparty channel (hlint, dhall, ormulu).
+7.  Answer 'P' to automatically add (prepend) the required PATH variable to "$HOME/.bashrc" (or
     "$HOME/zshrc" on MacOS).
-7.  Answer 'Y' to install HLS (Haskell Language Server), we need it for IDE support.
-8.  Answer 'Y' to install stack (we might be able to build our project with Cabal alone, but other
+8.  Answer 'Y' to install HLS (Haskell Language Server), we need it for IDE support.
+9.  Answer 'Y' to install stack (we might be able to build our project with Cabal alone, but other
     projects might need stack).
-9.  Answer 'Y' to enable better integration of stack with GHCup (so stack uses GHCup's own GHC versions).
-10. MacOS only: look for security warnings installing with GHCup. They may appear as popups like "llc" Not
+10. Answer 'Y' to enable better integration of stack with GHCup (so stack uses GHCup's own GHC versions).
+11. MacOS only: look for security warnings installing with GHCup. They may appear as popups like "llc" Not
     Opened - Apple could not verify "llc" ...
     1. Select "Done" to not move each file to the Trash.
     2. After clicking "Done" before addressing any subsequent popup that appears (if any), you'll have to
@@ -164,7 +173,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
        executables.
     5. On rerun you may get popups again for the same executables like Open "llc"? This time, click Open
        Anyway for each. It may also ask for your password to allow the installation to proceed.
-11. For the new PATH variable to take effect:
+12. For the new PATH variable to take effect:
     1. You can immediately get `ghcup` on the system PATH by running command:
        ```bash
        . "$HOME/.ghcup/env"
@@ -183,8 +192,8 @@ version set segfaulted on specific operating systems. So we maintain a list of k
 here:
 - GHC 9.14.1
 - Cabal 3.16.1.0
-- Stack 3.9.1
-- HLS 2.13.0.0
+- Stack 3.11.1
+- HLS 2.14.0.0
 
 Run `ghcup tui` to manage installed versions of GHC, Cabal, Stack, HLS, etc.
 1. Immediately change GHC to the latest version that is "hls-powered" (compatible with Haskell Language
@@ -250,13 +259,21 @@ cabal build all
 In addition to the Haskell toolchain, the current repository is easiest to work with when the following
 commands are also available on your `PATH`:
 
-- `node` for the current browser-harness-backed e2e spec. The long-term Playwright direction is to keep
-  Haskell-authored specs talking to an external runner process and let that runner use Playwright's
-  official Node client, rather than implementing Playwright's server/MCP protocol directly in Haskell.
-  No Playwright install is required yet; the current e2e path only needs a basic Node.js runtime. When a
-  Playwright-backed runner is introduced, the intended handoff is `TEST_CORE_BROWSER_RUNNER=node` plus
-  `TEST_CORE_BROWSER_RUNNER_ARGUMENTS=path/to/playwright-runner.js[,extra,args]`.
-- PostgreSQL client libraries (for example `libpq-dev` on Ubuntu or `postgresql-devel` on Fedora) so local
+- Node.js 22, 24, or 26 for the real Playwright e2e harness. Scenarios remain Haskell-authored; the
+  bundled Node process is only a streaming adapter to Playwright's official Chromium client. Install
+  its locked dependencies and browser once from the repository root:
+  ```bash
+  npm ci --prefix packages/test-core/playwright-runner
+  cd packages/test-core/playwright-runner
+  npx playwright install chromium
+  cd ../../..
+  ```
+  On supported Debian/Ubuntu CI hosts, use `npx playwright install chromium --with-deps` to install the
+  browser's system libraries too. Failed scenarios retain a trace, screenshot, and HTML under the
+  package's `test-results/playwright/` directory.
+- PostgreSQL client libraries (for example `libpq-dev` on Ubuntu or the `postgresql17-private-devel` plus
+  `postgresql17-server-devel` pair on Fedora)
+  so local
   source builds can compile the in-process runtime PostgreSQL adapter.
 - `psql` plus a local PostgreSQL server if you want to exercise migrations, seed data, or direct manual SQL
   checks locally.
@@ -275,7 +292,7 @@ sudo apt install -y nodejs postgresql postgresql-client libpq-dev
 ### Fedora
 
 ```bash
-sudo dnf install -y nodejs postgresql-server postgresql postgresql-devel
+sudo dnf install -y nodejs postgresql17 postgresql17-private-devel postgresql17-server-devel
 ```
 
 ### MacOS
@@ -527,6 +544,7 @@ DATABASE_PORT=5432
 DATABASE_NAME=web_api_dev
 DATABASE_USER=web_api_runtime
 DATABASE_PASSWORD=web_api
+DATABASE_CONNECT_TIMEOUT_SECONDS=10
 EOF
 
 cat > ./podman.env.local <<'EOF'
@@ -581,6 +599,16 @@ were created inside it. The built image `localhost/haskell-web-api:dev` is left 
 store so you can restart the stack quickly.
 
 ## Reverse-Proxy Compose Example
+
+This optional example requires a Compose provider in addition to Podman itself. On a fresh Fedora
+Distrobox, install one before running `podman compose`:
+
+```bash
+python3 -m pip install --user podman-compose
+```
+
+The earlier rootless Podman-pod example does not require Compose and is the preferred first end-to-end
+verification of a new box.
 
 The repository now includes a canonical reverse-proxy container example under
 `examples/reverse-proxy/`:
@@ -663,8 +691,8 @@ xdg-open http://127.0.0.1:16686
 Expected results:
 
 - plain HTTP on port `80` redirects to HTTPS because the app sees `X-Forwarded-Proto: http`,
-- HTTPS on port `443` succeeds with the local certificate chain from `tls/local-root-ca.pem`, and the app sees
-  `X-Forwarded-Proto: https`,
+- HTTPS on port `443` succeeds with the local certificate chain from `tls/local-root-ca.pem`, and the app
+  sees `X-Forwarded-Proto: https`,
 - Jaeger stays available on `127.0.0.1:16686`.
 
 6. Tear the stack down when finished:
@@ -1013,10 +1041,13 @@ behavior.
 than the default `certbot` on `PATH`.
 
 Set `LISTENER_<n>_ACME_DOMAINS` to the certificate domains you want the ACME order to cover. The
-certbot runtime path reuses that list when its arguments do not already declare `-d` / `--domain` /
-`--domains`, and when `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` is unset it also derives a working
-`certonly --non-interactive --agree-tos --webroot` invocation plus `--webroot-path`, `--server`,
-`--email`, and `--domains` from the ACME listener config. During that certbot run, the HTTP
+certbot runtime path derives a working `certonly --non-interactive --agree-tos --webroot` invocation plus
+`--webroot-path`, `--server`, `--email`, and `--domains` from the ACME listener config. Arbitrary
+`LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` are deliberately unsupported because their values are visible in
+the spawned process's argument list and may be retained by Certbot renewal configuration. For DNS-01
+or another custom authenticator, point `LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` at an operator-owned
+wrapper; keep its credentials in a root-owned credential file (typically mode `0600`) or in the
+wrapper's managed environment, never in framework configuration or argv. During that certbot run, the HTTP
 listener serves `/.well-known/acme-challenge/*` files from the temporary derived webroot path. The
 native in-process backend uses the same domain list for its ACME order identifiers and CSR.
 When `LISTENER_<n>_ACME_DIRECTORY_URL` is omitted, runtime config defaults it to the production Let's
@@ -1138,6 +1169,9 @@ Application and static responses now include a strict default security header se
 `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy`, and `X-Frame-Options: DENY`.
 The default CSP is same-origin oriented (`default-src 'self'`, `script-src 'self'`,
 `style-src 'self'`, `connect-src 'self'`) and denies framing with `frame-ancestors 'none'`.
+For every full HTML page response, the runtime adds a fresh script nonce to that page's
+`script-src` directive. HarchWeb uses it only for the small head capture kernel; declared deferred
+modules remain ordinary same-origin external scripts. This keeps the policy free of `unsafe-inline`.
 
 CORS is disabled by default in the browser sense: without `CORS_ALLOWED_ORIGINS`, responses do not emit
 `Access-Control-Allow-Origin`. For an explicit cross-origin browser client, configure exact origins and
@@ -1264,13 +1298,36 @@ outside normal WAI request middleware.
 If the request does not appear, re-check the firewall and router steps above first, then confirm the test
 device is really off the LAN (for example, disable Wi-Fi on the phone before retrying).
 
+#### Fresh Distrobox Verification Checklist
+
+After setup, verify the active shell and container bridge before treating the box as ready:
+
+```bash
+ghc --version
+cabal --version
+haskell-language-server-wrapper --version
+stack --version
+hspec-discover --help
+node --version
+ld.lld --version
+pg_config --version
+podman info --format 'rootless={{.Host.Security.Rootless}} socket={{.Host.RemoteSocket.Path}}'
+test -S /var/run/docker.sock && echo docker-socket-bridge-ready
+```
+
+Install the CI formatting tools, then run `.github/scripts/formatting-checks.sh`. With PostgreSQL 17 and
+Jaeger available through rootless Podman, run `./generate-code-coverage.sh`, then
+`cabal build all -O2 --ghc-options=-Werror` and `cabal test all -O2 --test-options="--skip Unit"`.
+Finally, follow the rootless Podman end-to-end bring-up/tear-down example above to verify the runtime
+image, database migration, app endpoints, and cleanup.
+
 #### Additional Build Prerequisites for CI Builds
 
 The .github workflow `ci.yml` requires formatting checks with `cabal-gild`, `hlint`, and `ormolu` for the
 `Formatting checks` step.
 
-You may want to install the formatting tools and set up the pre-commit hook that the CI workflow uses to
-fail fast on formatting regressions before a push or pull request.
+You may want to install the formatting tools and set up the tracked pre-commit hook, which runs the same
+formatting gate as CI, to fail fast on formatting regressions before a push or pull request.
 
 ```bash
 .github/scripts/install-formatting-tools.sh
@@ -1282,16 +1339,19 @@ Those commands install:
 - `ormolu`
 
 The formatting-check script requires the positional `cabal-gild FILE --mode check` interface, and the
-installer intentionally pins `cabal-gild` to `1.8.4.1` so local installs match CI.
+installer intentionally pins `cabal-gild` to `1.8.4.1` and Ormolu to a tested revision so local installs
+match CI. Both the CI check and the VS Code formatter pass `-XImportQualifiedPost` to Ormolu, matching the
+project's postpositive qualified-import style.
 
-To fail fast on formatting regressions before a push or pull request, copy the tracked pre-commit hook into
-your local git hooks directory:
+To fail fast on formatting regressions before a push or pull request, install the tracked pre-commit hook:
 
 ```bash
-install -Dm755 .github/hooks/pre-commit .git/hooks/pre-commit
+tools/install-git-hooks.sh
 ```
 
-After copying it, any git commit will automatically run formatting checks, or you can also run it yourself:
+The installer will not overwrite a different pre-commit hook or bypass an existing `core.hooksPath`; resolve
+either intentional local policy first. After installation, any git commit will automatically run formatting
+checks, or you can also run it yourself:
 
 ```bash
 git hook run pre-commit
@@ -1349,6 +1409,106 @@ the running container.
   \
   Then, close the attached VS Code window and re-attach to the container again. Finally `whoami` in the
   attached VS Code terminal should show the correct non-root user.
+
+### HLS formatter-plugin verification and rebuild
+
+The Haskell extension normally delegates Haskell document formatting to an HLS formatter plugin. Before
+assuming the extension can format with the `ormolu` executable on `PATH`, verify that the HLS binary selected
+for this project actually contains that plugin:
+
+```bash
+haskell-language-server-wrapper --probe-tools
+haskell-language-server-wrapper --list-plugins | rg '^(ormolu|fourmolu):'
+```
+
+For this repository, the probe must report project GHC `9.14.1`. A missing `ormolu:` / `fourmolu:` line
+means that the active HLS bindist cannot handle VS Code's `textDocument/formatting` request for Haskell
+files, even when `ormolu` itself is installed and works from the terminal. In that situation,
+`haskell.plugin.ormolu.config.external=true` is not a workaround: `external` only tells an already-loaded
+HLS Ormolu plugin to invoke the external executable; it cannot add a plugin that is absent from the binary.
+
+For the current GHC `9.14.1` toolchain, rebuilding HLS `2.14.0.0` does **not** resolve this: the official
+HLS source explicitly marks both `hls-ormolu-plugin` and `hls-fourmolu-plugin` unbuildable for GHC 9.14 and
+newer because their `ghc-lib-parser` dependency does not support that GHC version. Do not spend time on
+`ghcup compile hls` for this formatter issue. When choosing a future GHC/HLS combination, consult the
+official HLS plugin-support table and run the plugin check above before assuming editor formatting is
+available.
+
+When the plugin is present for a supported future toolchain, reload the attached VS Code window and configure
+the HLS Ormolu plugin in Remote Settings only:
+
+```jsonc
+{
+  "haskell.manageHLS": "PATH",
+  "haskell.formattingProvider": "ormolu",
+  "haskell.plugin.ormolu.config.external": true
+}
+```
+
+For the current toolchain, the Haskell extension cannot provide document formatting. The repository includes
+a small VS Code formatter provider at `tools/vscode-ormolu-formatter/` that invokes the same `ormolu` on
+the attached container's `PATH`; it is not a third-party formatter extension. Install it from a Dev
+Containers integrated terminal:
+
+```bash
+tools/install-vscode-ormolu-formatter.sh
+```
+
+Then select `gorban.haskell-web-api-ormolu-formatter` through `Format Document With...`, or make it the
+Remote default formatter and enable format-on-save:
+
+```jsonc
+{
+  "[haskell]": {
+    "editor.defaultFormatter": "gorban.haskell-web-api-ormolu-formatter",
+    "editor.formatOnSave": true
+  }
+}
+```
+
+The extension formats the in-memory editor content through
+`ormolu --ghc-opt=-XImportQualifiedPost --stdin-input-file`, so a failed parse
+leaves the file unchanged and reports the Ormolu error in VS Code. It can be reinstalled after source changes
+by rerunning the install script. This workaround was verified in the rootless Fedora Distrobox setup with
+GHC `9.14.1`: after `Developer: Reload Window`, both `Format Document` and format-on-save reformatted a
+deliberately mis-spaced `Config.hs` expression through the repo-owned extension.
+
+Verify a new installation the same way:
+
+1. Run `Developer: Reload Window` after installing the extension or changing Remote Settings.
+2. Open a `.hs` file, add extra whitespace to a valid expression, and run `Format Document`.
+3. Make the same valid whitespace-only change again, save, and confirm format-on-save applies Ormolu.
+4. Confirm the saved file matches CI's formatter with
+   `ormolu -m check --ghc-opt=-XImportQualifiedPost FILE`.
+
+The extension source is guarded by a matching local/CI check:
+
+```bash
+tools/check-vscode-ormolu-formatter.sh
+```
+
+It first proves the installed Ormolu executable formats a representative Haskell module as expected, then
+installs the lockfile-pinned lint dependencies, runs ESLint and syntax checks, executes process-boundary unit
+tests, packages a VSIX with the pinned `@vscode/vsce` version, and verifies the packaged runtime contents.
+The tracked pre-commit hook and GitHub Actions run the same check. In CI, the preceding `Install formatting
+and Ormolu test tools` step supplies the pinned Ormolu binary, so a formatter source change cannot bypass
+local or CI validation.
+
+If `Format Document` / format-on-save integration is required, install the `sjurmillidahl.ormolu-vscode`
+extension **in the attached Dev Container**, then set it as the Haskell default formatter in Remote Settings:
+
+```jsonc
+{
+  "[haskell]": {
+    "editor.defaultFormatter": "sjurmillidahl.ormolu-vscode",
+    "editor.formatOnSave": true
+  }
+}
+```
+
+Use `Format Document` on a deliberately mis-spaced expression, then confirm the same file is clean with
+`ormolu -m check FILE`. The separate semantic-token warning can be enabled away, if desired, with
+`"haskell.plugin.semanticTokens.globalOn": true`.
 
 ### Recommended VS Code Extensions
 

@@ -14,7 +14,7 @@ name: harch-web
 -- PVP summary:     +-+------- breaking API changes
 --                  | | +----- non-breaking API additions
 --                  | | | +--- code changes with no API change
-version: 0.1.1.0
+version: 0.1.2.0
 -- A short (one-line) description of the package.
 synopsis: haskell architecture web facade
 -- A longer description of the package.
@@ -33,21 +33,23 @@ maintainer: 1393236+gorban@users.noreply.github.com
 -- A copyright notice.
 copyright: (c) David Bruck
 category: Web
-build-type: Custom
+build-type: Simple
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
 extra-doc-files: CHANGELOG.md
-
-custom-setup
-  setup-depends:
-    base ^>=4.22.0.0,
-    Cabal,
-    directory,
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 -- extra-source-files:
 common common
   -- Common warning flags.
-  ghc-options: -Wall
+  ghc-options:
+    -Wall
+    -Wcompat
+    -Wincomplete-uni-patterns
+    -Wincomplete-record-updates
+    -Wpartial-fields
+    -Wredundant-constraints
+    -Wunused-packages
+
   -- Common settings.
   default-language: GHC2024
 
@@ -58,29 +60,156 @@ library
   -- Modules included in this library.
   exposed-modules:
     HarchWeb
+    HarchWeb.Account
+    HarchWeb.Acme
+    HarchWeb.Acme.Json
+    HarchWeb.Action
+    HarchWeb.Api
+    HarchWeb.Api.Multipart
+    HarchWeb.Api.Multipart.Storage
+    HarchWeb.ApplicationModule
+    HarchWeb.Authentication
+    HarchWeb.Authentication.Attempt
+    HarchWeb.Authentication.Jwt
+    HarchWeb.Controls
+    HarchWeb.Csrf
+    HarchWeb.Database
+    HarchWeb.DevSmtp
+    HarchWeb.Document
+    HarchWeb.Email
+    HarchWeb.EndpointMetadata
+    HarchWeb.EndpointSecurity
+    HarchWeb.Gmail
+    HarchWeb.GoogleWorkspace
+    HarchWeb.Localization
+    HarchWeb.Localization.Internal
+    HarchWeb.Localization.Quasi
+    HarchWeb.LoginProtection
+    HarchWeb.Markup
+    HarchWeb.Markup.Unsafe
     HarchWeb.Observability
+    HarchWeb.Password
+    HarchWeb.RecoveryCode
+    HarchWeb.RequestContext
+    HarchWeb.RequestId
+    HarchWeb.Routing
+    HarchWeb.Secret
+    HarchWeb.Security
+    HarchWeb.SecurityEvent
+    HarchWeb.Server
+    HarchWeb.Server.Transport.Internal
+    HarchWeb.Session
+    HarchWeb.Site
+    HarchWeb.StaticAssets
+    HarchWeb.StaticAssets.Route
+    HarchWeb.Time
+    HarchWeb.Totp
+    HarchWeb.Username
+
+  other-modules:
+    HarchWeb.Acme.Certbot.Options
+    HarchWeb.Acme.Certbot.Runtime
+    HarchWeb.Acme.Challenge
+    HarchWeb.Api.Endpoint
+    HarchWeb.Api.Endpoint.Family
+    HarchWeb.Api.Endpoint.Internal
+    HarchWeb.Api.Endpoint.Runtime
+    HarchWeb.Api.HeaderName
+    HarchWeb.Api.MediaType
+    HarchWeb.Api.Multipart.Disposition
+    HarchWeb.Api.Multipart.Scanner
+    HarchWeb.Api.Multipart.Storage.Internal
+    HarchWeb.Api.Negotiation
+    HarchWeb.Api.Request
+    HarchWeb.Api.Response
+    HarchWeb.ApplicationModule.Composition
+    HarchWeb.ApplicationModule.Core
+    HarchWeb.ApplicationModule.Mount
+    HarchWeb.Cookie
+    HarchWeb.Markup.Attributes
+    HarchWeb.Markup.Elements
+    HarchWeb.Markup.Implementation
+    HarchWeb.Markup.Internal
+    HarchWeb.Markup.Quasi
+    HarchWeb.Markup.Quasi.AttributeLowering
+    HarchWeb.Markup.Quasi.Lowering
+    HarchWeb.Markup.Quasi.LoweringSupport
+    HarchWeb.Markup.Quasi.Parser
+    HarchWeb.Markup.Regions
+    HarchWeb.Markup.Syntax
+    HarchWeb.Observability.Otlp
+    HarchWeb.Observability.Otlp.Export
+    HarchWeb.Observability.Otlp.Wire
+    HarchWeb.Observability.Types
+    HarchWeb.Password.WorkBudget
+    HarchWeb.PathPrefix
+    HarchWeb.Security.ConstantTime
+    HarchWeb.Security.ForwardedTrust
+    HarchWeb.Security.RequestLimits
+    HarchWeb.SecurityFailureCode
+    HarchWeb.SecurityFailureCode.Internal
+    HarchWeb.Server.Application
+    HarchWeb.Server.ClientAction
+    HarchWeb.Server.ClientAction.Runtime
+    HarchWeb.Server.Config
+    HarchWeb.Server.LocalTest
+    HarchWeb.Server.RequestAdmission
+    HarchWeb.Server.RequestBody
+    HarchWeb.Server.RequestExecution
+    HarchWeb.Server.RequestObservability
+    HarchWeb.Server.Response
+    HarchWeb.Server.ResponseRendering
+    HarchWeb.Server.Runtime
+    HarchWeb.Server.Sse
+    HarchWeb.Server.StaticAssets
+    HarchWeb.Server.Transport
+    HarchWeb.Server.Transport.Tls
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
   -- Other library packages from which modules are imported.
   build-depends:
+    aeson ^>=2.3.1.0,
+    asn1-encoding ^>=0.9.6,
+    asn1-types ^>=0.3.4,
     base ^>=4.22.0.0,
-    base64-bytestring,
-    bytestring,
-    directory,
-    filepath,
-    http-client,
-    http-client-tls,
-    http-types,
-    network,
-    process,
-    temporary,
-    text,
-    time,
-    tls,
-    wai,
-    warp,
-    warp-tls,
+    base16-bytestring ^>=1.0.2.0,
+    base64-bytestring ^>=1.2.1.0,
+    bytestring ^>=0.12.2.0,
+    case-insensitive ^>=1.2.1.0,
+    containers ^>=0.8,
+    crypton ^>=1.0.6,
+    crypton-x509 ^>=1.7.7,
+    crypton-x509-system ^>=1.6.8,
+    directory ^>=1.3.10.0,
+    filepath ^>=1.5.4.0,
+    haskell-src-meta ^>=0.8.16,
+    http-client ^>=0.7.19,
+    http-client-tls ^>=0.3.6.4,
+    http-date ^>=0.0.11,
+    http-types ^>=0.12.5,
+    jose ^>=0.12,
+    lens ^>=5.3,
+    memory ^>=0.18.0,
+    mtl ^>=2.3.1,
+    network ^>=3.2.8.0,
+    pem ^>=0.2.4,
+    process ^>=1.6.26.1,
+    template-haskell ^>=2.24.0.0,
+    temporary ^>=1.3,
+    text ^>=2.1.3,
+    time ^>=1.15,
+    tls ^>=1.9.0,
+    unix ^>=2.8.8.0,
+    wai ^>=3.2.5,
+    warp ^>=3.4.12,
+    warp-tls ^>=3.4.9,
+
+  cxx-sources: cbits/localization.cpp
+  extra-libraries:
+    icui18n
+    icuuc
+    stdc++
 
   -- Directories containing source files.
   hs-source-dirs: src
@@ -91,15 +220,89 @@ test-suite harch-web-tests
   type: exitcode-stdio-1.0
   -- Directories containing source files.
   hs-source-dirs: test
+  -- hspec-discover imports every test module. Keep this complete and let the
+  -- manifest check verify it against test/ rather than suppress Cabal's warning.
+  other-modules:
+    Unit.HarchWeb.AccountSpec
+    Unit.HarchWeb.Acme.Certbot.OptionsSpec
+    Unit.HarchWeb.Acme.Certbot.RuntimeSpec
+    Unit.HarchWeb.Acme.ChallengeSpec
+    Unit.HarchWeb.Acme.JsonSpec
+    Unit.HarchWeb.AcmeSpec
+    Unit.HarchWeb.ActionSpec
+    Unit.HarchWeb.Api.EndpointSpec
+    Unit.HarchWeb.Api.Multipart.DispositionSpec
+    Unit.HarchWeb.Api.Multipart.ScannerSpec
+    Unit.HarchWeb.Api.MultipartSpec
+    Unit.HarchWeb.Api.NegotiationSpec
+    Unit.HarchWeb.Api.RequestSpec
+    Unit.HarchWeb.Api.ResponseSpec
+    Unit.HarchWeb.ApplicationModuleSpec
+    Unit.HarchWeb.Authentication.AttemptSpec
+    Unit.HarchWeb.Authentication.JwtSpec
+    Unit.HarchWeb.AuthenticationSpec
+    Unit.HarchWeb.DatabaseSpec
+    Unit.HarchWeb.DevSmtpSpec
+    Unit.HarchWeb.DocumentSpec
+    Unit.HarchWeb.EmailSpec
+    Unit.HarchWeb.EndpointSecuritySpec
+    Unit.HarchWeb.FacadeSpec
+    Unit.HarchWeb.GmailSpec
+    Unit.HarchWeb.GoogleWorkspaceSpec
+    Unit.HarchWeb.LocalizationSpec
+    Unit.HarchWeb.LoginProtectionSpec
+    Unit.HarchWeb.Markup.AttributesSpec
+    Unit.HarchWeb.Markup.ElementsSpec
+    Unit.HarchWeb.Markup.Quasi.LoweringHygieneSpec
+    Unit.HarchWeb.Markup.Quasi.LoweringSpec
+    Unit.HarchWeb.Markup.RegionsSpec
+    Unit.HarchWeb.Markup.UnsafeSpec
+    Unit.HarchWeb.MarkupComponents
+    Unit.HarchWeb.MarkupRejection
+    Unit.HarchWeb.Observability.Otlp.ExportSpec
+    Unit.HarchWeb.Observability.Otlp.TestSupport
+    Unit.HarchWeb.Observability.TypesSpec
+    Unit.HarchWeb.ObservabilitySpec
+    Unit.HarchWeb.PasswordSpec
+    Unit.HarchWeb.PathPrefixSpec
+    Unit.HarchWeb.RecoveryCodeSpec
+    Unit.HarchWeb.RequestContextSpec
+    Unit.HarchWeb.RequestIdSpec
+    Unit.HarchWeb.RoutingSpec
+    Unit.HarchWeb.SecretSpec
+    Unit.HarchWeb.Security.ForwardedTrustSpec
+    Unit.HarchWeb.Security.RequestLimitsSpec
+    Unit.HarchWeb.SecurityEventSpec
+    Unit.HarchWeb.SecuritySpec
+    Unit.HarchWeb.Server.ApplicationSpec
+    Unit.HarchWeb.Server.ConfigSpec
+    Unit.HarchWeb.Server.LocalTestSpec
+    Unit.HarchWeb.Server.RequestExecutionSpec
+    Unit.HarchWeb.Server.RuntimeSpec
+    Unit.HarchWeb.Server.SseSpec
+    Unit.HarchWeb.Server.Transport.TlsSpec
+    Unit.HarchWeb.Server.TransportSpec
+    Unit.HarchWeb.SessionSpec
+    Unit.HarchWeb.SiteSpec
+    Unit.HarchWeb.StaticAssets.RouteSpec
+    Unit.HarchWeb.StaticAssetsSpec
+    Unit.HarchWeb.TestSupport
+    Unit.HarchWeb.TimeSpec
+    Unit.HarchWeb.TotpSpec
+    Unit.HarchWeb.UsernameSpec
+
   ghc-options:
-    -Wno-missing-home-modules
+    -F
+    -pgmF=spec-preprocessor
     -rtsopts
     -threaded
     -with-rtsopts=-N
 
   build-tool-depends:
     -- Discovers hspec *Spec.hs tests
-    hspec-discover:hspec-discover
+    -- Our spec-preprocessor to fill in {-# SPEC #-} headers
+    hspec-discover:hspec-discover ^>=2.11.17,
+    test-spec-preprocessor:spec-preprocessor ^>=0.1.2.0,
 
   -- .hs or .lhs file containing the Main module.
   main-is: Main.hs
@@ -108,19 +311,32 @@ test-suite harch-web-tests
   -- Other library packages from which modules are imported.
   build-depends:
     -- For testing framework:
+    aeson ^>=2.3.1.0,
+    asn1-encoding ^>=0.9.6,
+    asn1-types ^>=0.3.4,
     base ^>=4.22.0.0,
-    bytestring,
-    directory,
-    filepath,
-    harch-web,
-    hspec,
-    http-client,
-    http-types,
-    network,
-    process,
-    temporary,
-    text,
-    time,
-    tls,
-    wai,
-    warp,
+    base64-bytestring ^>=1.2.1.0,
+    bytestring ^>=0.12.2.0,
+    containers ^>=0.8,
+    crypton ^>=1.0.6,
+    data-default ^>=0.8.0.2,
+    directory ^>=1.3.10.0,
+    filepath ^>=1.5.4.0,
+    harch-web ^>=0.1.2.0,
+    hspec ^>=2.11.17,
+    http-client ^>=0.7.19,
+    http-types ^>=0.12.5,
+    jose ^>=0.12,
+    network ^>=3.2.8.0,
+    pem ^>=0.2.4,
+    process ^>=1.6.26.1,
+    template-haskell ^>=2.24.0.0,
+    temporary ^>=1.3,
+    test-core ^>=0.1.2.0,
+    text ^>=2.1.3,
+    time ^>=1.15,
+    tls ^>=1.9.0,
+    unix ^>=2.8.8.0,
+    wai ^>=3.2.5,
+    warp ^>=3.4.12,
+    warp-tls ^>=3.4.9,

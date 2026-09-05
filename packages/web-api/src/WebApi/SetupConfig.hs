@@ -15,13 +15,14 @@ module WebApi.SetupConfig
 where
 
 import Core.Config
-  ( ConfigOverridesFileError (..),
+  ( ConfigLayers (..),
+    ConfigOverridesFileError (..),
     ConfigParseError (..),
     loadConfigOverridesFile,
     lookupConfigValue,
     parseBoolean,
   )
-import Data.Bifunctor (bimap)
+import Data.Bifunctor (bimap, first)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -58,18 +59,24 @@ data AppSetupConfigLoadError
   | AppSetupConfigParseError ConfigParseError
   deriving (Eq, Show)
 
-committedSetupDefaults :: [(Text, Text)]
-committedSetupDefaults =
-  [ ("SETUP_AUTOSTART_DATABASE", "true"),
-    ("SETUP_AUTOSTART_JAEGER", "false")
-  ]
-
+-- | The single canonical source for the autostart defaults: 'committedSetupDefaults'
+-- and 'parseSetupAutostartConfig''s own fallback both derive from this record instead
+-- of re-typing 'True'\/'False' as string literals.
 defaultSetupAutostartConfig :: SetupAutostartConfig
 defaultSetupAutostartConfig =
   SetupAutostartConfig
     { setupAutostartDatabase = True,
       setupAutostartJaeger = False
     }
+
+committedSetupDefaults :: [(Text, Text)]
+committedSetupDefaults =
+  [ ("SETUP_AUTOSTART_DATABASE", renderConfigBoolean (setupAutostartDatabase defaultSetupAutostartConfig)),
+    ("SETUP_AUTOSTART_JAEGER", renderConfigBoolean (setupAutostartJaeger defaultSetupAutostartConfig))
+  ]
+
+renderConfigBoolean :: Bool -> Text
+renderConfigBoolean value = if value then "true" else "false"
 
 defaultAppSetupConfig :: AppSetupConfig
 defaultAppSetupConfig =
@@ -92,19 +99,15 @@ loadAppSetupConfigWithFiles committedDefaultsPath localOverridesPath = do
   pure $ do
     committedDefaults <- committedDefaultsResult
     localOverrides <- localOverridesResult
-    case parseAppSetupConfig
-      (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
-      committedDefaults
-      (localOverrides <> environmentOverrides) of
-      Left parseError -> Left (AppSetupConfigParseError parseError)
-      Right setupConfig -> Right setupConfig
+    first AppSetupConfigParseError $
+      parseAppSetupConfig
+        (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
+        committedDefaults
+        (localOverrides <> environmentOverrides)
   where
     loadOverridesFile overridesPath =
       fmap
-        ( either
-            (Left . AppSetupOverridesFileError overridesPath)
-            Right
-        )
+        (first (AppSetupOverridesFileError overridesPath))
         (loadConfigOverridesFile overridesPath)
 
 loadEnvironmentOverrides :: IO [(Text, Text)]
@@ -139,24 +142,40 @@ parseOptionalMigrationDatabaseConfig committedDefaults localOverrides environmen
     lookupMigrationValue key =
       fmap
         (key,)
-        (lookupConfigValue key committedDefaults localOverrides environmentOverrides)
+        (lookupConfigValue key configLayers)
+
+    configLayers =
+      ConfigLayers
+        { configLayerCommittedDefaults = committedDefaults,
+          configLayerLocalOverrides = localOverrides,
+          configLayerEnvironmentOverrides = environmentOverrides
+        }
 
     migrationConfigKeys =
       [ "WEB_API_MIGRATION_DATABASE_HOST",
         "WEB_API_MIGRATION_DATABASE_PORT",
         "WEB_API_MIGRATION_DATABASE_NAME",
         "WEB_API_MIGRATION_DATABASE_USER",
-        "WEB_API_MIGRATION_DATABASE_PASSWORD"
+        "WEB_API_MIGRATION_DATABASE_PASSWORD",
+        "WEB_API_MIGRATION_DATABASE_SSL_MODE",
+        "WEB_API_MIGRATION_DATABASE_SSL_ROOT_CERT"
       ]
 
 parseSetupAutostartConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError SetupAutostartConfig
 parseSetupAutostartConfig committedDefaults localOverrides environmentOverrides =
   SetupAutostartConfig
-    <$> optionalBoolean "SETUP_AUTOSTART_DATABASE" True
-    <*> optionalBoolean "SETUP_AUTOSTART_JAEGER" False
+    <$> optionalBoolean "SETUP_AUTOSTART_DATABASE" (setupAutostartDatabase defaultSetupAutostartConfig)
+    <*> optionalBoolean "SETUP_AUTOSTART_JAEGER" (setupAutostartJaeger defaultSetupAutostartConfig)
   where
     optionalBoolean key fallback =
       maybe
         (Right fallback)
         (parseBoolean key)
-        (lookupConfigValue key committedDefaults localOverrides environmentOverrides)
+        (lookupConfigValue key configLayers)
+
+    configLayers =
+      ConfigLayers
+        { configLayerCommittedDefaults = committedDefaults,
+          configLayerLocalOverrides = localOverrides,
+          configLayerEnvironmentOverrides = environmentOverrides
+        }

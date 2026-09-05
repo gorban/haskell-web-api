@@ -1,8 +1,18 @@
 packages:
+  examples/catalog-domain/
+  examples/composed-domains/
+  examples/custom-api/
+  examples/custom-db-adapter/
+  examples/localization/
+  examples/multipart-upload/
+  examples/orders-domain/
+  examples/two-pages/
   packages/core/
   packages/harch-web/
   packages/hspec-expectations-match/
+  packages/postgres-database-changes/
   packages/test-core/
+  packages/test-spec-preprocessor/
   packages/web-api/
 
 with-compiler: ghc-9.14.1
