@@ -9,7 +9,7 @@ import Control.Monad (forM_)
 import Data.ByteString qualified as ByteString
 import Data.Foldable (toList)
 import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
-import Data.List (isInfixOf)
+import Data.List (find, isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe (fromMaybe, isNothing)
@@ -129,6 +129,15 @@ existingSpec = do
                       invalidateMfaEnrollmentSession = \_ _ -> pure (error "unexpected MFA-enrollment session invalidation")
                     }
               }
+          missingMfaWorkflow =
+            activeWorkflow
+              { accountWorkflowMfaEnrollmentSessionStore =
+                  MfaEnrollmentSessionStore
+                    { saveMfaEnrollmentSession = \_ -> pure (error "unexpected MFA-enrollment session save"),
+                      loadMfaEnrollmentSession = \_ -> pure (Right Nothing),
+                      invalidateMfaEnrollmentSession = \_ _ -> pure (error "unexpected MFA-enrollment session invalidation")
+                    }
+              }
           accountAndEnrollmentContext =
             sessionRequestContext
               { WebApi.Route.requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue
@@ -155,6 +164,9 @@ existingSpec = do
         `shouldReturn` HarchWeb.CsrfRejected
       HarchWeb.verifyCsrfToken (accountCsrfProtection unavailableMfaWorkflow) enrollmentContext enrollmentToken
         `shouldReturn` HarchWeb.CsrfVerificationUnavailable
+      missingMfaToken <- issuedCsrfToken missingMfaWorkflow enrollmentContext
+      HarchWeb.verifyCsrfToken (accountCsrfProtection missingMfaWorkflow) enrollmentContext missingMfaToken
+        `shouldReturn` HarchWeb.CsrfVerified
 
     it "resends pending-profile verification through a localized client-action patch" $ do
       let actionRequest requestContext fields =
@@ -1149,7 +1161,12 @@ spec = do
         Just response -> do
           response `shouldSatisfy` actionResponseHasValidClientActionTransport
           Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` 200
-          HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
+          case find (Text.isPrefixOf "__Host-harch-mfa-enrollment=" . TextEncoding.decodeUtf8 . snd) (HarchWeb.clientActionHeaders response) of
+            Just (_, cookie) -> do
+              let renderedCookie = TextEncoding.decodeUtf8 cookie
+              renderedCookie `shouldSatisfy` Text.isPrefixOf "__Host-harch-mfa-enrollment="
+              renderedCookie `shouldSatisfy` Text.isSuffixOf "; Path=/; Max-Age=600; HttpOnly; Secure; SameSite=Strict"
+            Nothing -> expectationFailure "expected the MFA-enrollment session cookie"
           HarchWeb.clientActionHeaders response `shouldContain` [HarchWeb.csrfClearCookieHeader]
         Nothing -> expectationFailure "expected a verification action response"
       savedEnrollmentSession <- readIORef acceptedVerificationSessionReference
@@ -1206,7 +1223,13 @@ spec = do
                 accountWorkflowMfaStore = mfaStore,
                 accountWorkflowSessionStore = sessionStore,
                 accountWorkflowLoginAttemptStore = permissiveLoginAttemptStore,
-                accountWorkflowJwtIssuer = testAccountJwtIssuer,
+                accountWorkflowJwtIssuer =
+                  testAccountJwtIssuer
+                    { issueAccountSessionJwt =
+                        \issuedSession -> do
+                          Session.sessionPrincipal issuedSession `shouldBe` accountId
+                          pure (Right (HarchWeb.encodedJwtFromBytes "header.payload.signature"))
+                    },
                 accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
                 accountWorkflowClock = atomicModifyIORef' clockReference (\value -> (value + 1, value)),
                 accountWorkflowTotpClock = unixTimeSecondsFromNanoseconds
@@ -1224,7 +1247,11 @@ spec = do
           HarchWeb.clientActionFocusId response `shouldBe` Nothing
           HarchWeb.clientActionNavigation response
             `shouldBe` HarchWeb.NavigateInternal HarchWeb.ReplaceHistory (HarchWeb.RouteRequest ProfileRoute defaultRequestContext)
-          HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
+          HarchWeb.clientActionHeaders response
+            `shouldSatisfy` any ((== "Set-Cookie") . fst)
+          case find (Text.isPrefixOf "__Host-harch-session=" . TextEncoding.decodeUtf8 . snd) (HarchWeb.clientActionHeaders response) of
+            Just cookie -> TextEncoding.decodeUtf8 (snd cookie) `shouldBe` "__Host-harch-session=header.payload.signature; Path=/; Max-Age=28800; HttpOnly; Secure; SameSite=Strict"
+            Nothing -> expectationFailure "expected a rendered account-JWT cookie"
           HarchWeb.clientActionHeaders response `shouldContain` [HarchWeb.csrfClearCookieHeader]
       savedSessions <- readIORef savedSessionsReference
       length savedSessions `shouldBe` 1
@@ -1241,7 +1268,9 @@ spec = do
         Just response -> do
           response `shouldSatisfy` actionResponseHasValidClientActionTransport
           Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` 200
-          HarchWeb.clientActionHeaders response `shouldSatisfy` any (Text.isInfixOf "Max-Age=0" . TextEncoding.decodeUtf8 . snd)
+          case find (Text.isPrefixOf "__Host-harch-session=" . TextEncoding.decodeUtf8 . snd) (HarchWeb.clientActionHeaders response) of
+            Just cookie -> TextEncoding.decodeUtf8 (snd cookie) `shouldBe` "__Host-harch-session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict"
+            Nothing -> expectationFailure "expected the account-JWT cookie to be cleared"
       invalidatedSessions <- readIORef invalidatedSessionsReference
       case invalidatedSessions of
         [(invalidatedSessionId, invalidatedAt)] ->
@@ -1502,16 +1531,25 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
       handleAccountAction unavailableSession (spanishLoginRequest validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "no esta disponible")
-      let issuerFailureWorkflow =
+      jwtFailureSavedSessions <- newIORef []
+      jwtFailureInvalidatedSessions <- newIORef []
+      let jwtFailureSessionStore =
+            (accountWorkflowSessionStore validWorkflow)
+              { saveAccountSession = \session -> modifyIORef' jwtFailureSavedSessions (session :) >> pure (Right True),
+                invalidateAccountSession = \session _ -> modifyIORef' jwtFailureInvalidatedSessions (session :) >> pure (Right True)
+              }
+          issuerFailureWorkflow =
             validWorkflow
-              { accountWorkflowJwtIssuer =
+              { accountWorkflowSessionStore = jwtFailureSessionStore,
+                accountWorkflowJwtIssuer =
                   testAccountJwtIssuer
                     { issueAccountSessionJwt = \_ -> pure (Left AccountJwtIssueFailed)
                     }
               }
           unrenderableJwtWorkflow =
             validWorkflow
-              { accountWorkflowJwtIssuer =
+              { accountWorkflowSessionStore = jwtFailureSessionStore,
+                accountWorkflowJwtIssuer =
                   testAccountJwtIssuer
                     { issueAccountSessionJwt = \_ -> pure (Right (HarchWeb.encodedJwtFromBytes (ByteString.singleton 255)))
                     }
@@ -1520,6 +1558,10 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
       handleAccountAction unrenderableJwtWorkflow (loginRequest defaultRequestContext validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
+      savedJwtFailureSessions <- readIORef jwtFailureSavedSessions
+      invalidatedJwtFailureSessions <- readIORef jwtFailureInvalidatedSessions
+      invalidatedJwtFailureSessions
+        `shouldBe` map Session.sessionId savedJwtFailureSessions
       handleAccountAction validWorkflow (spanishLoginRequest validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "Has iniciado sesion")
       exhaustedLoginBudget <- Password.newPasswordWorkGate (fromMaybe (error "expected a positive password-work budget") (Password.mkPasswordWorkBudget 8))

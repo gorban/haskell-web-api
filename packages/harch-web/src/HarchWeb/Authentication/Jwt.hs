@@ -14,9 +14,12 @@ module HarchWeb.Authentication.Jwt
     JwtAlgorithm (..),
     JwtAllowedAlgorithms,
     JwtClaimsError,
+    JwtSigner (..),
     RequiredProtection,
     issueJwt,
+    joseJwtSigner,
     jwtProofVerifier,
+    mapJwtSignerError,
     mkJwtAllowedAlgorithms,
     mkJwtClaimsError,
   )
@@ -33,6 +36,7 @@ import Crypto.JOSE.JWS qualified as JWS
 import Crypto.JWT (ClaimsSet, JWTError, JWTValidationSettings)
 import Crypto.JWT qualified as Jwt
 import Data.Aeson (ToJSON)
+import Data.Bifunctor (first)
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
@@ -60,6 +64,24 @@ newtype JwtAllowedAlgorithms = JwtAllowedAlgorithms (Set.Set Jws.Alg)
 
 newtype JwtClaimsError = JwtClaimsError SecurityFailureCode
   deriving (Eq, Show)
+
+-- | A pluggable compact-JWT signing capability. The error type stays chosen
+-- by the application boundary, while Harch's default adapter retains JOSE's
+-- precise error type.
+newtype JwtSigner signingError claims = JwtSigner
+  { signJwt :: JWSHeader RequiredProtection -> claims -> IO (Either signingError EncodedJwt)
+  }
+
+-- | Adapt only a signer's private failure value without changing its headers,
+-- claims, or issued proof.
+mapJwtSignerError :: (sourceError -> targetError) -> JwtSigner sourceError claims -> JwtSigner targetError claims
+mapJwtSignerError mapError signer =
+  JwtSigner $ \header claims ->
+    first mapError <$> signJwt signer header claims
+
+-- | Harch's default JOSE-backed signer for a deployment-owned key.
+joseJwtSigner :: (ToJSON claims) => JWK -> JwtSigner JWTError claims
+joseJwtSigner key = JwtSigner (issueJwt key)
 
 mkJwtClaimsError :: SecurityFailureCode -> JwtClaimsError
 mkJwtClaimsError = JwtClaimsError

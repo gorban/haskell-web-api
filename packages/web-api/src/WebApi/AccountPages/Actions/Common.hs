@@ -116,10 +116,8 @@ pendingProfileForm actionRequest profile message isError =
 resendLabel :: AccountActionRequest -> Text
 resendLabel actionRequest = localized actionRequest ResendVerificationEmail
 
-profileLoadErrorType :: ProfileLoadError -> Text
-profileLoadErrorType loadError =
-  case loadError of
-    ProfileAccountStoreError _ -> "AccountStoreError"
+profileLoadErrorType :: Text
+profileLoadErrorType = "AccountStoreError"
 
 profileLoadErrorDetail :: ProfileLoadError -> Text
 profileLoadErrorDetail loadError =

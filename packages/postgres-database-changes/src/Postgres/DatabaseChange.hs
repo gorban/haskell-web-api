@@ -41,7 +41,7 @@ import Data.Char (isAlpha, isAlphaNum)
 import Data.List (find)
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
-import Data.Maybe (isNothing)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -83,10 +83,11 @@ newtype DatabaseChangeExecutor = DatabaseChangeExecutor
   { executeDatabaseChangeSql :: Text -> IO (Either DatabaseChangeExecutorError (Maybe DatabaseChangeResult))
   }
 
--- | The adapter's safe private failure classification.  It deliberately does
--- not retain server messages or SQL text, either of which may disclose values
--- from application-owned DML.
-newtype DatabaseChangeExecutorError = DatabaseChangeExecutorError Text
+-- | The adapter's safe failure classification. It deliberately carries no
+-- server message or SQL text: the runner has one execution-failure rail, and
+-- retaining a detail that no caller may interpret would only create a route
+-- for application-owned DML values to escape.
+data DatabaseChangeExecutorError = DatabaseChangeExecutorError
   deriving (Eq, Show)
 
 -- | The only successful result shapes accepted from the executor.
@@ -309,18 +310,28 @@ libpqExecutor :: LibPQ.Connection -> DatabaseChangeExecutor
 libpqExecutor connection = DatabaseChangeExecutor (runLibpqSql connection)
 
 runLibpqSql :: LibPQ.Connection -> Text -> IO (Either DatabaseChangeExecutorError (Maybe DatabaseChangeResult))
-runLibpqSql connection sql = do
-  maybeResult <- LibPQ.exec connection (TextEncoding.encodeUtf8 sql)
-  case maybeResult of
-    Nothing -> pure (Left (DatabaseChangeExecutorError "postgresql-command-failed"))
-    Just result -> do
-      status <- LibPQ.resultStatus result
-      if status == LibPQ.CommandOk
-        then pure (Right (Just DatabaseChangeCommandSucceeded))
-        else
-          if status == LibPQ.TuplesOk
-            then Right . Just . DatabaseChangeRows <$> readRows result
-            else pure (Left (DatabaseChangeExecutorError "postgresql-command-failed"))
+runLibpqSql connection sql =
+  LibPQ.exec connection (TextEncoding.encodeUtf8 sql)
+    >>= maybe libpqExecutionFailure runLibpqResult
+
+-- | Adapt only the two successful libpq protocol statuses that the immutable
+-- change runner can own.  The lookup is deliberately closed: notices, copy
+-- protocols, and every server failure remain the same redacted executor
+-- failure rather than acquiring accidental migration semantics.
+runLibpqResult :: LibPQ.Result -> IO (Either DatabaseChangeExecutorError (Maybe DatabaseChangeResult))
+runLibpqResult result = do
+  status <- LibPQ.resultStatus result
+  fromMaybe
+    libpqExecutionFailure
+    ( lookup
+        status
+        [ (LibPQ.CommandOk, pure (Right (Just DatabaseChangeCommandSucceeded))),
+          (LibPQ.TuplesOk, Right . Just . DatabaseChangeRows <$> readRows result)
+        ]
+    )
+
+libpqExecutionFailure :: IO (Either DatabaseChangeExecutorError (Maybe DatabaseChangeResult))
+libpqExecutionFailure = pure (Left DatabaseChangeExecutorError)
 
 readRows :: LibPQ.Result -> IO [[Maybe ByteString.ByteString]]
 readRows result = do
@@ -357,7 +368,7 @@ liftExecutorResult :: IO (Either DatabaseChangeExecutorError value) -> ExceptT D
 liftExecutorResult = liftEitherWith databaseChangeExecutorFailure
 
 databaseChangeExecutorFailure :: DatabaseChangeExecutorError -> DatabaseChangeError
-databaseChangeExecutorFailure DatabaseChangeExecutorError {} = DatabaseChangeExecutionFailed
+databaseChangeExecutorFailure DatabaseChangeExecutorError = DatabaseChangeExecutionFailed
 
 advisoryLockSql :: DatabaseChangeLedger -> Text
 advisoryLockSql ledger = "SELECT pg_advisory_xact_lock(" <> Text.pack (show (databaseChangeLedgerLockId ledger)) <> ");"

@@ -16,6 +16,8 @@ module WebApi.App
     buildAppWithDatabaseAndAccountWorkflowAndSecurity,
     buildApp,
     buildRuntimeAccountWorkflow,
+    buildRuntimeAccountWorkflowWithJwt,
+    buildRuntimeAccountWorkflowWithJwtRuntime,
     buildRuntimeAppWithAccountJwt,
     buildRuntimeAppWithDatabaseBuilder,
     otlpExportFailureMessage,
@@ -289,7 +291,17 @@ buildRuntimeAppWithAccountJwt pool config environmentConfig jwtRuntime =
         []
     )
   where
-    accountWorkflow = buildRuntimeAccountWorkflowWithJwt pool environmentConfig (accountJwtIssuerFromRuntime jwtRuntime)
+    -- The selected issuer is a strict field of 'AccountWorkflow': construct
+    -- the record now so application startup cannot defer that validated
+    -- security dependency until the first successful login.
+    !accountWorkflow = buildRuntimeAccountWorkflowWithJwtRuntime pool environmentConfig jwtRuntime
+
+-- | Build the runtime workflow from the already startup-validated JWT
+-- runtime. Keeping this composition here means the application and its
+-- integration tests share exactly one issuer selection path.
+buildRuntimeAccountWorkflowWithJwtRuntime :: PostgresPool -> AppEnvironmentConfig -> AccountJwtRuntime -> AccountWorkflow
+buildRuntimeAccountWorkflowWithJwtRuntime pool environmentConfig =
+  buildRuntimeAccountWorkflowWithJwt pool environmentConfig . accountJwtIssuerFromRuntime
 
 buildRuntimeAppWithDatabaseBuilder ::
   AppConfig ->

@@ -52,7 +52,7 @@ handleProfileWorkflow :: ProfileWorkflowInput -> AccountActionWorkflow
 handleProfileWorkflow input = do
   (now, loadedProfile) <- loadProfileNow (requestAccountPrincipal (HarchWeb.clientActionContext actionRequest))
   case loadedProfile of
-    Left loadError -> throwClientActionFailure (profileResponse actionRequest Http.status503 (PendingProfileForm mempty (Just (localized actionRequest ProfileUnavailable)) True (resendLabel actionRequest))) ProfileLoadFailure (profileLoadErrorType loadError) (profileLoadErrorDetail loadError)
+    Left loadError -> throwClientActionFailure (profileResponse actionRequest Http.status503 (PendingProfileForm mempty (Just (localized actionRequest ProfileUnavailable)) True (resendLabel actionRequest))) ProfileLoadFailure profileLoadErrorType (profileLoadErrorDetail loadError)
     Right ProfileUnauthenticated -> pure (profileResponse actionRequest Http.status403 (PendingProfileForm mempty (Just (localized actionRequest SignInBeforeResend)) True (resendLabel actionRequest)))
     Right (ProfileAuthenticated profile) -> pure (profileResponse actionRequest Http.status409 (PendingProfileForm (Email.emailAddressText (accountProfileEmail profile)) (Just (localized actionRequest EmailAlreadyVerified)) True (resendLabel actionRequest)))
     Right (ProfilePending profile) -> handlePendingProfile actionRequest submission now profile

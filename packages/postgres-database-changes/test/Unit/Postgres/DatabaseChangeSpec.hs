@@ -32,7 +32,7 @@ spec = do
     it "keeps public values comparable and diagnostic without exposing SQL payloads" $ do
       let changeId = requiredId "first"
           databaseChange = change "first" ["SELECT 1;"]
-          executorError = DatabaseChangeExecutorError "connection-lost"
+          executorError = DatabaseChangeExecutorError
           rows = DatabaseChangeRows [[encode "first"]]
           failure = DatabaseChangeDigestMismatch changeId
           allFailures =
@@ -49,17 +49,34 @@ spec = do
             ]
       expectAll
         ( (compare changeId (requiredId "second") `shouldBe` LT)
-            :| [ databaseChange /= change "second" ["SELECT 1;"] `shouldBe` True,
+            :| [ changeId < requiredId "second" `shouldBe` True,
+                 changeId <= changeId `shouldBe` True,
+                 requiredId "second" > changeId `shouldBe` True,
+                 requiredId "second" >= requiredId "second" `shouldBe` True,
+                 min changeId (requiredId "second") `shouldBe` changeId,
+                 max changeId (requiredId "second") `shouldBe` requiredId "second",
+                 databaseChange /= change "second" ["SELECT 1;"] `shouldBe` True,
                  testLedger /= requiredLedger "other_schema" "database_changes" (Just "schema_migrations") `shouldBe` True,
-                 executorError /= DatabaseChangeExecutorError "other" `shouldBe` True,
+                 hasDerivedContract [executorError] `shouldBe` True,
                  rows /= DatabaseChangeCommandSucceeded `shouldBe` True,
                  failure /= DatabaseChangeInvalidId `shouldBe` True,
                  show changeId `shouldBe` "DatabaseChangeId \"first\"",
+                 showsPrec 11 changeId "" `shouldBe` "(DatabaseChangeId \"first\")",
+                 show [changeId] `shouldBe` "[DatabaseChangeId \"first\"]",
                  show databaseChange `shouldBe` "DatabaseChange {databaseChangeId = DatabaseChangeId \"first\", databaseChangeStatements = \"SELECT 1;\" :| []}",
+                 showsPrec 11 databaseChange "" `shouldContain` "(DatabaseChange {",
+                 show [databaseChange] `shouldContain` "[DatabaseChange {",
                  show testLedger `shouldSatisfy` (Text.isInfixOf "DatabaseChangeLedger" . Text.pack),
-                 show executorError `shouldBe` "DatabaseChangeExecutorError \"connection-lost\"",
+                 showsPrec 11 testLedger "" `shouldContain` "(DatabaseChangeLedger",
+                 show [testLedger] `shouldContain` "[DatabaseChangeLedger",
+                 show executorError `shouldBe` "DatabaseChangeExecutorError",
+                 showsPrec 11 executorError "" `shouldBe` "DatabaseChangeExecutorError",
+                 show [executorError] `shouldBe` "[DatabaseChangeExecutorError]",
                  show rows `shouldSatisfy` (Text.isInfixOf "DatabaseChangeRows" . Text.pack),
+                 showsPrec 11 rows "" `shouldContain` "(DatabaseChangeRows",
+                 show [rows] `shouldContain` "[DatabaseChangeRows",
                  show failure `shouldBe` "DatabaseChangeDigestMismatch (DatabaseChangeId \"first\")",
+                 showsPrec 11 failure "" `shouldBe` "(DatabaseChangeDigestMismatch (DatabaseChangeId \"first\"))",
                  all (\value -> value == value) allFailures `shouldBe` True,
                  show allFailures
                    `shouldBe` "[DatabaseChangeInvalidId,DatabaseChangeInvalidLedger,DatabaseChangeDuplicateId (DatabaseChangeId \"first\"),DatabaseChangeExecutionFailed,DatabaseChangeCommandReturnedRows,DatabaseChangeQueryReturnedNoRows,DatabaseChangeMalformedLedgerRow,DatabaseChangeUnknownRecordedId (DatabaseChangeId \"first\"),DatabaseChangeDigestMismatch (DatabaseChangeId \"first\"),DatabaseChangeOutOfOrder (DatabaseChangeId \"first\")]"
@@ -164,7 +181,7 @@ spec = do
       readIORef rowsCommandSqlReference `shouldReturn` ["BEGIN;", "SELECT pg_advisory_xact_lock(782476311);", "CREATE SCHEMA IF NOT EXISTS \"web_api\";", "ROLLBACK;"]
 
     it "maps adapter failures and unavailable direct libpq connections to the safe execution error" $ do
-      let adapterFailure = DatabaseChangeExecutor (const (pure (Left (DatabaseChangeExecutorError "private"))))
+      let adapterFailure = DatabaseChangeExecutor (const (pure (Left DatabaseChangeExecutorError)))
       runDatabaseChangesWithExecutor adapterFailure testLedger [] [] `shouldReturn` Left DatabaseChangeExecutionFailed
       runDatabaseChanges (DatabaseChangeConnectionString "host=127.0.0.1 port=1 connect_timeout=1") testLedger [] [] `shouldReturn` Left DatabaseChangeExecutionFailed
 
@@ -234,6 +251,13 @@ assertFailure changes failingSql expected exactSql = do
   result `shouldBe` Left expected
   recordedSql <- readIORef recordedSqlReference
   if null exactSql then recordedSql `shouldContain` ["ROLLBACK;"] else recordedSql `shouldBe` exactSql
+
+hasDerivedContract :: (Eq value, Show value) => [value] -> Bool
+hasDerivedContract values =
+  sum [fromEnum (left == right) | left <- values, right <- values] == length values
+    && sum [fromEnum (left /= right) | left <- values, right <- values]
+      == length values * (length values - 1)
+    && sum [length (show item) + length (showList [item] "") | item <- values] > 0
 
 commandForLedgerQueryExecutor :: IORef [Text.Text] -> DatabaseChangeExecutor
 commandForLedgerQueryExecutor recordedSqlReference =

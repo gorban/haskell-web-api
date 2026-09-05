@@ -13,8 +13,12 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb qualified
+import HarchWeb.Account qualified as Account
 import HarchWeb.Api (ApiRequestDecodeResult (..), apiRequestDataFromWaiRequest, runRequestCodec)
+import HarchWeb.Email (mkEmailAddress)
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.Password qualified as Password
+import HarchWeb.Session (OpaqueSession (..), generateSessionId)
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import System.IO (hClose)
@@ -25,10 +29,12 @@ import TestSupport.AccountJwt (withTestAccountJwtFixture)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, withContainerizedPsqlOnPath)
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi (buildApp, run)
+import WebApi.Account (AccountStore (createPendingAccount), CreatePendingAccountOutcome (PendingAccountDeliveryClaimed), PendingAccount (..), defaultPendingRegistrationStoragePolicy)
+import WebApi.AccountJwt (AccountJwtIssuer (..), accountJwtIssuerFromRuntime, loadAccountJwtRuntime, mkAccountJwtConfiguration)
 import WebApi.Api.Endpoints (noApiRequestFields)
-import WebApi.App (buildAppWithDatabase, buildAppWithDatabaseAndAccountWorkflowAndSecurity, buildRuntimeAccountWorkflow, buildRuntimeAppWithDatabaseBuilder, otlpExportFailureMessage, runWithConfig, unavailableAccountWorkflow)
+import WebApi.App (buildAppWithDatabase, buildAppWithDatabaseAndAccountWorkflowAndSecurity, buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwtRuntime, buildRuntimeAppWithAccountJwt, buildRuntimeAppWithDatabaseBuilder, otlpExportFailureMessage, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Observability (runOtlpExportAction)
-import WebApi.AppEffect (AccountWorkflow (accountWorkflowEmailDelivery))
+import WebApi.AppEffect (AccountWorkflow (accountWorkflowEmailDelivery, accountWorkflowJwtIssuer, accountWorkflowSessionStore, accountWorkflowStore))
 import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), AppMode (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), TlsCertificateSource (..), TlsConfig (..), databasePoolCapacity, defaultAppConfig, defaultAppEnvironmentConfig, defaultTlsPolicy)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), PageRepository (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed, defaultPageRepository)
 import WebApi.Page (renderPage)
@@ -36,6 +42,7 @@ import WebApi.Postgres.Testing (closePostgresPool, newPostgresPool, runPostgresM
 import WebApi.Response (selectResponse)
 import WebApi.Route (AppRequestContext (..), AppRoute (..), defaultRequestContext, renderRoutePath)
 import WebApi.Route qualified
+import WebApi.Session (AccountSessionStore (..))
 import WebApi.SetupPlan (TcpEndpoint (..))
 
 routeLocationForTest :: Text.Text -> HarchWeb.RouteLocation
@@ -518,6 +525,154 @@ spec = do
         HarchWeb.BodyResponse _ -> expectationFailure "expected an API protocol response"
 
   describe "buildRuntimeApp" $ do
+    it "establishes a persisted signed session before rendering a protected runtime page" $
+      withTestAccountJwtFixture $ \runtimeEnvironmentConfig _ ->
+        withContainerizedPsqlOnPath $ do
+          ensureDefaultPostgresAvailable
+          runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig `shouldReturn` Right ()
+          runPostgresSeed defaultMigrationPostgresConfig `shouldReturn` Right ()
+          let databaseRuntimeEnvironmentConfig =
+                runtimeEnvironmentConfig
+                  { databaseConfig = defaultMigrationPostgresConfig
+                  }
+          bracket
+            (newPostgresPool (databasePoolCapacity defaultMigrationPostgresConfig) defaultMigrationPostgresConfig)
+            closePostgresPool
+            $ \pool -> do
+              runtimeResult <- loadAccountJwtRuntime (accountJwtConfiguration databaseRuntimeEnvironmentConfig)
+              runtime <-
+                case runtimeResult of
+                  Right value -> pure value
+                  Left loadError -> error ("expected test account JWT runtime: " <> show loadError)
+              runtimeAccountId <- Account.generateAccountId
+              verificationToken <- Account.generateEmailVerificationToken
+              runtimeEmail <-
+                case mkEmailAddress (Account.accountIdText runtimeAccountId <> "@runtime-session.example.test") of
+                  Just value -> pure value
+                  Nothing -> error "expected a generated runtime-account email address to be valid"
+              passwordHash <-
+                case Password.hashPasswordWithSalt testPasswordHashingPolicy "0123456789abcdef" (Password.mkPassword "runtime-session-password") of
+                  Just value -> pure value
+                  Nothing -> error "expected a valid test password hash"
+              runtimeSessionId <- generateSessionId
+              let workflow = buildRuntimeAccountWorkflowWithJwtRuntime pool databaseRuntimeEnvironmentConfig runtime
+                  accountStore = accountWorkflowStore workflow
+                  pendingAccount =
+                    PendingAccount
+                      { pendingAccountId = runtimeAccountId,
+                        pendingAccountEmail = runtimeEmail,
+                        pendingAccountUsername = Nothing,
+                        pendingAccountDisplayName = Nothing,
+                        pendingAccountPasswordHash = passwordHash,
+                        pendingAccountVerification = Account.mkStoredEmailVerification runtimeAccountId runtimeEmail 4102444800000000000 verificationToken,
+                        pendingAccountCreatedAtNanoseconds = 100
+                      }
+                  issuedSession =
+                    OpaqueSession
+                      { sessionId = runtimeSessionId,
+                        sessionPrincipal = runtimeAccountId,
+                        sessionIssuedAtNanoseconds = 100,
+                        sessionExpiresAtNanoseconds = 4102444800000000000
+                      }
+                  issuer = accountJwtIssuerFromRuntime runtime
+                  sessionStore = accountWorkflowSessionStore workflow
+                  runtimeApplication = buildRuntimeAppWithAccountJwt pool defaultAppConfig databaseRuntimeEnvironmentConfig runtime
+              accountJwtCookie (accountWorkflowJwtIssuer workflow)
+                `shouldBe` accountJwtCookie issuer
+              createdAccount <- createPendingAccount accountStore defaultPendingRegistrationStoragePolicy pendingAccount
+              case createdAccount of
+                Right (PendingAccountDeliveryClaimed _) -> pure ()
+                Right _ -> expectationFailure "expected the generated runtime account to be staged"
+                Left _ -> expectationFailure "expected the runtime account store to stage the generated account"
+              savedSession <- saveAccountSession sessionStore issuedSession
+              case savedSession of
+                Right True -> pure ()
+                Right False -> expectationFailure "expected the test account session to be persisted"
+                Left _ -> expectationFailure "expected the test account session store to be available"
+              issuedToken <- issueAccountSessionJwt issuer issuedSession
+              cookie <-
+                case issuedToken of
+                  Left issueError -> error ("expected test account JWT issuance: " <> show issueError)
+                  Right token ->
+                    case HarchWeb.renderAuthenticationCookie (accountJwtCookie issuer) token of
+                      Just value -> pure value
+                      Nothing -> error "expected a renderable test account JWT cookie"
+              profileResponse <-
+                performWaiRequest
+                  (HarchWeb.toWaiApplication runtimeApplication)
+                  ((waiRequest ["profile"]) {Wai.requestHeaders = [("Cookie", TextEncoding.encodeUtf8 cookie)]})
+              Wai.responseStatus profileResponse `shouldBe` Http.status200
+
+    it "composes startup-validated account JWT admission into the runtime application" $
+      withTestAccountJwtFixture $ \runtimeEnvironmentConfig _ ->
+        let unavailableDatabaseConfig =
+              postgresTestConfig
+                { databaseHost = "127.0.0.1",
+                  databasePort = 1,
+                  databaseConnectTimeoutSeconds = 1
+                }
+            unavailableRuntimeEnvironmentConfig =
+              runtimeEnvironmentConfig
+                { databaseConfig = unavailableDatabaseConfig
+                }
+         in bracket
+              (newPostgresPool (databasePoolCapacity unavailableDatabaseConfig) unavailableDatabaseConfig)
+              closePostgresPool
+              $ \pool -> do
+                runtimeResult <- loadAccountJwtRuntime (accountJwtConfiguration unavailableRuntimeEnvironmentConfig)
+                runtime <-
+                  case runtimeResult of
+                    Right value -> pure value
+                    Left loadError -> error ("expected test account JWT runtime: " <> show loadError)
+                let issuedSession =
+                      OpaqueSession
+                        { sessionId = testSessionId,
+                          sessionPrincipal = accountId,
+                          sessionIssuedAtNanoseconds = 100,
+                          sessionExpiresAtNanoseconds = 4102444800000000000
+                        }
+                    issuer = accountJwtIssuerFromRuntime runtime
+                    runtimeApplication = buildRuntimeAppWithAccountJwt pool defaultAppConfig unavailableRuntimeEnvironmentConfig runtime
+                    signedOutLogoutRequest =
+                      case HarchWeb.decodeClientAction
+                        runtimeApplication
+                        HarchWeb.ClientActionPayload
+                          { HarchWeb.clientActionMethod = "POST",
+                            HarchWeb.clientActionPath = "/logout",
+                            HarchWeb.clientActionFields = [],
+                            HarchWeb.clientActionCsrfToken = Nothing,
+                            HarchWeb.clientActionIdempotencyKey = Nothing,
+                            HarchWeb.clientActionPayloadContext = defaultRequestContext
+                          } of
+                        HarchWeb.DecodedClientAction action ->
+                          HarchWeb.ClientActionRequest
+                            { HarchWeb.clientAction = action,
+                              HarchWeb.clientActionRequestIdempotencyKey = Nothing,
+                              HarchWeb.clientActionContext = defaultRequestContext
+                            }
+                        _ -> error "expected runtime logout action to decode"
+                signedOutLogoutResponse <- HarchWeb.handleClientAction runtimeApplication signedOutLogoutRequest
+                case signedOutLogoutResponse of
+                  Just response -> do
+                    HarchWeb.clientActionStatus response `shouldBe` Http.status200
+                    HarchWeb.clientActionHeaders response
+                      `shouldContain` [("Set-Cookie", "__Host-harch-session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict")]
+                  Nothing -> expectationFailure "expected a signed-out logout response"
+                issuedToken <- issueAccountSessionJwt issuer issuedSession
+                cookie <-
+                  case issuedToken of
+                    Left issueError -> error ("expected test account JWT issuance: " <> show issueError)
+                    Right token ->
+                      case HarchWeb.renderAuthenticationCookie (accountJwtCookie issuer) token of
+                        Just value -> pure value
+                        Nothing -> error "expected a renderable test account JWT cookie"
+                profileResponse <-
+                  performWaiRequest
+                    (HarchWeb.toWaiApplication runtimeApplication)
+                    ((waiRequest ["profile"]) {Wai.requestHeaders = [("Cookie", TextEncoding.encodeUtf8 cookie)]})
+                Wai.responseStatus profileResponse `shouldBe` Http.status503
+                readResponseBody profileResponse `shouldReturn` "Authentication is temporarily unavailable."
+
     it "selects the production and test SMTP authentication policies while constructing runtime workflows"
       $ bracket
         (newPostgresPool (databasePoolCapacity (databaseConfig defaultAppEnvironmentConfig)) (databaseConfig defaultAppEnvironmentConfig))
@@ -885,11 +1040,37 @@ spec = do
         requestPath `shouldBe` "/v1/traces"
 
   describe "run" $ do
-    it "starts the runtime server from an explicit environment and app config" $ withTestAccountJwtFixture $ \runtimeEnvironmentConfig _ ->
+    it "fails startup before allocating a listener when account JWT key material is unreadable" $
+      withSystemTempFile "web-api-runtime-output.txt" $ \_ outputHandle -> do
+        let unreadableAccountJwtConfiguration =
+              case mkAccountJwtConfiguration "https://accounts.example.test" "web-api-account" "account-key-v1" "/tmp/web-api-missing-private.jwk" "/tmp/web-api-missing-verification.jwks" "__Host-harch-session" 28800 of
+                Right configuration -> configuration
+                Left configurationError -> error ("expected a valid account JWT configuration: " <> show configurationError)
+            runtimeEnvironmentConfig =
+              defaultAppEnvironmentConfig
+                { accountJwtConfiguration = unreadableAccountJwtConfiguration
+                }
+        result <- try (runWithConfig outputHandle defaultAppConfig runtimeEnvironmentConfig) :: IO (Either IOException ())
+        hClose outputHandle
+        case result of
+          Left exception ->
+            displayException exception
+              `shouldContain` "Failed to load account JWT configuration: AccountJwtSigningJwkUnreadable"
+          Right () ->
+            expectationFailure "expected startup to reject unreadable account JWT signing key material"
+
+    it "starts the runtime server from an explicit environment and app config" $ withTestAccountJwtFixture $ \fixtureEnvironmentConfig _ ->
       withUnusedTcpEndpoint $ \unusedEndpoint ->
         withSystemTempFile "web-api-runtime-output.txt" $ \outputPath outputHandle -> do
           completionReference <- newIORef Nothing
-          let runtimeAppConfig =
+          let unavailableDatabaseConfig =
+                postgresTestConfig
+                  { databaseHost = "127.0.0.1",
+                    databasePort = 1,
+                    databaseConnectTimeoutSeconds = 1
+                  }
+              runtimeEnvironmentConfig = fixtureEnvironmentConfig {databaseConfig = unavailableDatabaseConfig}
+              runtimeAppConfig =
                 defaultAppConfig
                   { listenerConfigs =
                       [ ListenerConfig
@@ -901,11 +1082,46 @@ spec = do
                           }
                       ]
                   }
+          runtimeResult <- loadAccountJwtRuntime (accountJwtConfiguration runtimeEnvironmentConfig)
+          runtime <-
+            case runtimeResult of
+              Right value -> pure value
+              Left loadError -> error ("expected test account JWT runtime: " <> show loadError)
+          runtimeAccountId <-
+            case Account.mkAccountId "runtime-server-account" of
+              Just value -> pure value
+              Nothing -> error "expected a valid runtime-server account identifier"
+          runtimeSessionId <- generateSessionId
+          let runtimeIssuer = accountJwtIssuerFromRuntime runtime
+              runtimeSession =
+                OpaqueSession
+                  { sessionId = runtimeSessionId,
+                    sessionPrincipal = runtimeAccountId,
+                    sessionIssuedAtNanoseconds = 100,
+                    sessionExpiresAtNanoseconds = 4102444800000000000
+                  }
+          issuedToken <- issueAccountSessionJwt runtimeIssuer runtimeSession
+          runtimeCookie <-
+            case issuedToken of
+              Left issueError -> error ("expected test account JWT issuance: " <> show issueError)
+              Right token ->
+                case HarchWeb.renderAuthenticationCookie (accountJwtCookie runtimeIssuer) token of
+                  Just value -> pure value
+                  Nothing -> error "expected a renderable runtime JWT cookie"
           serverThreadId <- forkIO $ do
             result <- try (runWithConfig outputHandle runtimeAppConfig runtimeEnvironmentConfig) :: IO (Either SomeException ())
             writeIORef completionReference (Just result)
           responseText <- waitForRuntimeServerResponse completionReference (tcpEndpointPort unusedEndpoint) "/api/status"
           responseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
+          profileResponseText <-
+            waitForRuntimeServerResponseWithHeaders
+              completionReference
+              (tcpEndpointPort unusedEndpoint)
+              "/profile"
+              [("Cookie", TextEncoding.encodeUtf8 runtimeCookie)]
+          -- The signature has already been admitted when this controlled
+          -- unavailable-session-store rail is selected.
+          profileResponseText `shouldBe` "Authentication is temporarily unavailable."
           completionResult <- readIORef completionReference
           completionResult `shouldSatisfy` isNothing
           killThread serverThreadId

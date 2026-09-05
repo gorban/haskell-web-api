@@ -235,6 +235,47 @@ multi-profile OAuth semantics. AHI-4D owns those authentication profiles and
 must extend this one guard boundary rather than introduce a `web-api`-local
 extractor.
 
+### Decision record — application-owned JWT key-pair startup proof (AHI-4C follow-up, 2026-09-04)
+
+**Decision: retain generic signing and verification in Harch, but require
+`web-api` startup to prove its configured active RS256 signing key verifies
+through its configured JWK set.** Harch cannot know which private key and
+verification set an application intends to pair, so putting that deployment
+check in the framework would either invent application configuration ownership
+or make every generic JWT caller supply a speculative startup policy. The
+application adapter already owns both files and their active key ID, making it
+the narrowest correct boundary.
+
+After structural JWK validation, `web-api` signs a claim-free RS256 proof with
+the active key and verifies it with Harch's exact RS256 allow-list and the
+configured set before constructing the runtime. It reports an unusable signer
+or a non-matching verification set with stable startup failure classes. The
+focused test covers same-`kid`, different-RSA-key material, while Harch retains
+its own protocol and cryptographic test suite. This catches structurally valid
+but operationally broken deployment keys before any login listener accepts
+traffic, without adding a second JWT implementation.
+
+### Decision record — pluggable application JWT signer (AHI-4C follow-up, 2026-09-04)
+
+**Decision: make compact-JWT signing a small Harch capability, and inject its
+application adapter while constructing the account-JWT runtime.** A signer is
+the one operation needed after claims and protected headers are already
+declared: it accepts those values and returns either the opaque compact proof
+or its application-selected failure. Harch supplies the JOSE adapter and a
+pure error mapper; it does not define deployment key loading, KMS policy, or
+application failure vocabulary. This is more pluggable than making
+`web-api`'s JOSE call a fixed implementation detail, while preserving a
+single generic cryptographic boundary.
+
+`web-api` builds the selected signer only after structural active-key checks,
+then uses that exact capability for the startup sign-and-verify proof and all
+session issuance. A custom KMS/HSM signer must therefore produce a proof the
+configured verifier accepts before the listener starts; a later expected
+signing failure remains `AccountJwtIssueFailed` at the normal issuance rail.
+The focused test proves both properties directly. We reject a test-only key
+injection point or a startup-proof bypass: either would make a production
+alternate signer unverified and create a second authentication path.
+
 ### Decision record — declared action-owner route for pre-decode guards (AHI-4C, 2026-09-04)
 
 **Decision: extend the existing `ActionCodec` and `ApplicationModule`
@@ -3065,6 +3106,24 @@ explicit application/workflow builder instead. This closes a capability gap at
 the constructor boundary rather than relying on callers to remember which
 otherwise-similar runtime constructor is safe to expose.
 
+### Decision record — explicit optional authorization policy (AHI-4C follow-up, 2026-09-04)
+
+**Decision: represent authorization-after-authentication as a sum selected by
+the application, rather than requiring authentication-only applications to
+invent impossible `Void` callbacks.** The existing scoped authorization
+interpreter stays intact in `AuthenticationWithAuthorization`. An
+`AuthenticationWithoutAuthorization` pipeline carries the application's
+explicit unavailable response and fails closed if a `RequireAuthorized` route
+is attached later. Authentication-only routes still establish their principal
+on the existing single guard rail.
+
+The rejected alternative was a second, application-specific authentication
+guard or a permissive default authorization implementation. The former would
+duplicate proof extraction and principal establishment; the latter could turn a
+future scoped endpoint into an authorization bypass. Making the policy shape
+explicit preserves pluggability for Harch applications while keeping a missing
+scoped policy observable as a safe 503 response.
+
 `ApplicationModule` also carries an immutable construction-owned mount chain.
 The root executor attaches it, alongside the declared endpoint/template and
 selected locale, to both its security-event sink and the `RequestContext`
@@ -3087,6 +3146,25 @@ than carrying an untyped diagnostic label through a successful construction.
 The helper is deliberately narrow; general-purpose module constructors retain
 their `Either` results so runtime and caller-provided declarations keep their
 typed failure paths.
+
+### Decision record — fixed validated authentication declarations (AHI-4C coverage follow-up, 2026-09-04)
+
+**Decision: distinguish authored authentication declarations from runtime
+configuration with named `required...OrDie` boundaries.** A fixed host-only
+cookie policy, positive proof limit, or low-cardinality failure code is owned
+by source and has already been selected by the application; its rejection is a
+programming defect. Harch's named helpers fail immediately with the declaration
+diagnostic, and focused tests exercise that defect path. Their dynamic
+`mk...` counterparts remain `Either`-returning constructors, so environment,
+deployment, and request-derived values continue through an ordinary explicit
+validation rail.
+
+The rejected alternative was replacing these branches with an HLint/HPC
+suppression, a fake strictness annotation, or an untested `fromJust` at each
+application call site. Those obscure why an error is exceptional and leave the
+framework without a tested declaration boundary. The helpers extend Harch's
+existing `requiredSafeUrlOrDie`/`requiredAccessibleNameOrDie` convention; they
+do not authorize applications to convert untrusted data into a crash.
 
 ## Example taxonomy
 

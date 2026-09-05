@@ -1,7 +1,9 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {-# SPEC #-}
 
+import Control.Exception (ErrorCall (..), evaluate)
 import Data.ByteString qualified as ByteString
 import Data.Either (fromRight)
 import Data.IORef (modifyIORef', newIORef, readIORef)
@@ -80,6 +82,17 @@ spec = do
                  mkSecurityFailureCode "Bad.Code" `shouldBe` Left "security failure code has invalid characters"
                ]
         )
+
+    it "raises only for invalid static authentication declarations" $ do
+      evaluate (requiredAuthenticationCookiePolicyOrDie "session" 28800 `seq` ())
+        `shouldThrow` \case
+          ErrorCall message -> "invalid authentication cookie declaration" `Text.isInfixOf` Text.pack message
+      evaluate (requiredAuthenticationProofMaximumBytesOrDie 0 `seq` ())
+        `shouldThrow` \case
+          ErrorCall message -> "invalid authentication proof limit declaration" `Text.isInfixOf` Text.pack message
+      evaluate (requiredSecurityFailureCodeOrDie "Bad.Code" `seq` ())
+        `shouldThrow` \case
+          ErrorCall message -> "invalid security failure-code declaration" `Text.isInfixOf` Text.pack message
 
     it "renders and clears only host-only safe JWT cookies" $ do
       let policy = fromRight (error "expected authentication cookie policy") (mkAuthenticationCookiePolicy "__Host-account-session" 28800)
@@ -173,20 +186,23 @@ spec = do
                 authenticationPrincipalEstablisher = PrincipalEstablisher $ \verified -> do
                   record verified
                   pure (Right "ada"),
-                authenticationAuthorizationInterpreter =
-                  AuthorizationInterpreter $ \principal requirement ->
-                    if principal == "ada" && requirement == RequireAllScopes ("reader" :| [])
-                      then Authorized
-                      else Forbidden MissingRequiredScopes,
-                authenticationDenialFailureCode = \MissingRequiredScopes -> requiredFailureCode "authorization.denied",
+                authenticationAuthorization =
+                  AuthenticationWithAuthorization
+                    ( AuthorizationInterpreter $ \principal requirement ->
+                        if principal == "ada" && requirement == RequireAllScopes ("reader" :| [])
+                          then Authorized
+                          else Forbidden MissingRequiredScopes
+                    )
+                    (\MissingRequiredScopes -> requiredFailureCode "authorization.denied")
+                    ( \receivedRequest denial ->
+                        case (endpointAccess (endpointMetadata receivedRequest), denial) of
+                          (RequireAuthorized _, MissingRequiredScopes) -> NonPageBodyResponse response403
+                          _ -> NonPageBodyResponse response503
+                    ),
                 authenticationAttachPrincipal = \principal requestContextValue -> requestContextValue {requestLanguage = principal},
                 authenticationChallenge = \receivedRequest failure ->
                   case (endpointAccess (endpointMetadata receivedRequest), failure) of
                     (RequireAuthenticated, ProofMissing) -> NonPageBodyResponse response401
-                    _ -> NonPageBodyResponse response503,
-                authenticationForbidden = \receivedRequest denial ->
-                  case (endpointAccess (endpointMetadata receivedRequest), denial) of
-                    (RequireAuthorized _, MissingRequiredScopes) -> NonPageBodyResponse response403
                     _ -> NonPageBodyResponse response503,
                 authenticationUnavailable = \receivedRequest dependency ->
                   if endpointAccess (endpointMetadata receivedRequest) == RequireAuthenticated
@@ -209,6 +225,11 @@ spec = do
       request <- newIORef (endpointRequest AllowUnauthenticated []) >>= readIORef
       runAuthenticationPipeline pipeline request
         `shouldReturn` ContinueEndpoint (defaultContext {requestLanguage = "ada"})
+
+    it "fails closed when an authentication-only pipeline is attached to a scoped endpoint" $ do
+      let pipeline = authenticationOnlyPipeline (AuthenticationProofExtractor (const (Right (Just "proof")))) (const (pure (Right "verified"))) (const (pure (Right "ada")))
+      runAuthenticationPipeline pipeline (authenticationOnlyEndpointRequest (RequireAuthorized ()) [])
+        `shouldReturn` HaltEndpoint (NonPageBodyResponse (responseBodyWith Http.status503 "Authentication unavailable for en"))
 
     it "continues anonymous endpoints without leaking presented-proof failure" $ do
       let rejected = mkProofRejection (requiredFailureCode "proof.rejected")
@@ -389,16 +410,12 @@ spec = do
           AuthenticationProofExtractor extractor = authenticationProofExtractor pipeline
           AuthenticationProofVerifier verifier = authenticationProofVerifier pipeline
           PrincipalEstablisher establisher = authenticationPrincipalEstablisher pipeline
-          AuthorizationInterpreter authorizer = authenticationAuthorizationInterpreter pipeline
       expectAll
         ( (extractor request `shouldBe` Right (Just "proof"))
             :| [ verifier "proof" `shouldReturn` Right "verified",
                  establisher "verified" `shouldReturn` Right "ada",
-                 authorizer "ada" (RequireAllScopes ("reader" :| [])) `shouldBe` Authorized,
-                 authenticationDenialFailureCode pipeline MissingRequiredScopes `shouldBe` requiredFailureCode "authorization.denied",
                  authenticationAttachPrincipal pipeline "ada" defaultContext `shouldBe` defaultContext {requestLanguage = "ada"},
                  authenticationChallenge pipeline request ProofMissing `shouldBe` NonPageBodyResponse response401,
-                 authenticationForbidden pipeline request MissingRequiredScopes `shouldBe` NonPageBodyResponse response403,
                  authenticationUnavailable pipeline request (mkAuthenticationDependency (requiredFailureCode "identity.unavailable")) `shouldBe` NonPageBodyResponse response503
                ]
         )
@@ -434,17 +451,46 @@ endpointRequest access headers =
       endpointDispatchKind = EndpointMatched
     }
 
+authenticationOnlyEndpointRequest :: AccessRequirement () -> Http.RequestHeaders -> EndpointRequest TestRoute TestContext ()
+authenticationOnlyEndpointRequest access headers =
+  EndpointRequest
+    { endpointWaiRequest = Wai.defaultRequest {Wai.requestHeaders = headers},
+      endpointRouteRequest = RouteRequest DataRoute defaultContext,
+      endpointMetadata = mkEndpointMetadata (requiredEndpointName "test.authentication") (requiredRouteTemplate "/authentication") HtmlEndpoint access,
+      endpointSecurityEventSink = Nothing,
+      endpointDispatchKind = EndpointMatched
+    }
+
 testPipeline :: AuthenticationProofExtractor TestRoute TestContext (ScopeRequirement Text) Text -> (Text -> IO (Either ProofVerificationFailure Text)) -> (Text -> IO (Either PrincipalEstablishmentFailure Text)) -> AuthenticationPipeline TestRoute TestContext (ScopeRequirement Text) Text Text Text ScopeAuthorizationDenial
 testPipeline extractor verifier establisher =
   AuthenticationPipeline
     { authenticationProofExtractor = extractor,
       authenticationProofVerifier = AuthenticationProofVerifier verifier,
       authenticationPrincipalEstablisher = PrincipalEstablisher establisher,
-      authenticationAuthorizationInterpreter = scopeAuthorizationInterpreter (const ["reader"]),
-      authenticationDenialFailureCode = const (requiredFailureCode "authorization.denied"),
+      authenticationAuthorization =
+        AuthenticationWithAuthorization
+          (scopeAuthorizationInterpreter (const ["reader"]))
+          (const (requiredFailureCode "authorization.denied"))
+          (\_ _ -> NonPageBodyResponse response403),
       authenticationAttachPrincipal = \principal requestContextValue -> requestContextValue {requestLanguage = principal},
       authenticationChallenge = \_ _ -> NonPageBodyResponse response401,
-      authenticationForbidden = \_ _ -> NonPageBodyResponse response403,
+      authenticationUnavailable = \_ _ -> NonPageBodyResponse response503
+    }
+
+authenticationOnlyPipeline :: AuthenticationProofExtractor TestRoute TestContext () Text -> (Text -> IO (Either ProofVerificationFailure Text)) -> (Text -> IO (Either PrincipalEstablishmentFailure Text)) -> AuthenticationPipeline TestRoute TestContext () Text Text Text ()
+authenticationOnlyPipeline extractor verifier establisher =
+  AuthenticationPipeline
+    { authenticationProofExtractor = extractor,
+      authenticationProofVerifier = AuthenticationProofVerifier verifier,
+      authenticationPrincipalEstablisher = PrincipalEstablisher establisher,
+      authenticationAuthorization =
+        AuthenticationWithoutAuthorization
+          ( \request ->
+              NonPageBodyResponse
+                (responseBodyWith Http.status503 ("Authentication unavailable for " <> requestLanguage (requestContext (endpointRouteRequest request))))
+          ),
+      authenticationAttachPrincipal = \principal requestContextValue -> requestContextValue {requestLanguage = principal},
+      authenticationChallenge = \_ _ -> NonPageBodyResponse response401,
       authenticationUnavailable = \_ _ -> NonPageBodyResponse response503
     }
 

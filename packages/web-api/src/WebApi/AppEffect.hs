@@ -54,8 +54,11 @@ data AccountWorkflow = AccountWorkflow
     accountWorkflowCsrfSigningKeyring :: SignedCsrfKeyring,
     -- | The only credential-issuance capability available to login. The
     -- workflow receives neither JWK files nor verification keys, so it cannot
-    -- accidentally grow a second authentication implementation.
-    accountWorkflowJwtIssuer :: AccountJwtIssuer,
+    -- accidentally grow a second authentication implementation.  This is
+    -- strict: runtime composition constructs the selected, startup-validated
+    -- issuance capability before the application begins accepting requests,
+    -- rather than deferring that security dependency until a later login.
+    accountWorkflowJwtIssuer :: !AccountJwtIssuer,
     -- | Derives the RFC TOTP Unix-second counter from the same durable
     -- instant read for this account operation.  This is pure deliberately:
     -- a second clock read could cross an epoch boundary independently.

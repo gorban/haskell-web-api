@@ -10,6 +10,7 @@ import Crypto.JWT qualified as Jwt
 import Data.Either (fromRight)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
+import Data.Text qualified as Text
 import HarchWeb
 
 spec =
@@ -58,6 +59,24 @@ spec =
                  hasDerivedContract [claimError] `shouldBe` True
                ]
         )
+
+    it "adapts signer failures without changing an issued compact proof" $ do
+      let header = JoseJws.newJWSHeaderProtected JwaJws.HS256
+          signingFailure = ("signing failed" :: Text)
+          rejectedSigner = JwtSigner (\_ _ -> pure (Left ("kms unavailable" :: Text)))
+      rejected <- signJwt (mapJwtSignerError (const signingFailure) rejectedSigner) header Jwt.emptyClaimsSet
+      case rejected of
+        Left failure -> failure `shouldBe` signingFailure
+        Right _ -> expectationFailure "expected the adapted signer to retain its failure"
+      signingKey <- JoseJwk.genJWK (JwaJwk.OctGenParam 64)
+      issued <- signJwt (mapJwtSignerError (const signingFailure) (joseJwtSigner signingKey)) header Jwt.emptyClaimsSet
+      case issued of
+        Right token ->
+          verifyAuthenticationProof
+            (jwtProofVerifier validationSettings (mkJwtAllowedAlgorithms (JwtHs256 :| [])) (JoseJwk.JWKSet [signingKey]) (Right . show))
+            token
+            `shouldReturn` Right (show Jwt.emptyClaimsSet)
+        Left failure -> expectationFailure ("expected the adapted JOSE signer to retain its proof: " <> Text.unpack failure)
 
 assertAcceptedAndRejected :: JwtAlgorithm -> JwaJws.Alg -> JWK -> IO ()
 assertAcceptedAndRejected algorithm joseAlgorithm key = do

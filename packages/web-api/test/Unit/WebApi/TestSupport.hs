@@ -102,6 +102,7 @@ module Unit.WebApi.TestSupport
     readLoopbackHttpResponse,
     readLoopbackHttpResponseBytes,
     waitForRuntimeServerResponse,
+    waitForRuntimeServerResponseWithHeaders,
     waitForRuntimeServerExit,
     buildHttpRequest,
     readAllSocketChunks,
@@ -1101,10 +1102,14 @@ readLoopbackHttpResponse port path = do
   pure (TextEncoding.decodeUtf8 responseBytes)
 
 readLoopbackHttpResponseBytes :: Int -> Text -> IO ByteString.ByteString
-readLoopbackHttpResponseBytes port path = do
+readLoopbackHttpResponseBytes port path =
+  readLoopbackHttpResponseBytesWithHeaders port path []
+
+readLoopbackHttpResponseBytesWithHeaders :: Int -> Text -> [(ByteString.ByteString, ByteString.ByteString)] -> IO ByteString.ByteString
+readLoopbackHttpResponseBytesWithHeaders port path requestHeaders = do
   clientSocket <- socket AF_INET Stream defaultProtocol
   connect clientSocket
-  SocketByteString.sendAll clientSocket (buildHttpRequest path)
+  SocketByteString.sendAll clientSocket (buildHttpRequestWithHeaders path requestHeaders)
   responseBytes <- readAllSocketChunks clientSocket
   close clientSocket
   pure (extractHttpBody responseBytes)
@@ -1114,6 +1119,10 @@ readLoopbackHttpResponseBytes port path = do
 
 waitForRuntimeServerResponse :: IORef (Maybe (Either SomeException ())) -> Int -> Text -> IO Text
 waitForRuntimeServerResponse completionReference port path =
+  waitForRuntimeServerResponseWithHeaders completionReference port path []
+
+waitForRuntimeServerResponseWithHeaders :: IORef (Maybe (Either SomeException ())) -> Int -> Text -> [(ByteString.ByteString, ByteString.ByteString)] -> IO Text
+waitForRuntimeServerResponseWithHeaders completionReference port path requestHeaders =
   waitForResponseAttempts (500 :: Int)
   where
     waitForResponseAttempts remainingAttempts = do
@@ -1126,7 +1135,7 @@ waitForRuntimeServerResponse completionReference port path =
           expectationFailure "expected runtime server to remain running, but it exited early"
             >> pure Text.empty
         Nothing -> do
-          responseResult <- try (readLoopbackHttpResponse port path) :: IO (Either IOError Text)
+          responseResult <- try (TextEncoding.decodeUtf8 <$> readLoopbackHttpResponseBytesWithHeaders port path requestHeaders) :: IO (Either IOError Text)
           case responseResult of
             Right responseText -> pure responseText
             Left _
@@ -1153,11 +1162,19 @@ waitForRuntimeServerExit completionReference =
               expectationFailure "expected runtime server to stop after being signalled"
 
 buildHttpRequest :: Text -> ByteString.ByteString
-buildHttpRequest path =
-  ByteStringChar8.pack $
-    "GET "
-      <> Text.unpack path
-      <> " HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+buildHttpRequest path = buildHttpRequestWithHeaders path []
+
+buildHttpRequestWithHeaders :: Text -> [(ByteString.ByteString, ByteString.ByteString)] -> ByteString.ByteString
+buildHttpRequestWithHeaders path requestHeaders =
+  ByteStringChar8.pack
+    ( "GET "
+        <> Text.unpack path
+        <> " HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+    )
+    <> foldMap renderHeader requestHeaders
+    <> "Connection: close\r\n\r\n"
+  where
+    renderHeader (headerName, headerValue) = headerName <> ": " <> headerValue <> "\r\n"
 
 readAllSocketChunks :: NetworkSocket.Socket -> IO ByteString.ByteString
 readAllSocketChunks clientSocket = do

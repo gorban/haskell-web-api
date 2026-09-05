@@ -7,8 +7,27 @@
 -- module owns all application meaning: startup JWK files, issuer/audience,
 -- minimal account/session claims, and the durable-session lookup which makes
 -- logout revocation effective before token expiry.
+--
+-- Decision (AHI-4C follow-up, 2026-09-04): startup proves the configured
+-- active private key can issue an RS256 compact proof that the configured
+-- verification JWK set accepts. Harch owns the generic JOSE operations, while
+-- this application-owned adapter alone knows the intended signing/verification
+-- pairing. This catches mismatched or structurally valid but cryptographically
+-- unusable deployment keys before a listener accepts login traffic; it does
+-- not create a second authentication or JWT implementation.
+--
+-- Decision (AHI-4C follow-up, 2026-09-04): the selected signing capability is
+-- constructed at startup from the validated active key, then retained by the
+-- runtime behind Harch's 'HarchWeb.JwtSigner' boundary. A non-JOSE deployment
+-- may supply that constructor, but it must pass the same startup proof and
+-- retains its ordinary session-issuance error rail. This keeps signing
+-- pluggable without giving application routes a second cryptographic path.
+-- Account identifiers use Harch's ASCII opaque-token alphabet, which excludes
+-- @:@; they therefore occupy the JWT subject's explicit string form rather
+-- than being dynamically re-parsed as a possible URI.
 module WebApi.AccountJwt
   ( AccountJwtConfiguration,
+    AccountJwtSignerBuilder,
     AccountJwtConfigurationError (..),
     AccountJwtIssueError (..),
     AccountJwtIssuer (..),
@@ -17,13 +36,16 @@ module WebApi.AccountJwt
     accountJwtAuthenticationPipeline,
     accountJwtIssuerFromRuntime,
     loadAccountJwtRuntime,
+    loadAccountJwtRuntimeWithSigner,
     mkAccountJwtConfiguration,
     unavailableAccountJwtIssuer,
   )
 where
 
 import Control.Exception (IOException, try)
-import Control.Lens (matching, preview, (&), (.~), (?~), (^.))
+import Control.Lens (matching, preview, review, (&), (.~), (?~), (^.))
+import Control.Monad.Except (ExceptT (..), runExceptT)
+import Core.Control.Error (liftEitherWith)
 import Crypto.JOSE.Header (HeaderParam (..), RequiredProtection (..))
 import Crypto.JOSE.JWA.JWK qualified as JwaJwk
 import Crypto.JOSE.JWA.JWS qualified as JwaJws
@@ -38,7 +60,6 @@ import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
-import Data.Void (Void, absurd)
 import Data.Word (Word64)
 import HarchWeb qualified
 import HarchWeb.Account qualified as Account
@@ -46,6 +67,7 @@ import HarchWeb.Session (OpaqueSession (..), SessionId, mkSessionId)
 import HarchWeb.Session qualified as Session
 import HarchWeb.Time (UnixTimeNanoseconds, unixTimeNanosecondsValue)
 import Network.HTTP.Types qualified as Http
+import Text.Show (showListWith)
 import WebApi.AccountPrincipal (AccountPrincipal, mkAccountPrincipal)
 import WebApi.Route (AppRequestContext (..), AppRoute (LoginRoute))
 import WebApi.Session (AccountSessionStore (..))
@@ -69,20 +91,23 @@ instance Eq AccountJwtConfiguration where
       && accountJwtCookiePolicy left == accountJwtCookiePolicy right
 
 instance Show AccountJwtConfiguration where
-  show configuration =
-    "AccountJwtConfiguration {accountJwtIssuerText = "
-      <> show (validatedStringOrUriText (accountJwtIssuer configuration))
-      <> ", accountJwtAudienceText = "
-      <> show (validatedStringOrUriText (accountJwtAudience configuration))
-      <> ", accountJwtActiveKeyId = "
-      <> show (accountJwtActiveKeyId configuration)
-      <> ", accountJwtSigningJwkFile = "
-      <> show (accountJwtSigningJwkFile configuration)
-      <> ", accountJwtVerificationJwkSetFile = "
-      <> show (accountJwtVerificationJwkSetFile configuration)
-      <> ", accountJwtCookiePolicy = "
-      <> show (accountJwtCookiePolicy configuration)
-      <> "}"
+  showsPrec depth configuration =
+    showParen (depth > 10) $
+      showString "AccountJwtConfiguration {accountJwtIssuerText = "
+        . shows (validatedStringOrUriText (accountJwtIssuer configuration))
+        . showString ", accountJwtAudienceText = "
+        . shows (validatedStringOrUriText (accountJwtAudience configuration))
+        . showString ", accountJwtActiveKeyId = "
+        . shows (accountJwtActiveKeyId configuration)
+        . showString ", accountJwtSigningJwkFile = "
+        . shows (accountJwtSigningJwkFile configuration)
+        . showString ", accountJwtVerificationJwkSetFile = "
+        . shows (accountJwtVerificationJwkSetFile configuration)
+        . showString ", accountJwtCookiePolicy = "
+        . shows (accountJwtCookiePolicy configuration)
+        . showChar '}'
+
+  showList = showListWith shows
 
 data ValidatedStringOrUri = ValidatedStringOrUri
   { validatedStringOrUriText :: Text,
@@ -110,6 +135,8 @@ data AccountJwtLoadError
   | AccountJwtVerificationKeyMissing
   | AccountJwtSigningKeyNotRsaPrivate
   | AccountJwtVerificationKeyNotRsa
+  | AccountJwtSigningKeyUnusable
+  | AccountJwtVerificationKeyDoesNotMatchSigningKey
   deriving (Eq, Show)
 
 data AccountJwtIssueError = AccountJwtIssueFailed
@@ -117,14 +144,18 @@ data AccountJwtIssueError = AccountJwtIssueFailed
 
 data AccountJwtRuntime = AccountJwtRuntime
   { runtimeAccountJwtConfiguration :: AccountJwtConfiguration,
-    runtimeAccountJwtSigningKey :: HarchWeb.JWK,
-    runtimeAccountJwtVerificationKeys :: HarchWeb.JWKSet
+    runtimeAccountJwtVerificationKeys :: HarchWeb.JWKSet,
+    runtimeAccountJwtSigner :: HarchWeb.JwtSigner AccountJwtIssueError Jwt.ClaimsSet
   }
+
+type AccountJwtSignerBuilder = HarchWeb.JWK -> HarchWeb.JwtSigner AccountJwtIssueError Jwt.ClaimsSet
 
 -- | Never show an in-memory signing key through a failed assertion or an
 -- application startup exception.
 instance Show AccountJwtRuntime where
-  show _ = "AccountJwtRuntime <redacted>"
+  showsPrec depth _ = showParen (depth > 10) (showString "AccountJwtRuntime <redacted>")
+
+  showList = showListWith shows
 
 -- | The small account-workflow capability needed after durable session
 -- creation. Keeping it distinct from 'AccountJwtRuntime' means a workflow
@@ -175,24 +206,29 @@ mkAccountJwtConfiguration issuer audience activeKeyId signingJwkFile verificatio
       | otherwise = Right value
 
 loadAccountJwtRuntime :: AccountJwtConfiguration -> IO (Either AccountJwtLoadError AccountJwtRuntime)
-loadAccountJwtRuntime configuration = do
-  signingKeyResult <- readJwk (accountJwtSigningJwkFile configuration)
-  verificationKeysResult <- readJwkSet (accountJwtVerificationJwkSetFile configuration)
-  -- Force the complete startup validation rail before constructing a runtime.
-  -- Binding a successful @()@ result without this case would be lazy enough to
-  -- defer key compatibility checks until an unrelated later use.
-  pure $ do
-    signingKey <- signingKeyResult
-    verificationKeys <- verificationKeysResult
-    case validateRuntimeKeys configuration signingKey verificationKeys of
-      Left failure -> Left failure
-      Right () ->
-        Right
-          AccountJwtRuntime
-            { runtimeAccountJwtConfiguration = configuration,
-              runtimeAccountJwtSigningKey = signingKey,
-              runtimeAccountJwtVerificationKeys = verificationKeys
-            }
+loadAccountJwtRuntime = loadAccountJwtRuntimeWithSigner defaultAccountJwtSigner
+
+loadAccountJwtRuntimeWithSigner :: AccountJwtSignerBuilder -> AccountJwtConfiguration -> IO (Either AccountJwtLoadError AccountJwtRuntime)
+loadAccountJwtRuntimeWithSigner signerBuilder configuration = runExceptT $ do
+  signingKey <- ExceptT (readJwk (accountJwtSigningJwkFile configuration))
+  verificationKeys <- ExceptT (readJwkSet (accountJwtVerificationJwkSetFile configuration))
+  -- The structural rail runs before the cryptographic round trip, so malformed
+  -- key shapes fail with their precise configuration classification.
+  (structurallyValidSigningKey, structurallyValidVerificationKeys) <-
+    ExceptT (pure (validateRuntimeKeys configuration signingKey verificationKeys))
+  let signer = signerBuilder structurallyValidSigningKey
+  validatedVerificationKeys <-
+    liftEitherWith id (validateRuntimeKeyPair configuration signer structurallyValidVerificationKeys)
+  pure
+    AccountJwtRuntime
+      { runtimeAccountJwtConfiguration = configuration,
+        runtimeAccountJwtVerificationKeys = validatedVerificationKeys,
+        runtimeAccountJwtSigner = signer
+      }
+
+defaultAccountJwtSigner :: AccountJwtSignerBuilder
+defaultAccountJwtSigner signingKey =
+  HarchWeb.mapJwtSignerError (const AccountJwtIssueFailed) (HarchWeb.joseJwtSigner signingKey)
 
 readJwk :: FilePath -> IO (Either AccountJwtLoadError HarchWeb.JWK)
 readJwk path = do
@@ -216,20 +252,51 @@ readJwkSet path = do
           Left _ -> Left AccountJwtVerificationJwkSetMalformed
           Right keys -> Right keys
 
-validateRuntimeKeys :: AccountJwtConfiguration -> HarchWeb.JWK -> HarchWeb.JWKSet -> Either AccountJwtLoadError ()
-validateRuntimeKeys configuration signingKey (JoseJwk.JWKSet verificationKeys) = do
-  if signingKey ^. JoseJwk.jwkKid == Just (accountJwtActiveKeyId configuration)
-    then Right ()
-    else Left AccountJwtSigningKeyIdMismatch
-  if rsaPrivateJwk signingKey
-    then Right ()
-    else Left AccountJwtSigningKeyNotRsaPrivate
-  case find ((== Just (accountJwtActiveKeyId configuration)) . (^. JoseJwk.jwkKid)) verificationKeys of
-    Nothing -> Left AccountJwtVerificationKeyMissing
-    Just verificationKey ->
-      if rsaJwk verificationKey
-        then Right ()
-        else Left AccountJwtVerificationKeyNotRsa
+validateRuntimeKeys :: AccountJwtConfiguration -> HarchWeb.JWK -> HarchWeb.JWKSet -> Either AccountJwtLoadError (HarchWeb.JWK, HarchWeb.JWKSet)
+validateRuntimeKeys configuration signingKey verificationKeys@(JoseJwk.JWKSet keys)
+  | signingKey ^. JoseJwk.jwkKid /= Just (accountJwtActiveKeyId configuration) = Left AccountJwtSigningKeyIdMismatch
+  | not (rsaPrivateJwk signingKey) = Left AccountJwtSigningKeyNotRsaPrivate
+  | otherwise =
+      case find ((== Just (accountJwtActiveKeyId configuration)) . (^. JoseJwk.jwkKid)) keys of
+        Nothing -> Left AccountJwtVerificationKeyMissing
+        Just verificationKey
+          | rsaJwk verificationKey -> Right (signingKey, verificationKeys)
+          | otherwise -> Left AccountJwtVerificationKeyNotRsa
+
+-- | Verify the concrete deployment-owned key pairing with Harch's selected
+-- RS256 verifier before constructing a runtime. This is intentionally here,
+-- not in Harch: only the application chooses the active signing key and the
+-- compatible verification set.
+validateRuntimeKeyPair :: AccountJwtConfiguration -> HarchWeb.JwtSigner AccountJwtIssueError Jwt.ClaimsSet -> HarchWeb.JWKSet -> IO (Either AccountJwtLoadError HarchWeb.JWKSet)
+validateRuntimeKeyPair configuration signer verificationKeys = do
+  issued <- HarchWeb.signJwt signer validationHeader validationClaims
+  case issued of
+    Left AccountJwtIssueFailed -> pure (Left AccountJwtSigningKeyUnusable)
+    Right proof -> do
+      let HarchWeb.AuthenticationProofVerifier verifyProof =
+            HarchWeb.jwtProofVerifier
+              (Jwt.defaultJWTValidationSettings (const True))
+              (HarchWeb.mkJwtAllowedAlgorithms (HarchWeb.JwtRs256 :| []))
+              verificationKeys
+              Right
+      verified <- verifyProof proof
+      pure $
+        case verified of
+          Left _ -> Left AccountJwtVerificationKeyDoesNotMatchSigningKey
+          Right _ -> Right verificationKeys
+  where
+    validationHeader :: HarchWeb.JWSHeader HarchWeb.RequiredProtection
+    validationHeader =
+      JoseJws.newJWSHeaderProtected JwaJws.RS256
+        & JoseJws.kid ?~ HeaderParam RequiredProtection (accountJwtActiveKeyId configuration)
+    -- Include an ordinary registered claim so this startup proof exercises the
+    -- verifier's claim-validation callback as well as its RS256 key pairing.
+    -- The callback deliberately accepts the probe's application-independent
+    -- audience; request authentication below applies the configured audience.
+    validationClaims :: Jwt.ClaimsSet
+    validationClaims =
+      Jwt.emptyClaimsSet
+        & Jwt.claimAud ?~ Jwt.Audience [validatedStringOrUriValue (accountJwtAudience configuration)]
 
 rsaPrivateJwk :: HarchWeb.JWK -> Bool
 rsaPrivateJwk key =
@@ -253,15 +320,11 @@ accountJwtIssuerFromRuntime runtime =
     configuration = runtimeAccountJwtConfiguration runtime
 
 issueJwtForSession :: AccountJwtRuntime -> OpaqueSession Account.AccountId -> IO (Either AccountJwtIssueError HarchWeb.EncodedJwt)
-issueJwtForSession runtime session = do
-  result <- HarchWeb.issueJwt signingKey header (claimsForSession configuration session)
-  pure $
-    case result of
-      Left _ -> Left AccountJwtIssueFailed
-      Right token -> Right token
+issueJwtForSession runtime session =
+  HarchWeb.signJwt signer header (claimsForSession configuration session)
   where
     configuration = runtimeAccountJwtConfiguration runtime
-    signingKey = runtimeAccountJwtSigningKey runtime
+    signer = runtimeAccountJwtSigner runtime
     header :: HarchWeb.JWSHeader HarchWeb.RequiredProtection
     header =
       JoseJws.newJWSHeaderProtected JwaJws.RS256
@@ -279,10 +342,7 @@ claimsForSession configuration session =
     & Jwt.claimJti ?~ Session.sessionIdText (sessionId session)
 
 accountIdStringOrUri :: Account.AccountId -> Jwt.StringOrURI
-accountIdStringOrUri accountId =
-  case matching Jwt.stringOrUri (Text.unpack (Account.accountIdText accountId)) of
-    Right parsedValue -> parsedValue
-    Left _ -> error "validated account identifier cannot be represented as a JWT StringOrURI"
+accountIdStringOrUri = review Jwt.string . Account.accountIdText
 
 numericDate :: UnixTimeNanoseconds -> Jwt.NumericDate
 numericDate instant =
@@ -295,7 +355,7 @@ numericDate instant =
 -- runtime. A successful signature is only an intermediate fact: this
 -- establishment step resolves the current durable session and checks both its
 -- subject and expiration before a principal reaches the request context.
-accountJwtAuthenticationPipeline :: AccountSessionStore -> IO UnixTimeNanoseconds -> AccountJwtRuntime -> HarchWeb.AuthenticationPipeline AppRoute AppRequestContext () HarchWeb.EncodedJwt AccountJwtClaims AccountPrincipal Void
+accountJwtAuthenticationPipeline :: AccountSessionStore -> IO UnixTimeNanoseconds -> AccountJwtRuntime -> HarchWeb.AuthenticationPipeline AppRoute AppRequestContext () HarchWeb.EncodedJwt AccountJwtClaims AccountPrincipal ()
 accountJwtAuthenticationPipeline sessionStore readClock runtime =
   HarchWeb.AuthenticationPipeline
     { HarchWeb.authenticationProofExtractor =
@@ -309,11 +369,11 @@ accountJwtAuthenticationPipeline sessionStore readClock runtime =
           (runtimeAccountJwtVerificationKeys runtime)
           parseAccountJwtClaims,
       HarchWeb.authenticationPrincipalEstablisher = establishAccountPrincipal sessionStore readClock,
-      HarchWeb.authenticationAuthorizationInterpreter = HarchWeb.AuthorizationInterpreter (\_ () -> HarchWeb.Authorized),
-      HarchWeb.authenticationDenialFailureCode = absurd,
+      HarchWeb.authenticationAuthorization =
+        HarchWeb.AuthenticationWithoutAuthorization
+          (\_ -> authenticationErrorResponse Http.status503 "Authorization is not configured for this application."),
       HarchWeb.authenticationAttachPrincipal = \principal context -> context {requestAccountPrincipal = Just principal},
       HarchWeb.authenticationChallenge = accountAuthenticationChallenge,
-      HarchWeb.authenticationForbidden = \_ denial -> absurd denial,
       HarchWeb.authenticationUnavailable = \_ _ -> authenticationErrorResponse Http.status503 "Authentication is temporarily unavailable."
     }
   where
@@ -322,7 +382,6 @@ accountJwtAuthenticationPipeline sessionStore readClock runtime =
     validationSettings =
       Jwt.defaultJWTValidationSettings (== validatedStringOrUriValue (accountJwtAudience configuration))
         & Jwt.jwtValidationSettingsIssuerPredicate .~ (== validatedStringOrUriValue (accountJwtIssuer configuration))
-        & Jwt.jwtValidationSettingsAudiencePredicate .~ (== validatedStringOrUriValue (accountJwtAudience configuration))
 
 accountAuthenticationChallenge :: HarchWeb.EndpointRequest AppRoute AppRequestContext () -> HarchWeb.AuthenticationFailure -> HarchWeb.NonPageResponse AppRoute AppRequestContext
 accountAuthenticationChallenge endpointRequest _ =
@@ -365,9 +424,8 @@ parseAccountJwtClaims claims = do
 
 invalidJwtClaims :: HarchWeb.JwtClaimsError
 invalidJwtClaims =
-  case HarchWeb.mkSecurityFailureCode "account.jwt.claims-rejected" of
-    Right failureCode -> HarchWeb.mkJwtClaimsError failureCode
-    Left _ -> error "account JWT claim failure code is invalid"
+  HarchWeb.mkJwtClaimsError
+    (HarchWeb.requiredSecurityFailureCodeOrDie "account.jwt.claims-rejected")
 
 establishAccountPrincipal :: AccountSessionStore -> IO UnixTimeNanoseconds -> HarchWeb.PrincipalEstablisher AccountJwtClaims AccountPrincipal
 establishAccountPrincipal sessionStore readClock =
@@ -398,22 +456,13 @@ accountSessionUnavailable :: HarchWeb.AuthenticationDependency
 accountSessionUnavailable = HarchWeb.mkAuthenticationDependency knownAccountSessionUnavailable
 
 knownAccountSessionRejected :: HarchWeb.SecurityFailureCode
-knownAccountSessionRejected =
-  case HarchWeb.mkSecurityFailureCode "account.jwt.session-rejected" of
-    Right failureCode -> failureCode
-    Left _ -> error "account JWT session rejection failure code is invalid"
+knownAccountSessionRejected = HarchWeb.requiredSecurityFailureCodeOrDie "account.jwt.session-rejected"
 
 knownAccountSessionUnavailable :: HarchWeb.SecurityFailureCode
-knownAccountSessionUnavailable =
-  case HarchWeb.mkSecurityFailureCode "account.jwt.session-unavailable" of
-    Right failureCode -> failureCode
-    Left _ -> error "account JWT session unavailable failure code is invalid"
+knownAccountSessionUnavailable = HarchWeb.requiredSecurityFailureCodeOrDie "account.jwt.session-unavailable"
 
 authenticationProofMaximumBytes :: HarchWeb.AuthenticationProofMaximumBytes
-authenticationProofMaximumBytes =
-  case HarchWeb.mkAuthenticationProofMaximumBytes 8192 of
-    Right maximumBytes -> maximumBytes
-    Left _ -> error "account JWT proof maximum is invalid"
+authenticationProofMaximumBytes = HarchWeb.requiredAuthenticationProofMaximumBytesOrDie 8192
 
 unavailableAccountJwtIssuer :: AccountJwtIssuer
 unavailableAccountJwtIssuer =
@@ -423,6 +472,4 @@ unavailableAccountJwtIssuer =
     }
   where
     unavailableCookiePolicy =
-      case HarchWeb.mkAuthenticationCookiePolicy "__Host-harch-session" 28800 of
-        Right cookiePolicy -> cookiePolicy
-        Left _ -> error "unavailable account JWT cookie policy is invalid"
+      HarchWeb.requiredAuthenticationCookiePolicyOrDie "__Host-harch-session" 28800

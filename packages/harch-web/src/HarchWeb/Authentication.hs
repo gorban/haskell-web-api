@@ -8,10 +8,26 @@
 -- Separating proof validity from principal establishment means a valid signed
 -- token cannot bypass a revoked session or disabled-account check; a fully
 -- stateless application may deliberately provide a pure establisher instead.
+--
+-- Decision record (AHI-4C follow-up, 2026-09-04): authorization is optional
+-- application policy after authentication, not an impossible @Void@ callback
+-- bundle. 'AuthenticationWithAuthorization' preserves scoped endpoints;
+-- 'AuthenticationWithoutAuthorization' gives an authentication-only
+-- application an explicit fail-closed response if a scoped route is later
+-- attached. This refines the existing guard boundary instead of introducing a
+-- second authentication pipeline.
+--
+-- Decision record (AHI-4C coverage follow-up, 2026-09-04): fixed declarations
+-- such as an application-owned cookie policy, failure code, or proof limit use
+-- the explicit @required...OrDie@ helpers below. Runtime configuration keeps
+-- the corresponding @mk...@ 'Either' rails. This follows Harch's existing
+-- declaration boundary rather than making a client input rejection appear
+-- impossible merely to satisfy a coverage gate.
 module HarchWeb.Authentication
   ( AccessFailure (..),
     AuthenticationDependency,
     AuthenticationFailure (..),
+    AuthenticationAuthorization (..),
     AuthenticationPipeline (..),
     AuthenticationCookiePolicy,
     AuthenticationProofMaximumBytes,
@@ -47,6 +63,9 @@ module HarchWeb.Authentication
     mkProofRejection,
     mkSecurityFailureCode,
     renderAuthenticationCookie,
+    requiredAuthenticationCookiePolicyOrDie,
+    requiredAuthenticationProofMaximumBytesOrDie,
+    requiredSecurityFailureCodeOrDie,
     runAuthenticationPipeline,
     scopeAuthorizationInterpreter,
   )
@@ -57,6 +76,7 @@ import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
+import Data.Either (fromRight)
 import Data.Foldable (traverse_)
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
@@ -146,6 +166,18 @@ mkAuthenticationCookiePolicy name maxAgeSeconds
   | otherwise =
       AuthenticationCookiePolicy <$> mkAuthenticationCookieName name <*> pure maxAgeSeconds
 
+-- | Require a host-only cookie declaration authored by application code to
+-- remain valid. Request-derived names or durations must use
+-- 'mkAuthenticationCookiePolicy' and handle its rejection rail instead.
+--
+-- This follows the established @required...OrDie@ declaration boundary: an
+-- error identifies an invalid program declaration, never a client outcome.
+requiredAuthenticationCookiePolicyOrDie :: Text -> Word64 -> AuthenticationCookiePolicy
+requiredAuthenticationCookiePolicyOrDie name maxAgeSeconds =
+  fromRight
+    (error "invalid authentication cookie declaration")
+    (mkAuthenticationCookiePolicy name maxAgeSeconds)
+
 -- | Render an issued compact JWT only when its opaque bytes are valid cookie
 -- octets. 'EncodedJwt' intentionally also represents untrusted received
 -- proofs for verifier tests, so rendering is partial rather than assuming its
@@ -200,6 +232,24 @@ mkAuthenticationProofMaximumBytes :: Int -> Either Text AuthenticationProofMaxim
 mkAuthenticationProofMaximumBytes value
   | value <= 0 = Left "authentication proof maximum bytes must be positive"
   | otherwise = Right (AuthenticationProofMaximumBytes value)
+
+-- | Require an application-authored positive proof limit. Runtime-selected
+-- limits must use 'mkAuthenticationProofMaximumBytes' so configuration errors
+-- remain on the ordinary validation rail.
+requiredAuthenticationProofMaximumBytesOrDie :: Int -> AuthenticationProofMaximumBytes
+requiredAuthenticationProofMaximumBytesOrDie value =
+  fromRight
+    (error "invalid authentication proof limit declaration")
+    (mkAuthenticationProofMaximumBytes value)
+
+-- | Require a fixed, application-authored failure classification. Dynamic
+-- classifications must use 'mkSecurityFailureCode' and keep rejection on the
+-- normal input-validation rail.
+requiredSecurityFailureCodeOrDie :: Text -> SecurityFailureCode
+requiredSecurityFailureCodeOrDie value =
+  fromRight
+    (error "invalid security failure-code declaration")
+    (mkSecurityFailureCode value)
 
 -- | Opaque compact-JWT bytes. It intentionally has no 'Show' instance: a
 -- proof must not reach assertion failures, logs, or telemetry by accident.
@@ -285,6 +335,22 @@ scopeAuthorizationInterpreter principalScopes =
           then Authorized
           else Forbidden MissingRequiredScopes
 
+-- | Authorization policy selected after a current principal is established.
+--
+-- 'AuthenticationWithAuthorization' retains the original scoped-authorization
+-- contract. 'AuthenticationWithoutAuthorization' is for applications whose
+-- endpoint algebra contains only anonymous and authenticated routes; if a
+-- scoped route is later introduced without selecting an interpreter, it fails
+-- closed through the application's explicit unavailable response rather than
+-- manufacturing an impossible denial value.
+data AuthenticationAuthorization route context authorization principal denial
+  = AuthenticationWithAuthorization
+      (AuthorizationInterpreter principal authorization denial)
+      (denial -> SecurityFailureCode)
+      (EndpointRequest route context authorization -> denial -> NonPageResponse route context)
+  | AuthenticationWithoutAuthorization
+      (EndpointRequest route context authorization -> NonPageResponse route context)
+
 -- | The complete application-selected proof-to-principal pipeline. A
 -- challenge renderer receives the classified failure but is responsible for
 -- returning only the protocol-appropriate generic public response.
@@ -292,11 +358,9 @@ data AuthenticationPipeline route context authorization proof verified principal
   { authenticationProofExtractor :: AuthenticationProofExtractor route context authorization proof,
     authenticationProofVerifier :: AuthenticationProofVerifier proof verified,
     authenticationPrincipalEstablisher :: PrincipalEstablisher verified principal,
-    authenticationAuthorizationInterpreter :: AuthorizationInterpreter principal authorization denial,
-    authenticationDenialFailureCode :: denial -> SecurityFailureCode,
+    authenticationAuthorization :: AuthenticationAuthorization route context authorization principal denial,
     authenticationAttachPrincipal :: principal -> context -> context,
     authenticationChallenge :: EndpointRequest route context authorization -> AuthenticationFailure -> NonPageResponse route context,
-    authenticationForbidden :: EndpointRequest route context authorization -> denial -> NonPageResponse route context,
     authenticationUnavailable :: EndpointRequest route context authorization -> AuthenticationDependency -> NonPageResponse route context
   }
 
@@ -347,11 +411,15 @@ runProtectedPipeline pipeline endpointRequest maybeAuthorization = do
       case maybeAuthorization of
         Nothing -> pure (ContinueEndpoint (authenticationAttachPrincipal pipeline principal (requestContext (endpointRouteRequest endpointRequest))))
         Just authorization ->
-          case authorizePrincipal (authenticationAuthorizationInterpreter pipeline) principal authorization of
-            Authorized -> pure (ContinueEndpoint (authenticationAttachPrincipal pipeline principal (requestContext (endpointRouteRequest endpointRequest))))
-            Forbidden denial -> do
-              emitAuthorizationDenial endpointRequest (authenticationDenialFailureCode pipeline denial)
-              pure (HaltEndpoint (authenticationForbidden pipeline endpointRequest denial))
+          case authenticationAuthorization pipeline of
+            AuthenticationWithAuthorization interpreter denialFailureCode forbidden ->
+              case authorizePrincipal interpreter principal authorization of
+                Authorized -> pure (ContinueEndpoint (authenticationAttachPrincipal pipeline principal (requestContext (endpointRouteRequest endpointRequest))))
+                Forbidden denial -> do
+                  emitAuthorizationDenial endpointRequest (denialFailureCode denial)
+                  pure (HaltEndpoint (forbidden endpointRequest denial))
+            AuthenticationWithoutAuthorization unexpectedAuthorization ->
+              pure (HaltEndpoint (unexpectedAuthorization endpointRequest))
 
 authenticationEventFromResult :: Either AuthenticationFailure principal -> AuthenticationEvent
 authenticationEventFromResult result =

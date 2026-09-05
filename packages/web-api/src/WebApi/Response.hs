@@ -78,9 +78,9 @@ selectProfileResponse config accountWorkflow routeRequest = do
   pure $
     case loadedProfile of
       Right profileState -> HarchWeb.RenderedPage (renderProfilePageWithState config routeRequest profileState)
-      Left profileLoadError ->
+      Left (ProfileAccountStoreError _) ->
         HarchWeb.RenderedPageWithMetadata
-          (pageErrorResponseMetadata (profileFailureDiagnostics profileLoadError))
+          (pageErrorResponseMetadata profileFailureDiagnostics)
           (renderUnavailableProfilePage config routeRequest)
 
 spacesLocation :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Text
@@ -218,13 +218,13 @@ pageFailureDiagnostics failureSurface routePath routeLabel databaseOperations da
       diagnosticsDatabaseOperations = map toHarchDatabaseOperation databaseOperations
     }
 
-profileFailureDiagnostics :: ProfileLoadError -> FailureDiagnostics
-profileFailureDiagnostics profileLoadError =
+profileFailureDiagnostics :: FailureDiagnostics
+profileFailureDiagnostics =
   FailureDiagnostics
     { diagnosticsObservabilityAttributes =
         [ Observability.ObservabilityAttribute
             { Observability.attributeName = "error.type",
-              Observability.attributeValue = Observability.TextAttribute (profileLoadErrorType profileLoadError)
+              Observability.attributeValue = Observability.TextAttribute profileLoadErrorType
             },
           Observability.ObservabilityAttribute
             { Observability.attributeName = "app.failure.code",
@@ -239,14 +239,12 @@ profileFailureDiagnostics profileLoadError =
               Observability.attributeValue = Observability.TextAttribute "page"
             }
         ],
-      diagnosticsLogEntries = ["Profile loading failed: " <> profileLoadErrorType profileLoadError],
+      diagnosticsLogEntries = ["Profile loading failed: " <> profileLoadErrorType],
       diagnosticsDatabaseOperations = []
     }
 
-profileLoadErrorType :: ProfileLoadError -> Text
-profileLoadErrorType profileLoadError =
-  case profileLoadError of
-    ProfileAccountStoreError _ -> "AccountStoreError"
+profileLoadErrorType :: Text
+profileLoadErrorType = "AccountStoreError"
 
 toHarchDatabaseOperation :: DatabaseOperation -> HarchDatabase.DatabaseOperation
 toHarchDatabaseOperation databaseOperation =

@@ -402,7 +402,7 @@ issueLoginSession actionRequest identifierValue proofChoice nowNanoseconds accou
             Just renderedCookie ->
               pure
                 ( ( loginResponse
-                      (accountActionResponseContext actionRequest Http.status200 Nothing [HarchWeb.csrfClearCookieHeader, ("Set-Cookie", TextEncoding.encodeUtf8 renderedCookie)])
+                      (accountActionResponseContext actionRequest Http.status200 Nothing [HarchWeb.csrfClearCookieHeader, setCookieHeader renderedCookie])
                       (form (localized actionRequest SignedIn) FormStatusSuccess)
                   )
                     { HarchWeb.clientActionNavigation =
@@ -441,7 +441,7 @@ issueLoginEnrollmentSession actionRequest identifierValue proofChoice nowNanosec
       response headers = loginResponse (accountActionResponseContext actionRequest Http.status403 Nothing headers) (form (localized actionRequest EnrollAuthenticatorBeforeSignIn))
   issued <- issueMfaEnrollmentSessionNow accountId nowNanoseconds
   case issued of
-    Right opaqueSession -> pure (response [HarchWeb.csrfClearCookieHeader, ("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie mfaEnrollmentSessionCookiePolicy (sessionId opaqueSession)))])
+    Right opaqueSession -> pure (response [HarchWeb.csrfClearCookieHeader, setCookieHeader (renderSessionCookie mfaEnrollmentSessionCookiePolicy (sessionId opaqueSession))])
     Left storeError -> throwClientActionFailure (response []) MfaEnrollmentSessionFailure "MfaEnrollmentSessionStoreError" (mfaEnrollmentSessionStoreErrorMessage storeError)
 
 handleLogout :: AccountActionRequest -> AccountActionWorkflow
@@ -449,7 +449,7 @@ handleLogout actionRequest =
   case requestAccountPrincipal (HarchWeb.clientActionContext actionRequest) of
     Nothing -> do
       cookiePolicy <- accountJwtCookiePolicyNow
-      pure (logoutResponse (accountActionResponseContext actionRequest Http.status200 Nothing [HarchWeb.csrfClearCookieHeader, ("Set-Cookie", TextEncoding.encodeUtf8 (HarchWeb.clearAuthenticationCookie cookiePolicy))]) (Just (localized actionRequest SignedOut, False)))
+      pure (logoutResponse (accountActionResponseContext actionRequest Http.status200 Nothing [HarchWeb.csrfClearCookieHeader, setCookieHeader (HarchWeb.clearAuthenticationCookie cookiePolicy)]) (Just (localized actionRequest SignedOut, False)))
     Just principal -> do
       let sessionToken = accountPrincipalSessionId principal
       invalidated <- invalidateAccountSessionNow sessionToken
@@ -457,7 +457,10 @@ handleLogout actionRequest =
         Left storeError -> throwClientActionFailure (logoutResponse (accountActionResponseContext actionRequest Http.status503 Nothing []) (Just (localized actionRequest SignOutUnavailable, True))) LogoutSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
         Right _ -> do
           cookiePolicy <- accountJwtCookiePolicyNow
-          pure (logoutResponse (accountActionResponseContext actionRequest Http.status200 Nothing [HarchWeb.csrfClearCookieHeader, ("Set-Cookie", TextEncoding.encodeUtf8 (HarchWeb.clearAuthenticationCookie cookiePolicy))]) (Just (localized actionRequest SignedOut, False)))
+          pure (logoutResponse (accountActionResponseContext actionRequest Http.status200 Nothing [HarchWeb.csrfClearCookieHeader, setCookieHeader (HarchWeb.clearAuthenticationCookie cookiePolicy)]) (Just (localized actionRequest SignedOut, False)))
+
+setCookieHeader :: Text -> Http.Header
+setCookieHeader cookie = ("Set-Cookie", TextEncoding.encodeUtf8 cookie)
 
 accountJwtCookiePolicyNow :: AppM publicFailure HarchWeb.AuthenticationCookiePolicy
 accountJwtCookiePolicyNow = accountJwtCookie . accountWorkflowJwtIssuer <$> accountWorkflow

@@ -2,17 +2,19 @@
 
 {-# SPEC #-}
 
-import Control.Lens (matching, (&), (?~))
+import Control.Lens (matching, (&), (.~), (?~), (^.))
 import Crypto.JOSE.Header (HeaderParam (..), RequiredProtection (..))
 import Crypto.JOSE.JWA.JWK qualified as JwaJwk
 import Crypto.JOSE.JWA.JWS qualified as JwaJws
 import Crypto.JOSE.JWK qualified as JoseJwk
 import Crypto.JOSE.JWS qualified as JoseJws
+import Crypto.JOSE.Types (Base64Integer (..))
 import Crypto.JWT qualified as Jwt
 import Data.Aeson qualified as Aeson
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Maybe (isNothing)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
@@ -37,15 +39,19 @@ spec =
       expectAll
         ( (valid `shouldSatisfy` isRight)
             :| [ mkAccountJwtConfiguration "" "web-api-account" "account-key-v1" "private.jwk" "verification.jwks" "__Host-harch-session" 28800 `shouldBe` Left AccountJwtIssuerInvalid,
+                 mkAccountJwtConfiguration "https://accounts.example.test\NUL" "web-api-account" "account-key-v1" "private.jwk" "verification.jwks" "__Host-harch-session" 28800 `shouldBe` Left AccountJwtIssuerInvalid,
                  mkAccountJwtConfiguration "https://accounts.example.test" "" "account-key-v1" "private.jwk" "verification.jwks" "__Host-harch-session" 28800 `shouldBe` Left AccountJwtAudienceInvalid,
                  mkAccountJwtConfiguration "https://accounts.example.test" "web-api-account" "" "private.jwk" "verification.jwks" "__Host-harch-session" 28800 `shouldBe` Left AccountJwtActiveKeyIdInvalid,
                  mkAccountJwtConfiguration "https://accounts.example.test" "web-api-account" (Text.replicate 129 "a") "private.jwk" "verification.jwks" "__Host-harch-session" 28800 `shouldBe` Left AccountJwtActiveKeyIdInvalid,
                  mkAccountJwtConfiguration "https://accounts.example.test" "web-api-account" "account-key-v1" "" "verification.jwks" "__Host-harch-session" 28800 `shouldBe` Left AccountJwtSigningJwkFileInvalid,
                  mkAccountJwtConfiguration "https://accounts.example.test" "web-api-account" "account-key-v1" "private.jwk" "" "__Host-harch-session" 28800 `shouldBe` Left AccountJwtVerificationJwkSetFileInvalid,
                  mkAccountJwtConfiguration "https://accounts.example.test" "web-api-account" "account-key-v1" "private.jwk" "verification.jwks" "session" 28800 `shouldBe` Left AccountJwtCookiePolicyInvalid,
-                 AccountJwtIssuerInvalid == AccountJwtIssuerInvalid `shouldBe` True,
+                 hasDerivedContract [AccountJwtIssuerInvalid, AccountJwtAudienceInvalid] `shouldBe` True,
                  show AccountJwtIssuerInvalid `shouldBe` "AccountJwtIssuerInvalid",
+                 showsPrec 11 AccountJwtIssuerInvalid "" `shouldBe` "AccountJwtIssuerInvalid",
+                 show [AccountJwtIssuerInvalid, AccountJwtAudienceInvalid] `shouldBe` "[AccountJwtIssuerInvalid,AccountJwtAudienceInvalid]",
                  show AccountJwtIssueFailed `shouldBe` "AccountJwtIssueFailed",
+                 showsPrec 11 AccountJwtIssueFailed "" `shouldBe` "AccountJwtIssueFailed",
                  show AccountJwtVerificationKeyMissing `shouldBe` "AccountJwtVerificationKeyMissing"
                ]
         )
@@ -69,17 +75,23 @@ spec =
               AccountJwtSigningKeyIdMismatch,
               AccountJwtVerificationKeyMissing,
               AccountJwtSigningKeyNotRsaPrivate,
-              AccountJwtVerificationKeyNotRsa
+              AccountJwtVerificationKeyNotRsa,
+              AccountJwtSigningKeyUnusable,
+              AccountJwtVerificationKeyDoesNotMatchSigningKey
             ]
       expectAll
         ( (configuration == configuration `shouldBe` True)
             :| [ configuration /= otherConfiguration `shouldBe` True,
                  show configuration `shouldContain` "AccountJwtConfiguration",
-                 all (\failure -> failure == failure) configurationErrors `shouldBe` True,
+                 showsPrec 11 configuration "" `shouldContain` "(AccountJwtConfiguration",
+                 show [configuration] `shouldContain` "[AccountJwtConfiguration",
+                 hasDerivedContract configurationErrors `shouldBe` True,
                  show configurationErrors `shouldContain` "AccountJwtCookiePolicyInvalid",
-                 all (\failure -> failure == failure) loadErrors `shouldBe` True,
+                 showsPrec 11 AccountJwtIssuerInvalid "" `shouldBe` "AccountJwtIssuerInvalid",
+                 hasDerivedContract loadErrors `shouldBe` True,
                  show loadErrors `shouldContain` "AccountJwtVerificationKeyNotRsa",
-                 AccountJwtIssueFailed == AccountJwtIssueFailed `shouldBe` True,
+                 showsPrec 11 AccountJwtSigningJwkUnreadable "" `shouldBe` "AccountJwtSigningJwkUnreadable",
+                 hasDerivedContract [AccountJwtIssueFailed] `shouldBe` True,
                  show [AccountJwtIssueFailed] `shouldBe` "[AccountJwtIssueFailed]"
                ]
         )
@@ -88,6 +100,8 @@ spec =
       withTestRuntime $ \runtime signingKey session -> do
         let issuer = accountJwtIssuerFromRuntime runtime
         show runtime `shouldBe` "AccountJwtRuntime <redacted>"
+        showsPrec 11 runtime "" `shouldBe` "(AccountJwtRuntime <redacted>)"
+        show [runtime] `shouldBe` "[AccountJwtRuntime <redacted>]"
         issued <- issueAccountSessionJwt issuer session
         token <-
           case issued of
@@ -141,6 +155,20 @@ spec =
         case revoked of
           HarchWeb.HaltEndpoint _ -> pure ()
           HarchWeb.ContinueEndpoint _ -> expectationFailure "revoked durable session must halt a protected endpoint"
+        HarchWeb.runAuthenticationPipeline pipeline (authorizedEndpointRequest cookie)
+          >>= expectAuthorizationUnavailable
+
+    it "proves a supplied signer at startup while preserving its session-issuance failure rail" $
+      withTestRuntimeConfiguration $ \configuration _ _ session -> do
+        loaded <- loadAccountJwtRuntimeWithSigner probeOnlySigner configuration
+        runtime <-
+          case loaded of
+            Right value -> pure value
+            Left loadError -> expectationFailure ("custom JWT runtime load failed: " <> show loadError) >> error "unreachable"
+        issued <- issueAccountSessionJwt (accountJwtIssuerFromRuntime runtime) session
+        case issued of
+          Left AccountJwtIssueFailed -> pure ()
+          Right _ -> expectationFailure "the supplied signer must not mint a session proof after its own failure"
 
     it "fails closed for missing and mismatched startup key material" $
       withSystemTempDirectory "web-api-account-jwt" $ \directory -> do
@@ -150,18 +178,34 @@ spec =
           Left AccountJwtSigningJwkUnreadable -> pure ()
           _ -> expectationFailure "expected an unreadable signing-key startup failure"
         signingKey <- JoseJwk.genJWK (JwaJwk.RSAGenParam 1024)
-        let namedSigningKey = signingKey & JoseJwk.jwkKid ?~ "different-key"
+        let namedMismatchedSigningKey = signingKey & JoseJwk.jwkKid ?~ "different-key"
             signingFile = directory </> "private.jwk"
             verificationFile = directory </> "verification.jwks"
             configuration = requiredConfiguration signingFile verificationFile
-        ByteString.writeFile signingFile (LazyByteString.toStrict (Aeson.encode namedSigningKey))
+        ByteString.writeFile signingFile (LazyByteString.toStrict (Aeson.encode namedMismatchedSigningKey))
         expectLoadFailure (loadAccountJwtRuntime configuration) AccountJwtVerificationJwkSetUnreadable
-        ByteString.writeFile signingFile (LazyByteString.toStrict (Aeson.encode namedSigningKey))
-        ByteString.writeFile verificationFile (LazyByteString.toStrict (Aeson.encode (JoseJwk.JWKSet [namedSigningKey])))
+        ByteString.writeFile signingFile (LazyByteString.toStrict (Aeson.encode namedMismatchedSigningKey))
+        ByteString.writeFile verificationFile (LazyByteString.toStrict (Aeson.encode (JoseJwk.JWKSet [namedMismatchedSigningKey])))
         mismatchedResult <- loadAccountJwtRuntime configuration
         case mismatchedResult of
           Left AccountJwtSigningKeyIdMismatch -> pure ()
           _ -> expectationFailure "expected a signing-key id startup failure"
+        matchingKeyIdDifferentMaterial <- JoseJwk.genJWK (JwaJwk.RSAGenParam 1024)
+        let namedSigningKey = signingKey & JoseJwk.jwkKid ?~ "account-key-v1"
+            namedDifferentVerificationKey = matchingKeyIdDifferentMaterial & JoseJwk.jwkKid ?~ "account-key-v1"
+        ByteString.writeFile signingFile (LazyByteString.toStrict (Aeson.encode namedSigningKey))
+        ByteString.writeFile verificationFile (LazyByteString.toStrict (Aeson.encode (JoseJwk.JWKSet [namedDifferentVerificationKey])))
+        expectLoadFailure (loadAccountJwtRuntime configuration) AccountJwtVerificationKeyDoesNotMatchSigningKey
+        let structurallyPrivateButUnusableSigningKey =
+              case namedSigningKey ^. JoseJwk.jwkMaterial of
+                JwaJwk.RSAKeyMaterial rsaParameters ->
+                  namedSigningKey
+                    & JoseJwk.jwkMaterial
+                      .~ JwaJwk.RSAKeyMaterial (rsaParameters & JwaJwk.rsaN .~ Base64Integer 1)
+                _ -> error "generated RSA key unexpectedly had non-RSA material"
+        ByteString.writeFile signingFile (LazyByteString.toStrict (Aeson.encode structurallyPrivateButUnusableSigningKey))
+        ByteString.writeFile verificationFile (LazyByteString.toStrict (Aeson.encode (JoseJwk.JWKSet [structurallyPrivateButUnusableSigningKey])))
+        expectLoadFailure (loadAccountJwtRuntime configuration) AccountJwtSigningKeyUnusable
 
     it "keeps malformed signing and verification JWK files on explicit startup rails" $
       withSystemTempDirectory "web-api-account-jwt" $ \directory -> do
@@ -281,12 +325,22 @@ spec =
         invalidAccount <- issueAndRender (claimsForTestSession session (Just "not an account id") (Just (sessionIdText (sessionId session))))
         missingSession <- issueAndRender (claimsForTestSession session (Just "account_01") Nothing)
         invalidSession <- issueAndRender (claimsForTestSession session (Just "account_01") (Just "short"))
+        wrongAudience <-
+          issueAndRender
+            ( claimsForTestSession session (Just "account_01") (Just (sessionIdText (sessionId session)))
+                & Jwt.claimAud ?~ Jwt.Audience [requiredStringOrUri "another-application"]
+            )
         let issuedTokens = [missingSubject, uriSubject, invalidAccount, missingSession, invalidSession]
             HarchWeb.AuthenticationProofVerifier verifier = HarchWeb.authenticationProofVerifier pipeline
         verificationResults <- traverse (verifier . fst) issuedTokens
         mapM_ expectClaimsRejection verificationResults
         results <- traverse (HarchWeb.runAuthenticationPipeline pipeline . protectedEndpointRequest . snd) issuedTokens
         mapM_ expectLoginRedirect results
+        wrongAudienceVerification <- verifier (fst wrongAudience)
+        case wrongAudienceVerification of
+          Left _ -> pure ()
+          Right _ -> expectationFailure "expected the configured audience check to reject the signed JWT"
+        HarchWeb.runAuthenticationPipeline pipeline (protectedEndpointRequest (snd wrongAudience)) >>= expectLoginRedirect
 
     it "keeps the unavailable workflow issuer safe and redacted" $ do
       let clearedCookie = HarchWeb.clearAuthenticationCookie (accountJwtCookie unavailableAccountJwtIssuer)
@@ -298,6 +352,10 @@ spec =
 
 withTestRuntime :: (AccountJwtRuntime -> HarchWeb.JWK -> OpaqueSession Account.AccountId -> IO value) -> IO value
 withTestRuntime action =
+  withTestRuntimeConfiguration $ \_ runtime signingKey session -> action runtime signingKey session
+
+withTestRuntimeConfiguration :: (AccountJwtConfiguration -> AccountJwtRuntime -> HarchWeb.JWK -> OpaqueSession Account.AccountId -> IO value) -> IO value
+withTestRuntimeConfiguration action =
   withSystemTempDirectory "web-api-account-jwt" $ \directory -> do
     signingKey <- JoseJwk.genJWK (JwaJwk.RSAGenParam 1024)
     accountId <- requiredAccountId "account_01"
@@ -315,7 +373,16 @@ withTestRuntime action =
     loaded <- loadAccountJwtRuntime configuration
     case loaded of
       Left loadError -> expectationFailure ("JWT runtime load failed: " <> show loadError) >> error "unreachable"
-      Right runtime -> action runtime namedSigningKey session
+      Right runtime -> action configuration runtime namedSigningKey session
+
+probeOnlySigner :: AccountJwtSignerBuilder
+probeOnlySigner signingKey =
+  HarchWeb.JwtSigner $ \header claims ->
+    if isNothing (claims ^. Jwt.claimSub)
+      then HarchWeb.signJwt joseSigner header claims
+      else pure (Left AccountJwtIssueFailed)
+  where
+    joseSigner = HarchWeb.mapJwtSignerError (const AccountJwtIssueFailed) (HarchWeb.joseJwtSigner signingKey)
 
 isAccepted :: Either HarchWeb.ProofVerificationFailure value -> Bool
 isAccepted result =
@@ -337,6 +404,13 @@ isRight result =
   case result of
     Left _ -> False
     Right _ -> True
+
+hasDerivedContract :: (Eq value, Show value) => [value] -> Bool
+hasDerivedContract values =
+  sum [fromEnum (left == right) | left <- values, right <- values] == length values
+    && sum [fromEnum (left /= right) | left <- values, right <- values]
+      == length values * (length values - 1)
+    && sum [length (show item) + length (showList [item] "") | item <- values] > 0
 
 expectHalted :: HarchWeb.EndpointGuardResult AppRoute AppRequestContext -> Expectation
 expectHalted result =
@@ -373,6 +447,21 @@ expectUnavailable result =
     HarchWeb.HaltEndpoint response -> expectationFailure ("expected unavailable response, got " <> show response)
     HarchWeb.ContinueEndpoint _ -> expectationFailure "expected authentication to halt"
 
+expectAuthorizationUnavailable :: HarchWeb.EndpointGuardResult AppRoute AppRequestContext -> Expectation
+expectAuthorizationUnavailable result =
+  case result of
+    HarchWeb.HaltEndpoint (HarchWeb.NonPageBodyResponse responseBody) ->
+      expectAll
+        ( (HarchWeb.responseStatus responseBody `shouldBe` Http.status503)
+            :| [ HarchWeb.responseBody responseBody `shouldBe` "Authorization is not configured for this application.",
+                 HarchWeb.responseObservabilityAttributes responseBody `shouldBe` [],
+                 HarchWeb.responseLogEntries responseBody `shouldBe` [],
+                 HarchWeb.responseDatabaseOperations responseBody `shouldBe` []
+               ]
+        )
+    HarchWeb.HaltEndpoint response -> expectationFailure ("expected authorization-unavailable response, got " <> show response)
+    HarchWeb.ContinueEndpoint _ -> expectationFailure "expected authorization-only route to halt"
+
 expectClaimsRejection :: Either HarchWeb.ProofVerificationFailure value -> Expectation
 expectClaimsRejection result =
   case result of
@@ -394,7 +483,13 @@ requiredConfiguration signingFile verificationFile =
     Left configurationError -> error ("test JWT configuration is invalid: " <> show configurationError)
 
 protectedEndpointRequest :: Text.Text -> HarchWeb.EndpointRequest AppRoute AppRequestContext ()
-protectedEndpointRequest cookie =
+protectedEndpointRequest = endpointRequestWithAccess HarchWeb.RequireAuthenticated
+
+authorizedEndpointRequest :: Text.Text -> HarchWeb.EndpointRequest AppRoute AppRequestContext ()
+authorizedEndpointRequest = endpointRequestWithAccess (HarchWeb.RequireAuthorized ())
+
+endpointRequestWithAccess :: HarchWeb.AccessRequirement () -> Text.Text -> HarchWeb.EndpointRequest AppRoute AppRequestContext ()
+endpointRequestWithAccess access cookie =
   HarchWeb.EndpointRequest
     { HarchWeb.endpointWaiRequest = (waiRequest ["profile"]) {Wai.requestHeaders = [("Cookie", TextEncoding.encodeUtf8 cookie)]},
       HarchWeb.endpointRouteRequest = HarchWeb.RouteRequest ProfileRoute defaultRequestContext,
@@ -403,7 +498,7 @@ protectedEndpointRequest cookie =
           (HarchWeb.requiredEndpointNameOrDie "account.profile")
           (HarchWeb.requiredRouteTemplateOrDie "/profile")
           HarchWeb.HtmlEndpoint
-          HarchWeb.RequireAuthenticated,
+          access,
       HarchWeb.endpointSecurityEventSink = Nothing,
       HarchWeb.endpointDispatchKind = HarchWeb.EndpointMatched
     }

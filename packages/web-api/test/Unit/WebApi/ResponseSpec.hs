@@ -7,11 +7,16 @@ import HarchWeb qualified
 import HarchWeb.Observability qualified as Observability
 import Network.HTTP.Types qualified as Http
 import Unit.WebApi.TestSupport hiding (databaseConfig)
+import WebApi.Account (AccountProfileStore (..), AccountStoreError (..))
+import WebApi.AccountPrincipal (mkAccountPrincipal)
+import WebApi.App (unavailableAccountWorkflow)
+import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (defaultAppConfig)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), PageRepository (..), buildSeededPageRepository, defaultDatabaseSeed, defaultPageRepository)
 import WebApi.Page (renderPage, renderPageFromRouteData)
 import WebApi.Postgres.Testing (buildPostgresPageRepositoryWithRunner)
-import WebApi.Response (selectResponse, selectResponseWithDatabase)
+import WebApi.Response (selectResponse, selectResponseWithDatabase, selectResponseWithDatabaseAndAccountWorkflow)
+import WebApi.Route (AppRequestContext (..), AppRoute (..), defaultRequestContext)
 import WebApi.RouteData (RouteDataResult (..), SecondRouteData (..))
 
 spec = do
@@ -58,6 +63,45 @@ spec = do
     it "keeps not-found handling in the page-result boundary" $ do
       renderedPage <- renderPage defaultAppConfig notFoundRequest
       selectResponse defaultAppConfig notFoundRequest `shouldReturn` HarchWeb.RenderedPage renderedPage
+
+    it "keeps profile-load diagnostics private while rendering an unavailable profile" $ do
+      let profileLoadFailure = AccountStoreUnavailable "profile database unavailable"
+          workflow =
+            unavailableAccountWorkflow
+              { accountWorkflowProfileStore =
+                  AccountProfileStore
+                    (\_ -> pure (Left profileLoadFailure))
+              }
+          authenticatedProfileRequest =
+            HarchWeb.RouteRequest
+              ProfileRoute
+              defaultRequestContext
+                { requestAccountPrincipal =
+                    Just (mkAccountPrincipal accountId testSessionId 200)
+                }
+      response <-
+        selectResponseWithDatabaseAndAccountWorkflow
+          defaultAppConfig
+          defaultPageRepository
+          workflow
+          authenticatedProfileRequest
+      case response of
+        HarchWeb.RenderedPageWithMetadata metadata page -> do
+          HarchWeb.responseStatus metadata `shouldBe` Http.status500
+          HarchWeb.responseContentType metadata `shouldBe` "text/html; charset=utf-8"
+          HarchWeb.responseBody metadata `shouldBe` ""
+          HarchWeb.responseObservabilityAttributes metadata
+            `shouldBe` [ Observability.ObservabilityAttribute "error.type" (Observability.TextAttribute "AccountStoreError"),
+                         Observability.ObservabilityAttribute "app.failure.code" (Observability.TextAttribute "profile.load"),
+                         Observability.ObservabilityAttribute "app.route" (Observability.TextAttribute "/profile"),
+                         Observability.ObservabilityAttribute "app.surface" (Observability.TextAttribute "page")
+                       ]
+          HarchWeb.responseLogEntries metadata
+            `shouldBe` ["Profile loading failed: AccountStoreError"]
+          HarchWeb.responseDatabaseOperations metadata `shouldBe` []
+          HarchWeb.renderHtml (HarchWeb.pageBody page)
+            `shouldNotSatisfy` Text.isInfixOf "profile database unavailable"
+        HarchWeb.RenderedPage _ -> expectationFailure "expected unavailable profile diagnostics"
 
     it "maps required second-page failures into explicit HTML 500 responses" $ do
       let failingDatabaseEffect =
