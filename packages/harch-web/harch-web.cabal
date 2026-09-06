@@ -131,6 +131,8 @@ library
     HarchWeb.Authentication.Pipeline
     HarchWeb.Authentication.Transport
     HarchWeb.Cookie
+    HarchWeb.Csrf.Lifecycle
+    HarchWeb.Csrf.Signed
     HarchWeb.Markup.Attributes
     HarchWeb.Markup.Elements
     HarchWeb.Markup.Implementation

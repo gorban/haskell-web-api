@@ -3344,6 +3344,25 @@ and adds a mobile-context load that verifies the SSR declaration, device-width
 layout, FAB target geometry, no horizontal overflow, enhanced navigation, and
 history.
 
+### Decision record — separate signed CSRF backend ownership (PR-F7, 2026-09-05)
+
+**Decision: retain `HarchWeb.Csrf` as the stable façade and one
+`CsrfProtection` lifecycle, while moving signed-token mechanics to a private
+backend module configured by `SignedCsrfDependencies`.** Page preparation and
+the action boundary already own the opaque token, nonce, and mandatory
+double-submit transport validation. A second signed-CSRF dispatcher or a
+backend-specific page flow would duplicate that ownership and create a path
+that could drift from the framework transport check.
+
+The dependency record groups the immutable key ring, bounded policy, clock,
+and current-binding resolver installed once for a backend. The request context
+and submitted token remain explicit issue/verify inputs, so request data is
+not confused with deployment configuration. The façade keeps the application
+surface stable while private module boundaries preserve key/token constructors
+and signed parsing details. Existing signed issuance, expiry, binding, key
+rotation, and synchronizer-unavailability tests therefore exercise the same
+single lifecycle rather than a replacement implementation.
+
 ## Example taxonomy
 
 The [examples index](../examples/README.md) uses four labels:

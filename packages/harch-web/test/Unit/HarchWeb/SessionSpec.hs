@@ -242,10 +242,12 @@ spec = do
           activeExpiry = 4000000000
           protection =
             Csrf.signedCsrfProtection
-              keyring
-              Csrf.defaultSignedCsrfPolicy
-              (readIORef currentTime)
-              (\isActive -> pure (if isActive then Csrf.BoundCsrfBinding sessionBinding activeExpiry else Csrf.AnonymousCsrfBinding))
+              Csrf.SignedCsrfDependencies
+                { Csrf.signedCsrfDependenciesKeyring = keyring,
+                  Csrf.signedCsrfDependenciesPolicy = Csrf.defaultSignedCsrfPolicy,
+                  Csrf.signedCsrfDependenciesCurrentTime = readIORef currentTime,
+                  Csrf.signedCsrfDependenciesResolveBinding = \isActive -> pure (if isActive then Csrf.BoundCsrfBinding sessionBinding activeExpiry else Csrf.AnonymousCsrfBinding)
+                }
       issued <- Csrf.issueCsrfToken protection True
       case issued of
         Csrf.CsrfProtectionUnavailable -> expectationFailure "expected a signed CSRF token"
@@ -276,10 +278,12 @@ spec = do
           keyring = required "CSRF key ring" (Csrf.mkSignedCsrfKeyring keyId ((keyId, signingKey) :| []))
           unavailableProtection =
             Csrf.signedCsrfProtection
-              keyring
-              Csrf.defaultSignedCsrfPolicy
-              (pure 1000000000)
-              (const (pure Csrf.CsrfBindingUnavailable))
+              Csrf.SignedCsrfDependencies
+                { Csrf.signedCsrfDependenciesKeyring = keyring,
+                  Csrf.signedCsrfDependenciesPolicy = Csrf.defaultSignedCsrfPolicy,
+                  Csrf.signedCsrfDependenciesCurrentTime = pure 1000000000,
+                  Csrf.signedCsrfDependenciesResolveBinding = const (pure Csrf.CsrfBindingUnavailable)
+                }
       Csrf.issueCsrfToken unavailableProtection () `shouldReturn` Csrf.CsrfProtectionUnavailable
 
     it "rejects malformed, unavailable, stale, and structurally invalid signed-token states" $ do
@@ -292,7 +296,7 @@ spec = do
           keyring = required "CSRF key ring" (Csrf.mkSignedCsrfKeyring currentKeyId ((currentKeyId, signingKey) :| []))
           otherKeyring = required "other CSRF key ring" (Csrf.mkSignedCsrfKeyring otherKeyId ((otherKeyId, otherSigningKey) :| []))
           policy = required "CSRF policy" (Csrf.mkSignedCsrfPolicy 1000 1)
-          protection = Csrf.signedCsrfProtection keyring policy (readIORef currentTime) (const (readIORef bindingResolution))
+          protection = signedProtection keyring policy (readIORef currentTime) (const (readIORef bindingResolution))
           unavailableIssuer = Csrf.CsrfProtection {Csrf.issueCsrfToken = const (pure Csrf.CsrfProtectionUnavailable), Csrf.verifyCsrfToken = \_ _ -> pure Csrf.CsrfRejected}
           tokenFromBytes bytes = required "valid transport token" (mkCsrfToken (TextEncoding.decodeUtf8 (Base64Url.encodeUnpadded bytes)))
           malformedTokens =
@@ -313,7 +317,7 @@ spec = do
           let alteredText = if Text.last (csrfTokenText token) == 'A' then Text.init (csrfTokenText token) <> "B" else Text.init (csrfTokenText token) <> "A"
               alteredToken = required "same-length altered token" (mkCsrfToken alteredText)
               tamperedMacToken = required "MAC-tampered CSRF token" (mkCsrfToken (tamperSignedTokenMac token))
-              unknownKeyProtection = Csrf.signedCsrfProtection otherKeyring policy (readIORef currentTime) (const (readIORef bindingResolution))
+              unknownKeyProtection = signedProtection otherKeyring policy (readIORef currentTime) (const (readIORef bindingResolution))
           Csrf.verifyCsrfToken protection () alteredToken `shouldReturn` Csrf.CsrfRejected
           Csrf.verifyCsrfToken protection () tamperedMacToken `shouldReturn` Csrf.CsrfRejected
           Csrf.verifyCsrfToken unknownKeyProtection () token `shouldReturn` Csrf.CsrfRejected
@@ -330,8 +334,8 @@ spec = do
           signingKey = required "CSRF signing key" (Csrf.mkCsrfSigningKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
           keyring = required "CSRF key ring" (Csrf.mkSignedCsrfKeyring keyId ((keyId, signingKey) :| []))
           policy = required "CSRF policy" (Csrf.mkSignedCsrfPolicy 1000 1)
-          protection = Csrf.signedCsrfProtection keyring policy (readIORef currentTime) (const (readIORef bindingResolution))
-          anonymousProtection = Csrf.signedCsrfProtection keyring policy (readIORef currentTime) (const (pure Csrf.AnonymousCsrfBinding))
+          protection = signedProtection keyring policy (readIORef currentTime) (const (readIORef bindingResolution))
+          anonymousProtection = signedProtection keyring policy (readIORef currentTime) (const (pure Csrf.AnonymousCsrfBinding))
       issued <- Csrf.issueCsrfToken protection ()
       case issued of
         Csrf.CsrfProtectionUnavailable -> expectationFailure "expected a signed CSRF token"
@@ -362,8 +366,8 @@ spec = do
           maximumTime = maxBound :: Time.UnixTimeNanoseconds
           largeSkewPolicy = required "large skew policy" (Csrf.mkSignedCsrfPolicy 1 maxBound)
           overflowPolicy = required "overflow policy" (Csrf.mkSignedCsrfPolicy maxBound 1)
-          boundedProtection = Csrf.signedCsrfProtection keyring largeSkewPolicy (pure 100) (const (pure (Csrf.BoundCsrfBinding binding maximumTime)))
-          overflowProtection = Csrf.signedCsrfProtection keyring overflowPolicy (pure maximumTime) (const (pure Csrf.AnonymousCsrfBinding))
+          boundedProtection = signedProtection keyring largeSkewPolicy (pure 100) (const (pure (Csrf.BoundCsrfBinding binding maximumTime)))
+          overflowProtection = signedProtection keyring overflowPolicy (pure maximumTime) (const (pure Csrf.AnonymousCsrfBinding))
       issued <- Csrf.issueCsrfToken boundedProtection ()
       case issued of
         Csrf.CsrfProtectionUnavailable -> expectationFailure "expected an unexpired bound token"
@@ -496,3 +500,13 @@ spec = do
                  mkSafeReturnPath "/account\0" `shouldBe` Nothing
                ]
         )
+
+signedProtection :: Csrf.SignedCsrfKeyring -> Csrf.SignedCsrfPolicy -> IO Time.UnixTimeNanoseconds -> (context -> IO Csrf.CsrfBindingResolution) -> Csrf.CsrfProtection context
+signedProtection keyring policy currentTime resolveBinding =
+  Csrf.signedCsrfProtection
+    Csrf.SignedCsrfDependencies
+      { Csrf.signedCsrfDependenciesKeyring = keyring,
+        Csrf.signedCsrfDependenciesPolicy = policy,
+        Csrf.signedCsrfDependenciesCurrentTime = currentTime,
+        Csrf.signedCsrfDependenciesResolveBinding = resolveBinding
+      }
