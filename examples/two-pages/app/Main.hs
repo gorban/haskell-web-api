@@ -22,9 +22,11 @@ main = do
             twoPageServerConfig
             ( buildApplication
                 ( HarchWeb.signedCsrfProtection
-                    keyring
-                    HarchWeb.defaultSignedCsrfPolicy
-                    currentUnixTimeNanoseconds
-                    (const (pure HarchWeb.AnonymousCsrfBinding))
+                    HarchWeb.SignedCsrfDependencies
+                      { HarchWeb.signedCsrfDependenciesKeyring = keyring,
+                        HarchWeb.signedCsrfDependenciesPolicy = HarchWeb.defaultSignedCsrfPolicy,
+                        HarchWeb.signedCsrfDependenciesCurrentTime = currentUnixTimeNanoseconds,
+                        HarchWeb.signedCsrfDependenciesResolveBinding = const (pure HarchWeb.AnonymousCsrfBinding)
+                      }
                 )
             )

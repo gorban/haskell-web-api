@@ -1663,10 +1663,12 @@ requiredComposedSite =
 testCsrfProtection :: Csrf.CsrfProtection ComposedContext
 testCsrfProtection =
   Csrf.signedCsrfProtection
-    keyring
-    Csrf.defaultSignedCsrfPolicy
-    (pure 1000000000)
-    (const (pure Csrf.AnonymousCsrfBinding))
+    Csrf.SignedCsrfDependencies
+      { Csrf.signedCsrfDependenciesKeyring = keyring,
+        Csrf.signedCsrfDependenciesPolicy = Csrf.defaultSignedCsrfPolicy,
+        Csrf.signedCsrfDependenciesCurrentTime = pure 1000000000,
+        Csrf.signedCsrfDependenciesResolveBinding = const (pure Csrf.AnonymousCsrfBinding)
+      }
   where
     keyId = requiredCsrf "test CSRF key id" (Csrf.mkCsrfKeyId "composed-test-v1")
     signingKey = requiredCsrf "test CSRF signing key" (Csrf.mkCsrfSigningKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
@@ -1675,10 +1677,12 @@ testCsrfProtection =
 admissionCsrfProtection :: Csrf.CsrfProtection ComposedContext
 admissionCsrfProtection =
   Csrf.signedCsrfProtection
-    keyring
-    Csrf.defaultSignedCsrfPolicy
-    (pure 1000000000)
-    resolveAdmissionCsrfBinding
+    Csrf.SignedCsrfDependencies
+      { Csrf.signedCsrfDependenciesKeyring = keyring,
+        Csrf.signedCsrfDependenciesPolicy = Csrf.defaultSignedCsrfPolicy,
+        Csrf.signedCsrfDependenciesCurrentTime = pure 1000000000,
+        Csrf.signedCsrfDependenciesResolveBinding = resolveAdmissionCsrfBinding
+      }
   where
     keyId = requiredCsrf "admission CSRF key id" (Csrf.mkCsrfKeyId "composed-test-v1")
     signingKey = requiredCsrf "admission CSRF signing key" (Csrf.mkCsrfSigningKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")

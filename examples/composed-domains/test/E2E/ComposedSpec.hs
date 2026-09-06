@@ -246,10 +246,12 @@ browserDependencies csrfProtection =
 browserCsrfProtection :: Csrf.CsrfProtection ComposedContext
 browserCsrfProtection =
   Csrf.signedCsrfProtection
-    keyring
-    Csrf.defaultSignedCsrfPolicy
-    (pure 1000000000)
-    (const (pure Csrf.AnonymousCsrfBinding))
+    Csrf.SignedCsrfDependencies
+      { Csrf.signedCsrfDependenciesKeyring = keyring,
+        Csrf.signedCsrfDependenciesPolicy = Csrf.defaultSignedCsrfPolicy,
+        Csrf.signedCsrfDependenciesCurrentTime = pure 1000000000,
+        Csrf.signedCsrfDependenciesResolveBinding = const (pure Csrf.AnonymousCsrfBinding)
+      }
   where
     keyId = requiredCsrf "browser CSRF key id" (Csrf.mkCsrfKeyId "composed-browser-v1")
     signingKey = requiredCsrf "browser CSRF signing key" (Csrf.mkCsrfSigningKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
@@ -258,10 +260,12 @@ browserCsrfProtection =
 admissionBrowserCsrfProtection :: Csrf.CsrfProtection ComposedContext
 admissionBrowserCsrfProtection =
   Csrf.signedCsrfProtection
-    keyring
-    Csrf.defaultSignedCsrfPolicy
-    (pure 1000000000)
-    resolveAdmissionCsrfBinding
+    Csrf.SignedCsrfDependencies
+      { Csrf.signedCsrfDependenciesKeyring = keyring,
+        Csrf.signedCsrfDependenciesPolicy = Csrf.defaultSignedCsrfPolicy,
+        Csrf.signedCsrfDependenciesCurrentTime = pure 1000000000,
+        Csrf.signedCsrfDependenciesResolveBinding = resolveAdmissionCsrfBinding
+      }
   where
     keyId = requiredCsrf "admission browser CSRF key id" (Csrf.mkCsrfKeyId "composed-browser-v1")
     signingKey = requiredCsrf "admission browser CSRF signing key" (Csrf.mkCsrfSigningKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")

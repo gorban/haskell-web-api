@@ -32,7 +32,7 @@ main = do
                   ComposedSiteDependencies
                     { composedStaticAssets = defaultComposedStaticAssets,
                       composedLocalePolicy = defaultLocalePolicy,
-                      composedCsrfProtection = HarchWeb.signedCsrfProtection keyring HarchWeb.defaultSignedCsrfPolicy currentUnixTimeNanoseconds (const (pure HarchWeb.AnonymousCsrfBinding)),
+                      composedCsrfProtection = HarchWeb.signedCsrfProtection HarchWeb.SignedCsrfDependencies {HarchWeb.signedCsrfDependenciesKeyring = keyring, HarchWeb.signedCsrfDependenciesPolicy = HarchWeb.defaultSignedCsrfPolicy, HarchWeb.signedCsrfDependenciesCurrentTime = currentUnixTimeNanoseconds, HarchWeb.signedCsrfDependenciesResolveBinding = const (pure HarchWeb.AnonymousCsrfBinding)},
                       composedDomainCapabilities = ComposedDomainCapabilities catalogQueries catalogCommands ordersQueries ordersCommands
                     }
               catalogQueries = CatalogQueries (const (pure "Catalog"))

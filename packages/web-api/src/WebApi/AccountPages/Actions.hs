@@ -71,10 +71,12 @@ type AccountActionWorkflow = AppM AccountActionResponse AccountActionResponse
 accountCsrfProtection :: AccountWorkflow -> HarchWeb.CsrfProtection AppRequestContext
 accountCsrfProtection workflow =
   HarchWeb.signedCsrfProtection
-    (accountWorkflowCsrfSigningKeyring workflow)
-    HarchWeb.defaultSignedCsrfPolicy
-    (accountWorkflowClock workflow)
-    (resolveCsrfBinding workflow)
+    HarchWeb.SignedCsrfDependencies
+      { HarchWeb.signedCsrfDependenciesKeyring = accountWorkflowCsrfSigningKeyring workflow,
+        HarchWeb.signedCsrfDependenciesPolicy = HarchWeb.defaultSignedCsrfPolicy,
+        HarchWeb.signedCsrfDependenciesCurrentTime = accountWorkflowClock workflow,
+        HarchWeb.signedCsrfDependenciesResolveBinding = resolveCsrfBinding workflow
+      }
 
 resolveCsrfBinding :: AccountWorkflow -> AppRequestContext -> IO HarchWeb.CsrfBindingResolution
 resolveCsrfBinding workflow requestContext = do
