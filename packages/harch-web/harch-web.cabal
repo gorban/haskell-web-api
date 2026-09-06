@@ -159,7 +159,9 @@ library
     HarchWeb.Server.ClientAction
     HarchWeb.Server.ClientAction.Runtime
     HarchWeb.Server.Config
+    HarchWeb.Server.EarlyStages
     HarchWeb.Server.LocalTest
+    HarchWeb.Server.PostMatch
     HarchWeb.Server.RequestAdmission
     HarchWeb.Server.RequestBody
     HarchWeb.Server.RequestExecution

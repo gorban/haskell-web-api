@@ -3363,6 +3363,25 @@ and signed parsing details. Existing signed issuance, expiry, binding, key
 rotation, and synchronizer-unavailability tests therefore exercise the same
 single lifecycle rather than a replacement implementation.
 
+### Decision record — cohesive post-match endpoint execution (PR-F2, 2026-09-05)
+
+**Decision: extract the existing post-match endpoint selection and guard
+execution into a private dispatcher collaborator, rather than introduce a
+second router or an independently matched security pipeline.** Route matching
+still produces the one `RouteDispatch`; the collaborator uses that result to
+select action-owner metadata when appropriate, attach the existing route
+observation, construct the existing endpoint request/event sink, and execute
+the installed guard rail. Request-body admission, route-local concurrency,
+timing, handler invocation, response finalization, and HEAD/OPTIONS/405
+policy remain in their established dispatcher owners.
+
+Routed observability now derives response diagnostics once at its response
+owner instead of accepting a caller-provided diagnostic value that could be
+inconsistent with the response. Its force-at-report-boundary behavior remains
+unchanged. This leaves SEC-1/SEC-2's declaration-level concurrency and action
+owner contract available to the same post-match collaborator rather than
+freezing an alternate admission path into this structural extraction.
+
 ## Example taxonomy
 
 The [examples index](../examples/README.md) uses four labels:

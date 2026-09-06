@@ -23,31 +23,16 @@ module HarchWeb.Server.RequestExecution
   )
 where
 
-import Control.Monad.Except (ExceptT, runExceptT, throwError)
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Except (runExceptT)
 import Data.ByteString qualified as ByteString
-import Data.Foldable (for_)
 import Data.List.NonEmpty (NonEmpty)
-import Data.Maybe (listToMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Csrf (PageSecurity, pageSecurityRuntimeNonce)
-import HarchWeb.Document (NavigationRuntime, RuntimeAsset)
-import HarchWeb.Document qualified as Document
-import HarchWeb.EndpointSecurity
-  ( AccessRequirement (..),
-    ApplicationSecurity (..),
-    AuthenticationGuard (..),
-    EndpointDispatchKind (..),
-    EndpointGuard (..),
-    EndpointGuardResult (..),
-    EndpointMetadata (endpointAccess, endpointName, endpointRouteTemplate),
-    EndpointRequest (..),
-    runEndpointGuardPipeline,
-  )
+import HarchWeb.EndpointSecurity (EndpointGuardResult (..))
 import HarchWeb.RequestId (RequestId, newRequestId, requestIdText)
 import HarchWeb.Routing
   ( RouteDispatch (..),
@@ -59,26 +44,12 @@ import HarchWeb.Routing
     routeAllowHeaderValue,
   )
 import HarchWeb.Routing qualified as Routing
-import HarchWeb.Security
-  ( RequestHeadLimitFailure (..),
-    RequestPolicyConfig (..),
-    applyRequestPathPrefix,
-    corsPreflightResponse,
-    externalRequestPath,
-    httpsRedirectResponse,
-    mkUrlPath,
-    requestPathPrefix,
-    requestPolicyResponseHeaders,
-    requestRedirectLocation,
-    urlPathText,
-    validateRequestHead,
-    waiRequestPath,
-    waiRequestRouteTarget,
-  )
-import HarchWeb.SecurityEvent (rootSecurityEventSink, rootSecurityEventSinkWithMountChain)
+import HarchWeb.Security (RequestPolicyConfig (..), requestPolicyResponseHeaders, validateRequestHead, waiRequestPath, waiRequestRouteTarget)
 import HarchWeb.Server.Application
 import HarchWeb.Server.ClientAction
 import HarchWeb.Server.ClientAction.Runtime (clientActionResponse)
+import HarchWeb.Server.EarlyStages (navigationRuntimeResponse, requestHeadLimitResponse, routeLocationDecodeResponse, runEarlyRequestStages, runtimeAssetResponse)
+import HarchWeb.Server.PostMatch (runPostMatchGuards)
 import HarchWeb.Server.RequestAdmission
   ( RouteConcurrencyGateCache,
     concurrencyLimitedMiddleware,
@@ -94,73 +65,8 @@ import HarchWeb.Server.RequestObservability
   )
 import HarchWeb.Server.Response
 import HarchWeb.Server.ResponseRendering
-import HarchWeb.Server.StaticAssets (serveStaticAssetResponse)
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
-
-navigationRuntimeResponse :: NavigationRuntime -> Text -> Maybe ResponseBody
-navigationRuntimeResponse runtime requestPath =
-  if requestPath == Document.navigationRuntimePath runtime
-    then
-      Just
-        ResponseBody
-          { responseStatus = Http.status200,
-            responseContentType = "application/javascript; charset=utf-8",
-            responseBody = Document.navigationRuntimeScript runtime,
-            responseObservabilityAttributes = [],
-            responseLogEntries = [],
-            responseDatabaseOperations = []
-          }
-    else Nothing
-
--- | Interpret one application-selected runtime asset at the existing early
--- response boundary. The caller preserves declaration order and serves only
--- the first path match; this is adapter selection, not a second static-file
--- or dialog-specific request pipeline.
-runtimeAssetResponse :: RuntimeAsset -> Text -> Maybe ResponseBody
-runtimeAssetResponse runtimeAsset requestPath =
-  if requestPath == Document.runtimeAssetPath runtimeAsset
-    then
-      Just
-        ResponseBody
-          { responseStatus = Http.status200,
-            responseContentType = "application/javascript; charset=utf-8",
-            responseBody = Document.runtimeAssetScript runtimeAsset,
-            responseObservabilityAttributes = [],
-            responseLogEntries = [],
-            responseDatabaseOperations = []
-          }
-    else Nothing
-
--- | Handle framework-owned responses before routing or application middleware.
--- Each response receives the request policy headers exactly once.
-runEarlyRequestStages ::
-  Application route action context authorization ->
-  Wai.Request ->
-  Text ->
-  Http.ResponseHeaders ->
-  ExceptT (Text, Wai.Response) IO ()
-runEarlyRequestStages webApplication request requestPath policyResponseHeaders = do
-  let requestPolicyConfig = applicationRequestPolicy webApplication
-      earlyResponse path = throwError . (path,) . applyResponseHeaders policyResponseHeaders
-  for_ (corsPreflightResponse requestPolicyConfig request) $
-    earlyResponse (externalRequestPath requestPolicyConfig request)
-  for_ (requestRedirectLocation requestPolicyConfig request) $ \redirectLocation ->
-    earlyResponse (externalRequestPath requestPolicyConfig request) (httpsRedirectResponse redirectLocation)
-  for_ (applicationNavigationRuntime webApplication >>= (`navigationRuntimeResponse` requestPath)) $
-    earlyResponse requestPath . toWaiBodyResponse []
-  for_
-    ( listToMaybe
-        (mapMaybe (`runtimeAssetResponse` requestPath) (applicationRuntimeAssets webApplication))
-    )
-    $ earlyResponse requestPath . toWaiBodyResponse []
-  maybeStaticResponse <- liftIO (serveStaticAssetResponse (applicationStaticAssets webApplication) request requestPath)
-  for_ maybeStaticResponse $ \(staticRoutePath, staticResponse) ->
-    earlyResponse
-      ( urlPathText
-          (applyRequestPathPrefix (requestPathPrefix requestPolicyConfig request) (mkUrlPath staticRoutePath))
-      )
-      staticResponse
 
 -- | Inputs that stay fixed after the framework has accepted a request for
 -- routing. Grouping them keeps the lifecycle helpers focused on their
@@ -269,35 +175,6 @@ toValidatedWaiApplication routeGateCache webApplication requestId request respon
               policyEvaluatedAt
       either respondEarlyRequest (const handleRoutedRequestAfterEarlyStages) earlyResult
 
-routeLocationDecodeResponse :: Wai.Response
-routeLocationDecodeResponse =
-  Wai.responseLBS
-    Http.status400
-    [(Http.hContentType, "text/plain; charset=utf-8")]
-    "Request target was rejected."
-
-requestHeadLimitResponse :: RequestHeadLimitFailure -> Wai.Response
-requestHeadLimitResponse limitFailure =
-  Wai.responseLBS
-    status
-    [(Http.hContentType, "text/plain; charset=utf-8")]
-    "Request metadata was rejected."
-  where
-    status =
-      case limitFailure of
-        InvalidRequestTargetEncoding -> Http.status400
-        RequestTargetTooLarge -> Http.status414
-        TooManyRequestHeaders -> Http.status431
-        RequestHeadersTooLarge -> Http.status431
-        RequestHeaderValueTooLarge -> Http.status431
-        TooManyRequestCookies -> Http.status431
-        RequestCookieNameTooLarge -> Http.status431
-        RequestCookieValueTooLarge -> Http.status431
-        TooManyPathSegments -> Http.status414
-        RequestPathSegmentTooLarge -> Http.status414
-        TooManyQueryFields -> Http.status414
-        RequestQueryFieldTooLarge -> Http.status414
-
 -- | The WAI boundary owns replacement rather than addition so an application
 -- response cannot shadow the framework's correlation value with a conflicting
 -- or client-derived header.
@@ -341,7 +218,7 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
   case routeDispatchResult of
     Left _ -> respondRouteLocationDecodeFailure routedRequestExecution
     Right routeDispatch -> do
-      guardResult <- runEndpointGuards webApplication request (routedRequestPath routedRequestExecution) routeDispatch middlewareResult
+      guardResult <- runPostMatchGuards webApplication request (routedRequestPath routedRequestExecution) routeDispatch middlewareResult
       case guardResult of
         HaltEndpoint guardedResponse ->
           continueRoutedResponse routedRequestExecution timingState routeDispatch (nonPageResponse guardedResponse)
@@ -362,102 +239,6 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
 respondRouteLocationDecodeFailure :: RoutedRequestExecution route action context authorization -> IO Wai.ResponseReceived
 respondRouteLocationDecodeFailure routedRequestExecution =
   routedRequestRespond routedRequestExecution routeLocationDecodeResponse
-
--- | Apply the explicit post-match security selection to every declared route
--- outcome.  A 404 has no endpoint declaration; a pre-route halt retains its
--- older response-body contract and is not reinterpreted as endpoint policy.
-runEndpointGuards ::
-  Application route action context authorization ->
-  Wai.Request ->
-  Text ->
-  RouteDispatch route context ->
-  MiddlewareResult context ->
-  IO (EndpointGuardResult route context)
-runEndpointGuards webApplication request requestPath routeDispatch middlewareResult =
-  case middlewareResult of
-    HaltMiddleware _ responseBodyValue -> pure (HaltEndpoint (NonPageBodyResponse responseBodyValue))
-    ContinueMiddleware middlewareContext ->
-      case routeDispatch of
-        RouteNotFound _
-          | isAction,
-            Just _ <- actionRoute ->
-              runSelectedEndpointGuards EndpointClientAction
-          | otherwise -> pure (ContinueEndpoint middlewareContext)
-        RouteMethodNotAllowed _ _ -> runSelectedEndpointGuards EndpointMethodNotAllowed
-        RouteMatched _ -> runSelectedEndpointGuards EndpointMatched
-        RouteMatchedHead _ -> runSelectedEndpointGuards EndpointMatchedHead
-        RouteOptions _ _ -> runSelectedEndpointGuards EndpointOptions
-  where
-    routeRequest = routeDispatchRequest routeDispatch
-    isAction = isClientActionRequest request
-    actionRoute =
-      if isAction
-        then clientActionRoute webApplication (requestMethodText request) requestPath (requestContext routeRequest)
-        else Nothing
-    guardRouteRequest =
-      case actionRoute of
-        Nothing -> routeRequest
-        Just actionRouteValue -> routeRequest {requestRoute = actionRouteValue}
-    selectedEndpointMetadata =
-      if isAction
-        then clientActionEndpointMetadata webApplication (requestMethodText request) requestPath (requestContext routeRequest)
-        else Just (routeEndpointMetadata webApplication (requestRoute routeRequest))
-    runSelectedEndpointGuards routeDispatchKind =
-      case selectedEndpointMetadata of
-        Nothing -> pure (ContinueEndpoint (requestContext routeRequest))
-        Just selectedMetadata ->
-          let observedRouteRequest =
-                guardRouteRequest
-                  { requestContext =
-                      applicationAttachRouteObservation
-                        webApplication
-                        (requestRoute guardRouteRequest)
-                        selectedMetadata
-                        (requestContext guardRouteRequest)
-                  }
-              endpointRequest =
-                EndpointRequest
-                  { endpointWaiRequest = request,
-                    endpointRouteRequest = observedRouteRequest,
-                    endpointMetadata = selectedMetadata,
-                    endpointSecurityEventSink =
-                      fmap
-                        ( \eventRoot ->
-                            case applicationRouteModuleChain webApplication of
-                              Nothing -> rootSecurityEventSink eventRoot (endpointName selectedMetadata) (endpointRouteTemplate selectedMetadata) (requestContext observedRouteRequest)
-                              Just routeModuleChain -> rootSecurityEventSinkWithMountChain eventRoot (routeModuleChain (requestRoute guardRouteRequest)) (endpointName selectedMetadata) (endpointRouteTemplate selectedMetadata) (requestContext observedRouteRequest)
-                        )
-                        (applicationSecurityEventRoot webApplication),
-                    endpointDispatchKind = if isAction then EndpointClientAction else routeDispatchKind
-                  }
-           in case applicationSecurity webApplication of
-                AuthenticationDisabled _ ->
-                  case endpointAccess (endpointMetadata endpointRequest) of
-                    AllowUnauthenticated -> runEndpointGuardPipeline (applicationEndpointGuards (applicationSecurity webApplication)) endpointRequest
-                    _ -> pure (HaltEndpoint (NonPageBodyResponse disabledSecurityResponse))
-                _ -> runEndpointGuardPipeline (applicationEndpointGuards (applicationSecurity webApplication)) endpointRequest
-
--- | An explicitly public root cannot accidentally make a protected endpoint
--- usable merely because its guard list is empty.  This is a server-side
--- composition error, so it fails closed with a generic unavailable response
--- rather than pretending that an identity challenge can be fulfilled.
-disabledSecurityResponse :: ResponseBody
-disabledSecurityResponse =
-  ResponseBody
-    { responseStatus = Http.status503,
-      responseContentType = "text/plain; charset=utf-8",
-      responseBody = "Authentication is unavailable.",
-      responseObservabilityAttributes = [],
-      responseLogEntries = ["endpoint security configuration rejected a protected endpoint"],
-      responseDatabaseOperations = []
-    }
-
-applicationEndpointGuards :: ApplicationSecurity route context authorization -> [EndpointGuard route context authorization]
-applicationEndpointGuards applicationSecurity =
-  case applicationSecurity of
-    AuthenticationDisabled guards -> guards
-    AuthenticationEnabled beforeGuards (AuthenticationGuard runAuthentication) afterGuards ->
-      beforeGuards <> [EndpointGuard runAuthentication] <> afterGuards
 
 -- | A route-local gate is available only for an already path-matched route.
 -- `RouteNotFound` deliberately has no route declaration whose policy it could

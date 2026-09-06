@@ -85,7 +85,7 @@ reportRoutedResponseObservability observabilityContext requestPath executionTimi
       requestPolicyConfig = requestObservabilityPolicyConfig observabilityContext
       requestLogFields = requestLogContextFields requestPolicyConfig request
       contextualizedLogs = map (prependRequestIdLogContext (requestObservabilityRequestId observabilityContext) . prependRequestLogContext requestLogFields) (diagnosticLogEntries diagnosticValues)
-      observabilityValue = buildRoutedRequestObservability observabilityContext requestPath executionTimings routeRequest response diagnosticValues
+      observabilityValue = buildRoutedRequestObservability observabilityContext requestPath executionTimings routeRequest response
   Observability.forceRequestObservability observabilityValue `seq`
     reportRequestObservability webApplication observabilityValue
       >> mapM_ (reportApplicationLog webApplication) contextualizedLogs
@@ -97,9 +97,8 @@ buildRoutedRequestObservability ::
   RequestExecutionTimings ->
   RouteRequest route context ->
   Response route context ->
-  ResponseDiagnostics ->
   Observability.RequestObservability
-buildRoutedRequestObservability observabilityContext requestPath executionTimings routeRequest response diagnosticValues =
+buildRoutedRequestObservability observabilityContext requestPath executionTimings routeRequest response =
   Observability.withDatabaseOperations (diagnosticDatabaseOperations diagnosticValues) $
     maybe id Observability.withRequestTraceContext (requestTraceContext request) $
       Observability.buildRequestObservability
@@ -125,6 +124,7 @@ buildRoutedRequestObservability observabilityContext requestPath executionTiming
               )
         )
   where
+    diagnosticValues = responseDiagnostics response
     webApplication = requestObservabilityApplication observabilityContext
     request = requestObservabilityWaiRequest observabilityContext
     requestPolicyConfig = requestObservabilityPolicyConfig observabilityContext
