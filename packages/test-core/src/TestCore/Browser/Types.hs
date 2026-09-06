@@ -26,6 +26,11 @@ data BrowserConfig = BrowserConfig
   }
   deriving (Eq, Show)
 
+-- | Client-side operations observed by the browser runner.  Enhanced-navigation
+-- and mutation counts are calls to @window.fetch@ made by the page, rather than
+-- HTTP transport legs: a redirect or an intercepted-and-aborted request must
+-- not turn one client action into multiple metric events.  Hard navigations
+-- remain browser transport events because they do not call @window.fetch@.
 data BrowserMetrics = BrowserMetrics
   { enhancedNavigationFetchCount :: Int,
     hardNavigationCount :: Int,

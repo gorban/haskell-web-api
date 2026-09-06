@@ -126,15 +126,32 @@ async function createContext(scriptsEnabled) {
   state.context = await state.browser.newContext(contextOptions);
   state.scriptsEnabled = scriptsEnabled;
   await state.context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+  await state.context.exposeBinding('__testCoreRecordFetch', (_source, metrics) => {
+    if (metrics.enhancedNavigation) state.metrics.enhancedNavigationFetchCount += 1;
+    if (metrics.mutation) state.metrics.mutationRequestCount += 1;
+  });
+  await state.context.addInitScript(() => {
+    const originalFetch = window.fetch;
+    window.fetch = function (...arguments_) {
+      const [input, init] = arguments_;
+      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+      const requestedWith = headers.get('X-Requested-With')?.toLowerCase();
+      const metrics = {
+        enhancedNavigation: requestedWith === 'tiny-navigation',
+        mutation: headers.has('X-Harch-Action'),
+      };
+      if (metrics.enhancedNavigation || metrics.mutation) {
+        void window.__testCoreRecordFetch(metrics);
+      }
+      return originalFetch.apply(this, arguments_);
+    };
+  });
   state.page = await state.context.newPage();
   state.countHardNavigations = false;
   state.metrics = emptyMetrics();
   state.blockedRequests = new Map();
 
   state.page.on('request', (request) => {
-    const headers = request.headers();
-    if (headers['x-requested-with'] === 'tiny-navigation') state.metrics.enhancedNavigationFetchCount += 1;
-    if (headers['x-harch-action']) state.metrics.mutationRequestCount += 1;
     if (state.countHardNavigations && request.isNavigationRequest() && request.frame() === state.page.mainFrame()) {
       state.metrics.hardNavigationCount += 1;
     }
