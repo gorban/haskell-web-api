@@ -375,7 +375,15 @@ spec = do
               `shouldBe` HarchWeb.RouteExecutionPolicy (HarchWeb.mkRequestConcurrencyLimit 1)
           )
             :| [ HarchWeb.routeExecutionPolicy siteApplication HomeRoute
-                   `shouldBe` HarchWeb.unboundedRouteExecutionPolicy
+                   `shouldBe` HarchWeb.unboundedRouteExecutionPolicy,
+                 ( HarchWeb.routeExecutionIdentity siteApplication StatusApiRoute
+                     == HarchWeb.routeExecutionIdentityFromMetadata (routeMetadata boundedStatusRoute)
+                 )
+                   `shouldBe` True,
+                 ( HarchWeb.routeExecutionIdentity siteApplication HomeRoute
+                     == HarchWeb.routeExecutionIdentityFromMetadata (routeMetadata (sampleRouteDefinition HomeRoute))
+                 )
+                   `shouldBe` True
                ]
         )
 

@@ -7,6 +7,7 @@
 module HarchWeb.Server
   ( module HarchWeb.Server.Config,
     Application (..),
+    RouteExecutionIdentity,
     RouteExecutionPolicy (..),
     ClientActionDecodeResult (..),
     ClientActionIdempotencyKey,
@@ -60,6 +61,7 @@ module HarchWeb.Server
     responsePolicyHeaders,
     responseStatusCode,
     renderResponse,
+    routeExecutionIdentityFromMetadata,
     unboundedRouteExecutionPolicy,
     reportEarlyRequestObservability,
     serverSentEventContentType,

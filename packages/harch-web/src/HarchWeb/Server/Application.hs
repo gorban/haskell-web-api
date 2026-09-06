@@ -13,8 +13,10 @@
 -- one route/action interpreter.
 module HarchWeb.Server.Application
   ( Application (..),
+    RouteExecutionIdentity,
     RouteExecutionPolicy (..),
     application,
+    routeExecutionIdentityFromMetadata,
     renderResponse,
     middlewareResultContext,
     unboundedRouteExecutionPolicy,
@@ -26,7 +28,7 @@ import Data.List.NonEmpty (NonEmpty)
 import Data.Text (Text)
 import HarchWeb.Csrf (CsrfProtection)
 import HarchWeb.Document (Document, NavigationRuntime, Page, RuntimeAsset)
-import HarchWeb.EndpointSecurity (ApplicationSecurity, EndpointMetadata)
+import HarchWeb.EndpointSecurity (ApplicationSecurity, EndpointMetadata (endpointName), EndpointName)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.RequestId (RequestId)
 import HarchWeb.Routing (RouteCodec, RouteRequest)
@@ -59,6 +61,18 @@ newtype RouteExecutionPolicy = RouteExecutionPolicy
 -- admission budget unless its declaration opts in.
 unboundedRouteExecutionPolicy :: RouteExecutionPolicy
 unboundedRouteExecutionPolicy = RouteExecutionPolicy {routeExecutionConcurrencyLimit = Nothing}
+
+-- | A bounded route gate's construction-owned scope. It comes from the
+-- declaration's validated endpoint identity after composition applies mount
+-- metadata; it never comes from a path capture or another request value.
+newtype RouteExecutionIdentity = RouteExecutionIdentity EndpointName
+  deriving (Eq)
+
+-- | Derive a stable execution scope from the selected route declaration.
+-- Mounted route definitions carry their mounted metadata here, preserving
+-- separation between declarations with the same child-local endpoint name.
+routeExecutionIdentityFromMetadata :: EndpointMetadata authorization -> RouteExecutionIdentity
+routeExecutionIdentityFromMetadata = RouteExecutionIdentity . endpointName
 
 data Application route action context authorization = Application
   { appName :: Text,
@@ -107,6 +121,9 @@ data Application route action context authorization = Application
     -- | Selects the route-local policy only after the shared dispatcher has
     -- matched a route and method. It is not a second request-policy parser.
     routeExecutionPolicy :: route -> RouteExecutionPolicy,
+    -- | Construction-owned identity for route-local execution admission. The
+    -- dispatcher selects the declaration before this is consulted.
+    routeExecutionIdentity :: route -> RouteExecutionIdentity,
     renderRequestResponse :: Wai.Request -> RouteRequest route context -> IO (Response route context),
     decodeClientAction :: ClientActionPayload context -> ClientActionDecodeResult action,
     -- | The one CSRF authority used for pre-render page issuance and decoded

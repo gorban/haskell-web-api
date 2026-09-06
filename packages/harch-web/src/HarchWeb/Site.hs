@@ -257,6 +257,7 @@ buildSiteApplication site =
         clientActionEndpointMetadata = siteClientActionEndpointMetadata site,
         clientActionRoute = siteClientActionRoute site,
         HarchWeb.routeExecutionPolicy = routeDefinitionExecutionPolicy . siteRouteDefinition site,
+        HarchWeb.routeExecutionIdentity = HarchWeb.routeExecutionIdentityFromMetadata . routeMetadata . siteRouteDefinition site,
         renderRequestResponse = renderSiteResponse site,
         decodeClientAction = siteDecodeClientAction site,
         csrfProtection = siteCsrfProtection site,

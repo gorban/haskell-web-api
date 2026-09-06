@@ -14,7 +14,8 @@
 -- retain their established single owners; this module owns only the cohesive
 -- post-match selection/observation/guard responsibility.
 module HarchWeb.Server.PostMatch
-  ( runPostMatchGuards,
+  ( PostMatchGuardResult (..),
+    runPostMatchGuards,
   )
 where
 
@@ -40,20 +41,29 @@ import HarchWeb.Server.Response (MiddlewareResult (..), NonPageResponse (NonPage
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 
+-- | The one declared owner selected after matching, together with the guard
+-- result.  A client action owns its declared action route even when that URL
+-- is absent from the page codec; an unknown action owns no declaration.
+-- Keeping this selection with post-match guards prevents the admission rail
+-- from independently interpreting the request.
+data PostMatchGuardResult route context
+  = HaltPostMatch (NonPageResponse route context)
+  | ContinuePostMatch context (Maybe route)
+
 -- | Apply the explicit post-match security selection to every declared route
 -- outcome. A 404 has no endpoint declaration; a pre-route halt retains its
 -- older response-body contract and is not reinterpreted as endpoint policy.
-runPostMatchGuards :: Application route action context authorization -> Wai.Request -> Text -> RouteDispatch route context -> MiddlewareResult context -> IO (EndpointGuardResult route context)
+runPostMatchGuards :: Application route action context authorization -> Wai.Request -> Text -> RouteDispatch route context -> MiddlewareResult context -> IO (PostMatchGuardResult route context)
 runPostMatchGuards webApplication request requestPath routeDispatch middlewareResult =
   case middlewareResult of
-    HaltMiddleware _ responseBodyValue -> pure (HaltEndpoint (NonPageBodyResponse responseBodyValue))
+    HaltMiddleware _ responseBodyValue -> pure (HaltPostMatch (NonPageBodyResponse responseBodyValue))
     ContinueMiddleware middlewareContext ->
       case routeDispatch of
         RouteNotFound _
           | isAction,
             Just _ <- actionRoute ->
               runSelectedEndpointGuards EndpointClientAction
-          | otherwise -> pure (ContinueEndpoint middlewareContext)
+          | otherwise -> pure (ContinuePostMatch middlewareContext selectedAdmissionRoute)
         RouteMethodNotAllowed _ _ -> runSelectedEndpointGuards EndpointMethodNotAllowed
         RouteMatched _ -> runSelectedEndpointGuards EndpointMatched
         RouteMatchedHead _ -> runSelectedEndpointGuards EndpointMatchedHead
@@ -65,6 +75,12 @@ runPostMatchGuards webApplication request requestPath routeDispatch middlewareRe
       if isAction
         then clientActionRoute webApplication (requestMethodText request) requestPath (requestContext routeRequest)
         else Nothing
+    selectedAdmissionRoute =
+      if isAction
+        then actionRoute
+        else case routeDispatch of
+          RouteNotFound _ -> Nothing
+          _ -> Just (requestRoute routeRequest)
     guardRouteRequest = maybe routeRequest (\actionRouteValue -> routeRequest {requestRoute = actionRouteValue}) actionRoute
     selectedEndpointMetadata =
       if isAction
@@ -72,7 +88,7 @@ runPostMatchGuards webApplication request requestPath routeDispatch middlewareRe
         else Just (routeEndpointMetadata webApplication (requestRoute routeRequest))
     runSelectedEndpointGuards routeDispatchKind =
       case selectedEndpointMetadata of
-        Nothing -> pure (ContinueEndpoint (requestContext routeRequest))
+        Nothing -> pure (ContinuePostMatch (requestContext routeRequest) selectedAdmissionRoute)
         Just selectedMetadata ->
           let observedRouteRequest =
                 guardRouteRequest
@@ -89,13 +105,21 @@ runPostMatchGuards webApplication request requestPath routeDispatch middlewareRe
            in case applicationSecurity webApplication of
                 AuthenticationDisabled _ ->
                   case endpointAccess (endpointMetadata endpointRequest) of
-                    AllowUnauthenticated -> runEndpointGuardPipeline (applicationEndpointGuards (applicationSecurity webApplication)) endpointRequest
-                    _ -> pure (HaltEndpoint (NonPageBodyResponse disabledSecurityResponse))
-                _ -> runEndpointGuardPipeline (applicationEndpointGuards (applicationSecurity webApplication)) endpointRequest
+                    AllowUnauthenticated -> runGuards endpointRequest
+                    _ -> pure (HaltPostMatch (NonPageBodyResponse disabledSecurityResponse))
+                _ -> runGuards endpointRequest
+    runGuards endpointRequest =
+      toPostMatchGuardResult selectedAdmissionRoute
+        <$> runEndpointGuardPipeline (applicationEndpointGuards (applicationSecurity webApplication)) endpointRequest
     securityEventSink selectedMetadata observedRouteRequest eventRoot =
       case applicationRouteModuleChain webApplication of
         Nothing -> rootSecurityEventSink eventRoot (endpointName selectedMetadata) (endpointRouteTemplate selectedMetadata) (requestContext observedRouteRequest)
         Just routeModuleChain -> rootSecurityEventSinkWithMountChain eventRoot (routeModuleChain (requestRoute guardRouteRequest)) (endpointName selectedMetadata) (endpointRouteTemplate selectedMetadata) (requestContext observedRouteRequest)
+
+toPostMatchGuardResult :: Maybe route -> EndpointGuardResult route context -> PostMatchGuardResult route context
+toPostMatchGuardResult selectedAdmissionRoute = \case
+  HaltEndpoint response -> HaltPostMatch response
+  ContinueEndpoint context -> ContinuePostMatch context selectedAdmissionRoute
 
 routeDispatchRequest :: RouteDispatch route context -> RouteRequest route context
 routeDispatchRequest = \case

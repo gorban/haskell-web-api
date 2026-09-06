@@ -11,6 +11,7 @@
 module HarchWeb.Server.RequestAdmission
   ( concurrencyLimitedMiddleware,
     RouteConcurrencyGateCache,
+    RouteExecutionIdentity,
     newRouteConcurrencyGateCache,
     routeConcurrencyMiddleware,
   )
@@ -20,6 +21,7 @@ import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
 import Control.Exception (finally, mask)
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import HarchWeb.Security (RequestConcurrencyLimit, requestConcurrencyLimitValue)
+import HarchWeb.Server.Application (RouteExecutionIdentity)
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 
@@ -41,16 +43,18 @@ concurrencyLimitedMiddleware maybeLimit waiMiddleware =
       pure (concurrencyGateMiddleware gate . waiMiddleware)
 
 -- | Per-public-WAI-adapter gate state for route-local execution limits. A
--- gate is installed only when a bounded route is first selected, and then
--- reused for that route's later requests. This cache is deliberately below
--- the global gate: it cannot affect listener admission, request-head
--- validation, or middleware that already ran to provide route context.
-newtype RouteConcurrencyGateCache route = RouteConcurrencyGateCache (MVar [(route, Wai.Middleware)])
+-- gate is installed only when a bounded declaration identity is first
+-- selected, and then reused for that declaration's later requests. The
+-- identity is construction-owned metadata, never a request capture. This
+-- cache is deliberately below the global gate: it cannot affect listener
+-- admission, request-head validation, or middleware that already ran to
+-- provide route context.
+newtype RouteConcurrencyGateCache = RouteConcurrencyGateCache (MVar [(RouteExecutionIdentity, Wai.Middleware)])
 
-newRouteConcurrencyGateCache :: IO (RouteConcurrencyGateCache route)
+newRouteConcurrencyGateCache :: IO RouteConcurrencyGateCache
 newRouteConcurrencyGateCache = RouteConcurrencyGateCache <$> newMVar []
 
-routeConcurrencyMiddleware :: (Eq route) => RouteConcurrencyGateCache route -> route -> Maybe RequestConcurrencyLimit -> IO Wai.Middleware
+routeConcurrencyMiddleware :: RouteConcurrencyGateCache -> RouteExecutionIdentity -> Maybe RequestConcurrencyLimit -> IO Wai.Middleware
 routeConcurrencyMiddleware _ _ Nothing = pure id
 routeConcurrencyMiddleware (RouteConcurrencyGateCache cache) routeValue (Just limit) =
   modifyMVar cache $ \entries ->

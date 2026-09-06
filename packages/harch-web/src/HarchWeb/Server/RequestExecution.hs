@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Typed request execution and the public WAI adapter.
@@ -32,7 +33,6 @@ import Data.Text.Encoding.Error qualified as TextEncodingError
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Csrf (PageSecurity, pageSecurityRuntimeNonce)
-import HarchWeb.EndpointSecurity (EndpointGuardResult (..))
 import HarchWeb.RequestId (RequestId, newRequestId, requestIdText)
 import HarchWeb.Routing
   ( RouteDispatch (..),
@@ -49,7 +49,7 @@ import HarchWeb.Server.Application
 import HarchWeb.Server.ClientAction
 import HarchWeb.Server.ClientAction.Runtime (clientActionResponse)
 import HarchWeb.Server.EarlyStages (navigationRuntimeResponse, requestHeadLimitResponse, routeLocationDecodeResponse, runEarlyRequestStages, runtimeAssetResponse)
-import HarchWeb.Server.PostMatch (runPostMatchGuards)
+import HarchWeb.Server.PostMatch (PostMatchGuardResult (..), runPostMatchGuards)
 import HarchWeb.Server.RequestAdmission
   ( RouteConcurrencyGateCache,
     concurrencyLimitedMiddleware,
@@ -74,7 +74,7 @@ import Network.Wai qualified as Wai
 -- every stage.
 data RoutedRequestExecution route action context authorization = RoutedRequestExecution
   { routedRequestApplication :: Application route action context authorization,
-    routedRequestRouteGateCache :: RouteConcurrencyGateCache route,
+    routedRequestRouteGateCache :: RouteConcurrencyGateCache,
     routedRequestWaiRequest :: Wai.Request,
     routedRequestRespond :: Wai.Response -> IO Wai.ResponseReceived,
     routedRequestPolicyConfig :: RequestPolicyConfig,
@@ -122,13 +122,13 @@ toWaiApplication webApplication = do
 -- | Mint the request correlation identifier before request-head validation so
 -- even framework rejections use the same response-header path as a routed
 -- request. The generated value is then fixed for the rest of this request.
-requestIdentifiedWaiApplication :: (Eq route) => Wai.Middleware -> RouteConcurrencyGateCache route -> Application route action context authorization -> Wai.Application
+requestIdentifiedWaiApplication :: (Eq route) => Wai.Middleware -> RouteConcurrencyGateCache -> Application route action context authorization -> Wai.Application
 requestIdentifiedWaiApplication gateMiddleware routeGateCache webApplication request respond = do
   requestId <- newRequestId
   let respondWithRequestId = respond . applyRequestIdResponseHeader requestId
   gateMiddleware (headLimitedWaiApplication routeGateCache webApplication requestId) request respondWithRequestId
 
-headLimitedWaiApplication :: (Eq route) => RouteConcurrencyGateCache route -> Application route action context authorization -> RequestId -> Wai.Application
+headLimitedWaiApplication :: (Eq route) => RouteConcurrencyGateCache -> Application route action context authorization -> RequestId -> Wai.Application
 headLimitedWaiApplication routeGateCache webApplication requestId request respond =
   case validateRequestHead (requestHeadLimits (applicationRequestPolicy webApplication)) request of
     Left limitFailure -> respond (requestHeadLimitResponse limitFailure)
@@ -137,7 +137,7 @@ headLimitedWaiApplication routeGateCache webApplication requestId request respon
 -- | Only valid, budgeted request heads reach the ordinary request pipeline.
 -- This keeps malformed target bytes and oversized metadata out of route
 -- parsing, application middleware, logs, and observability extraction.
-toValidatedWaiApplication :: (Eq route) => RouteConcurrencyGateCache route -> Application route action context authorization -> RequestId -> Wai.Application
+toValidatedWaiApplication :: (Eq route) => RouteConcurrencyGateCache -> Application route action context authorization -> RequestId -> Wai.Application
 toValidatedWaiApplication routeGateCache webApplication requestId request respond = do
   let requestPolicyConfig = applicationRequestPolicy webApplication
   case decodeRouteLocation (waiRequestRouteTarget requestPolicyConfig request) of
@@ -220,11 +220,11 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
     Right routeDispatch -> do
       guardResult <- runPostMatchGuards webApplication request (routedRequestPath routedRequestExecution) routeDispatch middlewareResult
       case guardResult of
-        HaltEndpoint guardedResponse ->
+        HaltPostMatch guardedResponse ->
           continueRoutedResponse routedRequestExecution timingState routeDispatch (nonPageResponse guardedResponse)
-        ContinueEndpoint guardedContext -> do
+        ContinuePostMatch guardedContext selectedAdmissionRoute -> do
           let guardedDispatch = setRouteDispatchContext guardedContext routeDispatch
-          routeMiddleware <- routeAdmissionMiddleware routedRequestExecution guardedDispatch
+          routeMiddleware <- routeAdmissionMiddleware routedRequestExecution selectedAdmissionRoute
           routeMiddleware
             ( \admittedRequest admittedRespond ->
                 continueRoutedRequest
@@ -240,21 +240,19 @@ respondRouteLocationDecodeFailure :: RoutedRequestExecution route action context
 respondRouteLocationDecodeFailure routedRequestExecution =
   routedRequestRespond routedRequestExecution routeLocationDecodeResponse
 
--- | A route-local gate is available only for an already path-matched route.
--- `RouteNotFound` deliberately has no route declaration whose policy it could
--- claim; all other dispatch outcomes retain the selected route so their
--- `HEAD`, `OPTIONS`, and 405 responses cannot bypass that route's gate.
-routeAdmissionMiddleware :: (Eq route) => RoutedRequestExecution route action context authorization -> RouteDispatch route context -> IO Wai.Middleware
-routeAdmissionMiddleware routedRequestExecution routeDispatch =
-  case routeDispatch of
-    RouteNotFound _ -> pure id
-    _ ->
-      routeConcurrencyMiddleware
-        (routedRequestRouteGateCache routedRequestExecution)
-        selectedRoute
-        (routeExecutionConcurrencyLimit (routeExecutionPolicy (routedRequestApplication routedRequestExecution) selectedRoute))
-  where
-    selectedRoute = requestRoute (routeDispatchRequest routeDispatch)
+-- | Admit the declaration selected exactly once by post-match execution. An
+-- ordinary unmatched route and an unknown client action have no declaration;
+-- a declared action uses its action owner even if its URL is not in the page
+-- codec. This preserves the route authority for 405, HEAD and OPTIONS while
+-- preventing page/action URL collisions from selecting another gate.
+routeAdmissionMiddleware :: RoutedRequestExecution route action context authorization -> Maybe route -> IO Wai.Middleware
+routeAdmissionMiddleware routedRequestExecution = \case
+  Nothing -> pure id
+  Just selectedRoute ->
+    routeConcurrencyMiddleware
+      (routedRequestRouteGateCache routedRequestExecution)
+      (routeExecutionIdentity (routedRequestApplication routedRequestExecution) selectedRoute)
+      (routeExecutionConcurrencyLimit (routeExecutionPolicy (routedRequestApplication routedRequestExecution) selectedRoute))
 
 continueRoutedRequest ::
   (Eq route) =>

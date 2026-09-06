@@ -1319,6 +1319,23 @@ while deployment configuration continues to own listener and application-wide bu
 may be redundant when wider than a configured global cap, but can never raise that cap because both
 gates must admit the request.
 
+**Amendment (SEC-1/SEC-2, 2026-09-06): the route gate is keyed by the declaration's stable
+`EndpointName`, after site/module composition has applied mounted metadata, rather than by the
+request-selected route ADT value.** The original “one gate per bounded route” wording was unsafe for
+parameterized route constructors: a path or query capture could become a permanent cache key and give
+each resource its own nominal budget. `RouteExecutionIdentity` is deliberately constructed only from
+validated endpoint metadata; ordinary sites derive it from their final route definition, so separately
+mounted declarations retain separate gates even when their children share a local name. Direct
+`Application` adapters must provide the same construction-owned mapping explicitly.
+
+Post-match selection now carries this declared owner from the single route/action interpreter into
+both guards and admission. A recognized client action uses its declared action owner whether or not
+its URL appears in the page codec; an unknown action owns no route policy. Ordinary matched routes
+retain their own owner for `HEAD`, `OPTIONS`, and 405 synthesis. This avoids a second action limiter
+and prevents a client-action URL that collides with a page route from borrowing that page's limit.
+Tests hold one parameterized capture while a distinct capture is rejected, and prove the same result
+for declared action URLs both absent from and colliding with the page codec.
+
 ### Follow-up decision — AL: split `HarchWeb.Security.RequestLimits` out, not the rest (2026-08-13)
 
 **Decision: extract only the genuinely self-contained cluster; leave the coupled remainder unsplit.**

@@ -3,7 +3,7 @@
 
 {-# SPEC #-}
 
-import Control.Concurrent (forkIO, newEmptyMVar, putMVar, readMVar)
+import Control.Concurrent (forkIO, newEmptyMVar, putMVar, readMVar, takeMVar)
 import Control.Exception ()
 import Control.Monad (forM_)
 import Data.ByteString qualified as ByteString (drop, intercalate, isInfixOf, isPrefixOf, replicate, takeWhile)
@@ -46,7 +46,7 @@ import System.Process ()
 import TestCore.CustomAssertions ()
 import TestCore.Wai (nextRequestBodyChunk, performWaiRequest, readResponseBody, waiRequest)
 import Text.Read ()
-import Unit.HarchWeb.TestSupport (TestContext (requestLanguage, testContextPathPrefix), TestRoute (DataRoute, EventStreamRoute, KnownRoute, MissingRoute), defaultContext, defaultRequestPolicy, emptyStaticAssets, expectMeasuredRequestTiming, expectMeasuredRootRequestTiming, hasTextAttribute, renderDocument, renderSampleResponse, rootPathApplication, sampleApplication, sampleApplicationWithConfig, sampleApplicationWithStaticAssets, samplePage, sampleRequestContextFromRequest, spanishContext, stripVolatileRequestTiming, testActionCodec, testPageSecurity, testRegionPatch, testTrustedForwardedProxy, trustedForwardedApplication, waiRequestWithRemoteHostAndHeaders, waitUntilIORefEquals)
+import Unit.HarchWeb.TestSupport (TestContext (requestLanguage, testContextPathPrefix), TestRoute (DataRoute, EventStreamRoute, KnownRoute, MissingRoute, QueryRoute), defaultContext, defaultRequestPolicy, emptyStaticAssets, expectMeasuredRequestTiming, expectMeasuredRootRequestTiming, hasTextAttribute, renderDocument, renderSampleResponse, rootPathApplication, sampleApplication, sampleApplicationWithConfig, sampleApplicationWithStaticAssets, samplePage, sampleRequestContextFromRequest, spanishContext, stripVolatileRequestTiming, testActionCodec, testPageSecurity, testRegionPatch, testTrustedForwardedProxy, trustedForwardedApplication, waiRequestWithRemoteHostAndHeaders, waitUntilIORefEquals)
 
 spec = do
   describe "toWaiApplication" $ do
@@ -323,6 +323,152 @@ spec = do
                  Wai.responseStatus methodMismatchResponse `shouldBe` Http.status503,
                  Wai.responseStatus firstResponse `shouldBe` Http.status200
                ]
+        )
+
+    it "shares one route-admission gate across parameterized captures" $ do
+      releaseSignal <- newEmptyMVar
+      admittedCount <- newIORef (0 :: Int)
+      let baseApplication = sampleApplication
+          limitedApplication =
+            baseApplication
+              { routeExecutionPolicy =
+                  \case
+                    QueryRoute _ -> RouteExecutionPolicy (mkRequestConcurrencyLimit 1)
+                    _ -> unboundedRouteExecutionPolicy,
+                renderRequestResponse = \request routeRequest ->
+                  case requestRoute routeRequest of
+                    QueryRoute _ -> do
+                      atomicModifyIORef' admittedCount (\count -> (count + 1, ()))
+                      readMVar releaseSignal
+                      renderRequestResponse baseApplication request routeRequest
+                    _ -> renderRequestResponse baseApplication request routeRequest
+              }
+          queryRequest queryValue =
+            (waiRequest ["query"]) {Wai.rawQueryString = queryValue}
+      waiApplication <- toWaiApplication limitedApplication
+      firstResponseSignal <- newEmptyMVar
+      _ <- forkIO (performWaiRequest (pure waiApplication) (queryRequest "?item=first") >>= putMVar firstResponseSignal)
+      waitUntilIORefEquals admittedCount 1
+      secondResponse <- performWaiRequest (pure waiApplication) (queryRequest "?item=second")
+      putMVar releaseSignal ()
+      firstResponse <- readMVar firstResponseSignal
+      expectAll
+        ( (Wai.responseStatus secondResponse `shouldBe` Http.status503)
+            :| [Wai.responseStatus firstResponse `shouldBe` Http.status200]
+        )
+
+    it "admits client actions by their declared owner, not their page-route collision" $ do
+      releaseSignal <- newEmptyMVar
+      admittedCount <- newIORef (0 :: Int)
+      let baseApplication = sampleApplication
+          limitedApplication =
+            baseApplication
+              { HarchWeb.clientActionEndpointMetadata = \methodValue pathValue _ ->
+                  if methodValue == "POST" && pathValue `elem` ["/actions/limited", "/known"]
+                    then Just (HarchWeb.routeEndpointMetadata baseApplication DataRoute)
+                    else Nothing,
+                HarchWeb.clientActionRoute = \methodValue pathValue _ ->
+                  if methodValue == "POST" && pathValue `elem` ["/actions/limited", "/known"]
+                    then Just DataRoute
+                    else Nothing,
+                routeExecutionPolicy =
+                  \case
+                    DataRoute -> RouteExecutionPolicy (mkRequestConcurrencyLimit 1)
+                    _ -> unboundedRouteExecutionPolicy,
+                decodeClientAction = const (DecodedClientAction ("limited" :: Text)),
+                handleClientAction = \_ -> do
+                  atomicModifyIORef' admittedCount (\count -> (count + 1, ()))
+                  takeMVar releaseSignal
+                  pure (Just (ClientActionResponse Http.status204 [] Nothing StayOnCurrentRoute [] [] []))
+              }
+          actionRequest pathSegments = do
+            actionBodyChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
+            pure
+              ( Wai.setRequestBodyChunks
+                  (nextRequestBodyChunk actionBodyChunks)
+                  ( (waiRequest pathSegments)
+                      { Wai.requestMethod = "POST",
+                        Wai.requestHeaders =
+                          [ ("X-Harch-Action", "1"),
+                            (Http.hContentType, "application/x-www-form-urlencoded"),
+                            ("Host", "example.test"),
+                            ("Origin", "http://example.test"),
+                            ("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                          ]
+                      }
+                  )
+              )
+      waiApplication <- toWaiApplication limitedApplication
+      unmatchedAction <- actionRequest ["actions", "limited"]
+      firstResponseSignal <- newEmptyMVar
+      _ <- forkIO (performWaiRequest (pure waiApplication) unmatchedAction >>= putMVar firstResponseSignal)
+      waitUntilIORefEquals admittedCount 1
+      secondUnmatchedAction <- actionRequest ["actions", "limited"]
+      unmatchedResponse <- performWaiRequest (pure waiApplication) secondUnmatchedAction
+      putMVar releaseSignal ()
+      firstResponse <- readMVar firstResponseSignal
+      collidingAction <- actionRequest ["known"]
+      collidingResponseSignal <- newEmptyMVar
+      _ <- forkIO (performWaiRequest (pure waiApplication) collidingAction >>= putMVar collidingResponseSignal)
+      waitUntilIORefEquals admittedCount 2
+      secondCollidingAction <- actionRequest ["known"]
+      collisionResponse <- performWaiRequest (pure waiApplication) secondCollidingAction
+      putMVar releaseSignal ()
+      collidingResponse <- readMVar collidingResponseSignal
+      expectAll
+        ( (Wai.responseStatus unmatchedResponse `shouldBe` Http.status503)
+            :| [ Wai.responseStatus firstResponse `shouldBe` Http.status204,
+                 Wai.responseStatus collisionResponse `shouldBe` Http.status503,
+                 Wai.responseStatus collidingResponse `shouldBe` Http.status204,
+                 readIORef admittedCount `shouldReturn` 2
+               ]
+        )
+
+    it "does not invent route admission for an unknown client action" $ do
+      releaseSignal <- newEmptyMVar
+      admittedCount <- newIORef (0 :: Int)
+      let baseApplication = sampleApplication
+          limitedApplication =
+            baseApplication
+              { routeExecutionPolicy =
+                  \case
+                    KnownRoute -> RouteExecutionPolicy (mkRequestConcurrencyLimit 1)
+                    _ -> unboundedRouteExecutionPolicy,
+                renderRequestResponse = \request routeRequest ->
+                  case requestRoute routeRequest of
+                    KnownRoute -> do
+                      atomicModifyIORef' admittedCount (\count -> (count + 1, ()))
+                      readMVar releaseSignal
+                      renderRequestResponse baseApplication request routeRequest
+                    _ -> renderRequestResponse baseApplication request routeRequest
+              }
+      waiApplication <- toWaiApplication limitedApplication
+      firstResponseSignal <- newEmptyMVar
+      _ <- forkIO (performWaiRequest (pure waiApplication) (waiRequest ["known"]) >>= putMVar firstResponseSignal)
+      waitUntilIORefEquals admittedCount 1
+      actionBodyChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
+      unknownActionResponse <-
+        performWaiRequest
+          (pure waiApplication)
+          ( Wai.setRequestBodyChunks
+              (nextRequestBodyChunk actionBodyChunks)
+              ( (waiRequest ["known"])
+                  { Wai.requestMethod = "POST",
+                    Wai.requestHeaders =
+                      [ ("X-Harch-Action", "1"),
+                        (Http.hContentType, "application/x-www-form-urlencoded"),
+                        ("Host", "example.test"),
+                        ("Origin", "http://example.test"),
+                        ("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                      ]
+                  }
+              )
+          )
+      putMVar releaseSignal ()
+      firstResponse <- readMVar firstResponseSignal
+      expectAll
+        ( (Wai.responseStatus unknownActionResponse `shouldBe` Http.status404)
+            :| [Wai.responseStatus firstResponse `shouldBe` Http.status200]
         )
 
     it "halts dynamic requests without bypassing framework response headers" $ do
