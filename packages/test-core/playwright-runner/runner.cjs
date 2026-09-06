@@ -6,6 +6,15 @@ const path = require('node:path');
 const readline = require('node:readline');
 const { chromium } = require('@playwright/test');
 
+let outputClosed = false;
+process.stdout.on('error', (error) => {
+  if (error && error.code === 'EPIPE') {
+    outputClosed = true;
+    return;
+  }
+  throw error;
+});
+
 const state = {
   browser: null,
   context: null,
@@ -215,15 +224,16 @@ async function releaseRequestsMatching(pattern) {
   const blocked = state.blockedRequests.get(pattern);
   if (!blocked) throw new Error(`request pattern is not blocked: ${pattern}`);
   state.blockedRequests.delete(pattern);
-  await Promise.all(blocked.pendingRoutes.map(async ({ route, resolve, reject }) => {
+  for (const { route, resolve } of blocked.pendingRoutes) {
     try {
-      await route.continue();
+      const continued = route.continue();
       resolve();
-    } catch (error) {
-      reject(error);
+      void continued.catch(() => {});
+    } catch (_) {
+      resolve();
     }
-  }));
-  await state.context.unroute(pattern, blocked.handler);
+  }
+  void state.context.unroute(pattern, blocked.handler).catch(() => {});
   return null;
 }
 
@@ -231,15 +241,16 @@ async function failBlockedRequestsMatching(pattern) {
   const blocked = state.blockedRequests.get(pattern);
   if (!blocked) throw new Error(`request pattern is not blocked: ${pattern}`);
   state.blockedRequests.delete(pattern);
-  await Promise.all(blocked.pendingRoutes.map(async ({ route, resolve, reject }) => {
+  for (const { route, resolve } of blocked.pendingRoutes) {
     try {
-      await route.abort('failed');
+      const aborted = route.abort('failed');
       resolve();
-    } catch (error) {
-      reject(error);
+      void aborted.catch(() => {});
+    } catch (_) {
+      resolve();
     }
-  }));
-  await state.context.unroute(pattern, blocked.handler);
+  }
+  void state.context.unroute(pattern, blocked.handler).catch(() => {});
   return null;
 }
 
@@ -350,7 +361,9 @@ function positiveInteger(value, description) {
 }
 
 function writeResponse(response) {
-  process.stdout.write(`${JSON.stringify(response)}\n`);
+  if (!outputClosed && !process.stdout.destroyed) {
+    process.stdout.write(`${JSON.stringify(response)}\n`);
+  }
 }
 
 main().catch(async (error) => {
