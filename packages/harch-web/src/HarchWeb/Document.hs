@@ -332,9 +332,94 @@ defaultNavigationRuntimeScript =
       "  const navigationContentSelector = 'main[data-navigation-content=\"true\"]';",
       "  const navigationSkipLinkSelector = 'a[data-navigation-skip-link=\"true\"]';",
       "  const navigationStatusSelector = '[data-navigation-route-status=\"true\"]';",
+      "  const stylesheetSelector = 'link[data-harch-stylesheet=\"true\"]';",
+      "  const pageEnhancementSelector = 'script[data-harch-page-enhancement]';",
       "  let activeNavigation = null;",
       "  let nextNavigationId = 1;",
       "  let renderedDocumentUrl = new URL(window.location.href);",
+      "  let activePageEnhancementDisposers = [];",
+      "",
+      "  function readPageEnhancementDescriptors(rootDocument, baseUrl) {",
+      "    const descriptors = Array.from(rootDocument.querySelectorAll(pageEnhancementSelector), (element) => ({ name: element.dataset.harchPageEnhancement, source: element.getAttribute('src') }));",
+      "    const names = new Set();",
+      "    for (const descriptor of descriptors) {",
+      "      if (!descriptor.name || !descriptor.source || names.has(descriptor.name)) { return null; }",
+      "      let sourceUrl;",
+      "      try { sourceUrl = new URL(descriptor.source, baseUrl); } catch (_error) { return null; }",
+      "      if (sourceUrl.origin !== window.location.origin) { return null; }",
+      "      descriptor.source = sourceUrl.href;",
+      "      names.add(descriptor.name);",
+      "    }",
+      "    return descriptors;",
+      "  }",
+      "",
+      "  async function loadPageEnhancementModules(descriptors) {",
+      "    try {",
+      "      const modules = await Promise.all(descriptors.map(async (descriptor) => ({ descriptor, module: await import(descriptor.source) })));",
+      "      return modules.every(({ module }) => typeof module.setupPageEnhancement === 'function') ? modules : null;",
+      "    } catch (_error) {",
+      "      return null;",
+      "    }",
+      "  }",
+      "",
+      "  function disposePageEnhancementDisposers(disposers) {",
+      "    try {",
+      "      disposers.forEach((dispose) => dispose());",
+      "      return true;",
+      "    } catch (_error) {",
+      "      return false;",
+      "    }",
+      "  }",
+      "",
+      "  function disposePageEnhancements() {",
+      "    const disposers = activePageEnhancementDisposers;",
+      "    activePageEnhancementDisposers = [];",
+      "    return disposePageEnhancementDisposers(disposers);",
+      "  }",
+      "",
+      "  function installPageEnhancements(modules, navigationContent) {",
+      "    const disposers = [];",
+      "    try {",
+      "      modules.forEach(({ module }) => {",
+      "        const dispose = module.setupPageEnhancement(navigationContent);",
+      "        if (dispose !== undefined && typeof dispose !== 'function') { throw new Error('invalid page enhancement disposer'); }",
+      "        if (dispose) { disposers.push(dispose); }",
+      "      });",
+      "      activePageEnhancementDisposers = disposers;",
+      "      return true;",
+      "    } catch (_error) {",
+      "      disposePageEnhancementDisposers(disposers);",
+      "      return false;",
+      "    }",
+      "  }",
+      "",
+      "  function readStylesheetSources(rootDocument, baseUrl) {",
+      "    const sources = Array.from(rootDocument.querySelectorAll(stylesheetSelector), (element) => element.getAttribute('href'));",
+      "    const resolved = [];",
+      "    for (const source of sources) {",
+      "      if (!source) { return null; }",
+      "      let sourceUrl;",
+      "      try { sourceUrl = new URL(source, baseUrl); } catch (_error) { return null; }",
+      "      if (sourceUrl.origin !== window.location.origin || resolved.includes(sourceUrl.href)) { return null; }",
+      "      resolved.push(sourceUrl.href);",
+      "    }",
+      "    return resolved;",
+      "  }",
+      "",
+      "  function reconcileStylesheets(nextSources) {",
+      "    const currentStylesheets = Array.from(document.querySelectorAll(stylesheetSelector));",
+      "    const currentSources = new Set(currentStylesheets.map((element) => element.href));",
+      "    currentStylesheets.forEach((element) => { if (!nextSources.includes(element.href)) { element.remove(); } });",
+      "    nextSources.forEach((source) => {",
+      "      if (!currentSources.has(source)) {",
+      "        const stylesheet = document.createElement('link');",
+      "        stylesheet.rel = 'stylesheet';",
+      "        stylesheet.dataset.harchStylesheet = 'true';",
+      "        stylesheet.href = source;",
+      "        document.head.append(stylesheet);",
+      "      }",
+      "    });",
+      "  }",
       "",
       "  function applyActionResponse(actionResponse) {",
       "    (actionResponse.patches || []).forEach((patch) => {",
@@ -523,7 +608,7 @@ defaultNavigationRuntimeScript =
       "    lifecycle.status.replaceChildren(lifecycle.announcementText);",
       "  }",
       "",
-      "  function applyFetchedDocument(responseText, finalUrl, shouldPushState) {",
+      "  async function applyFetchedDocument(responseText, finalUrl, shouldPushState, isCurrentNavigation) {",
       "    const parsedDocument = new DOMParser().parseFromString(responseText, 'text/html');",
       "    const nextTitle = parsedDocument.querySelector('title');",
       "    const nextNavigationRegion = parsedDocument.querySelector(navigationRegionSelector);",
@@ -535,6 +620,13 @@ defaultNavigationRuntimeScript =
       "      return false;",
       "    }",
       "",
+      "    const nextEnhancementDescriptors = readPageEnhancementDescriptors(parsedDocument, finalUrl);",
+      "    const nextStylesheetSources = readStylesheetSources(parsedDocument, finalUrl);",
+      "    if (!nextEnhancementDescriptors || !nextStylesheetSources) { return false; }",
+      "    const nextEnhancementModules = await loadPageEnhancementModules(nextEnhancementDescriptors);",
+      "    if (!isCurrentNavigation()) { return false; }",
+      "    if (!nextEnhancementModules) { return false; }",
+      "",
       "    const nextLifecycle = readNavigationLifecycle(parsedDocument, nextNavigationRegion, nextNavigationContent);",
       "    const currentLifecycle = readNavigationLifecycle(document, currentNavigationRegion, currentNavigationContent);",
       "    if (!nextLifecycle || !currentLifecycle || Boolean(nextLifecycle.status) !== Boolean(currentLifecycle.status) || Boolean(nextLifecycle.skipLink) !== Boolean(currentLifecycle.skipLink)) {",
@@ -542,6 +634,8 @@ defaultNavigationRuntimeScript =
       "    }",
       "",
       "    document.dispatchEvent(new CustomEvent('harch:navigation-before-replace'));",
+      "    if (!disposePageEnhancements()) { return false; }",
+      "    reconcileStylesheets(nextStylesheetSources);",
       "    if (currentLifecycle.skipLink) {",
       "      currentLifecycle.skipLink.replaceWith(nextLifecycle.skipLink);",
       "    }",
@@ -561,6 +655,7 @@ defaultNavigationRuntimeScript =
       "      window.history.replaceState({ path: finalUrl.href }, '', finalUrl.href);",
       "    }",
       "",
+      "    if (!installPageEnhancements(nextEnhancementModules, nextNavigationContent)) { return false; }",
       "    applyNavigationLifecycle(nextLifecycle);",
       "    return true;",
       "  }",
@@ -608,7 +703,8 @@ defaultNavigationRuntimeScript =
       "      if (!isCurrentNavigation()) {",
       "        return;",
       "      }",
-      "      if (!applyFetchedDocument(responseText, finalUrl, shouldPushState)) {",
+      "      const applied = await applyFetchedDocument(responseText, finalUrl, shouldPushState, isCurrentNavigation);",
+      "      if (isCurrentNavigation() && !applied) {",
       "        window.location.assign(targetUrl);",
       "      }",
       "    } catch (error) {",
@@ -644,20 +740,45 @@ defaultNavigationRuntimeScript =
       "    void navigateTo(window.location.href, false);",
       "  }",
       "",
+      "  async function installInitialPageEnhancements() {",
+      "    const navigationContent = document.querySelector(navigationContentSelector);",
+      "    const descriptors = readPageEnhancementDescriptors(document, window.location.href);",
+      "    if (!navigationContent || !descriptors) { return; }",
+      "    const modules = await loadPageEnhancementModules(descriptors);",
+      "    if (modules && document.querySelector(navigationContentSelector) === navigationContent) {",
+      "      installPageEnhancements(modules, navigationContent);",
+      "    }",
+      "  }",
+      "",
       "  document.addEventListener('click', handleDocumentClick);",
       "  window.addEventListener('popstate', handlePopState);",
       "  registerCapturedActionHandler();",
+      "  void installInitialPageEnhancements();",
       "})();"
     ]
 
 -- | Runtime assets are declared before document rendering so the server can
 -- apply the correct CSP policy without inspecting rendered HTML.
+--
+-- 'PageEnhancementModule' is the deliberately narrow declaration for behavior
+-- that belongs to the currently mounted page.  Its same-origin ES module must
+-- export @setupPageEnhancement :: Element -> (() -> void) | void@.  The one
+-- navigation runtime imports that declared source, invokes setup only after
+-- mounting the destination main region, and calls the returned disposer before
+-- replacing that region again.  It never evaluates script text from a fetched
+-- document.  A missing, duplicate, cross-origin, or failed enhancement is an
+-- incompatible enhanced navigation and deliberately falls back to the native
+-- SSR document instead of silently omitting behavior.
 data RuntimeDescriptor
   = InlineBootstrap
       { runtimeDescriptorName :: Text,
         runtimeDescriptorSource :: Text
       }
   | DeferredModule
+      { runtimeDescriptorName :: Text,
+        runtimeDescriptorSource :: Text
+      }
+  | PageEnhancementModule
       { runtimeDescriptorName :: Text,
         runtimeDescriptorSource :: Text
       }
@@ -1146,7 +1267,7 @@ renderStylesheets =
   Text.concat
     . map
       ( \Stylesheet {stylesheetAsset = AssetPath assetPath} ->
-          "<link rel=\"stylesheet\" href=\"" <> renderHtml (text assetPath) <> "\">"
+          "<link rel=\"stylesheet\" data-harch-stylesheet=\"true\" href=\"" <> renderHtml (text assetPath) <> "\">"
       )
 
 renderAttributes :: [HtmlAttribute] -> Text
@@ -1209,6 +1330,14 @@ renderRuntimeDescriptor runtimeNonce descriptor =
     DeferredModule {runtimeDescriptorSource = source} ->
       Text.concat
         [ "<script type=\"module\" src=\"",
+          renderHtml (text source),
+          "\" defer></script>"
+        ]
+    PageEnhancementModule {runtimeDescriptorName = name, runtimeDescriptorSource = source} ->
+      Text.concat
+        [ "<script type=\"module\" data-harch-page-enhancement=\"",
+          renderHtml (text name),
+          "\" src=\"",
           renderHtml (text source),
           "\" defer></script>"
         ]

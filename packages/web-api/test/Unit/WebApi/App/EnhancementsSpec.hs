@@ -84,7 +84,7 @@ spec = do
       prefixedShell <- renderedShellForRequest navigationAppConfig prefixedSecondRequest
       Text.isInfixOf "<a href=\"/app\" data-page-link=\"true\">Home</a><a href=\"/app/second\" data-page-link=\"true\" aria-current=\"page\">Second</a>" prefixedShell `shouldBe` True
       Text.isInfixOf "<script type=\"module\" src=\"/app/assets/navigation.js\" defer></script>" prefixedShell `shouldBe` True
-      Text.isInfixOf "<link rel=\"stylesheet\" href=\"/app/assets/styles/app.css\">" prefixedShell `shouldBe` True
+      Text.isInfixOf "<link rel=\"stylesheet\" data-harch-stylesheet=\"true\" href=\"/app/assets/styles/app.css\">" prefixedShell `shouldBe` True
 
     it "serves the bundled navigation asset through configured static roots" $ do
       response <- performWaiRequest (HarchWeb.toWaiApplication (buildApp navigationAppConfig)) (waiRequest ["assets", "navigation.js"])

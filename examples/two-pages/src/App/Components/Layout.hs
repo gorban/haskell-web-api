@@ -5,7 +5,7 @@ module App.Components.Layout
   )
 where
 
-import App.Pages.Route.Generated (PageRoute (LiveDataPage))
+import App.Pages.Route.Generated (PageRoute (HomePage, LiveDataPage))
 import App.Routes (TwoPageRoute)
 import App.Routes qualified as Routes
 import HarchWeb
@@ -14,6 +14,7 @@ import HarchWeb
     Page (..),
     PageShell (..),
     RuntimeDescriptor (..),
+    Stylesheet,
     literalElementId,
     stylesheet,
   )
@@ -42,10 +43,19 @@ twoPageShell page =
             }
         ],
       shellNavigationLifecycle = Nothing,
-      shellStylesheets = [stylesheet (AssetPath "/assets/two-pages.css")],
-      shellRuntimeDescriptors =
-        case pageRoute page of
-          Routes.Page LiveDataPage ->
-            [DeferredModule "two-pages-live-data" "/assets/live-data.js"]
-          _ -> []
+      shellStylesheets = stylesheet (AssetPath "/assets/two-pages.css") : pageStylesheets (pageRoute page),
+      shellRuntimeDescriptors = pageEnhancements (pageRoute page)
     }
+
+pageStylesheets :: TwoPageRoute -> [Stylesheet]
+pageStylesheets route =
+  case route of
+    Routes.Page HomePage -> [stylesheet (AssetPath "/assets/home-enhancement.css")]
+    _ -> []
+
+pageEnhancements :: TwoPageRoute -> [RuntimeDescriptor]
+pageEnhancements route =
+  case route of
+    Routes.Page HomePage -> [PageEnhancementModule "two-pages-home" "/assets/home-enhancement.js"]
+    Routes.Page LiveDataPage -> [PageEnhancementModule "two-pages-live-data" "/assets/live-data.js"]
+    _ -> []

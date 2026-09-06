@@ -19,7 +19,7 @@ import Data.Maybe ()
 import Data.Text ()
 import Data.Text qualified as Text (isInfixOf, isSuffixOf, length)
 import Data.Text.Encoding qualified as TextEncoding ()
-import HarchWeb (AssetPath (AssetPath), CssClass (GlobalCssClass), Document (Document, documentBodyAttributes, documentBootstrapHooks, documentMainAttributes, documentMainContent, documentMainId, documentNavigation, documentNavigationAttributes, documentNavigationLifecycle, documentRuntimeDescriptors, documentStylesheets, documentTitle, documentViewportPolicy), HtmlAttribute (HtmlAttribute, attributeName, attributeValue), LiveRegion (AssertiveAlert, PoliteStatus), NavigationAnnouncement (AnnounceElementText), NavigationFocusTarget (FocusElement), NavigationLifecycle (navigationAnnouncement, navigationFocusTarget, navigationSkipLink, navigationStatusClass), NavigationSkipLink (NavigationSkipLink, skipLinkClass, skipLinkLabel), Page (Page, pageBody, pageBootstrapHooks, pageContext, pageRoute, pageTitle), PageShell (shellMainAttributes, shellNavigationItems, shellNavigationLifecycle), ResolvedNavigationItem (ResolvedNavigationItem, navigationHref, navigationIsActive, navigationLabel, navigationRoute), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (DeferredModule), RuntimeNonce (runtimeNonceValue), buildNavigation, buildPageShell, generateRuntimeNonce, literalElementId, liveRegionAttributes, mainNavigationLifecycle, responsiveViewport, stylesheet)
+import HarchWeb (AssetPath (AssetPath), CssClass (GlobalCssClass), Document (Document, documentBodyAttributes, documentBootstrapHooks, documentMainAttributes, documentMainContent, documentMainId, documentNavigation, documentNavigationAttributes, documentNavigationLifecycle, documentRuntimeDescriptors, documentStylesheets, documentTitle, documentViewportPolicy), HtmlAttribute (HtmlAttribute, attributeName, attributeValue), LiveRegion (AssertiveAlert, PoliteStatus), NavigationAnnouncement (AnnounceElementText), NavigationFocusTarget (FocusElement), NavigationLifecycle (navigationAnnouncement, navigationFocusTarget, navigationSkipLink, navigationStatusClass), NavigationSkipLink (NavigationSkipLink, skipLinkClass, skipLinkLabel), Page (Page, pageBody, pageBootstrapHooks, pageContext, pageRoute, pageTitle), PageShell (shellMainAttributes, shellNavigationItems, shellNavigationLifecycle), ResolvedNavigationItem (ResolvedNavigationItem, navigationHref, navigationIsActive, navigationLabel, navigationRoute), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (DeferredModule, PageEnhancementModule), RuntimeNonce (runtimeNonceValue), ViewportPolicy (ResponsiveViewport), buildNavigation, buildPageShell, generateRuntimeNonce, literalElementId, liveRegionAttributes, mainNavigationLifecycle, responsiveViewport, stylesheet)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -127,15 +127,21 @@ movedSpec = do
               { documentStylesheets = [stylesheet (AssetPath "/assets/sample.css")]
               }
       Text.isInfixOf
-        "<title>Known</title><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><link rel=\"stylesheet\" href=\"/assets/sample.css\"><script type=\"module\" src=\"/assets/navigation.js\" defer></script>"
+        "<title>Known</title><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><link rel=\"stylesheet\" data-harch-stylesheet=\"true\" href=\"/assets/sample.css\"><script type=\"module\" src=\"/assets/navigation.js\" defer></script>"
         (renderDocument document)
         `shouldBe` True
+
+    it "keeps the closed responsive viewport policy comparable and inspectable" $ do
+      responsiveViewport `shouldBe` ResponsiveViewport
+      (responsiveViewport /= ResponsiveViewport) `shouldBe` False
+      show responsiveViewport `shouldBe` "ResponsiveViewport"
+      show [responsiveViewport] `shouldBe` "[ResponsiveViewport]"
 
     it "renders the shared HTML document for the supplied page and shell options" $
       renderDocument (buildPageShell sampleCodec sampleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext})))
         `shouldBe` "<!DOCTYPE html><html><head><title>Known</title><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><script type=\"module\" src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
 
-    it "HTML-escapes the stylesheet href, navigation href/label, main id, and deferred module src sinks" $
+    it "HTML-escapes marked stylesheets, navigation values, and declared runtime descriptor sinks" $
       renderDocument
         Document
           { documentTitle = "Known",
@@ -156,9 +162,9 @@ movedSpec = do
             documentNavigationLifecycle = Nothing,
             documentStylesheets = [stylesheet (AssetPath "/assets/sample.css?a=1&b=2")],
             documentViewportPolicy = responsiveViewport,
-            documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js?a=1&b=2"]
+            documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js?a=1&b=2", PageEnhancementModule "live\" data-unsafe=\"true" "/assets/live-data.js?a=1&b=2"]
           }
-        `shouldBe` "<!DOCTYPE html><html><head><title>Known</title><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><link rel=\"stylesheet\" href=\"/assets/sample.css?a=1&amp;b=2\"><script type=\"module\" src=\"/assets/navigation.js?a=1&amp;b=2\" defer></script></head><body><nav><a href=\"/known?a=1&amp;b=2\" data-page-link=\"true\">A &amp; &lt;B&gt;</a></nav><main id=\"app-main&quot; onclick=&quot;steal()\"><h1>Known</h1></main></body></html>"
+        `shouldBe` "<!DOCTYPE html><html><head><title>Known</title><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><link rel=\"stylesheet\" data-harch-stylesheet=\"true\" href=\"/assets/sample.css?a=1&amp;b=2\"><script type=\"module\" src=\"/assets/navigation.js?a=1&amp;b=2\" defer></script><script type=\"module\" data-harch-page-enhancement=\"live&quot; data-unsafe=&quot;true\" src=\"/assets/live-data.js?a=1&amp;b=2\" defer></script></head><body><nav><a href=\"/known?a=1&amp;b=2\" data-page-link=\"true\">A &amp; &lt;B&gt;</a></nav><main id=\"app-main&quot; onclick=&quot;steal()\"><h1>Known</h1></main></body></html>"
 
     it "renders bootstrap hook metadata only for pages that opt in" $
       renderDocument

@@ -1,13 +1,23 @@
-const liveRegion = document.querySelector("[data-live-data-source]");
+export function setupPageEnhancement(root) {
+  const liveRegion = root.querySelector("[data-live-data-source]");
+  if (!liveRegion || !("EventSource" in window)) return undefined;
 
-if (liveRegion && "EventSource" in window) {
   const status = liveRegion.querySelector("[data-live-data-status]");
   const eventSource = new EventSource(liveRegion.dataset.liveDataSource);
+  let released = false;
+
+  const release = () => {
+    if (!released) {
+      released = true;
+      eventSource.close();
+    }
+  };
 
   eventSource.addEventListener("update", (event) => {
     if (status) status.textContent = event.data;
-    eventSource.close();
+    release();
   });
 
-  eventSource.addEventListener("error", () => eventSource.close());
+  eventSource.addEventListener("error", release);
+  return release;
 }

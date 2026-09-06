@@ -30,7 +30,7 @@ spec =
         ( runBrowserScenario browser do
             visit homeUrl
             assertAll
-              ((,,) <$> textContent (byRole Heading `named` "Home") <*> attributeValue (css "link[rel='stylesheet']") "href" <*> attributeValue (css "section[data-page='home']") "class")
+              ((,,) <$> textContent (byRole Heading `named` "Home") <*> attributeValue (css "link[href='/assets/two-pages.css']") "href" <*> attributeValue (css "section[data-page='home']") "class")
               ( \(heading, stylesheetHref, homeClass) ->
                   (heading `shouldBe` "Home")
                     :| [ stylesheetHref `shouldBe` Just "/assets/two-pages.css",
@@ -376,6 +376,72 @@ spec =
               )
             visit liveDataUrl
             assertText (css "#live-data-status") (`shouldBe` "The live update arrived.")
+          )
+          `shouldReturn` Right ()
+
+    it "reconciles declared page enhancements across enhanced navigation and history" $
+      withBrowserAndServer $ \browser server -> do
+        let homeUrl = localServerBaseUrl server <> "/"
+            liveDataUrl = localServerBaseUrl server <> "/live-data"
+        ( runBrowserScenario browser do
+            visit homeUrl
+            assertText (css "[data-home-enhancement-status]") (`shouldBe` "The page-scoped home enhancement is ready.")
+            click (byRole Link `named` "See live updates")
+            assertText (css "#live-data-status") (`shouldBe` "The live update arrived.")
+            click (byRole Link `named` "Home")
+            assertText (css "[data-home-enhancement-status]") (`shouldBe` "The page-scoped home enhancement is ready.")
+            historyBack
+            assertAll
+              ((,,) <$> currentUrl <*> textContent (css "#live-data-status") <*> browserMetrics)
+              ( \(url, status, metrics) ->
+                  (url `shouldBe` liveDataUrl)
+                    :| [ status `shouldBe` "The live update arrived.",
+                         $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 3, hardNavigationCount = 0}|])
+                       ]
+              )
+          )
+          `shouldReturn` Right ()
+
+    it "supersedes a pending page enhancement before it can mount stale behavior" $
+      withBrowserAndServer $ \browser server -> do
+        let homeUrl = localServerBaseUrl server <> "/"
+            secondUrl = localServerBaseUrl server <> "/second"
+        ( runBrowserScenario browser do
+            blockRequestsMatching "**/assets/live-data.js"
+            visit homeUrl
+            click (byRole Link `named` "See live updates")
+            waitForBlockedRequestsMatching "**/assets/live-data.js"
+            click (byRole Link `named` "Go to the second page")
+            failBlockedRequestsMatching "**/assets/live-data.js"
+            assertAll
+              ((,,) <$> currentUrl <*> textContent (byRole Heading `named` "Second") <*> browserMetrics)
+              ( \(url, heading, metrics) ->
+                  (url `shouldBe` secondUrl)
+                    :| [ heading `shouldBe` "Second",
+                         $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 2, hardNavigationCount = 0}|])
+                       ]
+              )
+          )
+          `shouldReturn` Right ()
+
+    it "uses a native SSR navigation when a declared page enhancement fails to load" $
+      withBrowserAndServer $ \browser server -> do
+        let homeUrl = localServerBaseUrl server <> "/"
+            liveDataUrl = localServerBaseUrl server <> "/live-data"
+        ( runBrowserScenario browser do
+            blockRequestsMatching "**/assets/live-data.js"
+            visit homeUrl
+            click (byRole Link `named` "See live updates")
+            waitForBlockedRequestsMatching "**/assets/live-data.js"
+            failBlockedRequestsMatching "**/assets/live-data.js"
+            assertAll
+              ((,,) <$> currentUrl <*> textContent (byRole Heading `named` "Live updates") <*> browserMetrics)
+              ( \(url, heading, metrics) ->
+                  (url `shouldBe` liveDataUrl)
+                    :| [ heading `shouldBe` "Live updates",
+                         $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
+                       ]
+              )
           )
           `shouldReturn` Right ()
 

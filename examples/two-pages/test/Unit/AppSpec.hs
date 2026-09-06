@@ -376,7 +376,9 @@ spec =
                      `shouldBe` [HarchWeb.StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}],
                    Wai.responseStatus response `shouldBe` Http.status200,
                    Text.isInfixOf "<title>Home</title>" responseBody `shouldBe` True,
-                   Text.isInfixOf "<link rel=\"stylesheet\" href=\"/assets/two-pages.css\">" responseBody `shouldBe` True,
+                   Text.isInfixOf "<link rel=\"stylesheet\" data-harch-stylesheet=\"true\" href=\"/assets/two-pages.css\">" responseBody `shouldBe` True,
+                   Text.isInfixOf "<link rel=\"stylesheet\" data-harch-stylesheet=\"true\" href=\"/assets/home-enhancement.css\">" responseBody `shouldBe` True,
+                   Text.isInfixOf "<script type=\"module\" data-harch-page-enhancement=\"two-pages-home\" src=\"/assets/home-enhancement.js\" defer></script>" responseBody `shouldBe` True,
                    Text.isInfixOf "<section data-page=\"home\" class=\"harch-home-root\">" responseBody `shouldBe` True,
                    Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a><a href=\"/live-data\" data-page-link=\"true\">Live updates</a></nav>" responseBody `shouldBe` True,
                    Text.isInfixOf "<a href=\"/second\" data-page-link=\"true\">Go to the second page</a>" responseBody `shouldBe` True,
@@ -416,7 +418,7 @@ spec =
               :| [ Text.isInfixOf "<title>Live updates</title>" responseBody `shouldBe` True,
                    Text.isInfixOf "This complete status is rendered on the server before any live connection starts." responseBody `shouldBe` True,
                    Text.isInfixOf "<p id=\"live-data-status\" data-live-data-status role=\"status\">Waiting for an update.</p>" responseBody `shouldBe` True,
-                   Text.isInfixOf "<script type=\"module\" src=\"/assets/live-data.js\" defer></script>" responseBody `shouldBe` True
+                   Text.isInfixOf "<script type=\"module\" data-harch-page-enhancement=\"two-pages-live-data\" src=\"/assets/live-data.js\" defer></script>" responseBody `shouldBe` True
                  ]
           )
 

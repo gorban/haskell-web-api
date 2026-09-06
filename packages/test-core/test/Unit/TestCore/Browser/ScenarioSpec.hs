@@ -78,6 +78,7 @@ spec = do
               setInputFiles (byLabel "Attachment") "test-fixtures/attachment.txt"
               submit (byRole Form `named` "Registration")
               blockRequestsMatching "**/enhancements.js"
+              waitForBlockedRequestsMatching "**/enhancements.js"
               releaseRequestsMatching "**/enhancements.js"
               blockRequestsMatching "**/failure.js"
               failBlockedRequestsMatching "**/failure.js"

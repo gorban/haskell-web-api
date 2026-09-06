@@ -33,6 +33,7 @@ module TestCore.Browser.Scenario
     submit,
     visit,
     visitWithoutScripts,
+    waitForBlockedRequestsMatching,
   )
 where
 
@@ -167,6 +168,12 @@ historyForward = simpleCommand "historyForward" []
 
 blockRequestsMatching :: Text -> BrowserScenario ()
 blockRequestsMatching patternText = simpleCommand "blockRequestsMatching" ["pattern" .= patternText]
+
+-- | Wait until a request matching a deliberate blocker is actually pending.
+-- This makes a subsequent release or failure deterministic without exposing
+-- Playwright routing state to scenarios.
+waitForBlockedRequestsMatching :: Text -> BrowserScenario ()
+waitForBlockedRequestsMatching patternText = simpleCommand "waitForBlockedRequestsMatching" ["pattern" .= patternText]
 
 releaseRequestsMatching :: Text -> BrowserScenario ()
 releaseRequestsMatching patternText = simpleCommand "releaseRequestsMatching" ["pattern" .= patternText]

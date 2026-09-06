@@ -92,6 +92,8 @@ homePage pageSecurity routeRequest =
 
                   <p>This page is fully server-rendered on direct load and reload.</p>
 
+                  <p data-home-enhancement-status="true">The server-rendered home status is available without scripts.</p>
+
                   <p><PageLink to={NavigationPage SecondPage}>Go to the second page</PageLink></p>
 
                   <p><PageLink to={NavigationPage LiveDataPage}>See live updates</PageLink></p>

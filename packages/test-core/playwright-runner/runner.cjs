@@ -80,6 +80,7 @@ async function execute(request) {
     case 'historyBack': return requirePage().goBack({ waitUntil: 'commit', timeout: timeout() });
     case 'historyForward': return requirePage().goForward({ waitUntil: 'commit', timeout: timeout() });
     case 'blockRequestsMatching': return blockRequestsMatching(requireString(request.pattern, 'request pattern'));
+    case 'waitForBlockedRequestsMatching': return waitForBlockedRequestsMatching(requireString(request.pattern, 'request pattern'));
     case 'releaseRequestsMatching': return releaseRequestsMatching(requireString(request.pattern, 'request pattern'));
     case 'failBlockedRequestsMatching': return failBlockedRequestsMatching(requireString(request.pattern, 'request pattern'));
     case 'observeMany': return observeMany(request.observations);
@@ -199,6 +200,17 @@ async function blockRequestsMatching(pattern) {
   return null;
 }
 
+async function waitForBlockedRequestsMatching(pattern) {
+  const blocked = state.blockedRequests.get(pattern);
+  if (!blocked) throw new Error(`request pattern is not blocked: ${pattern}`);
+  const deadline = Date.now() + timeout();
+  while (blocked.pendingRoutes.length === 0) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for a blocked request matching: ${pattern}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return null;
+}
+
 async function releaseRequestsMatching(pattern) {
   const blocked = state.blockedRequests.get(pattern);
   if (!blocked) throw new Error(`request pattern is not blocked: ${pattern}`);
@@ -283,10 +295,11 @@ async function closeBrowser(failed, failureMessage) {
       const screenshotPath = path.join(runDirectory, 'page.png');
       const htmlPath = path.join(runDirectory, 'page.html');
       const tracePath = path.join(runDirectory, 'trace.zip');
-      await state.page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
-      fs.writeFileSync(htmlPath, await state.page.content(), 'utf8');
+      await withinTimeout(state.page.screenshot({ path: screenshotPath, fullPage: true, timeout: timeout() })).catch(() => {});
+      const pageHtml = await withinTimeout(state.page.content()).catch(() => null);
+      if (pageHtml !== null) fs.writeFileSync(htmlPath, pageHtml, 'utf8');
       if (failureMessage) fs.writeFileSync(path.join(runDirectory, 'failure.txt'), failureMessage, 'utf8');
-      await state.context.tracing.stop({ path: tracePath }).catch(() => {});
+      await withinTimeout(state.context.tracing.stop({ path: tracePath })).catch(() => {});
       for (const artifactPath of [screenshotPath, htmlPath, tracePath]) {
         if (fs.existsSync(artifactPath)) artifacts.push(artifactPath);
       }
@@ -300,6 +313,20 @@ async function closeBrowser(failed, failureMessage) {
     state.page = null;
   }
   return artifacts;
+}
+
+async function withinTimeout(operation) {
+  let timer;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('browser cleanup timed out')), timeout());
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function requirePage() {

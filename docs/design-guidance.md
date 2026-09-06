@@ -3344,6 +3344,43 @@ and adds a mobile-context load that verifies the SSR declaration, device-width
 layout, FAB target geometry, no horizontal overflow, enhanced navigation, and
 history.
 
+### Decision record — declared page-enhancement lifecycle (PR-C1, 2026-09-05)
+
+**Decision: extend `Document`'s existing runtime descriptors and the one
+replaceable navigation runtime with `PageEnhancementModule`; do not add a
+second router, an application callback registry, or fetched-script-text
+evaluation.** A complete document already declares its stylesheets and module
+assets, while the navigation runtime already owns the one validated
+fetch/replace/history lifecycle. A page-specific effect therefore declares a
+same-origin ES-module source and a stable name in that existing document
+boundary. Its module exports `setupPageEnhancement(main)`, which may return one
+disposer. The runtime imports that declared URL before it replaces a fetched
+page, then invokes setup only after the new main region is mounted and invokes
+the prior disposers before that region is removed. This handles revisits and
+module caching without relying on ES-module top-level code being evaluated a
+second time.
+
+Framework-rendered stylesheet links carry a closed framework marker. The same
+runtime reconciles only those marked, same-origin links on a successful page
+replacement; it does not adopt arbitrary `head` markup from a fetched
+document. Descriptor names must be nonempty and unique, sources must parse as
+same-origin URLs, modules must export the setup function, and setup/disposal
+must conform to the bounded contract. Any violation or module load failure
+makes that enhanced transition incompatible and uses ordinary native document
+navigation instead. A direct-load module failure intentionally leaves the
+already-rendered SSR content usable rather than creating a reload loop. CSP
+continues to authorize only the current document's nonce-bound inline capture
+kernel and declared same-origin module URLs; no fetched JavaScript text is
+executed.
+
+This is a general lifecycle primitive, not a generic JavaScript API: ordinary
+`DeferredModule` values retain their existing one-time behavior, application
+styles/content remain application-owned, and applications that replace the
+navigation runtime must implement this explicit descriptor contract or retain
+native navigation for pages that use it. The two-pages live SSE module and a
+second Home style/behavior module provide the reference proof; Swagger's
+future page asset remains AHI-4E work.
+
 ### Decision record — separate signed CSRF backend ownership (PR-F7, 2026-09-05)
 
 **Decision: retain `HarchWeb.Csrf` as the stable façade and one
