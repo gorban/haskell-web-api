@@ -20,31 +20,26 @@ if [ "${#missing_commands[@]}" -ne 0 ]; then
   exit 1
 fi
 
-production_paths=(
-  packages/core/src
-  packages/harch-web/src
-  packages/test-core/src
-  packages/web-api/src
-  examples
-)
-test_paths=(
-  packages/core/test
-  packages/harch-web/test
-  packages/test-core/test
-  packages/web-api/test
+mapfile -t package_component_paths < <(
+  find packages -mindepth 2 -maxdepth 2 -type d \( -name src -o -name app -o -name test \) \
+    ! -path 'packages/hspec-expectations-match/*' -print | sort
 )
 
-health_paths=(
-  packages/core/src
-  packages/harch-web/src
-  packages/test-core/src
-  packages/web-api/src
-  packages/core/test
-  packages/harch-web/test
-  packages/test-core/test
-  packages/web-api/test
-  examples
-)
+if [ "${#package_component_paths[@]}" -eq 0 ]; then
+  printf '%s\n' 'No package component roots found; quality inventory is incomplete.' >&2
+  exit 1
+fi
+
+production_paths=(examples)
+test_paths=()
+for component_path in "${package_component_paths[@]}"; do
+  case "$component_path" in
+    */test) test_paths+=("$component_path") ;;
+    *) production_paths+=("$component_path") ;;
+  esac
+done
+
+health_paths=("${production_paths[@]}" "${test_paths[@]}")
 
 module_name_for() {
   awk '
@@ -252,20 +247,27 @@ module_max_arity_for() {
       start_signature($0)
       next
     }
+    /^(data|newtype|type|class)[[:space:]]+/ { next }
     /^[A-Za-z_][A-Za-z0-9_\047]*([[:space:]]+[^=]+)?[[:space:]]*=/ {
       left = $0
       if (left ~ /::/) next
       name = $1
       if (name in signature_arity) next
       count = plain_equation_arity($0)
-      if (count > maximum) maximum = count
+      if (count > maximum) {
+        maximum = count
+        maximum_name = name
+      }
     }
     END {
       if (signature_active) finish_signature()
       for (signature_name in signature_arity) {
-        if (signature_arity[signature_name] > maximum) maximum = signature_arity[signature_name]
+        if (signature_arity[signature_name] > maximum) {
+          maximum = signature_arity[signature_name]
+          maximum_name = signature_name
+        }
       }
-      print maximum + 0
+      print (maximum + 0) ":" maximum_name
     }
   ' "$1"
 }
@@ -285,6 +287,7 @@ print_module_health_reports() {
   declare -A reexport_modules_by_key=()
   declare -A export_resolution_state=()
   declare -A arity_by_key=()
+  declare -A arity_owner_by_key=()
   declare -A imports_by_key=()
   declare -A keys_by_module=()
   declare -A local_imports_by_key=()
@@ -326,7 +329,9 @@ print_module_health_reports() {
     own_export_count_by_key["$key"]="$own_count"
     reexport_modules_by_key["$key"]="${reexports[*]}"
 
-    arity_by_key["$key"]="$(module_max_arity_for "$path")"
+    arity_measure="$(module_max_arity_for "$path")"
+    arity_by_key["$key"]="${arity_measure%%:*}"
+    arity_owner_by_key["$key"]="${arity_measure#*:}"
     imports_by_key["$key"]="$imports"
     keys_by_module["$module_name"]="${keys_by_module[$module_name]:-} $key"
   done < <(find "${health_paths[@]}" -type f -name '*.hs' -print | sort)
@@ -432,20 +437,21 @@ print_module_health_reports() {
   print_health_table() {
     local requested_scope="$1"
     printf '\nModule-health report: %s (advisory)\n\n' "$requested_scope"
-    printf '%-42s %7s %7s %7s %7s %7s %8s %7s  %s\n' 'module' 'lines' 'decls' 'imports' 'exports' 'arity' 'fan-out' 'fan-in' 'path'
+    printf '%-42s %7s %7s %7s %7s %7s %-28s %8s %7s  %s\n' 'module' 'lines' 'decls' 'imports' 'exports' 'arity' 'arity owner' 'fan-out' 'fan-in' 'path'
     for key in "${health_keys[@]}"; do
       [ "${scope_by_key[$key]}" = "$requested_scope" ] || continue
       local_fanout=0
       for ignored_target in ${local_imports_by_key[$key]:-}; do
         local_fanout=$((local_fanout + 1))
       done
-      printf '%-42s %7s %7s %7s %7s %7s %8s %7s  %s\n' \
+      printf '%-42s %7s %7s %7s %7s %7s %-28s %8s %7s  %s\n' \
         "${module_by_key[$key]}" \
         "${line_count_by_key[$key]}" \
         "${declaration_count_by_key[$key]}" \
         "${import_count_by_key[$key]}" \
         "${export_count_by_key[$key]}" \
         "${arity_by_key[$key]}" \
+        "${arity_owner_by_key[$key]:--}" \
         "$local_fanout" \
         "${fanin_by_key[$key]:-0}" \
         "${path_by_key[$key]}"

@@ -11,7 +11,7 @@ if ! grep -Fq 'tools/test-haskell-quality-report.sh' "$repo_root/tools/run-optim
   exit 1
 fi
 
-mkdir -p "$fixture_root/bin" "$fixture_root/tools" "$fixture_root/packages/core/src" "$fixture_root/packages/core/test" "$fixture_root/packages/harch-web/src" "$fixture_root/packages/harch-web/test" "$fixture_root/packages/test-core/src" "$fixture_root/packages/test-core/test" "$fixture_root/packages/web-api/src" "$fixture_root/packages/web-api/test" "$fixture_root/packages/hspec-expectations-match/src" "$fixture_root/examples"
+mkdir -p "$fixture_root/bin" "$fixture_root/tools" "$fixture_root/packages/core/src" "$fixture_root/packages/core/test" "$fixture_root/packages/harch-web/src" "$fixture_root/packages/harch-web/test" "$fixture_root/packages/test-core/src" "$fixture_root/packages/test-core/test" "$fixture_root/packages/web-api/src" "$fixture_root/packages/web-api/test" "$fixture_root/packages/new-component/src" "$fixture_root/packages/new-component/test" "$fixture_root/packages/hspec-expectations-match/src" "$fixture_root/examples"
 git -C "$fixture_root" init --quiet
 cp "$repo_root/tools/haskell-quality-report.sh" "$fixture_root/tools/haskell-quality-report.sh"
 
@@ -46,6 +46,9 @@ printf '%s\n' \
   '(.+.) = undefined' >"$fixture_root/packages/core/src/Operator.hs"
 printf '%s\n' 'module Imports where' 'import Data.Aeson ((.=))' >"$fixture_root/packages/core/src/Imports.hs"
 printf '%s\n' 'module Pattern where' 'patternOnly (First : Second : rest) = rest' >"$fixture_root/packages/core/src/Pattern.hs"
+printf '%s\n' 'module Declarations where' 'data ParameterizedData first second third fourth fifth sixth = ParameterizedData' 'newtype ParameterizedNewtype first second third fourth fifth sixth = ParameterizedNewtype first' >"$fixture_root/packages/core/src/Declarations.hs"
+printf '%s\n' 'module SixInputs where' 'sixInputs :: first -> second -> third -> fourth -> fifth -> sixth -> result' 'sixInputs = undefined' >"$fixture_root/packages/new-component/src/SixInputs.hs"
+printf '%s\n' 'module NewComponentSpec where' 'spec = 1' >"$fixture_root/packages/new-component/test/NewComponentSpec.hs"
 printf '%s\n' 'module Vendor where' 'vendored value = case value of Left problem -> Left problem; Right result -> Right result' >"$fixture_root/packages/hspec-expectations-match/src/Vendor.hs"
 
 printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\\n" "$*" >>"$QUALITY_ARGON_CALLS"' 'printf "%s\\n" "fixture/Production.hs" "  1:1 productionHotspot - 12" "  2:1 spec - 120" "  3:1 helperHotspot - 9"' >"$fixture_root/bin/argon"
@@ -73,12 +76,15 @@ printf '%s' "$report_output" | grep -qE 'Repeated production string literals \(3
 printf '%s' "$report_output" | grep -qE '3[[:space:]]+"repeat"'
 printf '%s' "$report_output" | grep -qE 'Module-health report: production \(advisory\)'
 printf '%s' "$report_output" | grep -qE 'Module-health report: test \(advisory\)'
-printf '%s' "$report_output" | grep -qE 'lines.*decls.*imports.*exports.*arity.*fan-out.*fan-in'
-printf '%s' "$report_output" | grep -qE 'Alpha[[:space:]]+4[[:space:]]+2[[:space:]]+1[[:space:]]+2[[:space:]]+2[[:space:]]+1[[:space:]]+2'
+printf '%s' "$report_output" | grep -qE 'lines.*decls.*imports.*exports.*arity.*arity owner.*fan-out.*fan-in'
+printf '%s' "$report_output" | grep -qE 'Alpha[[:space:]]+4[[:space:]]+2[[:space:]]+1[[:space:]]+2[[:space:]]+2[[:space:]]+alphaPair[[:space:]]+1[[:space:]]+2'
 printf '%s\n' "$report_output" | awk '$1 == "Arity" && $6 == 5 { found = 1 } END { exit !found }'
 printf '%s\n' "$report_output" | awk '$1 == "Imports" && $6 == 0 { found = 1 } END { exit !found }'
 printf '%s\n' "$report_output" | awk '$1 == "Operator" && $6 == 3 { found = 1 } END { exit !found }'
 printf '%s\n' "$report_output" | awk '$1 == "Pattern" && $6 == 0 { found = 1 } END { exit !found }'
+printf '%s\n' "$report_output" | awk '$1 == "Declarations" && $6 == 0 { found = 1 } END { exit !found }'
+printf '%s\n' "$report_output" | awk '$1 == "SixInputs" && $6 == 6 && $7 == "sixInputs" { found = 1 } END { exit !found }'
+printf '%s' "$report_output" | grep -qE 'packages/new-component/test/NewComponentSpec.hs'
 printf '%s' "$report_output" | grep -qE 'packages/core/test/Spec.hs'
 printf '%s' "$report_output" | grep -qE 'Alpha -> Beta -> Alpha'
 if printf '%s' "$report_output" | grep -qE 'Vendor.hs'; then
