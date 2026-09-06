@@ -10,6 +10,7 @@ trap 'rm -f "$build_log"' EXIT
 "$repo_root/tools/test-haskell-quality-report.sh"
 "$repo_root/tools/test-install-git-hooks.sh"
 "$repo_root/tools/test-run-observed-command.sh"
+"$repo_root/tools/test-run-integration-and-e2e-check.sh"
 
 if ! command -v ld.lld >/dev/null; then
   printf '%s\n' 'LLVM lld is required for the optimized diagnostic gate; install an ld.lld executable before running this check.' >&2

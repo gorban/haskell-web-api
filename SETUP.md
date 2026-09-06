@@ -67,7 +67,7 @@ init_hooks="ln -sf /usr/bin/podman-remote /usr/local/bin/podman 2>/dev/null || t
   built-in `vimdiff` tool inside the container, and `postgresql17` keeps a PostgreSQL 17 `psql` CLI
   available without a separate install step. `postgresql17-private-devel` and `postgresql17-server-devel`
   are also needed on current Fedora to provide a working `pg_config` and the `libpq` development link used
-  by local source builds; `nodejs` is required by the browser-harness e2e spec; and `lld` provides
+  by local source builds; Node.js 24 is required by the browser-harness e2e spec; and `lld` provides
   `ld.lld`, required by the optimized and coverage diagnostic build wrappers.
 - The web-api project setup also tries to start missing prerequisites like PostgreSQL and Jaeger with
   `docker` or `podman`, so the example container definition also includes `podman-remote`, a socket
@@ -259,7 +259,7 @@ cabal build all
 In addition to the Haskell toolchain, the current repository is easiest to work with when the following
 commands are also available on your `PATH`:
 
-- Node.js 22, 24, or 26 for the real Playwright e2e harness. Scenarios remain Haskell-authored; the
+- Node.js 24 for the real Playwright e2e harness. Scenarios remain Haskell-authored; the
   bundled Node process is only a streaming adapter to Playwright's official Chromium client. Install
   its locked dependencies and browser once from the repository root:
   ```bash

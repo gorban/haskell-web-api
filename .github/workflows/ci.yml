@@ -254,7 +254,7 @@ jobs:
         if: steps.coverage.outcome == 'success'
         id: run_tests_skip_unit
         run: |
-          cabal test all -O2 --ghc-options=-optl-fuse-ld=lld --test-options="--skip Unit"
+          tools/run-integration-and-e2e-check.sh
 
       - name: Upload Playwright failure artifacts
         if: failure() && steps.run_tests_skip_unit.outcome == 'failure'

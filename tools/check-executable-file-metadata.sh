@@ -24,6 +24,7 @@ expected_executables=(
   tools/install-vscode-ormolu-formatter.sh
   tools/package-vscode-ormolu-formatter.sh
   tools/run-code-coverage-check.sh
+  tools/run-integration-and-e2e-check.sh
   tools/run-observed-command.sh
   tools/run-optimized-build-check.sh
   tools/seed-test-database.sh
@@ -35,6 +36,7 @@ expected_executables=(
   tools/test-haskell-quality-report.sh
   tools/test-install-git-hooks.sh
   tools/test-run-observed-command.sh
+  tools/test-run-integration-and-e2e-check.sh
 )
 
 failed=0

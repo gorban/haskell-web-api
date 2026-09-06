@@ -63,7 +63,9 @@ change; do not bypass the existing ignore rule.
 # CI-equivalent checks
 
 Before pushing, run the same checks that CI runs from the repository root. Ensure the local PostgreSQL,
-Jaeger, and LLVM `ld.lld` prerequisites are available, then seed the test database and run:
+Jaeger, LLVM `ld.lld`, Node.js 24, and Playwright Chromium prerequisites are available. Install the browser
+dependencies with `npm ci --prefix packages/test-core/playwright-runner` and `npx --prefix
+packages/test-core/playwright-runner playwright install chromium`, then seed the test database and run:
 
 ```sh
 cabal run haskell-web-api-db -- migrate-and-seed
@@ -72,7 +74,7 @@ cabal run haskell-web-api-db -- migrate-and-seed
 ./tools/run-code-coverage-check.sh
 ./.github/scripts/formatting-checks.sh
 ./tools/check-vscode-ormolu-formatter.sh
-cabal test all -O2 --test-options="--skip Unit"
+./tools/run-integration-and-e2e-check.sh
 ```
 
 Before the formatting checks, run `.github/scripts/install-formatting-tools.sh` whenever the
