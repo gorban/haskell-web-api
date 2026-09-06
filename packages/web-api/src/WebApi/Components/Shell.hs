@@ -18,6 +18,7 @@ import WebApi.Route (AppRequestContext, AppRoute)
 
 data AppShellProps = AppShellProps
   { appShellTitlePrefix :: Text,
+    appShellDocumentLanguage :: HarchWeb.Locale,
     appShellPathPrefix :: HarchWeb.PathPrefix,
     appShellStylesheet :: HarchWeb.Stylesheet,
     appShellNavigationItems :: [HarchWeb.NavigationItem AppRoute],
@@ -26,9 +27,10 @@ data AppShellProps = AppShellProps
   }
 
 appPageShell :: AppShellProps -> HarchWeb.PageShell AppRoute AppRequestContext
-appPageShell AppShellProps {appShellTitlePrefix, appShellPathPrefix, appShellStylesheet, appShellNavigationItems, appShellNavigationLifecycle, appShellRuntimeAssets} =
+appPageShell AppShellProps {appShellTitlePrefix, appShellDocumentLanguage, appShellPathPrefix, appShellStylesheet, appShellNavigationItems, appShellNavigationLifecycle, appShellRuntimeAssets} =
   HarchWeb.PageShell
-    { HarchWeb.shellBodyAttributes =
+    { HarchWeb.shellDocumentLanguage = appShellDocumentLanguage,
+      HarchWeb.shellBodyAttributes =
         [ HarchWeb.HtmlAttribute "data-app" appShellTitlePrefix,
           scopedClassAttribute "app-shell" "body"
         ],

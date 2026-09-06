@@ -12,7 +12,8 @@ import WebApi.Components.Shell (AppShellProps (..), appPageShell)
 import WebApi.Config (AppConfig (..))
 import WebApi.Localization (AppMessage (SkipToMainContent), localizedMessage)
 import WebApi.Route
-  ( AppRequestContext (..),
+  ( AppLocale (..),
+    AppRequestContext (..),
     AppRoute (..),
     routeCodec,
   )
@@ -52,12 +53,21 @@ buildAppPageShellConfig config context =
   appPageShell
     AppShellProps
       { appShellTitlePrefix = appTitlePrefix config,
+        appShellDocumentLanguage = documentLanguage (requestLocale context),
         appShellPathPrefix = requestPathPrefix context,
         appShellStylesheet = HarchWeb.stylesheet (HarchWeb.AssetPath "/assets/styles/app.css"),
         appShellNavigationItems = noAppShellNavigationItems,
         appShellNavigationLifecycle = Just (appNavigationLifecycle context),
         appShellRuntimeAssets = appRuntimeAssets
       }
+
+documentLanguage :: AppLocale -> HarchWeb.Locale
+documentLanguage selectedLocale =
+  HarchWeb.locale
+    ( case selectedLocale of
+        English -> "en"
+        Spanish -> "es"
+    )
 
 appRuntimeAssets :: [HarchWeb.RuntimeAsset]
 appRuntimeAssets = [HarchWeb.defaultDialogRuntime]

@@ -1009,6 +1009,7 @@ spec = describe "Unit.App.Composed" $ do
                  ]
     map endpointName (Action.declaredActionEndpointMetadata (moduleActionCodec rootModule))
       `shouldBe` [requiredEndpointName "root.catalog.catalog.refresh", requiredEndpointName "root.orders.orders.submit"]
+    shellDocumentLanguage shell `shouldBe` locale "es"
     shellBodyAttributes shell `shouldBe` []
     shellNavigationAttributes shell `shouldBe` []
     shellMainId shell `shouldBe` literalElementId "main"

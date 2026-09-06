@@ -66,6 +66,7 @@ import HarchWeb
 import HarchWeb qualified
 import HarchWeb.Csrf (CsrfPagePreparationFailure (..), CsrfProtection, PageSecurity, csrfProtectionUnavailable, preparePageSecurity)
 import HarchWeb.Document qualified as Document
+import HarchWeb.Localization (locale)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Server.ClientAction (csrfCookieFromRequest)
 import Network.HTTP.Types qualified as Http
@@ -211,7 +212,8 @@ apiOnlySite name defaultContext codec siteSecurityValue routeDefinition =
 apiOnlyFallbackPageShell :: PageShell route context
 apiOnlyFallbackPageShell =
   PageShell
-    { shellBodyAttributes = [],
+    { shellDocumentLanguage = locale "en",
+      shellBodyAttributes = [],
       shellNavigationAttributes = [],
       shellNavigationItems = [],
       shellMainId = literalElementId "main",

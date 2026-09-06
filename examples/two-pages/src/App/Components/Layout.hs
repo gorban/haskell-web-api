@@ -16,13 +16,15 @@ import HarchWeb
     RuntimeDescriptor (..),
     Stylesheet,
     literalElementId,
+    locale,
     stylesheet,
   )
 
 twoPageShell :: Page TwoPageRoute () -> PageShell TwoPageRoute ()
 twoPageShell page =
   PageShell
-    { shellBodyAttributes =
+    { shellDocumentLanguage = locale "en",
+      shellBodyAttributes =
         [ HtmlAttribute
             { attributeName = "data-app",
               attributeValue = "two-pages-example"

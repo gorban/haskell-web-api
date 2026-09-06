@@ -47,6 +47,7 @@ import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import HarchWeb.Localization (Locale, localeText)
 import HarchWeb.Markup (ElementId, Html, elementIdText, renderHtml, safeUrlText, text)
 import HarchWeb.PathPrefix (PathPrefix, applyPathPrefix, mkUrlPath, urlPathText)
 import HarchWeb.Routing (RouteCodec, routeHref)
@@ -645,6 +646,7 @@ defaultNavigationRuntimeScript =
       "    currentNavigationRegion.replaceWith(nextNavigationRegion);",
       "    currentNavigationContent.replaceWith(nextNavigationContent);",
       "    syncBodyAttributes(parsedDocument.body);",
+      "    document.documentElement.lang = parsedDocument.documentElement.lang;",
       "    if (currentLifecycle.status) {",
       "      syncElementAttributes(currentLifecycle.status, nextLifecycle.status);",
       "      nextLifecycle.status = currentLifecycle.status;",
@@ -806,6 +808,10 @@ data ResolvedNavigationItem route = ResolvedNavigationItem
 
 data Document route = Document
   { documentTitle :: Text,
+    -- | Application-resolved language for the root document.  Harch renders
+    -- this only on @html@ and preserves any language declaration that a child
+    -- component deliberately owns.
+    documentLanguage :: Locale,
     documentBodyAttributes :: [HtmlAttribute],
     documentNavigationAttributes :: [HtmlAttribute],
     documentNavigation :: [ResolvedNavigationItem route],
@@ -832,7 +838,11 @@ responsiveViewport :: ViewportPolicy
 responsiveViewport = ResponsiveViewport
 
 data PageShell route context = PageShell
-  { shellBodyAttributes :: [HtmlAttribute],
+  { -- | The application selects this after resolving its request locale; Harch
+    -- never guesses it from a URL.  An accepted enhanced navigation adopts the
+    -- replacement document's root language using this same rendered value.
+    shellDocumentLanguage :: Locale,
+    shellBodyAttributes :: [HtmlAttribute],
     shellNavigationAttributes :: [HtmlAttribute],
     shellNavigationItems :: [NavigationItem route],
     shellMainId :: ElementId,
@@ -1131,6 +1141,7 @@ buildPageShell :: (Eq route) => RouteCodec route context -> PageShell route cont
 buildPageShell codec shell page =
   Document
     { documentTitle = pageTitle page,
+      documentLanguage = shellDocumentLanguage shell,
       documentBodyAttributes = shellBodyAttributes shell,
       documentNavigationAttributes = shellNavigationAttributes shell,
       documentNavigation = buildNavigation codec page (shellNavigationItems shell),
@@ -1177,7 +1188,9 @@ renderDocumentWithNonce runtimeNonce = renderDocumentWithNonceAndActionCsrf runt
 renderDocumentWithNonceAndActionCsrf :: RuntimeNonce -> Maybe Text -> Document route -> Text
 renderDocumentWithNonceAndActionCsrf runtimeNonce maybeActionCsrf document =
   Text.concat
-    [ "<!DOCTYPE html><html><head><title>",
+    [ "<!DOCTYPE html><html lang=\"",
+      renderHtml (text (localeText (documentLanguage document))),
+      "\"><head><title>",
       renderHtml (text (documentTitle document)),
       "</title>",
       renderViewportPolicy (documentViewportPolicy document),

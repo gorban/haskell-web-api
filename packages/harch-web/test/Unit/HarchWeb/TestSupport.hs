@@ -249,7 +249,8 @@ sampleMissingPage request =
 sampleShell :: PageShell TestRoute TestContext
 sampleShell =
   PageShell
-    { shellBodyAttributes =
+    { shellDocumentLanguage = locale "en",
+      shellBodyAttributes =
         [ HtmlAttribute
             { attributeName = "data-app",
               attributeValue = "sample"

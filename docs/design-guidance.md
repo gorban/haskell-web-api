@@ -3467,6 +3467,26 @@ document-wide single-action queue.
 This keeps one capture/action/navigation ownership boundary and makes stale
 client presentation impossible without inventing a second router.
 
+### Decision record — application-owned document language through the existing shell (PR-C3, 2026-09-06)
+
+**Decision: add the already-resolved root language to `PageShell` and
+`Document`; do not infer it from a URL or create a second localization/routing
+selector.** Route parsing and locale selection are application-owned: different
+applications can select language through a prefix, host, account preference, or
+another trusted request context. The existing shell is the composition boundary
+that already turns that context into a complete SSR document, so carrying a
+typed `Locale` there keeps Harch pluggable while rendering a correct `html
+lang` for every supported page route.
+
+An accepted enhanced navigation parses a complete replacement document and
+copies only its root `html.lang` after the replacement has passed lifecycle
+compatibility checks. It does not replace the root node or rewrite descendant
+markup, so a component's deliberate nested `lang` remains its own semantic
+responsibility. Rejected or native navigations leave the current root untouched;
+ordinary SSR, script-disabled loads, reloads, and browser history each use the
+server-rendered language. This extends the document/navigation lifecycle rather
+than making routing a framework-owned locale policy.
+
 ### Decision record — separate signed CSRF backend ownership (PR-F7, 2026-09-05)
 
 **Decision: retain `HarchWeb.Csrf` as the stable façade and one

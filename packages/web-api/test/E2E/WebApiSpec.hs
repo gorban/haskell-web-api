@@ -70,8 +70,8 @@ spec =
             ( do
                 visitWithoutScripts spanishHomeUrl
                 assertAll
-                  ((,) <$> currentUrl <*> textContent (byRole Heading))
-                  (\(url, heading) -> (url `shouldBe` (HarchWeb.localServerBaseUrl server <> "/es/spaces")) :| [heading `shouldBe` "Sitio en construcción"])
+                  ((,,) <$> currentUrl <*> textContent (byRole Heading) <*> attributeValue (css "html") "lang")
+                  (\(url, heading, language) -> (url `shouldBe` (HarchWeb.localServerBaseUrl server <> "/es/spaces")) :| [heading `shouldBe` "Sitio en construcción", language `shouldBe` Just "es"])
             )
             `shouldReturn` Right ()
 
@@ -151,6 +151,9 @@ spec =
             browser
             ( do
                 visit secondUrl
+                assertAttribute (css "html") "lang" (`shouldBe` Just "en")
+                reload
+                assertAttribute (css "html") "lang" (`shouldBe` Just "en")
                 click languageTrigger
                 assertAttribute (css "#language-dialog") "open" (`shouldBe` Just "")
                 assertFocused englishChoice (`shouldBe` True)
@@ -169,15 +172,20 @@ spec =
                 click languageTrigger
                 click spanishChoice
                 assertAll
-                  ((,,,) <$> currentUrl <*> textContent (byRole Heading `named` "Elige un idioma") <*> textContent (byRole Status) <*> browserMetrics)
-                  ( \(url, heading, announcement, metrics) ->
+                  ((,,,,) <$> currentUrl <*> textContent (byRole Heading `named` "Elige un idioma") <*> textContent (byRole Status) <*> browserMetrics <*> attributeValue (css "html") "lang")
+                  ( \(url, heading, announcement, metrics, language) ->
                       (url `shouldBe` spanishLanguageUrl)
                         :| [ heading `shouldBe` "Elige un idioma",
                              announcement `shouldBe` "web-api: Language",
-                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|]),
+                             language `shouldBe` Just "es"
                            ]
                   )
                 assertAttribute (css "#language-dialog") "open" (`shouldBe` Nothing)
+                historyBack
+                assertAttribute (css "html") "lang" (`shouldBe` Just "en")
+                historyForward
+                assertAttribute (css "html") "lang" (`shouldBe` Just "es")
             )
             `shouldReturn` Right ()
 

@@ -110,8 +110,8 @@ movedSpec = do
                 navigationStatusClass = Just globalCssClass
               }
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
-          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = literalElementId "app-main", documentMainAttributes = [mainAttribute], documentMainContent = trustedMarkup "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentNavigationLifecycle = Just navigationLifecycle, documentStylesheets = [stylesheetValue], documentViewportPolicy = responsiveViewport, documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
-          shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = literalElementId "app-main", shellMainAttributes = [mainAttribute], shellNavigationLifecycle = Just navigationLifecycle, shellStylesheets = [stylesheetValue], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
+          document = Document {documentTitle = "Known", documentLanguage = locale "en", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = literalElementId "app-main", documentMainAttributes = [mainAttribute], documentMainContent = trustedMarkup "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentNavigationLifecycle = Just navigationLifecycle, documentStylesheets = [stylesheetValue], documentViewportPolicy = responsiveViewport, documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
+          shell = PageShell {shellDocumentLanguage = locale "en", shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = literalElementId "app-main", shellMainAttributes = [mainAttribute], shellNavigationLifecycle = Just navigationLifecycle, shellStylesheets = [stylesheetValue], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
           responseBodyValue = ResponseBody {responseStatus = Http.status202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}
           clientActionPayload =
             ClientActionPayload
@@ -198,6 +198,7 @@ movedSpec = do
                  Text.isInfixOf "finalUrl = new URL(response.url);" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "window.history.pushState({ path: finalUrl.href }, '', finalUrl.href);" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "activeNavigation.abortController.abort();" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "document.documentElement.lang = parsedDocument.documentElement.lang;" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "focusTarget.focus({ preventScroll: true });" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "lifecycle.status.replaceChildren(lifecycle.announcementText);" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "['click', 'input', 'change', 'keydown', 'submit']" defaultCaptureKernelScript `shouldBe` False
@@ -219,6 +220,7 @@ movedSpec = do
       resolvedNavigationItemHref `shouldBe` "/known"
       resolvedNavigationItemIsActive `shouldBe` True
       documentTitle document `shouldBe` "Known"
+      documentLanguage document `shouldBe` locale "en"
       documentBodyAttributes document `shouldBe` [attribute]
       documentNavigationAttributes document `shouldBe` [navigationAttribute]
       documentNavigation document `shouldBe` [resolvedNavigationItem]
@@ -228,6 +230,7 @@ movedSpec = do
       documentBootstrapHooks document `shouldBe` ["known-page"]
       documentStylesheets document `shouldBe` [stylesheetValue]
       documentRuntimeDescriptors document `shouldBe` [DeferredModule "navigation" "/assets/navigation.js"]
+      shellDocumentLanguage shell `shouldBe` locale "en"
       shellBodyAttributes shell `shouldBe` [attribute]
       shellNavigationAttributes shell `shouldBe` [navigationAttribute]
       shellNavigationItems shell `shouldBe` [navigationItem]
@@ -321,10 +324,10 @@ movedSpec = do
           otherServerSentEvent = ServerSentEvent {serverSentEventName = Nothing, serverSentEventId = Just "43", serverSentEventData = "Waiting"}
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
           otherResolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Missing", navigationRoute = MissingRoute, navigationHref = "/404", navigationIsActive = False}
-          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = literalElementId "app-main", documentMainAttributes = [mainAttribute], documentMainContent = trustedMarkup "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentNavigationLifecycle = Just navigationLifecycle, documentStylesheets = [], documentViewportPolicy = responsiveViewport, documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
-          otherDocument = Document {documentTitle = "Missing", documentBodyAttributes = [otherAttribute], documentNavigationAttributes = [otherNavigationAttribute], documentNavigation = [otherResolvedNavigationItem], documentMainId = literalElementId "other-main", documentMainAttributes = [otherMainAttribute], documentMainContent = trustedMarkup "<h1>Missing</h1>", documentBootstrapHooks = [], documentNavigationLifecycle = Just otherNavigationLifecycle, documentStylesheets = [], documentViewportPolicy = responsiveViewport, documentRuntimeDescriptors = []}
-          shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = literalElementId "app-main", shellMainAttributes = [mainAttribute], shellNavigationLifecycle = Just navigationLifecycle, shellStylesheets = [], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
-          otherShell = PageShell {shellBodyAttributes = [otherAttribute], shellNavigationAttributes = [otherNavigationAttribute], shellNavigationItems = [otherNavigationItem], shellMainId = literalElementId "other-main", shellMainAttributes = [otherMainAttribute], shellNavigationLifecycle = Just otherNavigationLifecycle, shellStylesheets = [], shellRuntimeDescriptors = []}
+          document = Document {documentTitle = "Known", documentLanguage = locale "en", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = literalElementId "app-main", documentMainAttributes = [mainAttribute], documentMainContent = trustedMarkup "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentNavigationLifecycle = Just navigationLifecycle, documentStylesheets = [], documentViewportPolicy = responsiveViewport, documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
+          otherDocument = Document {documentTitle = "Missing", documentLanguage = locale "en", documentBodyAttributes = [otherAttribute], documentNavigationAttributes = [otherNavigationAttribute], documentNavigation = [otherResolvedNavigationItem], documentMainId = literalElementId "other-main", documentMainAttributes = [otherMainAttribute], documentMainContent = trustedMarkup "<h1>Missing</h1>", documentBootstrapHooks = [], documentNavigationLifecycle = Just otherNavigationLifecycle, documentStylesheets = [], documentViewportPolicy = responsiveViewport, documentRuntimeDescriptors = []}
+          shell = PageShell {shellDocumentLanguage = locale "en", shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = literalElementId "app-main", shellMainAttributes = [mainAttribute], shellNavigationLifecycle = Just navigationLifecycle, shellStylesheets = [], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
+          otherShell = PageShell {shellDocumentLanguage = locale "en", shellBodyAttributes = [otherAttribute], shellNavigationAttributes = [otherNavigationAttribute], shellNavigationItems = [otherNavigationItem], shellMainId = literalElementId "other-main", shellMainAttributes = [otherMainAttribute], shellNavigationLifecycle = Just otherNavigationLifecycle, shellStylesheets = [], shellRuntimeDescriptors = []}
           body = ResponseBody {responseStatus = Http.status202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}
           otherBody = ResponseBody {responseStatus = Http.status200, responseContentType = "text/html", responseBody = "<h1>OK</h1>", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR sample"], responseDatabaseOperations = []}
           pageMetadata = ResponseBody {responseStatus = Http.status500, responseContentType = "text/html; charset=utf-8", responseBody = "", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR page"], responseDatabaseOperations = []}
@@ -501,7 +504,7 @@ movedSpec = do
       notFoundRequest codec defaultContext `shouldBe` RouteRequest {requestRoute = MissingRoute, requestContext = defaultContext}
       renderResponse sampleApplication request `shouldReturn` PageResponse testPageSecurity (samplePage request)
       renderDocument (pageShell sampleApplication (samplePage request))
-        `shouldBe` "<!DOCTYPE html><html><head><title>Known</title><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><script type=\"module\" src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
+        `shouldBe` "<!DOCTYPE html><html lang=\"en\"><head><title>Known</title><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><script type=\"module\" src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
       Text.isInfixOf
         "<script nonce=\""
         ( renderDocument

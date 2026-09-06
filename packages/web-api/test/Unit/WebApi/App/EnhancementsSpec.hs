@@ -142,6 +142,9 @@ spec = do
 
     it "keeps the shell configuration seam aligned with the rendered shell entry point" $ do
       let shellConfig = buildAppPageShellConfig navigationAppConfig defaultRequestContext
+          spanishShellConfig = buildAppPageShellConfig navigationAppConfig spanishRequestContext
+      HarchWeb.shellDocumentLanguage shellConfig `shouldBe` HarchWeb.locale "en"
+      HarchWeb.shellDocumentLanguage spanishShellConfig `shouldBe` HarchWeb.locale "es"
       HarchWeb.shellNavigationItems shellConfig `shouldBe` []
       HarchWeb.shellRuntimeDescriptors shellConfig
         `shouldBe` [HarchWeb.DeferredModule "harch-dialog" "/assets/dialog.js"]
@@ -168,8 +171,10 @@ spec = do
       helpShell <- renderedShell defaultAppConfig HelpRoute
       expectAll
         ( (Text.isInfixOf "<h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Choose a language</h1>" languageShell `shouldBe` True)
-            :| [ Text.isInfixOf "href=\"/en/language\" data-page-link=\"true\" aria-current=\"page\">English</a>" languageShell `shouldBe` True,
+            :| [ Text.isInfixOf "<!DOCTYPE html><html lang=\"en\">" languageShell `shouldBe` True,
+                 Text.isInfixOf "href=\"/en/language\" data-page-link=\"true\" aria-current=\"page\">English</a>" languageShell `shouldBe` True,
                  Text.isInfixOf "aria-haspopup=\"dialog\" aria-controls=\"language-dialog\" aria-expanded=\"false\"" languageShell `shouldBe` True,
+                 Text.isInfixOf "<!DOCTYPE html><html lang=\"es\">" spanishLanguageShell `shouldBe` True,
                  Text.isInfixOf "<h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Elige un idioma</h1>" spanishLanguageShell `shouldBe` True,
                  Text.isInfixOf "href=\"/es/language\" data-page-link=\"true\" aria-current=\"page\">Espanol</a>" spanishLanguageShell `shouldBe` True,
                  Text.isInfixOf "data-page=\"help\"" helpShell `shouldBe` True,

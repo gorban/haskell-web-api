@@ -300,7 +300,8 @@ buildComposedSiteWithAdmissionWorkflow dependencies maybeAdmissionWorkflow rootS
 composedPageShell :: Page RootRoute ComposedContext -> PageShell RootRoute ComposedContext
 composedPageShell page =
   PageShell
-    { shellBodyAttributes = [],
+    { shellDocumentLanguage = selectedLocale,
+      shellBodyAttributes = [],
       shellNavigationAttributes = [],
       shellNavigationItems =
         [ NavigationItem "Sign in" (Localized selectedLocale (Public PublicLogin)),
