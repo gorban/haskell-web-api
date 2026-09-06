@@ -187,6 +187,30 @@ validation, then asks the same selected `CsrfProtection` to verify current
 binding state. It therefore cannot introduce an app-specific cookie, an
 accepting equality check, or a backend-verification bypass.
 
+### Decision record — bounded anonymous synchronizer issuance (SEC-3, 2026-09-06)
+
+**Decision: keep the composed PostgreSQL synchronizer behind the existing
+`CsrfProtection` capability, but make its anonymous binding a bounded rolling
+window while authenticated bindings retain expiry/revocation-only storage.** A
+cookie-less visitor has no durable browser identity before issuance. Treating
+every such visitor as one binding and rejecting it at a per-binding limit made
+the admission form a small, site-wide exhaustible resource. Giving that caller
+a new server-side session or a second cookie would add a parallel identity and
+transport authority merely to implement storage accounting.
+
+The application-owned store instead serializes a binding's capacity decision
+with a PostgreSQL transaction advisory lock. At anonymous capacity it removes
+the oldest active digest and records the new digest in the same statement;
+each fresh visitor can therefore obtain a token while work and durable rows
+stay bounded. Harch continues to verify an existing cookie before it asks for
+issuance, so ordinary navigation retains the browser's current token and does
+not churn the window. Under sustained anonymous issuance an already-rendered
+oldest form can be reclaimed before its nominal one-hour expiry; its submission
+is safely rejected by the existing CSRF rail and a complete GET supplies a new
+form. Account/admission bindings never use reclamation: exhaustion is still an
+explicit unavailable outcome rather than a capacity-dependent grant change.
+This is an application PostgreSQL policy, not a second Harch CSRF mode.
+
 ### Decision record — typed account-JWT cookie policy (AHI-4C, 2026-09-03)
 
 **Decision: extend `HarchWeb.Authentication` with a validated host-only JWT

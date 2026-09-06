@@ -12,6 +12,7 @@
 -- dependency.
 module App.Composed.CsrfSynchronizer
   ( SynchronizerTokenDigest,
+    SynchronizerTokenCapacityPolicy (..),
     SynchronizerTokenStore (..),
     SynchronizerTokenStoreError (..),
     synchronizerTokenDigestText,
@@ -59,12 +60,28 @@ data SynchronizerTokenStoreError
   | SynchronizerTokenStoreCorrupt
   deriving (Eq, Show)
 
+-- | The application-selected capacity behavior for one durable binding.
+--
+-- Authenticated grants keep every valid token until its own expiry or
+-- revocation: unexpectedly discarding one would turn an account/admission
+-- transition into a capacity-dependent failure.  Anonymous issuance has no
+-- durable browser identity before the first token is minted, so a shared
+-- marker cannot safely reject every later visitor once it is full.  Its
+-- bounded rolling window reclaims the oldest record to make room.  A
+-- reclaimed anonymous form is rejected by the normal CSRF rail and must be
+-- refreshed; a browser that keeps a valid token incurs no new issuance and
+-- therefore does not churn the window during ordinary navigation.
+data SynchronizerTokenCapacityPolicy
+  = PreserveSynchronizerTokens
+  | ReplaceOldestSynchronizerToken
+  deriving (Eq, Show)
+
 -- | Application-owned durable token capability.  The store may enforce its
 -- per-binding capacity in 'saveSynchronizerToken'; @False@ means no bounded
 -- slot is available, never that a token was saved.  Verification is always a
 -- fresh durable read, so an explicit revocation takes effect immediately.
 data SynchronizerTokenStore = SynchronizerTokenStore
-  { saveSynchronizerToken :: SynchronizerTokenDigest -> CsrfBindingDigest -> UnixTimeNanoseconds -> UnixTimeNanoseconds -> IO (Either SynchronizerTokenStoreError Bool),
+  { saveSynchronizerToken :: SynchronizerTokenCapacityPolicy -> SynchronizerTokenDigest -> CsrfBindingDigest -> UnixTimeNanoseconds -> UnixTimeNanoseconds -> IO (Either SynchronizerTokenStoreError Bool),
     verifySynchronizerToken :: SynchronizerTokenDigest -> CsrfBindingDigest -> UnixTimeNanoseconds -> IO (Either SynchronizerTokenStoreError Bool),
     cleanupSynchronizerTokens :: UnixTimeNanoseconds -> IO (Either SynchronizerTokenStoreError ())
   }
@@ -96,13 +113,13 @@ issueSynchronizerToken store readClock resolveBinding context = do
   now <- readClock
   case bindingExpiry now bindingResolution of
     Nothing -> pure CsrfProtectionUnavailable
-    Just (binding, expiresAt, cookieMaxAge) -> do
+    Just (capacityPolicy, binding, expiresAt, cookieMaxAge) -> do
       cleanupResult <- cleanupSynchronizerTokens store now
       case cleanupResult of
         Left _ -> pure CsrfProtectionUnavailable
         Right () -> do
           token <- generateCsrfToken
-          saved <- saveSynchronizerToken store (synchronizerTokenDigest token) (csrfBindingDigest binding) now expiresAt
+          saved <- saveSynchronizerToken store capacityPolicy (synchronizerTokenDigest token) (csrfBindingDigest binding) now expiresAt
           pure $
             case saved of
               Right True -> CsrfTokenIssued token cookieMaxAge
@@ -126,7 +143,7 @@ verifyDurableSynchronizerToken store readClock resolveBinding context token = do
     _ ->
       case bindingExpiry now bindingResolution of
         Nothing -> pure CsrfVerificationUnavailable
-        Just (binding, _, _) -> do
+        Just (_, binding, _, _) -> do
           verified <- verifySynchronizerToken store (synchronizerTokenDigest token) (csrfBindingDigest binding) now
           pure $
             case verified of
@@ -134,16 +151,16 @@ verifyDurableSynchronizerToken store readClock resolveBinding context token = do
               Right False -> CsrfRejected
               Left _ -> CsrfVerificationUnavailable
 
-bindingExpiry :: UnixTimeNanoseconds -> CsrfBindingResolution -> Maybe (CsrfBinding, UnixTimeNanoseconds, CsrfCookieMaxAgeSeconds)
+bindingExpiry :: UnixTimeNanoseconds -> CsrfBindingResolution -> Maybe (SynchronizerTokenCapacityPolicy, CsrfBinding, UnixTimeNanoseconds, CsrfCookieMaxAgeSeconds)
 bindingExpiry now resolution =
   case resolution of
     CsrfBindingUnavailable -> Nothing
     AnonymousCsrfBinding -> do
       expiresAt <- addUnixTimeNanoseconds now anonymousLifetimeNanoseconds
-      pure (anonymousBinding, expiresAt, defaultCsrfCookieMaxAgeSeconds)
+      pure (ReplaceOldestSynchronizerToken, anonymousBinding, expiresAt, defaultCsrfCookieMaxAgeSeconds)
     BoundCsrfBinding binding expiresAt -> do
       cookieMaxAge <- cookieLifetime now expiresAt
-      pure (binding, expiresAt, cookieMaxAge)
+      pure (PreserveSynchronizerTokens, binding, expiresAt, cookieMaxAge)
   where
     -- The anonymous marker is domain-separated and immediately digested by
     -- Harch; it carries neither a principal nor session data.

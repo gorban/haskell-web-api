@@ -66,6 +66,7 @@ module App.Composed
     ComposedDomainCapabilities (..),
     ComposedSiteDependencies (..),
     SynchronizerTokenDigest,
+    SynchronizerTokenCapacityPolicy (..),
     SynchronizerTokenStore (..),
     SynchronizerTokenStoreError (..),
     SynchronizerStoragePolicy,
@@ -169,7 +170,8 @@ import App.Composed.Admission.Types
     unAdmissionSessionId,
   )
 import App.Composed.CsrfSynchronizer
-  ( SynchronizerTokenDigest,
+  ( SynchronizerTokenCapacityPolicy (..),
+    SynchronizerTokenDigest,
     SynchronizerTokenStore (..),
     SynchronizerTokenStoreError (..),
     synchronizerCsrfProtection,
