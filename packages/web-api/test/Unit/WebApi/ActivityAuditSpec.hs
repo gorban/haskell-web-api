@@ -6,9 +6,12 @@ import Control.Exception (evaluate)
 import Control.Monad (void)
 import Data.Either (fromRight)
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
+import HarchWeb.Account (mkAccountId)
 import HarchWeb.EndpointMetadata (mkEndpointName, mkRouteTemplate)
 import HarchWeb.Localization (locale)
+import HarchWeb.RequestId (mkRequestId)
 import HarchWeb.SecurityEvent (RouteObservation (..), requiredModuleNameOrDie)
 import WebApi.ActivityAudit
 
@@ -20,8 +23,6 @@ spec = describe "WebApi.ActivityAudit" $ do
     expectPayload EmailVerified "email-verified" Nothing
     expectPayload (AuthenticationRejected PasswordAuthenticationStage) "authentication-rejected" (Just "password")
     expectPayload (AuthenticationRejected SecondFactorAuthenticationStage) "authentication-rejected" (Just "second-factor")
-    expectPayload (AuthenticationThrottled PasswordAuthenticationStage) "authentication-throttled" (Just "password")
-    expectPayload (AuthenticationThrottled SecondFactorAuthenticationStage) "authentication-throttled" (Just "second-factor")
     expectPayload MfaEnrolled "mfa-enrolled" Nothing
     expectPayload (AccountSessionIssued PasswordAuthenticationMethod) "account-session-issued" (Just "password")
     expectPayload (AccountSessionIssued TotpAuthenticationMethod) "account-session-issued" (Just "totp")
@@ -35,6 +36,11 @@ spec = describe "WebApi.ActivityAudit" $ do
     Text.isInfixOf "correct horse battery staple" renderedPayloads `shouldBe` False
     Text.isInfixOf "Bearer secret-token" renderedPayloads `shouldBe` False
     Text.isInfixOf "?return=/private" renderedPayloads `shouldBe` False
+
+  it "keeps framework request correlation separate from activity identity and payload" $ do
+    let activity = sampleActivity
+    activityRequestId activity `shouldBe` requiredMaybe "request id" (mkRequestId "550e8400-e29b-41d4-a716-446655440000")
+    payloadText (activityEvent activity) `shouldBe` "account-session-issued\npassword"
 
   it "projects only trusted declared route facts into bounded audit columns" $ do
     case auditRouteObservationFromTrusted (requiredTrustedRouteObservation "account.login" ("root" :| ["account"]) "/account/login" "en") of
@@ -65,8 +71,6 @@ spec = describe "WebApi.ActivityAudit" $ do
         EmailVerified,
         AuthenticationRejected PasswordAuthenticationStage,
         AuthenticationRejected SecondFactorAuthenticationStage,
-        AuthenticationThrottled PasswordAuthenticationStage,
-        AuthenticationThrottled SecondFactorAuthenticationStage,
         MfaEnrolled,
         AccountSessionIssued PasswordAuthenticationMethod,
         AccountSessionIssued TotpAuthenticationMethod,
@@ -76,6 +80,15 @@ spec = describe "WebApi.ActivityAudit" $ do
       ]
     unavailableStore = ActivityAuditStore (const (pure (Left ActivityAuditUnavailable)))
     successfulStore = ActivityAuditStore (const (pure (Right (activityIdFromDatabase 42))))
+
+sampleActivity :: AccountActivity
+sampleActivity =
+  AccountActivity
+    { activitySubject = requiredMaybe "account id" (mkAccountId "account_01"),
+      activityRequestId = requiredMaybe "request id" (mkRequestId "550e8400-e29b-41d4-a716-446655440000"),
+      activityEvent = AccountSessionIssued PasswordAuthenticationMethod,
+      activityRoute = Nothing
+    }
 
 expectPayload :: AccountAuditEvent -> Text.Text -> Maybe Text.Text -> Expectation
 expectPayload auditEvent expectedCode expectedDetail = do
@@ -130,3 +143,6 @@ requiredTrustedRouteObservation endpointName mountChain routeTemplate localeName
 
 required :: String -> Either error value -> value
 required label = fromRight (error ("expected valid " <> label))
+
+requiredMaybe :: String -> Maybe value -> value
+requiredMaybe label = fromMaybe (error ("expected valid " <> label))

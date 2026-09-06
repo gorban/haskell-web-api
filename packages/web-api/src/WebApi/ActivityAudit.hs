@@ -39,10 +39,14 @@ import Data.Word (Word16, Word64)
 import HarchWeb.Account (AccountId)
 import HarchWeb.EndpointMetadata (endpointNameText, routeTemplateText)
 import HarchWeb.Localization (localeText)
+import HarchWeb.RequestId (RequestId)
 import HarchWeb.SecurityEvent (RouteObservation (..), moduleNameText)
 
 data AccountActivity = AccountActivity
   { activitySubject :: AccountId,
+    -- | Correlates this activity with the framework-owned HTTP request.  It is
+    -- neither an activity identity nor an authorization credential.
+    activityRequestId :: RequestId,
     activityEvent :: AccountAuditEvent,
     activityRoute :: Maybe AuditRouteObservation
   }
@@ -50,13 +54,13 @@ data AccountActivity = AccountActivity
 -- | The initial operator questions are deliberately finite: account delivery,
 -- verification, admitted authentication outcome, MFA enrollment, and session
 -- lifecycle. In particular, unknown-identifier failures and every later
--- observation of an existing throttle stay out of this account ledger.
+-- observation of an existing throttle stay out of this account ledger until a
+-- reviewed operator question and retention policy select them.
 data AccountAuditEvent
   = PendingRegistrationDelivered AuditRegistrationDeliveryStage
   | VerificationResendDelivered
   | EmailVerified
   | AuthenticationRejected AuditAuthenticationStage
-  | AuthenticationThrottled AuditAuthenticationStage
   | MfaEnrolled
   | AccountSessionIssued AuditAuthenticationMethod
   | AccountSessionEnded AuditSessionEndReason
@@ -98,8 +102,6 @@ accountAuditEventPayload accountAuditEvent =
       AccountAuditPayload "email-verified" 1 Nothing
     AuthenticationRejected stage ->
       AccountAuditPayload "authentication-rejected" 1 (Just (authenticationStageCode stage))
-    AuthenticationThrottled stage ->
-      AccountAuditPayload "authentication-throttled" 1 (Just (authenticationStageCode stage))
     MfaEnrolled ->
       AccountAuditPayload "mfa-enrolled" 1 Nothing
     AccountSessionIssued method ->
