@@ -56,8 +56,35 @@ runBrowserSession action session = do
           Left unexpectedException -> Left (BrowserRunnerProtocolError (displayException unexpectedException))
           Right result -> result
   finishResult <- finishSession session scenarioResult
-  exitCode <- waitForProcess (sessionProcess session)
-  pure (mergeSessionResults exitCode scenarioResult finishResult)
+  exitResult <- waitForRunnerExit session
+  pure $
+    case exitResult of
+      Left exitError ->
+        case scenarioResult of
+          Left scenarioError -> Left scenarioError
+          Right _ -> Left exitError
+      Right exitCode -> mergeSessionResults exitCode scenarioResult finishResult
+
+-- | The protocol's @finish@ response means the runner has completed its
+-- browser cleanup.  It must then exit promptly: retaining a Node event-loop
+-- handle would otherwise leave an E2E example waiting forever after its last
+-- successful browser command.  The bracketed session release terminates the
+-- child after this bounded wait.
+waitForRunnerExit :: BrowserSession -> IO (Either BrowserRunnerError ExitCode)
+waitForRunnerExit session = do
+  let timeoutMilliseconds = browserProtocolTimeoutMilliseconds (sessionConfig session)
+  exitResult <- timeout (timeoutMilliseconds * 1000) (waitForProcess (sessionProcess session))
+  pure $
+    case exitResult of
+      Nothing ->
+        Left
+          ( BrowserRunnerProtocolError
+              ( "browser runner did not exit after finish within "
+                  <> show timeoutMilliseconds
+                  <> "ms"
+              )
+          )
+      Just exitCode -> Right exitCode
 
 launchBrowserSession :: BrowserConfig -> IO (Either BrowserRunnerError BrowserSession)
 launchBrowserSession config = do

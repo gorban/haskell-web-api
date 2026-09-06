@@ -49,6 +49,12 @@ spec = do
         result <- runBrowserScenario config (pure ())
         result `shouldBe` Left (BrowserRunnerProtocolError "browser command initialize timed out after 1000ms")
 
+    it "bounds a runner that answers finish but retains an event-loop handle" $
+      withFakeRunner "hang-after-finish" $ \config -> do
+        result <- timeout 1000000 (runBrowserScenario config (pure ()))
+        result
+          `shouldBe` Just (Left (BrowserRunnerProtocolError "browser runner did not exit after finish within 250ms"))
+
     it "keeps protocol transport bounded separately from browser operations" $
       withFakeRunner "delayed-observe" $ \config ->
         runBrowserScenario
@@ -411,6 +417,7 @@ spec = do
           "  setInterval(() => {}, 60000);",
           "}",
           "if (mode === 'unresponsive') { setInterval(() => {}, 60000); }",
+          "if (mode === 'hang-after-finish') { setInterval(() => {}, 60000); }",
           "(async () => {",
           "  for await (const line of lines) {",
           "    const request = JSON.parse(line);",
