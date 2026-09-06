@@ -18,12 +18,14 @@ module HarchWeb.Document
     RuntimeAsset (..),
     RuntimeDescriptor (..),
     RuntimeNonce,
+    ViewportPolicy (..),
     buildNavigation,
     buildPageShell,
     defaultCaptureKernel,
     defaultCaptureKernelByteBudget,
     defaultCaptureKernelScript,
     defaultNavigationRuntime,
+    responsiveViewport,
     defaultNavigationRuntimeScript,
     defaultDialogRuntime,
     defaultDialogRuntimeScript,
@@ -688,9 +690,21 @@ data Document route = Document
     documentBootstrapHooks :: [Text],
     documentNavigationLifecycle :: Maybe NavigationLifecycle,
     documentStylesheets :: [Stylesheet],
+    documentViewportPolicy :: ViewportPolicy,
     documentRuntimeDescriptors :: [RuntimeDescriptor]
   }
   deriving (Eq, Show)
+
+-- | Closed complete-document viewport policy. 'ResponsiveViewport' emits the
+-- standard device-width, initial-scale-one declaration and deliberately omits
+-- maximum-scale, minimum-scale, and user-scalable restrictions, preserving
+-- user zoom. This extends the existing complete-document boundary rather than
+-- admitting arbitrary application head markup.
+data ViewportPolicy = ResponsiveViewport
+  deriving (Eq, Show)
+
+responsiveViewport :: ViewportPolicy
+responsiveViewport = ResponsiveViewport
 
 data PageShell route context = PageShell
   { shellBodyAttributes :: [HtmlAttribute],
@@ -983,6 +997,7 @@ buildPageShell codec shell page =
       documentBootstrapHooks = pageBootstrapHooks page,
       documentNavigationLifecycle = shellNavigationLifecycle shell,
       documentStylesheets = shellStylesheets shell,
+      documentViewportPolicy = responsiveViewport,
       documentRuntimeDescriptors = shellRuntimeDescriptors shell
     }
 
@@ -1022,6 +1037,7 @@ renderDocumentWithNonceAndActionCsrf runtimeNonce maybeActionCsrf document =
     [ "<!DOCTYPE html><html><head><title>",
       renderHtml (text (documentTitle document)),
       "</title>",
+      renderViewportPolicy (documentViewportPolicy document),
       renderStylesheets (documentStylesheets document),
       renderRuntimeDescriptors runtimeNonce (documentRuntimeDescriptors document),
       "</head><body",
@@ -1042,6 +1058,9 @@ renderDocumentWithNonceAndActionCsrf runtimeNonce maybeActionCsrf document =
       renderNavigationStatus document,
       "</body></html>"
     ]
+
+renderViewportPolicy :: ViewportPolicy -> Text
+renderViewportPolicy ResponsiveViewport = "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
 
 actionCsrfAttribute :: Maybe Text -> [HtmlAttribute]
 actionCsrfAttribute maybeActionCsrf =

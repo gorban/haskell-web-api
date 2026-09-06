@@ -12,6 +12,7 @@ const state = {
   page: null,
   config: null,
   scriptsEnabled: null,
+  mobileViewport: null,
   countHardNavigations: false,
   metrics: emptyMetrics(),
   blockedRequests: new Map(),
@@ -64,6 +65,7 @@ async function execute(request) {
     case 'visitWithoutScripts': return visit(request.url, false);
     case 'setCookie': return setCookie(request.url, request.name, request.value);
     case 'setViewportSize': return requirePage().setViewportSize({ width: positiveInteger(request.width, 'viewport width'), height: positiveInteger(request.height, 'viewport height') });
+    case 'emulateMobileViewport': return emulateMobileViewport(request.width, request.height);
     case 'reload': return requirePage().reload({ waitUntil: 'commit', timeout: timeout() });
     case 'click': return resolveLocator(request.locator).click({ timeout: timeout() });
     case 'press': return resolveLocator(request.locator).press(requireString(request.key, 'keyboard key'), { timeout: timeout() });
@@ -104,7 +106,14 @@ async function createContext(scriptsEnabled) {
     await state.context.tracing.stop().catch(() => {});
     await state.context.close();
   }
-  state.context = await state.browser.newContext({ javaScriptEnabled: scriptsEnabled });
+  const contextOptions = { javaScriptEnabled: scriptsEnabled };
+  if (state.mobileViewport) {
+    contextOptions.viewport = state.mobileViewport;
+    contextOptions.screen = state.mobileViewport;
+    contextOptions.isMobile = true;
+    contextOptions.hasTouch = true;
+  }
+  state.context = await state.browser.newContext(contextOptions);
   state.scriptsEnabled = scriptsEnabled;
   await state.context.tracing.start({ screenshots: true, snapshots: true, sources: true });
   state.page = await state.context.newPage();
@@ -120,6 +129,15 @@ async function createContext(scriptsEnabled) {
       state.metrics.hardNavigationCount += 1;
     }
   });
+}
+
+async function emulateMobileViewport(width, height) {
+  state.mobileViewport = {
+    width: positiveInteger(width, 'mobile viewport width'),
+    height: positiveInteger(height, 'mobile viewport height'),
+  };
+  await createContext(state.scriptsEnabled === null ? true : state.scriptsEnabled);
+  return null;
 }
 
 // `visit` uses Playwright's earliest navigation signal (`commit`) rather than

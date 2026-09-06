@@ -3322,6 +3322,28 @@ configuration continues to use the existing unavailable CSRF authority; an
 accidental page route therefore receives the renderer's safe 503 outcome, not
 invented page security or an SSR document outside the page-security rail.
 
+### Decision record — responsive viewport belongs to the complete document (PR-C4, 2026-09-05)
+
+**Decision: extend `Document` with a closed `ViewportPolicy` whose current
+`ResponsiveViewport` case is selected by `buildPageShell`; do not introduce a
+raw head-markup escape hatch or a per-page viewport string.** The complete
+document renderer already owns title, styles, runtime descriptors, and the
+SSR document shell. A viewport declaration has the same lifecycle: region
+patches and enhanced navigation replace body content, not the policy that made
+that content usable on the device. The single standard declaration is
+`width=device-width, initial-scale=1`; it intentionally does not constrain
+minimum/maximum scale or `user-scalable`, so browser zoom remains available.
+
+The reference app receives this policy through its ordinary `PageShell`, not a
+separate app-specific head configuration. `emulateMobileViewport` is likewise
+a narrow test-adapter operation: it recreates a touch-capable mobile context
+with a declared device size, while scenarios retain their Haskell-owned
+control flow and assertions. It does not expose arbitrary Playwright context
+options. The browser proof separately retains desktop size/CSS-zoom coverage
+and adds a mobile-context load that verifies the SSR declaration, device-width
+layout, FAB target geometry, no horizontal overflow, enhanced navigation, and
+history.
+
 ## Example taxonomy
 
 The [examples index](../examples/README.md) uses four labels:

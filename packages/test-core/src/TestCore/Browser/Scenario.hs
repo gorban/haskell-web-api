@@ -16,6 +16,7 @@ module TestCore.Browser.Scenario
     assertVisible,
     blockRequestsMatching,
     click,
+    emulateMobileViewport,
     failBlockedRequestsMatching,
     runPageScript,
     fill,
@@ -112,6 +113,12 @@ setCookie url name value =
 -- the protocol boundary.
 setViewportSize :: Int -> Int -> BrowserScenario ()
 setViewportSize width height = simpleCommand "setViewportSize" ["width" .= width, "height" .= height]
+
+-- | Recreate the browser context as a touch-capable mobile device before a
+-- visit. This exercises a document's viewport policy without exposing raw
+-- Playwright context options to application scenarios.
+emulateMobileViewport :: Int -> Int -> BrowserScenario ()
+emulateMobileViewport width height = simpleCommand "emulateMobileViewport" ["width" .= width, "height" .= height]
 
 reload :: BrowserScenario ()
 reload = simpleCommand "reload" []

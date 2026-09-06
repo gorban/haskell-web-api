@@ -66,6 +66,7 @@ spec = do
         runBrowserScenario
           config
           ( do
+              emulateMobileViewport 320 480
               visit "http://localhost/"
               setCookie "http://localhost/" "session" "opaque-session"
               setViewportSize 320 480

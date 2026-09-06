@@ -192,7 +192,7 @@ spec = do
                  parseRoute (HarchWeb.routeCodec apiApplication) (SampleContext "") (routeLocationForTest "/api/status")
                    `shouldBe` HarchWeb.RouteParsed (RouteRequest StatusApiRoute (SampleContext "")),
                  HarchWeb.renderDocumentForTests document
-                   `shouldBe` "<!DOCTYPE html><html><head><title>Fallback</title></head><body><nav data-navigation-region=\"primary\"></nav><main id=\"main\" data-navigation-content=\"true\">fallback</main></body></html>"
+                   `shouldBe` "<!DOCTYPE html><html><head><title>Fallback</title><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"></head><body><nav data-navigation-region=\"primary\"></nav><main id=\"main\" data-navigation-content=\"true\">fallback</main></body></html>"
                ]
         )
       HarchWeb.renderResponse apiApplication (RouteRequest StatusApiRoute (SampleContext "")) >>= \case
@@ -458,7 +458,7 @@ spec = do
           request = RouteRequest {requestRoute = HomeRoute, requestContext = SampleContext ""}
       PageResponse _ page <- HarchWeb.renderResponse siteApplication request
       HarchWeb.renderDocumentForTests (HarchWeb.pageShell siteApplication page)
-        `shouldBe` "<!DOCTYPE html><html><head><title>Home</title></head><body><nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Home</h1><p><a href=\"/second\">Browse second</a></p></main></body></html>"
+        `shouldBe` "<!DOCTYPE html><html><head><title>Home</title><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"></head><body><nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Home</h1><p><a href=\"/second\">Browse second</a></p></main></body></html>"
 
     it "does not duplicate a runtime module already supplied by the app shell" $ do
       let duplicatedRuntimeSite =

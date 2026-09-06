@@ -213,7 +213,7 @@ spec =
             )
             `shouldReturn` Right ()
 
-    it "keeps the Help FAB usable, unobstructive, and absent at its destination" $
+    it "keeps the Help FAB usable in a desktop narrow-width, layout-zoomed viewport and absent at its destination" $
       withBrowserApp $ \browser appConfig ->
         HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
           let baseUrl = HarchWeb.localServerBaseUrl server
@@ -245,6 +245,37 @@ spec =
                 assertAll
                   ((,) <$> currentUrl <*> textContent (byRole Heading))
                   (\(url, heading) -> (url `shouldBe` helpUrl) :| [heading `shouldBe` "Help and support"])
+            )
+            `shouldReturn` Right ()
+
+    it "uses the responsive document viewport on mobile for Help FAB navigation and history" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let baseUrl = HarchWeb.localServerBaseUrl server
+              secondUrl = baseUrl <> "/second"
+              helpUrl = baseUrl <> "/help"
+              helpFab = byRole Link `named` "Help and support"
+          runBrowserScenario
+            browser
+            ( do
+                emulateMobileViewport 320 480
+                visit secondUrl
+                _ <-
+                  runPageScript
+                    "const viewport = document.querySelector('meta[name=viewport]'); const fab = document.querySelector('[data-help-fab]'); const box = fab.getBoundingClientRect(); const policy = viewport && viewport.content === 'width=device-width, initial-scale=1'; document.body.dataset.testMobileViewport = String(policy && window.innerWidth === 320 && document.documentElement.scrollWidth <= window.innerWidth && box.width >= 44 && box.height >= 44 && box.right <= window.innerWidth && box.bottom <= window.innerHeight); true"
+                assertAttribute (css "body") "data-test-mobile-viewport" (`shouldBe` Just "true")
+                press helpFab "Enter"
+                assertAll
+                  ((,) <$> currentUrl <*> textContent (byRole Heading `named` "Help and support"))
+                  (\(url, heading) -> (url `shouldBe` helpUrl) :| [heading `shouldBe` "Help and support"])
+                historyBack
+                assertAll
+                  ((,) <$> currentUrl <*> textContent (byRole Heading `named` "Second"))
+                  (\(url, heading) -> (url `shouldBe` secondUrl) :| [heading `shouldBe` "Second"])
+                _ <-
+                  runPageScript
+                    "const viewport = document.querySelector('meta[name=viewport]'); const fab = document.querySelector('[data-help-fab]'); const box = fab.getBoundingClientRect(); document.body.dataset.testMobileHistoryViewport = String(viewport && viewport.content === 'width=device-width, initial-scale=1' && document.documentElement.scrollWidth <= window.innerWidth && box.width >= 44 && box.height >= 44); true"
+                assertAttribute (css "body") "data-test-mobile-history-viewport" (`shouldBe` Just "true")
             )
             `shouldReturn` Right ()
 
