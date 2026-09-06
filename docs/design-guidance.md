@@ -3085,9 +3085,14 @@ rail. This allows a durable application to audit distinct malformed account or
 session claims while neither raw claims nor the JWT itself reach telemetry,
 logs, or public responses. JOSE failures remain Harch's fixed rejection code.
 This is an extension of the existing adapter, not a second application JWT
-verification path. The reusable framework decision is complete; AHI-4C still
-needs its admission module-health follow-up (AHI-4C-AMH) and its remaining
-implementation/gate evidence before the task is marked complete.
+verification path. AHI-4C-AMH subsequently completed the admission ownership
+split: `App.Composed.Admission` is the 235-line route-aware coordinator, while
+private `Admission.Proof` (208 lines) and `Admission.Session` (180 lines) own
+proof/attempt and durable-session concerns respectively. The 2026-09-06
+quality report found no import cycle or module-health finding in that cluster;
+the exact-SHA CI run `34016973612` provides the current full-suite evidence.
+The remaining AHI-4C implementation and gate evidence is still required before
+the parent task is marked complete.
 
 The application configuration retains the parsed JWT issuer and audience with
 their redacted configuration text at startup, rather than reparsing them on
