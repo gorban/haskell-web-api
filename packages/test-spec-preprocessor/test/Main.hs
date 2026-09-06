@@ -1,36 +1,38 @@
-{-# LANGUAGE TemplateHaskell #-}
-
-{-# SPEC #-}
-
 import Control.Exception (evaluate)
 import Control.Monad (forM_)
 import Control.Monad.Except (runExceptT)
 import Data.List (intercalate, isInfixOf)
+import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeFileName, (</>))
-import TestCore.E2EPrelude qualified as E2EPrelude
-import TestCore.SpecPreprocessor (run, runPure)
+import System.IO.Temp (withSystemTempDirectory)
+import Test.Hspec
+import TestSpecPreprocessor (run, runPure)
 
+main :: IO ()
+main = hspec spec
+
+spec :: Spec
 spec = do
-  describe "run" $ do
+  describe "Unit.TestSpecPreprocessor.run" $ do
     it "fails with missing output argument" $ do
       result <- runExceptT $ run ["inputOnly.hs"]
-      err <- $([|result|] `shouldMatch` [p|Left err|])
+      err <- expectLeft result
       err `shouldContain'` missingArgsError
 
     it "fails with missing input and output arguments" $ do
       result <- runExceptT $ run []
-      err <- $([|result|] `shouldMatch` [p|Left err|])
+      err <- expectLeft result
       err `shouldContain'` missingArgsError
 
     it "fails with too many file arguments" $ do
       result <- runExceptT $ run ["file1.hs", "file2.hs", "file3.hs"]
-      err <- $([|result|] `shouldMatch` [p|Left err|])
+      err <- expectLeft result
       err `shouldContain'` missingArgsError
 
     it "fails when input file is missing" $
       withTempFile "tst-missing" [] "MissingSpec.hs" $ \(_, missingFile) -> do
         result <- runExceptT $ run [missingFile, missingFile ++ ".out"]
-        err <- $([|result|] `shouldMatch` [p|Left err|])
+        err <- expectLeft result
         err `shouldSatisfy` ("does not exist" `isInfixOf`)
 
     it "fails when output path is too long" $
@@ -40,7 +42,7 @@ spec = do
             longFileName = replicate longFileNameLength 'o' ++ ".out"
             outputPath = tempDir </> longFileName
         result <- runExceptT $ run [tempFile, outputPath]
-        err <- $([|result|] `shouldMatch` [p|Left err|])
+        err <- expectLeft result
         err `shouldSatisfy` ("invalid" `isInfixOf`)
 
     it "ignores files without SPEC pragma" $
@@ -135,7 +137,7 @@ spec = do
         outputContents `shouldContain'` expectedHeader
         outputContents `shouldContain'` "import TestCore.Prelude"
 
-  describe "runPure" $ do
+  describe "Unit.TestSpecPreprocessor.runPure" $ do
     it "keeps standard SPEC preprocessing unchanged" $ do
       let moduleBase = "PureSpec"
           hsRoot = "test-spec"
@@ -155,6 +157,11 @@ spec = do
           output = runPure hsRoot absolutePath e2ePureSpecContents
       output `shouldContain'` expectedHeader
       output `shouldContain'` "import TestCore.E2EPrelude"
+
+    it "normalizes a Windows source path in the generated LINE pragma" $ do
+      let absolutePath = "C:\\work\\test\\PureSpec.hs"
+          output = runPure "test" absolutePath pureSpecContents
+      output `shouldContain'` "{-# LINE 2 \"C:/work/test/PureSpec.hs\" #-}"
 
     forM_
       [ ("SPEC", pureSpecContents, "import TestCore.Prelude"),
@@ -266,10 +273,6 @@ spec = do
           expectedHeader = getModuleHeader moduleBase
           output = runPure hsRoot absolutePath pureSpecContents
       output `shouldContain'` expectedHeader
-
-  describe "TestCore.E2EPrelude" $
-    it "re-exports the standard test helpers for future browser specs" $
-      E2EPrelude.shouldBe True True
   where
     getHaskellName baseName = baseName ++ ".hs"
     getModuleName segments baseName = intercalate "." (segments ++ [baseName])
@@ -284,3 +287,19 @@ spec = do
     nestedModuleSegments = ["Nested"]
     defaultModuleSegments = ["test"]
     exampleModuleBase = "ExampleSpec"
+
+expectLeft :: Either String () -> IO String
+expectLeft result =
+  case result of
+    Left err -> pure err
+    Right () -> expectationFailure "expected spec preprocessor failure" >> pure ""
+
+shouldContain' :: String -> String -> Expectation
+shouldContain' haystack needle = haystack `shouldSatisfy` isInfixOf needle
+
+withTempFile :: String -> [String] -> String -> ((FilePath, FilePath) -> IO a) -> IO a
+withTempFile directoryTemplate segments filename action =
+  withSystemTempDirectory directoryTemplate $ \tempRoot -> do
+    let directory = foldl (</>) tempRoot segments
+    createDirectoryIfMissing True directory
+    action (tempRoot, directory </> filename)

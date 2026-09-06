@@ -595,6 +595,20 @@ lessons (this one, and a companion one about deleting tautological `x == x` test
 regressing a *derived* instance's own coverage) discovered while verifying the fix, not just applying
 it.
 
+### Decision record — package-local runtime coverage ownership (RV-B3, 2026-09-06)
+
+An extracted runtime package may not rely on a downstream compatibility facade's tests for coverage:
+instrumentation follows the package being tested, so the implementation can otherwise disappear
+from its own report surface. We considered keeping the existing `TestCore` suite as the owner, but
+that only instruments `test-core` and makes a dependency-cycle-safe extraction invisible to the
+gate. We instead moved the processor's behavior suite to the dependency-light
+`test-spec-preprocessor` package and retained only a narrow facade regression in `test-core`.
+
+The coverage runner now treats every nonexcluded package as an expected Cabal-produced report owner
+and fails when its report is absent. It continues to accept valid `0/0` report categories: absence
+of counters is not absence of a report. This extends the existing package-local coverage boundary
+rather than adding a cross-package TIX merger or a test-only dependency cycle.
+
 ### Naming a partial slice in the status table
 
 A row in "Current capability and remaining design direction" may say `Implemented` only when the

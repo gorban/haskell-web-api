@@ -79,6 +79,22 @@ report_coverage_is_complete() {
   done
 }
 
+# Every nonexcluded project package is a runtime coverage owner.  A package
+# may legitimately report a 0/0 category, but it may not silently disappear
+# because it has no test-suite TIX/report producer.
+expected_package_report_is_present() {
+  local expected_package="$1"
+  shift
+  local observed_package
+
+  for observed_package in "$@"; do
+    if [ "$observed_package" = "$expected_package" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 # GHC executes these implementation modules only while compiling quasiquotes.
 # Their counters belong to the compiler process, not a test executable's TIX,
 # so an ordinary runtime HPC run cannot observe them. 'AttributeLowering' and
@@ -185,6 +201,15 @@ if [ "${1:-}" = "--coverage-report-fixture" ]; then
     exit 2
   fi
   report_coverage_is_complete "$2"
+  exit
+fi
+
+if [ "${1:-}" = "--expected-package-report-fixture" ]; then
+  if [ "$#" -lt 3 ]; then
+    printf 'usage: %s --expected-package-report-fixture <expected-package> <observed-package>...\n' "$0" >&2
+    exit 2
+  fi
+  expected_package_report_is_present "$2" "${@:3}"
   exit
 fi
 
@@ -385,6 +410,12 @@ EOF
 
     printf '\n\033[36mRunning tests with coverage for: %s\033[0m\n' "$pkg"
     cabal test "$pkg" --jobs=1 --enable-coverage --test-show-details=direct --test-options="+RTS --read-tix-file=no -RTS --match Unit"
+
+    package_report=$(find dist-newstyle -path "*/$pkg-*/noopt/hpc/vanilla/html/hpc_index.html" -type f -print | head -n1)
+    if [ -z "$package_report" ]; then
+      printf 'Expected an authoritative HPC report for nonexcluded runtime package %s, but no package report was produced.\n' "$pkg" >&2
+      exit 1
+    fi
 
     pkg_hpc_dir=$(find dist-newstyle -path "*/$pkg-*/opt/hpc/vanilla" -type d -print | head -n1)
     if [ -n "$pkg_hpc_dir" ]; then

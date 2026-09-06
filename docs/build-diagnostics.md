@@ -38,6 +38,12 @@ runtime error paths, and all other production modules remain in the gate. Add no
 without demonstrating that it executes exclusively in GHC's compiler process and documenting the
 corresponding compile-time acceptance test.
 
+Each nonexcluded project package must also produce its own Cabal-authoritative HPC report. A valid
+zero-counter category is still a report; an absent report is a gate failure. The extracted
+`test-spec-preprocessor` owns its direct Hspec behavior suite, rather than borrowing coverage from
+the `TestCore` compatibility facade. That keeps the package graph acyclic while making its runtime
+implementation part of the enforced coverage surface.
+
 ## Fatal diagnostics
 
 Any line containing `warning:` or `Warning:` is fatal unless it matches the exact documented

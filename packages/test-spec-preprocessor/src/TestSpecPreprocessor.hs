@@ -6,6 +6,10 @@
 -- that itself uses that matcher.  Standard specs default to
 -- @TestCore.Prelude@; @spec-prelude=@ selects a different standard prelude.
 -- @E2E_SPEC@ always imports @TestCore.E2EPrelude@.
+--
+-- Its direct Hspec suite is also this package's runtime coverage owner.  It
+-- deliberately does not import the @TestCore@ compatibility facade: that
+-- direction would recreate the package cycle this extraction avoids.
 module TestSpecPreprocessor (run, runPure) where
 
 import Control.Exception (IOException, displayException, try)

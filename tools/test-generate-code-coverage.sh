@@ -100,6 +100,15 @@ expect_report_success 'a purely declarative HPC report with no counters' "$zero_
 expect_report_success 'an HPC report with a valid empty alternative category' "$mixed_zero_total_report"
 expect_report_failure 'an HPC report with a nonzero numerator and zero total' "$invalid_zero_total_report"
 
+if "$coverage_script" --expected-package-report-fixture test-spec-preprocessor web-api; then
+  printf '%s\n' 'coverage gate unexpectedly accepted a missing expected package report.' >&2
+  exit 1
+fi
+if ! "$coverage_script" --expected-package-report-fixture test-spec-preprocessor test-spec-preprocessor web-api; then
+  printf '%s\n' 'coverage gate unexpectedly rejected a present expected package report.' >&2
+  exit 1
+fi
+
 test_hpc_dir='dist-newstyle/build/x86_64-linux/ghc-9.14.1/custom-api-0.1.0.0/t/custom-api-tests/opt/hpc/vanilla'
 resolved_package_dir="$($coverage_script --package-version-dir-fixture "$test_hpc_dir" custom-api)"
 if [ "$resolved_package_dir" != 'custom-api-0.1.0.0' ]; then
