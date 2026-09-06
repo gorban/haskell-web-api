@@ -572,18 +572,22 @@ not* suppress that finding — it deduplicated the literal into one named, expor
 should take: find the shared literal or constructor reference and give it one name, rather than
 forcing each call site and telling the linter to stop complaining about it.
 
-**But naming alone does not reliably survive `-O2`, confirmed while closing task CB (2026-08-21).**
+**Historical note — the rest of task CB's coverage workaround is superseded (2026-08-21).**
 `noApiRequestFields`'s own type (`RequestCodec ()`, a `newtype`-wrapped function) has enough shape
 that GHC keeps it as a real reference. A *trivial* nullary value — a bare data constructor, a `Text`
-literal, `Just True` — does not: GHC's `-O2` optimizer inlines the named binding back to the literal
-at each call site, silently reproducing the exact CSE-sharing gap the naming was meant to remove, with
-compilation succeeding either way (the only way to catch it is rerunning the full coverage gate and
-reading the per-line HPC HTML markup, not trusting that a build succeeded or extrapolating from one
-prior fix). CB's own inventory hit this on `emptyFieldDefault`, `databaseConnectTimeoutSecondsKey`,
-`derEncoding`, and `throttleCountsAsSuccess`/`noThrottleRecordingNeeded` — each needed a named binding
-*and* a follow-up `$!` at the specific reference(s) still left unticked. Prefer naming first for types
-with real shape (functions, `IO` actions, records); for a trivial nullary value referenced at 2+ call
-sites, expect to need both, and verify with the full gate before considering it closed.
+literal, `Just True` — can be inlined back to a literal at each call site under `-O2`, silently
+reproducing a CSE-sharing coverage gap. CB's historical inventory records
+`emptyFieldDefault`, `databaseConnectTimeoutSecondsKey`, `derEncoding`, and
+`throttleCountsAsSuccess`/`noThrottleRecordingNeeded`, including places where `$!` was added to
+influence the resulting HPC ticks.
+
+That historical workaround is not current guidance and must not be copied. It is a gate-masking
+technique under the rule above, even when a full coverage run happens to pass. Diagnose the real
+sharing or unreachable behavior instead: deduplicate/restructure the representation, or extend a
+behavioral test that can genuinely demand the relevant path. A documented last-resort exception may
+be relevant to an actual suppression only after those alternatives fail; it never authorizes
+strictness added to influence HPC attribution. Re-run the full coverage gate to inspect the outcome,
+but do not use a green percentage to justify fake strictness.
 
 **Follow-up: complete.** Task CB in `TASKS.md` audited and fixed every existing ignore pragma in this
 codebase against this rule (2026-08-21) — see its own completion note for the full list and the two
@@ -1883,12 +1887,11 @@ seed subprocess environment (`PGCONNECT_TIMEOUT`) was considered and rejected �
 `Integration/WebApiSpec.hs` tests that assert its exact environment against real subprocess runs,
 for a code path with no starvation risk to close in the first place.
 
-A genuine coverage-gate CSE-literal gap surfaced while closing this out:
-`parseConnectTimeout = parseNonNegativeInt "DATABASE_CONNECT_TIMEOUT_SECONDS"` left the string
-literal permanently unticked despite the declaration itself running on every config-parsing test,
-the same documented pattern this memory/document has already closed twice before (AZ, DE) — `$!`
-at the literal's call site (`parseNonNegativeInt $! "DATABASE_CONNECT_TIMEOUT_SECONDS"`) fixed it
-immediately, confirmed by re-running the full coverage gate rather than assumed.
+**Historical coverage record, superseded as implementation guidance.** The original change reported
+that a CSE-shared `DATABASE_CONNECT_TIMEOUT_SECONDS` literal remained unticked and used `$!` at its
+call site after a coverage rerun. That record explains the existing code, but does not authorize
+repeating the technique. Current work must resolve such a signal through real behavioral demand or
+representation/test restructuring under the never-mask-a-gate-finding rule.
 
 Follow-up: AX already identified that genuine migration atomicity needs a persistent-connection
 Postgres runtime replacing the current per-statement `psql` subprocess model; AY's own deferred
@@ -1954,22 +1957,18 @@ unchanged, `source` simply inferring back to `DatabaseConfig` there. `DatabaseCo
 `psql`-subprocess migration runner has no pool to size, so `WebApi.DatabaseSetup.parseDatabaseSetupConfig`
 supplies a hardcoded `migrationDatabasePoolCapacity = 1` rather than a second unused required env var.
 
-**Three genuine coverage gaps surfaced, all the documented "bare variable as a direct call argument"
-HPC artifact, none needing an ignore pragma — confirmed by actually running HLint, not assumed by
-analogy.** `writeTVar (poolIdleConnections pool) remainingIdleConnections` (a pattern-bound list
-tail), `buildRuntimeAccountWorkflow pool environmentConfig` (`pool` referenced twice in one `let`,
-crediting only the first use), and `parsePositiveInt databasePoolCapacityKey` (the same
-named-CSE-literal gap `databaseConnectTimeoutSecondsKey` hit) all needed `$!` at the uncredited
-reference. The refinement to this document's own worked-example precedent: forcing a *bare
-identifier* (a pattern-bound variable, a function parameter, or a same-module named literal) is not
-automatically an HLint "Redundant $!" case the way forcing a literal or a fully-applied constructor
-is — running `hlint --language=ImportQualifiedPost` against all three sites, and against the existing
-`parseConnectTimeout = parseNonNegativeInt $! databaseConnectTimeoutSecondsKey` with its own ignore
-pragma stripped, returned "No hints" in every case. HLint cannot prove a bare identifier resolves to
-a value already in WHNF without cross-declaration analysis it does not perform, so it does not flag
-forcing one — meaning an ignore pragma here would itself be an unverified, unnecessary suppression,
-exactly what the never-mask-a-gate-finding rule warns against. All three `$!` additions ship with a
-plain comment explaining the HPC gap; none carries `{-# ANN ... "HLint: ignore Redundant $!" #-}`.
+**Historical coverage observation, with superseded handling (2026-08-21).** The original pool
+implementation record identified three uncredited expressions — a pattern-bound list tail, a reused
+`pool` parameter, and `databasePoolCapacityKey` — and added `$!` at their references after HLint did
+not report a redundant-strictness hint. That established only that the linter did not diagnose that
+specific syntax; it did not make strictness a correct response to a coverage signal.
+
+The current never-mask-a-gate-finding rule supersedes that workaround. Do not copy those `$!`
+additions into new code to influence HPC attribution, whether or not HLint emits a hint. Diagnose and
+restructure the sharing/laziness boundary or add a test that demands real behavior; a documented
+last-resort suppression exception does not make metric-oriented strictness acceptable. The original
+comments and historical verification remain evidence of the 2026-08-21 investigation, not a
+precedent for current implementation work.
 
 ### Follow-up decision — CK: nested per-constructor detail records close `-Wpartial-fields`, following each type's own sibling convention (2026-08-21)
 
@@ -2052,11 +2051,11 @@ differently, as implemented, closes both findings correctly rather than trading 
 own existing style in the same module: tests use pattern-match predicates
 (`\case PendingAccountCreated -> True; _ -> False`) instead of `==`, sidestepping the derived-
 `Eq`/`Show`-under-HPC coverage gap this session already root-caused and documented twice (DE, and
-the memory it lives in) rather than needing a third encounter with it. A smaller instance of this
-session's *other* documented coverage-gate pattern — a CSE-shared bare atom losing its own HPC tick
-— surfaced anyway, this time on a data constructor (`AccountStoreUnavailable`) rather than a string
-literal, in the new upfront-check code path; `$!`-forcing it at the same argument position the
-technique already covers closed it immediately, confirmed by a genuine coverage re-run.
+the memory it lives in) rather than needing a third encounter with it. The historical
+implementation also recorded a CSE-shared `AccountStoreUnavailable` atom that lost an HPC tick and
+used `$!` after a coverage rerun. This explains an existing historical workaround; it is not a
+reusable technique. Future coverage work follows the current rule's behavioral-test or
+restructuring response instead.
 
 ### Follow-up decision — BR: validated newtypes plus `IsString`, not a blocklist or a bare `Text` parameter (2026-08-21)
 
@@ -2112,13 +2111,13 @@ once, matching the exact shape and naming convention `WebApi.Login`'s existing
 always present, or crash with a named diagnostic" — and both call sites use it instead of hand-
 rolling their own.
 
-Two rounds of genuine coverage gaps surfaced closing this out, both already-documented patterns
-applied to new shapes rather than new problems. First: `requiredSafeUrlOrDie`'s `context` argument
-is only demanded on its (never-taken, by construction) `error` path, so the `Text.concat`-shaped
-diagnostic-message expression at each call site stayed a permanently-unticked, unforced thunk under
-HPC in every real run — closed with the established `$!`-forcing technique at each call site
-(`(requiredSafeUrlOrDie $! contextExpr) (mkSafeUrl renderedPath)`), not by trying to make the
-`error` branch reachable. Second: `DataAttributeSuffix`/`SafeUrl`'s `deriving (Eq, Show)` showed
+The historical completion record describes two coverage observations. First:
+`requiredSafeUrlOrDie`'s `context` argument is only demanded on its (never-taken, by construction)
+`error` path, so the `Text.concat`-shaped diagnostic-message expression at each call site stayed an
+unforced thunk under HPC in the original run, and that implementation used `$!` at each call site.
+That is preserved as an explanation of the shipped historical code, not a current technique: do not
+recreate it rather than resolving a current coverage finding through real behavior or restructuring.
+Second: `DataAttributeSuffix`/`SafeUrl`'s `deriving (Eq, Show)` showed
 "top-level declarations" gaps despite exhaustive `==`/`/=`/`show`/`show [x]` exercises covering most
 of it — the residue needed an explicit *equal-value* `==` exercise (`x == x`) alongside the
 already-present *unequal-value* `/=` exercise, confirmed by reading the per-line HPC HTML markup
@@ -2449,14 +2448,15 @@ same shortcut, not just documented after the fact. Second, apply it retroactivel
 new instances rather than leaving them as an exception: one was replaced outright with a genuine
 fix (a direct unit test for register/unregister, requiring `CertbotWebrootStore`'s constructor to
 be exported the way `AcmeChallengeStore`'s already is — the actual missing piece, not a metric
-workaround). The other was *verified*, not assumed, to be a genuine last resort: removing it and
-re-running the full coverage gate reproduced the gap on that exact expression, and reading why
-confirmed it is not the literal-duplication case the new rule's own worked example fixes by
+workaround). The other was investigated by removing it and rerunning the full coverage gate, which
+reproduced the gap on that exact expression and showed it is not the literal-duplication case the
+new rule's own worked example fixes by
 deduplication — there is nothing duplicated to name once, only two real, both-necessary references
 to one already-correctly-factored `let` binding, where GHC's sharing of that thunk credits only the
-first reference. Keeping the `$!` there, with a comment stating exactly what was tried and why
-deduplication does not apply, is what the new rule itself asks for as its last-resort case — not a
-quiet exception to it.
+first reference. The historical implementation retained `$!` with a comment describing that
+investigation. That comment and this record remain evidence of the incident; they are not an
+exception or a precedent for new code. The current rule requires behavioral demand or restructuring
+instead of new strictness chosen to influence a coverage metric.
 
 ### Decision record — PR-S6: bounded, retryable pending registration delivery (2026-08-24)
 

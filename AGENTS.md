@@ -83,11 +83,14 @@ The optimized-build wrapper first tests the warning classifier, then rejects act
 linker warnings before the longer coverage run. The coverage wrapper cleans and rebuilds all
 packages, runs Unit tests package by package, requires 100% coverage in every project report and
 the complete multi-package report, and applies the same diagnostic gate. Its runtime scope excludes
-only the exact three `HarchWeb.Markup.Quasi*` Template Haskell implementation modules: GHC executes
-them during compilation, before a test executable and its TIX exist. It does not exclude generated
-instances, ordinary runtime modules, error paths, or application code. They record only the
-documented GHC HPC diagnostic without masking it; see `docs/build-diagnostics.md`. Do not run
-another Cabal command while either wrapper is active.
+only the exact compiler-process Template Haskell modules `HarchWeb.Markup.Quasi`,
+`HarchWeb.Markup.Quasi.AttributeLowering`, `HarchWeb.Markup.Quasi.Lowering`,
+`HarchWeb.Markup.Quasi.LoweringSupport`, and `HarchWeb.Markup.Quasi.Parser`: GHC executes them
+during compilation, before a test executable and its TIX exist. The private lowering collaborators
+are excluded only because they are reachable exclusively from that compiler-time path. It does not
+exclude generated instances, ordinary runtime modules, error paths, or application code. They
+record only the documented GHC HPC diagnostic without masking it; see
+`docs/build-diagnostics.md`. Do not run another Cabal command while either wrapper is active.
 
 Treat its process exit status as a hard pre-push gate: it must be zero. Both the red
 `Per-project reports found with <100% coverage` section and the red `Aggregate coverage report
