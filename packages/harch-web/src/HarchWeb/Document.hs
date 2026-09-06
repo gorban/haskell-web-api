@@ -468,7 +468,7 @@ defaultNavigationRuntimeScript =
       "    if (response.status === 401 && response.headers.get('X-Harch-Action-Reauthenticate') === 'required') {",
       "      return { reauthenticationRequired: true };",
       "    }",
-      "    return { navigation: applyActionResponse(actionResponse), reauthenticationRequired: false };",
+      "    return { actionResponse, reauthenticationRequired: false };",
       "  }",
       "",
       "  async function navigateActionResponse(navigation) {",
@@ -508,9 +508,12 @@ defaultNavigationRuntimeScript =
       "          }",
       "          return;",
       "        }",
-      "        settlement.completed();",
-      "        if (outcome.navigation) {",
-      "          await navigateActionResponse(outcome.navigation);",
+      "        if (!settlement.completed()) {",
+      "          return;",
+      "        }",
+      "        const navigation = applyActionResponse(outcome.actionResponse);",
+      "        if (navigation) {",
+      "          await navigateActionResponse(navigation);",
       "        }",
       "      } catch (_error) {",
       "        settlement.recoverable();",
@@ -661,6 +664,7 @@ defaultNavigationRuntimeScript =
       "  }",
       "",
       "  async function navigateTo(targetUrl, shouldPushState) {",
+      "    document.dispatchEvent(new CustomEvent('harch:navigation-start'));",
       "    const navigationId = nextNavigationId++;",
       "    const abortController = new AbortController();",
       "    if (activeNavigation) {",
@@ -841,7 +845,13 @@ data PageShell route context = PageShell
 
 -- | This tiny capture-phase kernel is deliberately inline in the head. It is
 -- installed before any framework control in the body can become interactive;
--- larger behavior modules consume its queue after they load.
+-- larger behavior modules consume its queue after they load.  A claimed action
+-- may present patches, focus, or typed navigation only after its settlement
+-- succeeds.  Explicit cancellation and every enhanced-navigation start
+-- invalidate outstanding claims before later transport completions can affect
+-- the document.  A new capture from one control supersedes its older claim;
+-- captures from distinct controls remain independent.  This cancels client
+-- presentation, not a mutation the server may already have performed.
 defaultCaptureKernel :: RuntimeDescriptor
 defaultCaptureKernel =
   InlineBootstrap
@@ -861,7 +871,7 @@ defaultCaptureKernelScript =
       "  const controlSelector = '[data-harch-control]';",
       "  const actionSelector = 'form[data-harch-action=\"true\"]';",
       "  const CapturedEvent = Object.freeze({ Submit: 'submit', DialogTrigger: 'dialog-trigger' });",
-      "  const actionState = Object.freeze({ Pending: 'pending', Claimed: 'claimed', Completed: 'completed', Recoverable: 'recoverable', Retained: 'retained' });",
+      "  const actionState = Object.freeze({ Pending: 'pending', Claimed: 'claimed', Completed: 'completed', Recoverable: 'recoverable', Retained: 'retained', Cancelled: 'cancelled' });",
       "  const statusFor = (control) => control.querySelector('[data-harch-action-status]');",
       "  const retryFor = (control) => control.querySelector('[data-harch-action-retry]');",
       "  const cancelFor = (control) => control.querySelector('[data-harch-action-cancel]');",
@@ -904,6 +914,16 @@ defaultCaptureKernelScript =
       "    capturedActions.delete(entry.id);",
       "    window.location.assign(entry.envelope.fallbackHref);",
       "    updateBeforeUnload();",
+      "  };",
+      "  const invalidate = (entry) => {",
+      "    window.clearTimeout(entry.livenessTimer);",
+      "    window.clearTimeout(entry.reauthenticationTimer);",
+      "    entry.claimId = null;",
+      "    entry.state = actionState.Cancelled;",
+      "    capturedActions.delete(entry.id);",
+      "  };",
+      "  const supersedeControl = (control) => {",
+      "    capturedActions.forEach((entry) => { if (entry.control === control) { invalidate(entry); } });",
       "  };",
       "  const settle = (entry, claimId, outcome) => {",
       "    if (entry.claimId !== claimId || entry.state !== actionState.Claimed) {",
@@ -1015,8 +1035,10 @@ defaultCaptureKernelScript =
       "  const capture = (event) => {",
       "    const capturedEvent = capturedEventHandlers[event.type]?.(event);",
       "    if (capturedEvent) {",
+      "      const control = capturedEvent.trigger || event.target;",
+      "      supersedeControl(control);",
       "      const actionId = String(nextActionId++);",
-      "      const entry = { id: actionId, type: capturedEvent.type, envelope: capturedEvent, control: capturedEvent.trigger || event.target, claimId: null, state: actionState.Pending, livenessTimer: null, reauthenticationTimer: null, reauthenticationAttempts: 0 };",
+      "      const entry = { id: actionId, type: capturedEvent.type, envelope: capturedEvent, control, claimId: null, state: actionState.Pending, livenessTimer: null, reauthenticationTimer: null, reauthenticationAttempts: 0 };",
       "      capturedActions.set(actionId, entry);",
       "      if (!isDialogEntry(entry)) { entry.control.dataset.harchActionId = actionId; }",
       "      setStatus(entry, actionState.Pending, entry.control.dataset.harchActionPendingCopy || 'Submitting…');",
@@ -1029,10 +1051,8 @@ defaultCaptureKernelScript =
       "  const cancel = (actionId) => {",
       "    const entry = capturedActions.get(actionId);",
       "    if (!entry) { return false; }",
-      "    window.clearTimeout(entry.livenessTimer);",
-      "    window.clearTimeout(entry.reauthenticationTimer);",
-      "    setStatus(entry, 'cancelled', entry.control.dataset.harchActionCancelledCopy || 'Action cancelled.');",
-      "    capturedActions.delete(actionId);",
+      "    invalidate(entry);",
+      "    setStatus(entry, actionState.Cancelled, entry.control.dataset.harchActionCancelledCopy || 'Action cancelled.');",
       "    updateBeforeUnload();",
       "    return true;",
       "  };",
@@ -1047,11 +1067,13 @@ defaultCaptureKernelScript =
       "    const control = cancelButton ? cancelButton.closest(controlSelector) : null;",
       "    if (control && cancel(control.dataset.harchActionId)) { event.preventDefault(); }",
       "  }, true);",
-      "  document.addEventListener('harch:navigation-before-replace', () => {",
-      "    capturedActions.forEach((entry) => { if (entry.state === actionState.Retained) { cancel(entry.id); } });",
+      "  document.addEventListener('harch:navigation-start', () => {",
+      "    capturedActions.forEach((entry) => invalidate(entry));",
+      "    updateBeforeUnload();",
       "  });",
       "  window.addEventListener('pagehide', () => {",
-      "    capturedActions.forEach((entry) => { if (entry.state === actionState.Retained) { cancel(entry.id); } });",
+      "    capturedActions.forEach((entry) => invalidate(entry));",
+      "    updateBeforeUnload();",
       "  });",
       "  document.addEventListener('error', (event) => {",
       "    const script = event.target instanceof HTMLScriptElement ? event.target : null;",

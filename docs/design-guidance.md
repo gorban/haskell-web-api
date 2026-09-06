@@ -3441,6 +3441,32 @@ native navigation for pages that use it. The two-pages live SSE module and a
 second Home style/behavior module provide the reference proof; Swagger's
 future page asset remains AHI-4E work.
 
+### Decision record — live action claims gate client presentation (PR-C2, 2026-09-06)
+
+**Decision: extend the existing capture-kernel settlement and replaceable
+navigation lifecycle; do not add an application-local stale-response flag or a
+second action dispatcher.** The capture kernel already owns an action's
+identity, claim, cancellation state, and recovery controls. Its boolean
+settlement is therefore the one authority that can decide whether a returned
+transport result still belongs to the document that captured it. The default
+action runtime now decodes a response without mutating the page, completes its
+claim, and presents patches, focus, or typed action navigation only when that
+completion succeeds.
+
+Every enhanced navigation invalidates all outstanding capture claims at its
+start, before it fetches or replaces content. A late response consequently
+cannot patch a same-ID region on a replacement page, move focus, or supersede
+the user's navigation; explicit cancellation has the same presentation effect.
+This does not promise to abort or undo a mutation already accepted by the
+server. A live action still applies exactly once, while a reauthentication
+response retains only a live claim through the existing bounded replay path.
+Repeated captures from the same control supersede its older client claim;
+captures from independent controls remain independent. This ensures an older
+response cannot overwrite the user's later submission without imposing a
+document-wide single-action queue.
+This keeps one capture/action/navigation ownership boundary and makes stale
+client presentation impossible without inventing a second router.
+
 ### Decision record — separate signed CSRF backend ownership (PR-F7, 2026-09-05)
 
 **Decision: retain `HarchWeb.Csrf` as the stable façade and one

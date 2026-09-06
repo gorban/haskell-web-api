@@ -193,6 +193,87 @@ spec =
           )
           `shouldReturn` Right ()
 
+    it "does not present a delayed response after its action is cancelled" $
+      withBrowserAndServer $ \browser server -> do
+        let homeUrl = localServerBaseUrl server <> "/"
+            subscriptionForm = byRole Form `named` "Subscription"
+            emailField = byLabel "Email address"
+            actionStatus = within subscriptionForm (css "[data-harch-action-status]")
+            actionResponseMarker =
+              "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); if (!String(arguments_[0]).includes('/actions/subscribe')) { return response; } const decode = response.json.bind(response); response.json = async () => { const value = await decode(); document.body.dataset.harchActionResponseDecoded = 'true'; return value; }; return response; };"
+        ( runBrowserScenario browser do
+            blockRequestsMatching "**/actions/subscribe"
+            visit homeUrl
+            _ <- runPageScript actionResponseMarker
+            fill emailField "cancelled@example.com"
+            submit subscriptionForm
+            waitForBlockedRequestsMatching "**/actions/subscribe"
+            click (byRole Button `named` "Cancel action")
+            releaseRequestsMatching "**/actions/subscribe"
+            assertEventually (attributeValue (css "body") "data-harch-action-response-decoded") (`shouldBe` Just "true")
+            assertAll
+              ((,,) <$> currentUrl <*> textContent actionStatus <*> browserMetrics)
+              ( \(url, status, metrics) ->
+                  (url `shouldBe` homeUrl)
+                    :| [ status `shouldBe` "Action cancelled.",
+                         $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 0, mutationRequestCount = 1}|])
+                       ]
+              )
+          )
+          `shouldReturn` Right ()
+
+    it "does not let a delayed action replace a page selected by navigation" $
+      withBrowserAndServer $ \browser server -> do
+        let secondUrl = localServerBaseUrl server <> "/second"
+            subscriptionForm = byRole Form `named` "Subscription"
+            emailField = byLabel "Email address"
+            actionResponseMarker =
+              "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); if (!String(arguments_[0]).includes('/actions/subscribe')) { return response; } const decode = response.json.bind(response); response.json = async () => { const value = await decode(); document.body.dataset.harchActionResponseDecoded = 'true'; return value; }; return response; };"
+        ( runBrowserScenario browser do
+            blockRequestsMatching "**/actions/subscribe"
+            visit (localServerBaseUrl server <> "/")
+            _ <- runPageScript actionResponseMarker
+            fill emailField "navigation@example.com"
+            submit subscriptionForm
+            waitForBlockedRequestsMatching "**/actions/subscribe"
+            click (byRole Link `named` "Go to the second page")
+            assertUrl (`shouldBe` secondUrl)
+            releaseRequestsMatching "**/actions/subscribe"
+            assertEventually (attributeValue (css "body") "data-harch-action-response-decoded") (`shouldBe` Just "true")
+            assertAll
+              ((,,) <$> currentUrl <*> textContent (byRole Heading `named` "Second") <*> browserMetrics)
+              ( \(url, heading, metrics) ->
+                  (url `shouldBe` secondUrl)
+                    :| [ heading `shouldBe` "Second",
+                         $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 1}|])
+                       ]
+              )
+          )
+          `shouldReturn` Right ()
+
+    it "supersedes an earlier delayed submission from the same control" $
+      withBrowserAndServer $ \browser server -> do
+        let subscriptionForm = byRole Form `named` "Subscription"
+            emailField = byLabel "Email address"
+        ( runBrowserScenario browser do
+            blockRequestsMatching "**/actions/subscribe"
+            visit (localServerBaseUrl server <> "/")
+            fill emailField "first@example.com"
+            submit subscriptionForm
+            waitForBlockedRequestsMatching "**/actions/subscribe"
+            fill emailField "second@example.com"
+            submit subscriptionForm
+            assertEventually (mutationRequestCount <$> browserMetrics) (`shouldBe` 2)
+            releaseRequestsMatching "**/actions/subscribe"
+            assertAll
+              ((,) <$> textContent (byRole Heading `named` "Subscription received") <*> browserMetrics)
+              ( \(heading, metrics) ->
+                  (heading `shouldBe` "Subscription received")
+                    :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 2}|])]
+              )
+          )
+          `shouldReturn` Right ()
+
     it "shows immediate recoverable outcomes for throwing and rejected handlers" $
       withBrowserAndServer $ \browser server -> do
         let homeUrl = localServerBaseUrl server <> "/"
