@@ -900,9 +900,20 @@ spec = do
                 runtimeAppConfig
                 (const defaultPageRepository)
                 defaultAppEnvironmentConfig
-        HarchWeb.reportRequestObservability
-          runtimeApplication
-          (Observability.buildRequestObservability Observability.RequestIdentity {Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET", Observability.requestIdentityScheme = "http", Observability.requestIdentityPath = "/api/status", Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/api/status"} 200 Observability.BodyResponseKind [])
+        response <-
+          performWaiRequest
+            (HarchWeb.toWaiApplication runtimeApplication)
+            (waiRequest ["api", "status"])
+        Wai.responseStatus response `shouldBe` Http.status200
+        requestIdText <-
+          case lookup "X-Request-ID" (Wai.responseHeaders response) of
+            Nothing -> expectationFailure "OTLP-exported request lacked X-Request-ID" >> pure Text.empty
+            Just requestId ->
+              case TextEncoding.decodeUtf8' requestId of
+                Left failure -> expectationFailure (show failure) >> pure Text.empty
+                Right value -> do
+                  HarchWeb.mkRequestId value `shouldSatisfy` isJust
+                  pure value
         CapturedOtlpRequest
           { capturedOtlpMethod = requestMethod,
             capturedOtlpPath = requestPath,
@@ -918,6 +929,8 @@ spec = do
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"service.name\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"web-api\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"GET /api/status\""
+        requestBodyText
+          `shouldSatisfy` Text.isInfixOf ("\"key\":\"harch.request.id\",\"value\":{\"stringValue\":\"" <> requestIdText <> "\"}")
         requestBodyText `shouldSatisfy` (not . Text.isInfixOf "\"STATUS_CODE_ERROR\"")
 
     it "keeps runtime request reporting alive when the OTLP collector rejects the export" $
