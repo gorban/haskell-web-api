@@ -3257,6 +3257,27 @@ deployment may choose a different image version, worker budget, or schedule,
 but must review its corresponding preload, database, timezone, and scheduler
 authentication configuration rather than inheriting test defaults blindly.
 
+**Schema/maintenance slice (2026-09-07): retain function-only append and RLS
+even though a `SECURITY DEFINER` append cannot use `INSERT ... RETURNING`.**
+The application migration creates the owner-managed policy, scope maps,
+partition registry, forced-RLS parent, and fixed UTC monthly maintenance
+function in the existing database-change runner. The runtime role has only
+schema usage and EXECUTE on the append function; the reader has parent SELECT
+through a scope predicate; the scheduler has only the no-argument maintenance
+wrapper. PostgreSQL applies the caller's absent SELECT policy to a `RETURNING`
+projection, so the controlled append obtains its generated identity from the
+session-local parent identity sequence instead. The insert RLS check is
+unconditional only because no runtime login has INSERT privilege on either the
+parent or a child: function privilege plus the security-definer owner remain
+the actual mutation boundary. Real-role tests prove both sides rather than
+treating RLS alone as a table-privilege substitute.
+
+This shipped slice creates/validates partitions and exact shared counters but
+does not yet install the scheduler connection/job, expose a Haskell
+repository, or make account mutations atomic with audit append. Those remain
+AHI-5's schedule/bootstrap and workflow integration follow-ups; it must not be
+described as a completed audit capability.
+
 ### Decision record — AHI-5-RID: opaque UUIDv4 request-correlation kernel (2026-09-05)
 
 **Decision: make `RequestId` a small Harch-owned opaque UUIDv4 type before

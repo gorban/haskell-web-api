@@ -308,6 +308,140 @@ spec = do
           thd3 forbiddenRoleCreate `shouldContain` "permission denied"
       )
 
+    it
+      "installs controlled account-audit append, RLS scope reads, and deterministic partition maintenance on real PostgreSQL"
+      ( withContainerizedPsqlOnPath $ do
+          ensureDefaultPostgresAvailable
+          inheritedEnvironment <- getEnvironment
+          databaseSetupExecutable <- testBuildToolPath "haskell-web-api-db"
+          withSystemTempDirectory "haskell-web-api-audit-db" $ \workingDirectory -> do
+            (_, _, _, processHandle) <-
+              createProcess
+                ( (proc databaseSetupExecutable ["migrate"])
+                    { cwd = Just workingDirectory,
+                      env = Just (databaseSetupEnvironment inheritedEnvironment)
+                    }
+                )
+            waitForProcess processHandle `shouldReturn` ExitSuccess
+
+          runPsql
+            inheritedEnvironment
+            "web_api_owner"
+            "web_api_owner"
+            "DO $$ DECLARE registry_row RECORD; BEGIN FOR registry_row IN SELECT partition_name FROM account_audit.partition_registry LOOP EXECUTE format('DROP TABLE account_audit.%I', registry_row.partition_name); END LOOP; DELETE FROM account_audit.partition_registry; PERFORM account_audit.maintain_activity_partitions_at('2026-09-15 12:00:00+00', interval '12 months'); END $$;"
+            `shouldReturn` (ExitSuccess, "", "")
+
+          runPsql
+            inheritedEnvironment
+            "web_api_owner"
+            "web_api_owner"
+            "ALTER ROLE web_api_audit_reader LOGIN PASSWORD 'audit-reader'; ALTER ROLE web_api_audit_scheduler LOGIN PASSWORD 'audit-scheduler'; DELETE FROM account_audit.reader_scope_grant WHERE reader_role_name = 'web_api_audit_reader'; INSERT INTO account_audit.reader_scope_grant (reader_role_name, audit_scope_id) VALUES ('web_api_audit_reader', 'default');"
+            `shouldReturn` (ExitSuccess, "", "")
+
+          initialPartitions <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT partition_name || '|' || lower_bound || '|' || upper_bound FROM account_audit.partition_registry ORDER BY lower_bound;"
+          initialPartitions
+            `shouldBe` ( ExitSuccess,
+                         "activity_2026_09|2026-09-01 00:00:00+00|2026-10-01 00:00:00+00\nactivity_2026_10|2026-10-01 00:00:00+00|2026-11-01 00:00:00+00\n",
+                         ""
+                       )
+
+          runtimeAppend <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "SELECT activity_id::TEXT || '|' || utilization_percent::TEXT FROM account_audit.append_activity('account_audit_test', '550e8400-e29b-41d4-a716-446655440000', 'account-session-issued', 1::SMALLINT, 'password', NULL, NULL, NULL, NULL);"
+          case runtimeAppend of
+            (ExitSuccess, resultText, "") -> resultText `shouldContain` "|0\n"
+            _ -> expectationFailure "expected the controlled audit append to return one committed ID"
+
+          directRuntimeRead <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "SELECT account_id FROM account_audit.activity;"
+          fst3 directRuntimeRead `shouldNotBe` ExitSuccess
+          thd3 directRuntimeRead `shouldContain` "permission denied"
+
+          directRuntimeInsert <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "INSERT INTO account_audit.activity (occurred_at, audit_scope_id, account_id, request_id, event_code, payload_version, payload_detail) VALUES (statement_timestamp(), 'default', 'forbidden', '550e8400-e29b-41d4-a716-446655440000', 'account-session-issued', 1, 'password');"
+          fst3 directRuntimeInsert `shouldNotBe` ExitSuccess
+          thd3 directRuntimeInsert `shouldContain` "permission denied"
+
+          runPsql
+            inheritedEnvironment
+            "web_api_owner"
+            "web_api_owner"
+            "INSERT INTO account_audit.activity (occurred_at, audit_scope_id, account_id, request_id, event_code, payload_version, payload_detail) VALUES (statement_timestamp(), 'other-scope', 'hidden', '550e8400-e29b-41d4-a716-446655440000', 'account-session-issued', 1, 'password');"
+            `shouldReturn` (ExitSuccess, "", "")
+          scopedReaderRows <-
+            runPsql
+              inheritedEnvironment
+              "web_api_audit_reader"
+              "audit-reader"
+              "SELECT audit_scope_id || '|' || account_id FROM account_audit.activity WHERE request_id = '550e8400-e29b-41d4-a716-446655440000' ORDER BY audit_scope_id;"
+          scopedReaderRows `shouldBe` (ExitSuccess, "default|account_audit_test\n", "")
+
+          schedulerExplicitTime <-
+            runPsql
+              inheritedEnvironment
+              "web_api_audit_scheduler"
+              "audit-scheduler"
+              "SELECT * FROM account_audit.maintain_activity_partitions_at('2026-09-15 12:00:00+00', interval '12 months');"
+          fst3 schedulerExplicitTime `shouldNotBe` ExitSuccess
+          thd3 schedulerExplicitTime `shouldContain` "permission denied"
+
+          maintenanceNoOp <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT created_partition_count::TEXT || '|' || dropped_partition_count::TEXT FROM account_audit.maintain_activity_partitions_at('2026-09-15 12:00:00+00', interval '12 months');"
+          maintenanceNoOp `shouldBe` (ExitSuccess, "0|0\n", "")
+          createdOneExpiredPair <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT * FROM account_audit.maintain_activity_partitions_at('2025-08-15 12:00:00+00', interval '12 months');"
+          case createdOneExpiredPair of
+            (ExitSuccess, _, "") -> pure ()
+            _ -> expectationFailure "expected deterministic maintenance to prepare the first expired pair"
+          maintenanceOneDrop <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT created_partition_count::TEXT || '|' || dropped_partition_count::TEXT FROM account_audit.maintain_activity_partitions_at('2026-09-15 12:00:00+00', interval '12 months');"
+          maintenanceOneDrop `shouldBe` (ExitSuccess, "0|1\n", "")
+          createdTwoExpiredPairs <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT * FROM account_audit.maintain_activity_partitions_at('2025-07-15 12:00:00+00', interval '12 months');"
+          case createdTwoExpiredPairs of
+            (ExitSuccess, _, "") -> pure ()
+            _ -> expectationFailure "expected deterministic maintenance to prepare the second expired pair"
+          maintenanceTwoDrops <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT created_partition_count::TEXT || '|' || dropped_partition_count::TEXT FROM account_audit.maintain_activity_partitions_at('2026-09-15 12:00:00+00', interval '12 months');"
+          maintenanceTwoDrops `shouldBe` (ExitSuccess, "0|2\n", "")
+      )
+
     it "maps runtime PostgreSQL connection failures into database errors without shelling out to psql" $
       withUnusedLoopbackPort $ \unusedPort ->
         withTemporaryEnvironment "PATH" (Just "") $ do
@@ -326,6 +460,14 @@ spec = do
   where
     fst3 (firstValue, _, _) = firstValue
     thd3 (_, _, thirdValue) = thirdValue
+
+    runPsql inheritedEnvironment username password sql =
+      readCreateProcessWithExitCode
+        ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", username, "--no-password", "--set", "ON_ERROR_STOP=1", "--tuples-only", "--no-align", "--quiet", "--command", sql])
+            { env = Just (("PGPASSWORD", password) : inheritedEnvironment)
+            }
+        )
+        ""
 
 withUnusedLoopbackPort :: (Int -> IO a) -> IO a
 withUnusedLoopbackPort action = do

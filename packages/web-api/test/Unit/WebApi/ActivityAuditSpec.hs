@@ -14,6 +14,7 @@ import HarchWeb.Localization (locale)
 import HarchWeb.RequestId (mkRequestId)
 import HarchWeb.SecurityEvent (RouteObservation (..), requiredModuleNameOrDie)
 import WebApi.ActivityAudit
+import WebApi.Postgres.Testing (accountAuditAppendResultFixStatements, accountAuditControlledAppendPolicyStatements, accountAuditInitialMaintenanceStatements, accountAuditInsertPolicyFixStatements, accountAuditMigrationStatements, accountAuditRuntimeReconciliationStatements)
 
 spec = describe "WebApi.ActivityAudit" $ do
   it "encodes every closed audit event with a stable code, version, and bounded detail" $ do
@@ -63,6 +64,27 @@ spec = describe "WebApi.ActivityAudit" $ do
 
   it "materializes a successfully appended audit identifier without exposing it" $ do
     appendAccountActivity successfulStore (error "activity belongs to the storage adapter") >>= expectActivityId
+
+  it "keeps the immutable audit schema and deployment reconciliation on controlled function boundaries" $ do
+    let schemaSql = Text.unlines accountAuditMigrationStatements
+        policySql = Text.unlines (accountAuditInsertPolicyFixStatements <> accountAuditControlledAppendPolicyStatements)
+        appendResultSql = Text.unlines accountAuditAppendResultFixStatements
+        setupSql = Text.unlines accountAuditInitialMaintenanceStatements
+        reconciliationSql = Text.unlines (accountAuditRuntimeReconciliationStatements "web_api_dev" "runtime\"role")
+    expectAll
+      ( auditMigrationExpectation "pg_cron extension" ("CREATE EXTENSION IF NOT EXISTS pg_cron" `Text.isInfixOf` schemaSql)
+          :| [ auditMigrationExpectation "range partition parent" ("PARTITION BY RANGE (occurred_at)" `Text.isInfixOf` schemaSql),
+               auditMigrationExpectation "forced RLS" ("FORCE ROW LEVEL SECURITY" `Text.isInfixOf` schemaSql),
+               auditMigrationExpectation "runtime append grant" ("GRANT EXECUTE ON FUNCTION account_audit.append_activity" `Text.isInfixOf` reconciliationSql),
+               auditMigrationExpectation "scheduler maintenance grant" ("GRANT EXECUTE ON FUNCTION account_audit.maintain_activity_partitions() TO web_api_audit_scheduler" `Text.isInfixOf` schemaSql),
+               auditMigrationExpectation "controlled append policy" ("FOR INSERT TO PUBLIC WITH CHECK (true)" `Text.isInfixOf` policySql),
+               auditMigrationExpectation "append identity result" ("currval(pg_get_serial_sequence('account_audit.activity', 'activity_id'))" `Text.isInfixOf` appendResultSql),
+               auditMigrationExpectation "initial partition maintenance" ("PERFORM account_audit.maintain_activity_partitions()" `Text.isInfixOf` setupSql),
+               auditMigrationExpectation "reader and scheduler connection grants" ("GRANT CONNECT ON DATABASE \"web_api_dev\" TO web_api_audit_reader, web_api_audit_scheduler" `Text.isInfixOf` reconciliationSql),
+               auditMigrationExpectation "quoted runtime role identifier" ("\"runtime\"\"role\"" `Text.isInfixOf` reconciliationSql),
+               auditMigrationExpectation "runtime scope literal" ("VALUES ('runtime\"role', 'default')" `Text.isInfixOf` reconciliationSql)
+             ]
+      )
   where
     allAccountAuditEvents =
       [ PendingRegistrationDelivered RegistrationCreated,
@@ -146,3 +168,7 @@ required label = fromRight (error ("expected valid " <> label))
 
 requiredMaybe :: String -> Maybe value -> value
 requiredMaybe label = fromMaybe (error ("expected valid " <> label))
+
+auditMigrationExpectation :: String -> Bool -> Expectation
+auditMigrationExpectation label condition =
+  if condition then pure () else expectationFailure ("expected audit migration to include " <> label)

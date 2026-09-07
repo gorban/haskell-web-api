@@ -30,6 +30,14 @@ import Postgres.DatabaseChange
     runDatabaseChanges,
   )
 import WebApi.Config (DatabaseConfig (..))
+import WebApi.Postgres.ActivityAuditMigration
+  ( accountAuditAppendResultFixStatements,
+    accountAuditControlledAppendPolicyStatements,
+    accountAuditInitialMaintenanceStatements,
+    accountAuditInsertPolicyFixStatements,
+    accountAuditMigrationStatements,
+    accountAuditRuntimeReconciliationStatements,
+  )
 import WebApi.Postgres.Pool (runtimeConnectionString)
 import WebApi.Postgres.Runtime
   ( PostgresCommand,
@@ -88,7 +96,12 @@ webApiDatabaseChanges =
     change "pending-registration-lifecycle-v1" pendingRegistrationLifecycleMigrationStatements,
     change "verification-resend-lifecycle-v1" verificationResendLifecycleMigrationStatements,
     change "keyed-login-attempt-groups-v1" keyedLoginAttemptGroupMigrationStatements,
-    change "remove-session-csrf-v1" removeSessionCsrfMigrationStatements
+    change "remove-session-csrf-v1" removeSessionCsrfMigrationStatements,
+    change "account-audit-schema-v1" accountAuditMigrationStatements,
+    change "account-audit-controlled-append-policy-v1" accountAuditInsertPolicyFixStatements,
+    change "account-audit-controlled-append-rls-v2" accountAuditControlledAppendPolicyStatements,
+    change "account-audit-append-result-v1" accountAuditAppendResultFixStatements,
+    change "account-audit-initial-maintenance-v1" accountAuditInitialMaintenanceStatements
   ]
   where
     change changeId statements =
@@ -238,7 +251,7 @@ migrationEpochNanoseconds = "floor(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 10000
 -- recorded rather than being hidden by it.
 migrationReconciliationStatementsFor :: DatabaseConfig -> DatabaseConfig -> [Text]
 migrationReconciliationStatementsFor migrationDatabaseConfig runtimeDatabaseConfig =
-  ownershipStatements <> privilegeStatements
+  ownershipStatements <> privilegeStatements <> accountAuditRuntimeReconciliationStatements (databaseName runtimeDatabaseConfig) (databaseUser runtimeDatabaseConfig)
   where
     migrationOwner = sqlIdentifier (databaseUser migrationDatabaseConfig)
     runtimeOwner = sqlIdentifier (databaseUser runtimeDatabaseConfig)

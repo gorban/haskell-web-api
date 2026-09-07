@@ -132,6 +132,7 @@ library
     WebApi.Page.Model
     WebApi.Page.Rendering
     WebApi.Postgres.AccountRepository
+    WebApi.Postgres.ActivityAuditMigration
     WebApi.Postgres.LoginAttemptRepository
     WebApi.Postgres.MfaEnrollmentSessionRepository
     WebApi.Postgres.MfaRepository
