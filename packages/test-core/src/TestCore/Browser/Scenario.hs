@@ -1,3 +1,4 @@
+{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -5,7 +6,9 @@
 -- Playwright adapter; scenario control flow and assertions stay here.
 module TestCore.Browser.Scenario
   ( BrowserScenario,
+    BrowserAssertionBlock,
     assertAll,
+    assertAllObserved,
     assertAttribute,
     assertEventually,
     assertFocused,
@@ -27,6 +30,9 @@ module TestCore.Browser.Scenario
     releaseRequestsMatching,
     reload,
     runBrowserScenario,
+    runBrowserSpec,
+    satisfies,
+    matches,
     setCookie,
     setInputFiles,
     setViewportSize,
@@ -45,12 +51,12 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (ReaderT, ask, runReaderT)
 import Data.Aeson (Value, (.=))
 import Data.Aeson.Types (Pair)
-import Data.List.NonEmpty (NonEmpty)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import GHC.Clock (getMonotonicTimeNSec)
 import Test.HUnit.Lang (HUnitFailure)
-import Test.Hspec (Expectation)
+import Test.Hspec (Expectation, expectationFailure, shouldSatisfy)
 import TestCore.Browser.Model.Internal
   ( BrowserObservation,
     CompiledObservation (..),
@@ -86,6 +92,14 @@ throwScenarioError = BrowserScenario . throwError
 runBrowserScenario :: BrowserConfig -> BrowserScenario a -> IO (Either BrowserRunnerError a)
 runBrowserScenario config scenario =
   withBrowserSession config (runExceptT . runReaderT (unBrowserScenario scenario))
+
+-- | Interpret a scenario once at the Hspec boundary.  Scenario code keeps the
+-- typed runner-error rail; ordinary E2E specs need not repeatedly assert a
+-- successful @Right ()@ result.
+runBrowserSpec :: BrowserConfig -> BrowserScenario () -> Expectation
+runBrowserSpec config scenario = do
+  result <- runBrowserScenario config scenario
+  either (expectationFailure . show) pure result
 
 command :: Text -> [Pair] -> BrowserScenario Value
 command commandName fields = do
@@ -233,12 +247,112 @@ assertEventually observation expectation = do
                   liftScenarioIO (threadDelay 25000)
                   retryUntil session startedAt (Just failureMessage)
 
--- | Retry one composed observation, then report every independent expectation
--- against that observation. Keep browser actions and dependent checks outside
--- this helper so they remain fail-fast.
+-- | Retry one semantically cohesive observation, then report every independent
+-- expectation against that observation. This compatibility helper remains for
+-- callers whose observation is intentionally one positional product; new
+-- heterogeneous browser assertions should use 'assertAllObserved' instead.
+-- Keep browser actions and dependent checks outside either helper so they
+-- remain fail-fast.
 assertAll :: BrowserObservation a -> (a -> NonEmpty Expectation) -> BrowserScenario ()
 assertAll observation expectations =
   assertEventually observation (expectAll . expectations)
+
+-- | An opaque, heterogeneous set of independent observations.  It gathers
+-- one browser snapshot, rather than encoding unrelated observations as a
+-- positional tuple.  The result is intentionally only useful for authoring
+-- the block: dependent browser actions belong outside it, where their
+-- fail-fast ordering remains explicit.
+newtype BrowserAssertionBlock a = BrowserAssertionBlock ([ObservedAssertion], a)
+
+data ObservedAssertion = forall value. ObservedAssertion (BrowserObservation value) (value -> Expectation)
+
+instance Functor BrowserAssertionBlock where
+  fmap transform (BrowserAssertionBlock (assertions, value)) = BrowserAssertionBlock (assertions, transform value)
+
+instance Applicative BrowserAssertionBlock where
+  pure value = BrowserAssertionBlock ([], value)
+  BrowserAssertionBlock (left, transform) <*> BrowserAssertionBlock (right, value) = BrowserAssertionBlock (left <> right, transform value)
+
+instance Monad BrowserAssertionBlock where
+  BrowserAssertionBlock (assertions, value) >>= next =
+    let BrowserAssertionBlock (successor, result) = next value
+     in BrowserAssertionBlock (assertions <> successor, result)
+
+infix 1 `satisfies`
+
+-- | Add one predicate assertion to an aggregate browser snapshot.
+satisfies :: (Show value) => BrowserObservation value -> (value -> Bool) -> BrowserAssertionBlock ()
+satisfies observation predicate = observation `matches` (`shouldSatisfy` predicate)
+
+infix 1 `matches`
+
+-- | Add one arbitrary Hspec expectation to an aggregate browser snapshot.
+matches :: BrowserObservation value -> (value -> Expectation) -> BrowserAssertionBlock ()
+matches observation expectation = BrowserAssertionBlock ([ObservedAssertion observation expectation], ())
+
+-- | Retry one heterogeneous snapshot and report all independent matchers in
+-- source declaration order.  Empty blocks are a construction error because
+-- they would otherwise create a misleading successful no-op assertion.
+assertAllObserved :: BrowserAssertionBlock () -> BrowserScenario ()
+assertAllObserved (BrowserAssertionBlock (assertions, _)) =
+  case assertions of
+    [] -> throwScenarioError (BrowserRunnerProtocolError "empty observed assertion block")
+    _ -> do
+      session <- askSession
+      startedAt <- liftScenarioIO getMonotonicTimeNSec
+      retryObserved session startedAt Nothing
+  where
+    retryObserved session startedAt lastFailure = do
+      attempts <- observeAssertions assertions
+      case attempts of
+        [] -> throwScenarioError (BrowserRunnerProtocolError "observed assertion block produced no expectations")
+        firstAttempt : remainingAttempts -> do
+          assertionAttempt <- liftScenarioIO (try (expectAll (firstAttempt :| remainingAttempts)) :: IO (Either SomeException ()))
+          case assertionAttempt of
+            Right () -> pure ()
+            Left assertionException ->
+              case fromException assertionException :: Maybe HUnitFailure of
+                Nothing -> liftScenarioIO (throwIO assertionException)
+                Just _ -> do
+                  now <- liftScenarioIO getMonotonicTimeNSec
+                  let elapsedMilliseconds = fromIntegral ((now - startedAt) `div` 1000000)
+                      timeoutMilliseconds = browserTimeoutMilliseconds (sessionConfig session)
+                      failureMessage = displayException assertionException
+                  if elapsedMilliseconds >= timeoutMilliseconds
+                    then throwScenarioError (BrowserAssertionFailed (fromMaybe failureMessage lastFailure <> " (timed out after " <> show timeoutMilliseconds <> "ms; last failure: " <> failureMessage <> ")") [])
+                    else liftScenarioIO (threadDelay 25000) >> retryObserved session startedAt (Just failureMessage)
+
+    observeAssertions observedAssertions = do
+      let compiledAssertions = map compileAssertion observedAssertions
+      response <- command "observeMany" ["observations" .= concatMap compiledAssertionRequests compiledAssertions]
+      responseValues <-
+        case fromJsonResult response of
+          Left decodeError -> throwScenarioError (BrowserRunnerProtocolError decodeError)
+          Right values -> pure values
+      case decodeAssertions compiledAssertions responseValues of
+        Left decodeError -> throwScenarioError (BrowserRunnerProtocolError decodeError)
+        Right (expectations, []) -> pure expectations
+        Right (_, remaining) -> throwScenarioError (BrowserRunnerProtocolError ("browser runner returned " <> show (length remaining) <> " unexpected observation values"))
+
+    compileAssertion (ObservedAssertion observation expectation) =
+      let compiled = compileObservation observation
+       in CompiledAssertion
+            (compiledRequests compiled)
+            ( \values -> do
+                (observedValue, remaining) <- decodeCompiledValues compiled values
+                pure (expectation observedValue, remaining)
+            )
+
+    decodeAssertions [] values = Right ([], values)
+    decodeAssertions (compiled : remaining) values = do
+      (expectation, afterCompiled) <- compiledAssertionDecode compiled values
+      (otherExpectations, afterAll) <- decodeAssertions remaining afterCompiled
+      pure (expectation : otherExpectations, afterAll)
+
+data CompiledAssertion = CompiledAssertion
+  { compiledAssertionRequests :: [Value],
+    compiledAssertionDecode :: [Value] -> Either String (Expectation, [Value])
+  }
 
 assertText :: Locator -> (Text -> Expectation) -> BrowserScenario ()
 assertText locator = assertEventually (textContent locator)

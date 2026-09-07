@@ -33,119 +33,95 @@ spec =
         let loginUrl = localServerBaseUrl server <> "/es/public/login"
             catalogUrl = localServerBaseUrl server <> "/es/catalog"
             ordersUrl = localServerBaseUrl server <> "/es/orders"
-        ( runBrowserScenario browser do
-            visit loginUrl
-            assertAll
-              ((,) <$> textContent (byRole Link `named` "Catalog") <*> textContent (byRole Link `named` "Orders"))
-              (\(catalogLabel, ordersLabel) -> (catalogLabel `shouldBe` "Catalog") :| [ordersLabel `shouldBe` "Orders"])
-            click (byRole Link `named` "Catalog")
-            assertAll
-              ((,,) <$> currentUrl <*> textContent (byRole Heading `named` "es catalog") <*> browserMetrics)
-              ( \(url, heading, metrics) ->
-                  (url `shouldBe` catalogUrl)
-                    :| [ heading `shouldBe` "es catalog",
-                         $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
-                       ]
-              )
-            reload
-            assertAll
-              ((,) <$> currentUrl <*> textContent (byRole Heading `named` "es catalog"))
-              (\(url, heading) -> (url `shouldBe` catalogUrl) :| [heading `shouldBe` "es catalog"])
-            click (byRole Link `named` "Orders")
-            assertAll
-              ((,) <$> currentUrl <*> textContent (byRole Heading `named` "es orders"))
-              (\(url, heading) -> (url `shouldBe` ordersUrl) :| [heading `shouldBe` "es orders"])
-          )
-          `shouldReturn` Right ()
+        runBrowserSpec browser do
+          visit loginUrl
+          assertAllObserved do
+            textContent (byRole Link `named` "Catalog") `matches` (`shouldBe` "Catalog")
+            textContent (byRole Link `named` "Orders") `matches` (`shouldBe` "Orders")
+          click (byRole Link `named` "Catalog")
+          assertAllObserved do
+            currentUrl `matches` (`shouldBe` catalogUrl)
+            textContent (byRole Heading `named` "es catalog") `matches` (`shouldBe` "es catalog")
+            browserMetrics `matches` \metrics ->
+              $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+          reload
+          assertAllObserved do
+            currentUrl `matches` (`shouldBe` catalogUrl)
+            textContent (byRole Heading `named` "es catalog") `matches` (`shouldBe` "es catalog")
+          click (byRole Link `named` "Orders")
+          assertAllObserved do
+            currentUrl `matches` (`shouldBe` ordersUrl)
+            textContent (byRole Heading `named` "es orders") `matches` (`shouldBe` "es orders")
 
     it "keeps default-locale mounted navigation SSR-complete across reload and enhancement" $
       withBrowserAndServer $ \browser server -> do
         let catalogUrl = localServerBaseUrl server <> "/catalog"
             ordersUrl = localServerBaseUrl server <> "/en/orders"
-        ( runBrowserScenario browser do
-            visit catalogUrl
-            assertAll
-              ((,) <$> currentUrl <*> textContent (byRole Heading `named` "en catalog"))
-              (\(url, heading) -> (url `shouldBe` catalogUrl) :| [heading `shouldBe` "en catalog"])
-            reload
-            assertAll
-              (textContent (byRole Heading `named` "en catalog"))
-              (\heading -> (heading `shouldBe` "en catalog") :| [])
-            click (byRole Link `named` "Orders")
-            assertAll
-              ((,,) <$> currentUrl <*> textContent (byRole Heading `named` "en orders") <*> browserMetrics)
-              ( \(url, heading, metrics) ->
-                  (url `shouldBe` ordersUrl)
-                    :| [ heading `shouldBe` "en orders",
-                         $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
-                       ]
-              )
-          )
-          `shouldReturn` Right ()
+        runBrowserSpec browser do
+          visit catalogUrl
+          assertAllObserved do
+            currentUrl `matches` (`shouldBe` catalogUrl)
+            textContent (byRole Heading `named` "en catalog") `matches` (`shouldBe` "en catalog")
+          reload
+          assertAllObserved do
+            textContent (byRole Heading `named` "en catalog") `matches` (`shouldBe` "en catalog")
+          click (byRole Link `named` "Orders")
+          assertAllObserved do
+            currentUrl `matches` (`shouldBe` ordersUrl)
+            textContent (byRole Heading `named` "en orders") `matches` (`shouldBe` "en orders")
+            browserMetrics `matches` \metrics ->
+              $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
 
     it "keeps public and mounted-domain navigation usable when scripts are disabled" $
       withBrowserAndServer $ \browser server -> do
         let loginUrl = localServerBaseUrl server <> "/public/login"
             spanishLoginUrl = localServerBaseUrl server <> "/es/public/login"
-        ( runBrowserScenario browser do
-            visitWithoutScripts loginUrl
-            assertAll
-              ((,) <$> textContent (byRole Heading `named` "Login") <*> textContent (byRole Link `named` "Catalog"))
-              (\(heading, catalogLabel) -> (heading `shouldBe` "Login") :| [catalogLabel `shouldBe` "Catalog"])
-            click (byRole Link `named` "Catalog")
-            assertAll
-              (textContent (byRole Heading `named` "en catalog"))
-              (\heading -> (heading `shouldBe` "en catalog") :| [])
-            click (byRole Link `named` "Orders")
-            assertAll
-              (textContent (byRole Heading `named` "en orders"))
-              (\heading -> (heading `shouldBe` "en orders") :| [])
-            visitWithoutScripts spanishLoginUrl
-            click (byRole Link `named` "Catalog")
-            assertAll
-              (textContent (byRole Heading `named` "es catalog"))
-              (\heading -> (heading `shouldBe` "es catalog") :| [])
-            click (byRole Link `named` "Orders")
-            assertAll
-              (textContent (byRole Heading `named` "es orders"))
-              (\heading -> (heading `shouldBe` "es orders") :| [])
-          )
-          `shouldReturn` Right ()
+        runBrowserSpec browser do
+          visitWithoutScripts loginUrl
+          assertAllObserved do
+            textContent (byRole Heading `named` "Login") `matches` (`shouldBe` "Login")
+            textContent (byRole Link `named` "Catalog") `matches` (`shouldBe` "Catalog")
+          click (byRole Link `named` "Catalog")
+          assertAllObserved do
+            textContent (byRole Heading `named` "en catalog") `matches` (`shouldBe` "en catalog")
+          click (byRole Link `named` "Orders")
+          assertAllObserved do
+            textContent (byRole Heading `named` "en orders") `matches` (`shouldBe` "en orders")
+          visitWithoutScripts spanishLoginUrl
+          click (byRole Link `named` "Catalog")
+          assertAllObserved do
+            textContent (byRole Heading `named` "es catalog") `matches` (`shouldBe` "es catalog")
+          click (byRole Link `named` "Orders")
+          assertAllObserved do
+            textContent (byRole Heading `named` "es orders") `matches` (`shouldBe` "es orders")
 
     it "submits admission through the enhanced action and replaces credential history" $
       withAdmissionBrowserAndServer $ \browser server -> do
         let admissionUrl = localServerBaseUrl server <> "/public/admission"
             loginUrl = localServerBaseUrl server <> "/en/public/login"
-        ( runBrowserScenario browser do
-            visit admissionUrl
-            fill (byLabel "Admission name") "support_operator"
-            fill (byLabel "One-time code") browserAdmissionCode
-            submit (byRole Form `named` "Admission")
-            assertAll
-              ((,,) <$> currentUrl <*> textContent (byRole Heading `named` "Login") <*> browserMetrics)
-              ( \(url, heading, metrics) ->
-                  (url `shouldBe` loginUrl)
-                    :| [ heading `shouldBe` "Login",
-                         $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
-                       ]
-              )
-          )
-          `shouldReturn` Right ()
+        runBrowserSpec browser do
+          visit admissionUrl
+          fill (byLabel "Admission name") "support_operator"
+          fill (byLabel "One-time code") browserAdmissionCode
+          submit (byRole Form `named` "Admission")
+          assertAllObserved do
+            currentUrl `matches` (`shouldBe` loginUrl)
+            textContent (byRole Heading `named` "Login") `matches` (`shouldBe` "Login")
+            browserMetrics `matches` \metrics ->
+              $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
 
     it "submits the same admission workflow through its CSRF-protected native fallback" $
       withAdmissionBrowserAndServer $ \browser server -> do
         let admissionUrl = localServerBaseUrl server <> "/public/admission"
             loginUrl = localServerBaseUrl server <> "/en/public/login"
-        ( runBrowserScenario browser do
-            visitWithoutScripts admissionUrl
-            fill (byLabel "Admission name") "support_operator"
-            fill (byLabel "One-time code") browserAdmissionCode
-            submit (byRole Form `named` "Admission")
-            assertAll
-              ((,) <$> currentUrl <*> textContent (byRole Heading `named` "Login"))
-              (\(url, heading) -> (url `shouldBe` loginUrl) :| [heading `shouldBe` "Login"])
-          )
-          `shouldReturn` Right ()
+        runBrowserSpec browser do
+          visitWithoutScripts admissionUrl
+          fill (byLabel "Admission name") "support_operator"
+          fill (byLabel "One-time code") browserAdmissionCode
+          submit (byRole Form `named` "Admission")
+          assertAllObserved do
+            currentUrl `matches` (`shouldBe` loginUrl)
+            textContent (byRole Heading `named` "Login") `matches` (`shouldBe` "Login")
 
 withBrowserAndServer :: (BrowserConfig -> LocalTestServer -> IO a) -> IO a
 withBrowserAndServer action = do

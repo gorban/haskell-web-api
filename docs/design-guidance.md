@@ -786,6 +786,13 @@ Prefer:
 - `children={value}` when children are computed, and
 - `props={[first, second]}` only for an intentionally positional multi-argument function.
 
+The same rule applies to tests and production code: do not encode a cohesive
+product's meaning solely by ordinal position. Prefer named record fields; use
+a newtype or ADT where values need domain distinction or invariants. Keep a
+positional product only when its order is itself the intentional, documented
+contract. A builder is useful only when it adds validation, defaults, or
+genuine incremental construction rather than disguising an ordinary record.
+
 Scoped class names are available through `cssScope` and `ScopedCssClass`. App styles remain ordinary
 static assets today; a typed CSS or JavaScript asset EDSL has not landed.
 

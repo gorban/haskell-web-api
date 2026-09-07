@@ -6,7 +6,6 @@
 
 import App.App (multipartUploadApplication)
 import App.MultipartUpload (NativeUploadState, nativeUploadDiscardCount, newNativeUploadState)
-import Data.List.NonEmpty (NonEmpty (..))
 import HarchWeb (LocalTestServer (..), withLocalTestServer)
 
 spec =
@@ -16,18 +15,14 @@ spec =
         withTempFile "multipart-upload-e2e" [] "attachment.txt" $ \(_tempRoot, filePath) -> do
           writeFile filePath "e2e file contents"
           let uploadUrl = localServerBaseUrl server <> "/native-upload"
-          ( runBrowserScenario browser do
-              visit uploadUrl
-              setInputFiles (css "#native-upload-file") filePath
-              submit (byRole Form `named` "Upload a file")
-              assertAll
-                ((,) <$> textContent (byRole Heading `named` "Upload received") <*> browserMetrics)
-                ( \(heading, metrics) ->
-                    (heading `shouldBe` "Upload received")
-                      :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1, mutationRequestCount = 0}|])]
-                )
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            visit uploadUrl
+            setInputFiles (css "#native-upload-file") filePath
+            submit (byRole Form `named` "Upload a file")
+            assertAllObserved do
+              textContent (byRole Heading `named` "Upload received") `matches` (`shouldBe` "Upload received")
+              browserMetrics `matches` \metrics ->
+                $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1, mutationRequestCount = 0}|])
           nativeUploadDiscardCount uploadState `shouldReturn` 1
 
     it "submits the same native multipart upload as SSR with scripts disabled" $
@@ -35,13 +30,12 @@ spec =
         withTempFile "multipart-upload-e2e-no-js" [] "attachment.txt" $ \(_tempRoot, filePath) -> do
           writeFile filePath "e2e file contents, no scripts"
           let uploadUrl = localServerBaseUrl server <> "/native-upload"
-          ( runBrowserScenario browser do
-              visitWithoutScripts uploadUrl
-              setInputFiles (css "#native-upload-file") filePath
-              submit (byRole Form `named` "Upload a file")
-              assertText (byRole Heading `named` "Upload received") (`shouldBe` "Upload received")
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            visitWithoutScripts uploadUrl
+            setInputFiles (css "#native-upload-file") filePath
+            submit (byRole Form `named` "Upload a file")
+            assertAllObserved do
+              textContent (byRole Heading `named` "Upload received") `matches` (`shouldBe` "Upload received")
           nativeUploadDiscardCount uploadState `shouldReturn` 1
 
 withBrowserAndUploadServer :: (BrowserConfig -> LocalTestServer -> NativeUploadState -> IO a) -> IO a

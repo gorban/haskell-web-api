@@ -1,3 +1,4 @@
+{-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -5,7 +6,7 @@
 
 import Control.Concurrent (forkIO, killThread, threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
-import Control.Exception (AsyncException (ThreadKilled), SomeException, finally, fromException, try)
+import Control.Exception (AsyncException (ThreadKilled), SomeException, displayException, finally, fromException, try)
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Encoding qualified as AesonEncoding
 import Data.ByteString.Lazy qualified as LazyByteString
@@ -105,6 +106,55 @@ spec = do
               pure scriptResult
           )
           `shouldReturn` Right (Aeson.Bool True)
+
+    it "batches heterogeneous observed assertions in one browser snapshot" $
+      withFakeRunner "aggregate-only" $ \config ->
+        runBrowserSpec config $ do
+          assertAllObserved do
+            currentUrl `satisfies` (== "http://localhost/")
+            textContent (byRole Heading) `matches` (`shouldBe` "Home")
+            browserMetrics `matches` (`shouldBe` BrowserMetrics 1 0 1)
+
+    it "rejects an empty observed assertion block" $
+      withFakeRunner "normal" $ \config -> do
+        result <- runBrowserScenario config (assertAllObserved (pure ()))
+        result `shouldBe` Left (BrowserRunnerProtocolError "empty observed assertion block")
+
+    it "keeps aggregate observed assertion failures in declaration order" $
+      withFakeRunner "normal" $ \config -> do
+        result <-
+          runBrowserScenario config $ assertAllObserved do
+            currentUrl `matches` (`shouldBe` "https://wrong.example/")
+            textContent (byRole Heading) `matches` (`shouldBe` "Wrong heading")
+        result `shouldSatisfy` \case
+          Left (BrowserAssertionFailed message _) ->
+            let rendered = Text.pack message
+                (firstFailure, laterFailures) = Text.breakOn "Wrong heading" rendered
+             in "https://wrong.example/" `Text.isInfixOf` firstFailure
+                  && not (Text.null laterFailures)
+          _ -> False
+
+    it "retries a failed aggregate block against fresh snapshots" $
+      withFakeRunner "retry" $ \config ->
+        runBrowserSpec config $ do
+          assertAllObserved do
+            textContent (byRole Heading) `matches` (`shouldBe` "Home")
+            inputValue (css "input[name=email]") `matches` (`shouldBe` "person@example.com")
+
+    it "does not retry an unexpected aggregate matcher exception" $
+      withFakeRunner "normal" $ \config -> do
+        result <- runBrowserScenario config $ assertAllObserved do
+          textContent (byRole Heading) `matches` (\_ -> ioError (userError "aggregate callback exploded"))
+        result `shouldSatisfy` \case
+          Left (BrowserRunnerProtocolError message) -> "aggregate callback exploded" `Text.isInfixOf` Text.pack message
+          _ -> False
+
+    it "renders runner failures at the Hspec boundary" $
+      withFakeRunner "command-error" $ \config -> do
+        failed <- try (runBrowserSpec config (click (byText "Missing"))) :: IO (Either SomeException ())
+        failed `shouldSatisfy` \case
+          Left exception -> "BrowserCommandFailed" `Text.isInfixOf` Text.pack (displayException exception)
+          Right () -> False
 
     it "encodes every semantic locator and role while exercising both applicative APIs" $
       withFakeRunner "normal" $ \config -> do
@@ -438,6 +488,7 @@ spec = do
           "    if (mode === 'command-error-no-artifacts' && request.command === 'click') { rawReply({ protocol: 1, id: request.id, status: 'error', message: 'missing element' }); continue; }",
           "    if (request.command === 'observeMany') {",
           "      if (mode === 'delayed-observe') { await new Promise((resolve) => setTimeout(resolve, 500)); }",
+          "      if (mode === 'aggregate-only' && request.observations.length !== 3) { reply(request.id, 'error', null, 'expected one three-observation snapshot'); continue; }",
           "      if (mode === 'observe-not-array') { reply(request.id, 'ok', { value: 'Home' }); continue; }",
           "      if (mode === 'observe-no-value') { rawReply({ protocol: 1, id: request.id, status: 'ok' }); continue; }",
           "      if (mode === 'observe-missing') { reply(request.id, 'ok', []); continue; }",

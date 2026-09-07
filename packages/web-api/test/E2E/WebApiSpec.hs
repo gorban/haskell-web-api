@@ -1,3 +1,4 @@
+{-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 
@@ -9,7 +10,6 @@ import Data.Aeson qualified as Aeson
 import Data.ByteString qualified as ByteString
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Data.List (find)
-import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -48,46 +48,36 @@ spec =
       withBrowserApp $ \browser appConfig ->
         HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
           let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
-          runBrowserScenario
-            browser
-            ( do
-                visit homeUrl
-                assertAll
-                  ((,) <$> currentUrl <*> textContent (byRole Heading))
-                  (\(url, heading) -> (url `shouldBe` (HarchWeb.localServerBaseUrl server <> "/spaces")) :| [heading `shouldBe` "Site under construction"])
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            visit homeUrl
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` (HarchWeb.localServerBaseUrl server <> "/spaces"))
+              textContent (byRole Heading) `matches` (`shouldBe` "Site under construction")
 
     it "keeps direct second-page loads and script-disabled root redirects usable" $
       withBrowserApp $ \browser appConfig ->
         HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
           let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
               secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
-          runBrowserScenario
-            browser
-            ( do
-                visit secondUrl
-                assertText (byRole Heading) (`shouldBe` "Second")
-                visitWithoutScripts homeUrl
-                assertAll
-                  ((,) <$> currentUrl <*> textContent (byRole Heading))
-                  (\(url, heading) -> (url `shouldBe` (HarchWeb.localServerBaseUrl server <> "/spaces")) :| [heading `shouldBe` "Site under construction"])
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            visit secondUrl
+            assertAllObserved do
+              textContent (byRole Heading) `matches` (`shouldBe` "Second")
+            visitWithoutScripts homeUrl
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` (HarchWeb.localServerBaseUrl server <> "/spaces"))
+              textContent (byRole Heading) `matches` (`shouldBe` "Site under construction")
 
     it "redirects Spanish roots to localized Spaces SSR content while scripts are disabled" $
       withBrowserApp $ \browser appConfig ->
         HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
           let spanishHomeUrl = HarchWeb.localServerBaseUrl server <> "/es"
-          runBrowserScenario
-            browser
-            ( do
-                visitWithoutScripts spanishHomeUrl
-                assertAll
-                  ((,,) <$> currentUrl <*> textContent (byRole Heading) <*> attributeValue (css "html") "lang")
-                  (\(url, heading, language) -> (url `shouldBe` (HarchWeb.localServerBaseUrl server <> "/es/spaces")) :| [heading `shouldBe` "Sitio en construcción", language `shouldBe` Just "es"])
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            visitWithoutScripts spanishHomeUrl
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` (HarchWeb.localServerBaseUrl server <> "/es/spaces"))
+              textContent (byRole Heading) `matches` (`shouldBe` "Sitio en construcción")
+              attributeValue (css "html") "lang" `matches` (`shouldBe` Just "es")
 
     it "serves the app-home spaces placeholder through SSR and enhanced navigation" $
       withBrowserApp $ \browser appConfig ->
@@ -96,29 +86,22 @@ spec =
               secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
               spacesUrl = HarchWeb.localServerBaseUrl server <> "/spaces"
               spanishSpacesUrl = HarchWeb.localServerBaseUrl server <> "/es/spaces"
-          runBrowserScenario
-            browser
-            ( do
-                visit homeUrl
-                assertAll
-                  ((,) <$> currentUrl <*> textContent (byRole Heading))
-                  (\(url, heading) -> (url `shouldBe` spacesUrl) :| [heading `shouldBe` "Site under construction"])
-                visit secondUrl
-                click (byRole Link `named` "Spaces")
-                assertAll
-                  ((,,) <$> currentUrl <*> textContent (byRole Heading) <*> browserMetrics)
-                  ( \(url, heading, metrics) ->
-                      (url `shouldBe` spacesUrl)
-                        :| [ heading `shouldBe` "Site under construction",
-                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
-                           ]
-                  )
-                visitWithoutScripts spanishSpacesUrl
-                assertAll
-                  ((,) <$> textContent (byRole Heading) <*> textContent (byText "Sigan este espacio."))
-                  (\(heading, body) -> (heading `shouldBe` "Sitio en construcción") :| [body `shouldBe` "Sigan este espacio."])
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            visit homeUrl
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` spacesUrl)
+              textContent (byRole Heading) `matches` (`shouldBe` "Site under construction")
+            visit secondUrl
+            click (byRole Link `named` "Spaces")
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` spacesUrl)
+              textContent (byRole Heading) `matches` (`shouldBe` "Site under construction")
+              browserMetrics `matches` \metrics ->
+                $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+            visitWithoutScripts spanishSpacesUrl
+            assertAllObserved do
+              textContent (byRole Heading) `matches` (`shouldBe` "Sitio en construcción")
+              textContent (byText "Sigan este espacio.") `matches` (`shouldBe` "Sigan este espacio.")
 
     it "serves the app-home profile landing through SSR and enhanced navigation" $
       withBrowserApp $ \browser appConfig ->
@@ -127,29 +110,25 @@ spec =
               loginUrl = HarchWeb.localServerBaseUrl server <> "/login"
               profileUrl = HarchWeb.localServerBaseUrl server <> "/profile"
               spanishProfileUrl = HarchWeb.localServerBaseUrl server <> "/es/profile"
-          runBrowserScenario
-            browser
-            ( do
-                visit secondUrl
-                _ <-
-                  runPageScript
-                    "const link = document.querySelector('nav a'); link.focus(); const style = getComputedStyle(link); link.dataset.testFocusVisibleStyle = String(link.matches(':focus-visible') && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0); true"
-                assertAttribute (byRole Link `named` "Home") "data-test-focus-visible-style" (`shouldBe` Just "true")
-                click (byRole Link `named` "Profile")
-                assertAll
-                  ((,,) <$> currentUrl <*> textContent (byRole Heading) <*> browserMetrics)
-                  ( \(url, heading, metrics) ->
-                      (url `shouldBe` loginUrl)
-                        :| [ heading `shouldBe` "Sign in",
-                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
-                           ]
-                  )
-                visitWithoutScripts profileUrl
-                assertText (byRole Heading) (`shouldBe` "Sign in")
-                visitWithoutScripts spanishProfileUrl
-                assertText (byRole Heading) (`shouldBe` "Iniciar sesion")
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            visit secondUrl
+            _ <-
+              runPageScript
+                "const link = document.querySelector('nav a'); link.focus(); const style = getComputedStyle(link); link.dataset.testFocusVisibleStyle = String(link.matches(':focus-visible') && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0); true"
+            assertAllObserved do
+              attributeValue (byRole Link `named` "Home") "data-test-focus-visible-style" `matches` (`shouldBe` Just "true")
+            click (byRole Link `named` "Profile")
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` loginUrl)
+              textContent (byRole Heading) `matches` (`shouldBe` "Sign in")
+              browserMetrics `matches` \metrics ->
+                $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+            visitWithoutScripts profileUrl
+            assertAllObserved do
+              textContent (byRole Heading) `matches` (`shouldBe` "Sign in")
+            visitWithoutScripts spanishProfileUrl
+            assertAllObserved do
+              textContent (byRole Heading) `matches` (`shouldBe` "Iniciar sesion")
 
     it "opens the language picker accessibly and navigates its typed choices" $
       withBrowserApp $ \browser appConfig ->
@@ -161,47 +140,51 @@ spec =
               englishChoice = byRole Link `named` "English"
               spanishChoice = byRole Link `named` "Spanish"
               closeControl = byRole Button `named` "Close language picker"
-          runBrowserScenario
-            browser
-            ( do
-                visit secondUrl
-                assertAttribute (css "html") "lang" (`shouldBe` Just "en")
-                reload
-                assertAttribute (css "html") "lang" (`shouldBe` Just "en")
-                click languageTrigger
-                assertAttribute (css "#language-dialog") "open" (`shouldBe` Just "")
-                assertFocused englishChoice (`shouldBe` True)
-                _ <-
-                  runPageScript
-                    "const dialog = document.querySelector('#language-dialog'); document.querySelector('nav a').focus(); dialog.dataset.testBackgroundContained = String(dialog.contains(document.activeElement)); true"
-                assertAttribute (css "#language-dialog") "data-test-background-contained" (`shouldBe` Just "true")
-                press englishChoice "Tab"
-                assertFocused spanishChoice (`shouldBe` True)
-                press spanishChoice "Tab"
-                assertFocused closeControl (`shouldBe` True)
-                press closeControl "Tab"
-                assertFocused englishChoice (`shouldBe` True)
-                press (css "#language-dialog") "Escape"
-                assertFocused languageTrigger (`shouldBe` True)
-                click languageTrigger
-                click spanishChoice
-                assertAll
-                  ((,,,,) <$> currentUrl <*> textContent (byRole Heading `named` "Elige un idioma") <*> textContent (byRole Status) <*> browserMetrics <*> attributeValue (css "html") "lang")
-                  ( \(url, heading, announcement, metrics, language) ->
-                      (url `shouldBe` spanishLanguageUrl)
-                        :| [ heading `shouldBe` "Elige un idioma",
-                             announcement `shouldBe` "web-api: Language",
-                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|]),
-                             language `shouldBe` Just "es"
-                           ]
-                  )
-                assertAttribute (css "#language-dialog") "open" (`shouldBe` Nothing)
-                historyBack
-                assertAttribute (css "html") "lang" (`shouldBe` Just "en")
-                historyForward
-                assertAttribute (css "html") "lang" (`shouldBe` Just "es")
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            visit secondUrl
+            assertAllObserved do
+              attributeValue (css "html") "lang" `matches` (`shouldBe` Just "en")
+            reload
+            assertAllObserved do
+              attributeValue (css "html") "lang" `matches` (`shouldBe` Just "en")
+            click languageTrigger
+            assertAllObserved do
+              attributeValue (css "#language-dialog") "open" `matches` (`shouldBe` Just "")
+              isFocused englishChoice `satisfies` id
+            _ <-
+              runPageScript
+                "const dialog = document.querySelector('#language-dialog'); document.querySelector('nav a').focus(); dialog.dataset.testBackgroundContained = String(dialog.contains(document.activeElement)); true"
+            assertAllObserved do
+              attributeValue (css "#language-dialog") "data-test-background-contained" `matches` (`shouldBe` Just "true")
+            press englishChoice "Tab"
+            assertAllObserved do
+              isFocused spanishChoice `satisfies` id
+            press spanishChoice "Tab"
+            assertAllObserved do
+              isFocused closeControl `satisfies` id
+            press closeControl "Tab"
+            assertAllObserved do
+              isFocused englishChoice `satisfies` id
+            press (css "#language-dialog") "Escape"
+            assertAllObserved do
+              isFocused languageTrigger `satisfies` id
+            click languageTrigger
+            click spanishChoice
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` spanishLanguageUrl)
+              textContent (byRole Heading `named` "Elige un idioma") `matches` (`shouldBe` "Elige un idioma")
+              textContent (byRole Status) `matches` (`shouldBe` "web-api: Language")
+              browserMetrics `matches` \metrics ->
+                $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
+              attributeValue (css "html") "lang" `matches` (`shouldBe` Just "es")
+            assertAllObserved do
+              attributeValue (css "#language-dialog") "open" `matches` (`shouldBe` Nothing)
+            historyBack
+            assertAllObserved do
+              attributeValue (css "html") "lang" `matches` (`shouldBe` Just "en")
+            historyForward
+            assertAllObserved do
+              attributeValue (css "html") "lang" `matches` (`shouldBe` Just "es")
 
     it "keeps language selection and dialog startup failure complete without enhanced behavior" $
       withBrowserApp $ \browser appConfig ->
@@ -210,30 +193,24 @@ spec =
               secondUrl = baseUrl <> "/second"
               languageUrl = baseUrl <> "/language"
               spanishLanguageUrl = baseUrl <> "/es/language"
-          runBrowserScenario
-            browser
-            ( do
-                blockRequestsMatching "**/assets/dialog.js"
-                visit secondUrl
-                click (byRole Link `named` "Language")
-                failBlockedRequestsMatching "**/assets/dialog.js"
-                assertAll
-                  ((,) <$> currentUrl <*> browserMetrics)
-                  ( \(url, metrics) ->
-                      (url `shouldBe` languageUrl)
-                        :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 1}|])]
-                  )
-                visitWithoutScripts secondUrl
-                press (byRole Link `named` "Language") "Enter"
-                assertAll
-                  ((,) <$> currentUrl <*> textContent (byRole Heading))
-                  (\(url, heading) -> (url `shouldBe` languageUrl) :| [heading `shouldBe` "Choose a language"])
-                press (byRole Link `named` "Spanish") "Enter"
-                assertAll
-                  ((,) <$> currentUrl <*> textContent (byRole Heading))
-                  (\(url, heading) -> (url `shouldBe` spanishLanguageUrl) :| [heading `shouldBe` "Elige un idioma"])
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            blockRequestsMatching "**/assets/dialog.js"
+            visit secondUrl
+            click (byRole Link `named` "Language")
+            failBlockedRequestsMatching "**/assets/dialog.js"
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` languageUrl)
+              browserMetrics `matches` \metrics ->
+                $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 1}|])
+            visitWithoutScripts secondUrl
+            press (byRole Link `named` "Language") "Enter"
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` languageUrl)
+              textContent (byRole Heading) `matches` (`shouldBe` "Choose a language")
+            press (byRole Link `named` "Spanish") "Enter"
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` spanishLanguageUrl)
+              textContent (byRole Heading) `matches` (`shouldBe` "Elige un idioma")
 
     it "keeps the Help FAB usable in a desktop narrow-width, layout-zoomed viewport and absent at its destination" $
       withBrowserApp $ \browser appConfig ->
@@ -242,33 +219,28 @@ spec =
               secondUrl = baseUrl <> "/second"
               helpUrl = baseUrl <> "/help"
               helpFab = byRole Link `named` "Help and support"
-          runBrowserScenario
-            browser
-            ( do
-                setViewportSize 320 480
-                visit secondUrl
-                _ <-
-                  runPageScript
-                    "document.documentElement.style.zoom = '2'; const fab = document.querySelector('[data-help-fab]'); fab.focus(); const box = fab.getBoundingClientRect(); const overlaps = [...document.querySelectorAll('#app-main a, #app-main button, #app-main input, #app-main select')].filter((control) => control !== fab && !control.closest('dialog')).some((control) => { const other = control.getBoundingClientRect(); return box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top; }); fab.dataset.testGeometry = String(box.width >= 44 && box.height >= 44 && box.right <= window.innerWidth && box.bottom <= window.innerHeight && !overlaps && getComputedStyle(fab).outlineStyle !== 'none'); true"
-                assertAttribute helpFab "data-test-geometry" (`shouldBe` Just "true")
-                press helpFab "Enter"
-                assertAll
-                  ((,,) <$> currentUrl <*> textContent (byRole Heading `named` "Help and support") <*> browserMetrics)
-                  ( \(url, heading, metrics) ->
-                      (url `shouldBe` helpUrl)
-                        :| [ heading `shouldBe` "Help and support",
-                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
-                           ]
-                  )
-                _ <- runPageScript "document.body.dataset.testNoHelpFab = String(!document.querySelector('[data-help-fab]')); true"
-                assertAttribute (css "body") "data-test-no-help-fab" (`shouldBe` Just "true")
-                visitWithoutScripts secondUrl
-                press helpFab "Enter"
-                assertAll
-                  ((,) <$> currentUrl <*> textContent (byRole Heading))
-                  (\(url, heading) -> (url `shouldBe` helpUrl) :| [heading `shouldBe` "Help and support"])
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            setViewportSize 320 480
+            visit secondUrl
+            _ <-
+              runPageScript
+                "document.documentElement.style.zoom = '2'; const fab = document.querySelector('[data-help-fab]'); fab.focus(); const box = fab.getBoundingClientRect(); const overlaps = [...document.querySelectorAll('#app-main a, #app-main button, #app-main input, #app-main select')].filter((control) => control !== fab && !control.closest('dialog')).some((control) => { const other = control.getBoundingClientRect(); return box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top; }); fab.dataset.testGeometry = String(box.width >= 44 && box.height >= 44 && box.right <= window.innerWidth && box.bottom <= window.innerHeight && !overlaps && getComputedStyle(fab).outlineStyle !== 'none'); true"
+            assertAllObserved do
+              attributeValue helpFab "data-test-geometry" `matches` (`shouldBe` Just "true")
+            press helpFab "Enter"
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` helpUrl)
+              textContent (byRole Heading `named` "Help and support") `matches` (`shouldBe` "Help and support")
+              browserMetrics `matches` \metrics ->
+                $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+            _ <- runPageScript "document.body.dataset.testNoHelpFab = String(!document.querySelector('[data-help-fab]')); true"
+            assertAllObserved do
+              attributeValue (css "body") "data-test-no-help-fab" `matches` (`shouldBe` Just "true")
+            visitWithoutScripts secondUrl
+            press helpFab "Enter"
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` helpUrl)
+              textContent (byRole Heading) `matches` (`shouldBe` "Help and support")
 
     it "uses the responsive document viewport on mobile for Help FAB navigation and history" $
       withBrowserApp $ \browser appConfig ->
@@ -277,29 +249,27 @@ spec =
               secondUrl = baseUrl <> "/second"
               helpUrl = baseUrl <> "/help"
               helpFab = byRole Link `named` "Help and support"
-          runBrowserScenario
-            browser
-            ( do
-                emulateMobileViewport 320 480
-                visit secondUrl
-                _ <-
-                  runPageScript
-                    "const viewport = document.querySelector('meta[name=viewport]'); const fab = document.querySelector('[data-help-fab]'); const box = fab.getBoundingClientRect(); const policy = viewport && viewport.content === 'width=device-width, initial-scale=1'; document.body.dataset.testMobileViewport = String(policy && window.innerWidth === 320 && document.documentElement.scrollWidth <= window.innerWidth && box.width >= 44 && box.height >= 44 && box.right <= window.innerWidth && box.bottom <= window.innerHeight); true"
-                assertAttribute (css "body") "data-test-mobile-viewport" (`shouldBe` Just "true")
-                press helpFab "Enter"
-                assertAll
-                  ((,) <$> currentUrl <*> textContent (byRole Heading `named` "Help and support"))
-                  (\(url, heading) -> (url `shouldBe` helpUrl) :| [heading `shouldBe` "Help and support"])
-                historyBack
-                assertAll
-                  ((,) <$> currentUrl <*> textContent (byRole Heading `named` "Second"))
-                  (\(url, heading) -> (url `shouldBe` secondUrl) :| [heading `shouldBe` "Second"])
-                _ <-
-                  runPageScript
-                    "const viewport = document.querySelector('meta[name=viewport]'); const fab = document.querySelector('[data-help-fab]'); const box = fab.getBoundingClientRect(); document.body.dataset.testMobileHistoryViewport = String(viewport && viewport.content === 'width=device-width, initial-scale=1' && document.documentElement.scrollWidth <= window.innerWidth && box.width >= 44 && box.height >= 44); true"
-                assertAttribute (css "body") "data-test-mobile-history-viewport" (`shouldBe` Just "true")
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            emulateMobileViewport 320 480
+            visit secondUrl
+            _ <-
+              runPageScript
+                "const viewport = document.querySelector('meta[name=viewport]'); const fab = document.querySelector('[data-help-fab]'); const box = fab.getBoundingClientRect(); const policy = viewport && viewport.content === 'width=device-width, initial-scale=1'; document.body.dataset.testMobileViewport = String(policy && window.innerWidth === 320 && document.documentElement.scrollWidth <= window.innerWidth && box.width >= 44 && box.height >= 44 && box.right <= window.innerWidth && box.bottom <= window.innerHeight); true"
+            assertAllObserved do
+              attributeValue (css "body") "data-test-mobile-viewport" `matches` (`shouldBe` Just "true")
+            press helpFab "Enter"
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` helpUrl)
+              textContent (byRole Heading `named` "Help and support") `matches` (`shouldBe` "Help and support")
+            historyBack
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` secondUrl)
+              textContent (byRole Heading `named` "Second") `matches` (`shouldBe` "Second")
+            _ <-
+              runPageScript
+                "const viewport = document.querySelector('meta[name=viewport]'); const fab = document.querySelector('[data-help-fab]'); const box = fab.getBoundingClientRect(); document.body.dataset.testMobileHistoryViewport = String(viewport && viewport.content === 'width=device-width, initial-scale=1' && document.documentElement.scrollWidth <= window.innerWidth && box.width >= 44 && box.height >= 44); true"
+            assertAllObserved do
+              attributeValue (css "body") "data-test-mobile-history-viewport" `matches` (`shouldBe` Just "true")
 
     it "focuses and announces one lifecycle for keyboard navigation, history, and final redirected URLs" $
       withBrowserApp $ \browser appConfig ->
@@ -309,79 +279,54 @@ spec =
               spacesUrl = baseUrl <> "/spaces"
               mainContent = css "#app-main"
               routeStatus = css "[data-navigation-route-status]"
-          runBrowserScenario
-            browser
-            ( do
-                setViewportSize 320 480
-                visit secondUrl
-                assertText routeStatus (`shouldBe` "")
-                _ <-
-                  runPageScript
-                    "window.__ahi8HistoryLength = history.length; const status = document.querySelector('[data-navigation-route-status]'); let count = 0; status.dataset.testMutationCount = '0'; new MutationObserver((records) => { count += records.filter((record) => record.type === 'childList' || record.type === 'characterData').length; status.dataset.testMutationCount = String(count); }).observe(status, { childList: true, characterData: true, subtree: true }); document.documentElement.style.zoom = '2'; true"
-                press (byRole Link `named` "Spaces") "Enter"
-                assertAll
-                  ((,) <$> currentUrl <*> isFocused mainContent)
-                  (\(url, mainFocused) -> (url `shouldBe` spacesUrl) :| [mainFocused `shouldBe` True])
-                _ <-
-                  runPageScript
-                    "const main = document.querySelector('#app-main'); const box = main.getBoundingClientRect(); const sampleX = Math.min(window.innerWidth - 1, Math.max(0, box.left + 1)); const sampleY = Math.min(window.innerHeight - 1, Math.max(0, box.top + 1)); const topElement = document.elementFromPoint(sampleX, sampleY); const style = getComputedStyle(main); main.dataset.testFocusUnobscured = String(document.activeElement === main && box.top >= 0 && box.top < window.innerHeight && (topElement === main || main.contains(topElement)) && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0); true"
-                assertAll
-                  ( (,,,,,,)
-                      <$> currentUrl
-                      <*> textContent (css "title")
-                      <*> textContent (byRole Heading)
-                      <*> textContent routeStatus
-                      <*> isFocused mainContent
-                      <*> attributeValue routeStatus "data-test-mutation-count"
-                      <*> attributeValue mainContent "data-test-focus-unobscured"
-                  )
-                  ( \(url, title, heading, announcement, mainFocused, mutationCount, unobscured) ->
-                      (url `shouldBe` spacesUrl)
-                        :| [ title `shouldBe` "web-api: Spaces",
-                             heading `shouldBe` "Site under construction",
-                             announcement `shouldBe` "web-api: Spaces",
-                             mainFocused `shouldBe` True,
-                             mutationCount `shouldBe` Just "1",
-                             unobscured `shouldBe` Just "true"
-                           ]
-                  )
-                historyBack
-                assertAll
-                  ((,,,) <$> currentUrl <*> textContent (css "title") <*> textContent routeStatus <*> attributeValue routeStatus "data-test-mutation-count")
-                  ( \(url, title, announcement, mutationCount) ->
-                      (url `shouldBe` secondUrl)
-                        :| [ title `shouldBe` "web-api: Second",
-                             announcement `shouldBe` "web-api: Second",
-                             mutationCount `shouldBe` Just "2"
-                           ]
-                  )
-                assertFocused mainContent (`shouldBe` True)
-                historyForward
-                assertAll
-                  ((,,,) <$> currentUrl <*> textContent routeStatus <*> attributeValue routeStatus "data-test-mutation-count" <*> attributeValue (byRole Link `named` "Spaces") "aria-current")
-                  ( \(url, announcement, mutationCount, activeRoute) ->
-                      (url `shouldBe` spacesUrl)
-                        :| [ announcement `shouldBe` "web-api: Spaces",
-                             mutationCount `shouldBe` Just "3",
-                             activeRoute `shouldBe` Just "page"
-                           ]
-                  )
-                _ <- runPageScript "document.querySelector('#app-main').dataset.testHistoryStable = String(history.length === window.__ahi8HistoryLength + 1); true"
-                assertAttribute mainContent "data-test-history-stable" (`shouldBe` Just "true")
-                visit secondUrl
-                press (byRole Link `named` "Home") "Enter"
-                assertAll
-                  ((,,,,) <$> currentUrl <*> textContent (css "title") <*> textContent routeStatus <*> isFocused mainContent <*> browserMetrics)
-                  ( \(url, title, announcement, mainFocused, metrics) ->
-                      (url `shouldBe` spacesUrl)
-                        :| [ title `shouldBe` "web-api: Spaces",
-                             announcement `shouldBe` "web-api: Spaces",
-                             mainFocused `shouldBe` True,
-                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
-                           ]
-                  )
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            setViewportSize 320 480
+            visit secondUrl
+            assertAllObserved do
+              textContent routeStatus `matches` (`shouldBe` "")
+            _ <-
+              runPageScript
+                "window.__ahi8HistoryLength = history.length; const status = document.querySelector('[data-navigation-route-status]'); let count = 0; status.dataset.testMutationCount = '0'; new MutationObserver((records) => { count += records.filter((record) => record.type === 'childList' || record.type === 'characterData').length; status.dataset.testMutationCount = String(count); }).observe(status, { childList: true, characterData: true, subtree: true }); document.documentElement.style.zoom = '2'; true"
+            press (byRole Link `named` "Spaces") "Enter"
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` spacesUrl)
+              isFocused mainContent `satisfies` id
+            _ <-
+              runPageScript
+                "const main = document.querySelector('#app-main'); const box = main.getBoundingClientRect(); const sampleX = Math.min(window.innerWidth - 1, Math.max(0, box.left + 1)); const sampleY = Math.min(window.innerHeight - 1, Math.max(0, box.top + 1)); const topElement = document.elementFromPoint(sampleX, sampleY); const style = getComputedStyle(main); main.dataset.testFocusUnobscured = String(document.activeElement === main && box.top >= 0 && box.top < window.innerHeight && (topElement === main || main.contains(topElement)) && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0); true"
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` spacesUrl)
+              textContent (css "title") `matches` (`shouldBe` "web-api: Spaces")
+              textContent (byRole Heading) `matches` (`shouldBe` "Site under construction")
+              textContent routeStatus `matches` (`shouldBe` "web-api: Spaces")
+              isFocused mainContent `satisfies` id
+              attributeValue routeStatus "data-test-mutation-count" `matches` (`shouldBe` Just "1")
+              attributeValue mainContent "data-test-focus-unobscured" `matches` (`shouldBe` Just "true")
+            historyBack
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` secondUrl)
+              textContent (css "title") `matches` (`shouldBe` "web-api: Second")
+              textContent routeStatus `matches` (`shouldBe` "web-api: Second")
+              attributeValue routeStatus "data-test-mutation-count" `matches` (`shouldBe` Just "2")
+              isFocused mainContent `satisfies` id
+            historyForward
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` spacesUrl)
+              textContent routeStatus `matches` (`shouldBe` "web-api: Spaces")
+              attributeValue routeStatus "data-test-mutation-count" `matches` (`shouldBe` Just "3")
+              attributeValue (byRole Link `named` "Spaces") "aria-current" `matches` (`shouldBe` Just "page")
+            _ <- runPageScript "document.querySelector('#app-main').dataset.testHistoryStable = String(history.length === window.__ahi8HistoryLength + 1); true"
+            assertAllObserved do
+              attributeValue mainContent "data-test-history-stable" `matches` (`shouldBe` Just "true")
+            visit secondUrl
+            press (byRole Link `named` "Home") "Enter"
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` spacesUrl)
+              textContent (css "title") `matches` (`shouldBe` "web-api: Spaces")
+              textContent routeStatus `matches` (`shouldBe` "web-api: Spaces")
+              isFocused mainContent `satisfies` id
+              browserMetrics `matches` \metrics ->
+                $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
 
     it "keeps only the newest overlapping enhanced navigation lifecycle" $
       withBrowserApp $ \browser appConfig ->
@@ -390,31 +335,24 @@ spec =
               spacesUrl = baseUrl <> "/spaces"
               loginUrl = baseUrl <> "/login"
               routeStatus = css "[data-navigation-route-status]"
-          runBrowserScenario
-            browser
-            ( do
-                visit spacesUrl
-                blockRequestsMatching "**/second"
-                _ <-
-                  runPageScript
-                    "const status = document.querySelector('[data-navigation-route-status]'); let count = 0; status.dataset.testMutationCount = '0'; new MutationObserver((records) => { count += records.filter((record) => record.type === 'childList' || record.type === 'characterData').length; status.dataset.testMutationCount = String(count); }).observe(status, { childList: true, characterData: true, subtree: true }); true"
-                press (byRole Link `named` "Second") "Enter"
-                waitForBlockedRequestsMatching "**/second"
-                press (byRole Link `named` "Profile") "Enter"
-                releaseRequestsMatching "**/second"
-                assertAll
-                  ((,,,,) <$> currentUrl <*> textContent (byRole Heading) <*> textContent routeStatus <*> attributeValue routeStatus "data-test-mutation-count" <*> browserMetrics)
-                  ( \(url, heading, announcement, mutationCount, metrics) ->
-                      (url `shouldBe` loginUrl)
-                        :| [ heading `shouldBe` "Sign in",
-                             announcement `shouldBe` "web-api: Sign in",
-                             mutationCount `shouldBe` Just "1",
-                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 2, hardNavigationCount = 0}|])
-                           ]
-                  )
-                assertFocused (css "#app-main") (`shouldBe` True)
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            visit spacesUrl
+            blockRequestsMatching "**/second"
+            _ <-
+              runPageScript
+                "const status = document.querySelector('[data-navigation-route-status]'); let count = 0; status.dataset.testMutationCount = '0'; new MutationObserver((records) => { count += records.filter((record) => record.type === 'childList' || record.type === 'characterData').length; status.dataset.testMutationCount = String(count); }).observe(status, { childList: true, characterData: true, subtree: true }); true"
+            press (byRole Link `named` "Second") "Enter"
+            waitForBlockedRequestsMatching "**/second"
+            press (byRole Link `named` "Profile") "Enter"
+            releaseRequestsMatching "**/second"
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` loginUrl)
+              textContent (byRole Heading) `matches` (`shouldBe` "Sign in")
+              textContent routeStatus `matches` (`shouldBe` "web-api: Sign in")
+              attributeValue routeStatus "data-test-mutation-count" `matches` (`shouldBe` Just "1")
+              browserMetrics `matches` \metrics ->
+                $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 2, hardNavigationCount = 0}|])
+              isFocused (css "#app-main") `satisfies` id
 
     it "falls back natively for failed, incompatible, and unsafe final responses without announcing success" $
       withBrowserApp $ \browser appConfig ->
@@ -423,44 +361,36 @@ spec =
               secondUrl = baseUrl <> "/second"
               spacesUrl = baseUrl <> "/spaces"
               routeStatus = byRole Status
-              assertNativeFallback =
-                assertAll
-                  ((,,,) <$> currentUrl <*> textContent (byRole Heading) <*> textContent routeStatus <*> browserMetrics)
-                  ( \(url, heading, announcement, metrics) ->
-                      (url `shouldBe` secondUrl)
-                        :| [ heading `shouldBe` "Second",
-                             announcement `shouldBe` "",
-                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
-                           ]
-                  )
-          runBrowserScenario
-            browser
-            ( do
-                visit spacesUrl
-                blockRequestsMatching "**/second"
-                press (byRole Link `named` "Second") "Enter"
-                failBlockedRequestsMatching "**/second"
-                assertNativeFallback
-                visit spacesUrl
-                _ <-
-                  runPageScript
-                    "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: response.url, text: async () => '<!DOCTYPE html><html><head><title>Incompatible</title></head><body><main>Missing lifecycle markers</main></body></html>' }; }; true"
-                press (byRole Link `named` "Second") "Enter"
-                assertNativeFallback
-                visit spacesUrl
-                _ <-
-                  runPageScript
-                    "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: 'https://outside.example/redirect', text: () => response.text() }; }; true"
-                press (byRole Link `named` "Second") "Enter"
-                assertNativeFallback
-                visit spacesUrl
-                _ <-
-                  runPageScript
-                    "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: '://malformed', text: () => response.text() }; }; true"
-                press (byRole Link `named` "Second") "Enter"
-                assertNativeFallback
-            )
-            `shouldReturn` Right ()
+              assertNativeFallback = assertAllObserved do
+                currentUrl `matches` (`shouldBe` secondUrl)
+                textContent (byRole Heading) `matches` (`shouldBe` "Second")
+                textContent routeStatus `matches` (`shouldBe` "")
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
+          runBrowserSpec browser do
+            visit spacesUrl
+            blockRequestsMatching "**/second"
+            press (byRole Link `named` "Second") "Enter"
+            failBlockedRequestsMatching "**/second"
+            assertNativeFallback
+            visit spacesUrl
+            _ <-
+              runPageScript
+                "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: response.url, text: async () => '<!DOCTYPE html><html><head><title>Incompatible</title></head><body><main>Missing lifecycle markers</main></body></html>' }; }; true"
+            press (byRole Link `named` "Second") "Enter"
+            assertNativeFallback
+            visit spacesUrl
+            _ <-
+              runPageScript
+                "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: 'https://outside.example/redirect', text: () => response.text() }; }; true"
+            press (byRole Link `named` "Second") "Enter"
+            assertNativeFallback
+            visit spacesUrl
+            _ <-
+              runPageScript
+                "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: '://malformed', text: () => response.text() }; }; true"
+            press (byRole Link `named` "Second") "Enter"
+            assertNativeFallback
 
     it "keeps delayed-runtime and scripts-disabled keyboard navigation native, including the skip link" $
       withBrowserApp $ \browser appConfig ->
@@ -469,37 +399,29 @@ spec =
               secondUrl = baseUrl <> "/second"
               spacesUrl = baseUrl <> "/spaces"
               mainContent = css "#app-main"
-          runBrowserScenario
-            browser
-            ( do
-                blockRequestsMatching "**/assets/navigation.js"
-                visit secondUrl
-                press (byRole Link `named` "Spaces") "Enter"
-                assertAll
-                  ((,,) <$> currentUrl <*> textContent (byRole Status) <*> browserMetrics)
-                  ( \(url, announcement, metrics) ->
-                      (url `shouldBe` spacesUrl)
-                        :| [ announcement `shouldBe` "",
-                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
-                           ]
-                  )
-                releaseRequestsMatching "**/assets/navigation.js"
-                visitWithoutScripts secondUrl
-                press (css "body") "Tab"
-                assertFocused (byRole Link `named` "Skip to main content") (`shouldBe` True)
-                press (byRole Link `named` "Skip to main content") "Enter"
-                assertFocused mainContent (`shouldBe` True)
-                press (byRole Link `named` "Spaces") "Enter"
-                assertAll
-                  ((,,) <$> currentUrl <*> textContent (byRole Heading) <*> browserMetrics)
-                  ( \(url, heading, metrics) ->
-                      (url `shouldBe` spacesUrl)
-                        :| [ heading `shouldBe` "Site under construction",
-                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
-                           ]
-                  )
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            blockRequestsMatching "**/assets/navigation.js"
+            visit secondUrl
+            press (byRole Link `named` "Spaces") "Enter"
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` spacesUrl)
+              textContent (byRole Status) `matches` (`shouldBe` "")
+              browserMetrics `matches` \metrics ->
+                $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
+            releaseRequestsMatching "**/assets/navigation.js"
+            visitWithoutScripts secondUrl
+            press (css "body") "Tab"
+            assertAllObserved do
+              isFocused (byRole Link `named` "Skip to main content") `satisfies` id
+            press (byRole Link `named` "Skip to main content") "Enter"
+            assertAllObserved do
+              isFocused mainContent `satisfies` id
+            press (byRole Link `named` "Spaces") "Enter"
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` spacesUrl)
+              textContent (byRole Heading) `matches` (`shouldBe` "Site under construction")
+              browserMetrics `matches` \metrics ->
+                $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
 
     it "preserves Spanish registration input until the delayed runtime sends its localized patch" $
       withBrowserApp $ \browser appConfig ->
@@ -508,47 +430,30 @@ spec =
               usernameField = byLabel "Nombre de usuario"
               emailField = byLabel "Direccion de correo"
               passwordField = byLabel "Contrasena"
-          runBrowserScenario
-            browser
-            ( do
-                blockRequestsMatching "**/assets/navigation.js"
-                visit registrationUrl
-                assertText (byRole Heading) (`shouldBe` "Crea tu cuenta")
-                fill usernameField "person_01"
-                _ <-
-                  runPageScript
-                    "const field = document.querySelector('#registration-email'); field.value = 'person@example.test'; field.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'person@example.test' })); true"
-                paste passwordField "correct horse battery staple"
-                click (byRole Button `named` "Crear cuenta")
-                assertAll
-                  ( (,,,,)
-                      <$> currentUrl
-                      <*> inputValue usernameField
-                      <*> inputValue emailField
-                      <*> inputValue passwordField
-                      <*> browserMetrics
-                  )
-                  ( \(url, username, email, password, metrics) ->
-                      (url `shouldBe` registrationUrl)
-                        :| [ username `shouldBe` "person_01",
-                             email `shouldBe` "person@example.test",
-                             password `shouldBe` "correct horse battery staple",
-                             $( [|metrics|]
-                                  `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 0}|]
-                              )
-                           ]
-                  )
-                releaseRequestsMatching "**/assets/navigation.js"
-                assertAll
-                  ((,,) <$> browserMetrics <*> textContent (byText "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") <*> inputValue passwordField)
-                  ( \(metrics, message, password) ->
-                      ($([|metrics|] `shouldMatch` [p|BrowserMetrics {mutationRequestCount = 1}|]))
-                        :| [ message `shouldBe` "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.",
-                             password `shouldBe` ""
-                           ]
-                  )
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            blockRequestsMatching "**/assets/navigation.js"
+            visit registrationUrl
+            assertAllObserved do
+              textContent (byRole Heading) `matches` (`shouldBe` "Crea tu cuenta")
+            fill usernameField "person_01"
+            _ <-
+              runPageScript
+                "const field = document.querySelector('#registration-email'); field.value = 'person@example.test'; field.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'person@example.test' })); true"
+            paste passwordField "correct horse battery staple"
+            click (byRole Button `named` "Crear cuenta")
+            assertAllObserved do
+              currentUrl `matches` (`shouldBe` registrationUrl)
+              inputValue usernameField `matches` (`shouldBe` "person_01")
+              inputValue emailField `matches` (`shouldBe` "person@example.test")
+              inputValue passwordField `matches` (`shouldBe` "correct horse battery staple")
+              browserMetrics `matches` \metrics ->
+                $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 0}|])
+            releaseRequestsMatching "**/assets/navigation.js"
+            assertAllObserved do
+              browserMetrics `matches` \metrics ->
+                $([|metrics|] `shouldMatch` [p|BrowserMetrics {mutationRequestCount = 1}|])
+              textContent (byText "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") `matches` (`shouldBe` "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.")
+              inputValue passwordField `matches` (`shouldBe` "")
 
     it "accepts pasted and autofill-compatible login values, clears secrets, and keeps focus visible when narrow and zoomed" $
       withBrowserApp $ \browser appConfig ->
@@ -559,109 +464,105 @@ spec =
               proofField = byLabel "Verification method"
               authenticatorField = byLabel "Authenticator code"
               recoveryField = byLabel "Recovery code"
-          runBrowserScenario
-            browser
-            ( do
-                setViewportSize 320 480
-                visit loginUrl
-                _ <-
-                  runPageScript
-                    "const field = document.querySelector('#login-identifier'); field.value = 'not an identifier!'; field.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'not an identifier!' })); true"
-                paste passwordField "short"
-                paste authenticatorField "1"
-                press identifierField "Tab"
-                assertFocused passwordField (`shouldBe` True)
-                press passwordField "Tab"
-                assertFocused proofField (`shouldBe` True)
-                press proofField "Tab"
-                assertFocused authenticatorField (`shouldBe` True)
-                click (byRole Button `named` "Sign in")
-                assertFocused (css "#login-error-summary") (`shouldBe` True)
-                assertAll
-                  ((,,,) <$> inputValue identifierField <*> inputValue passwordField <*> inputValue authenticatorField <*> browserMetrics)
-                  ( \(identifier, password, authenticator, metrics) ->
-                      (identifier `shouldBe` "not an identifier!")
-                        :| [ password `shouldBe` "",
-                             authenticator `shouldBe` "",
-                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
-                           ]
-                  )
-                _ <-
-                  runPageScript
-                    "const proof = document.querySelector('#login-proof'); proof.value = 'recovery'; proof.dispatchEvent(new Event('change', { bubbles: true })); const identifier = document.querySelector('#login-identifier'); identifier.value = 'person@example.test'; identifier.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'person@example.test' })); document.documentElement.style.zoom = '2'; true"
-                paste passwordField "correct horse battery staple"
-                paste recoveryField "pasted-recovery"
-                _ <-
-                  runPageScript
-                    "const field = document.querySelector('#login-recovery-code'); field.focus(); field.scrollIntoView({ block: 'nearest' }); const box = field.getBoundingClientRect(); field.dataset.testFocusVisible = String(field === document.activeElement && box.top >= 0 && box.bottom <= window.innerHeight); field.dataset.testFocusVisible"
-                assertAttribute recoveryField "data-test-focus-visible" (`shouldBe` Just "true")
-                click (byRole Button `named` "Sign in")
-                assertAll
-                  ((,,,) <$> inputValue identifierField <*> inputValue passwordField <*> inputValue authenticatorField <*> inputValue recoveryField)
-                  ( \(identifier, password, authenticator, recovery) ->
-                      (identifier `shouldBe` "person@example.test")
-                        :| [password `shouldBe` "", authenticator `shouldBe` "", recovery `shouldBe` ""]
-                  )
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            setViewportSize 320 480
+            visit loginUrl
+            _ <-
+              runPageScript
+                "const field = document.querySelector('#login-identifier'); field.value = 'not an identifier!'; field.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'not an identifier!' })); true"
+            paste passwordField "short"
+            paste authenticatorField "1"
+            press identifierField "Tab"
+            assertAllObserved do
+              isFocused passwordField `satisfies` id
+            press passwordField "Tab"
+            assertAllObserved do
+              isFocused proofField `satisfies` id
+            press proofField "Tab"
+            assertAllObserved do
+              isFocused authenticatorField `satisfies` id
+            click (byRole Button `named` "Sign in")
+            assertAllObserved do
+              isFocused (css "#login-error-summary") `satisfies` id
+              inputValue identifierField `matches` (`shouldBe` "not an identifier!")
+              inputValue passwordField `matches` (`shouldBe` "")
+              inputValue authenticatorField `matches` (`shouldBe` "")
+              browserMetrics `matches` \metrics ->
+                $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+            _ <-
+              runPageScript
+                "const proof = document.querySelector('#login-proof'); proof.value = 'recovery'; proof.dispatchEvent(new Event('change', { bubbles: true })); const identifier = document.querySelector('#login-identifier'); identifier.value = 'person@example.test'; identifier.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'person@example.test' })); document.documentElement.style.zoom = '2'; true"
+            paste passwordField "correct horse battery staple"
+            paste recoveryField "pasted-recovery"
+            _ <-
+              runPageScript
+                "const field = document.querySelector('#login-recovery-code'); field.focus(); field.scrollIntoView({ block: 'nearest' }); const box = field.getBoundingClientRect(); field.dataset.testFocusVisible = String(field === document.activeElement && box.top >= 0 && box.bottom <= window.innerHeight); field.dataset.testFocusVisible"
+            assertAllObserved do
+              attributeValue recoveryField "data-test-focus-visible" `matches` (`shouldBe` Just "true")
+            click (byRole Button `named` "Sign in")
+            assertAllObserved do
+              inputValue identifierField `matches` (`shouldBe` "person@example.test")
+              inputValue passwordField `matches` (`shouldBe` "")
+              inputValue authenticatorField `matches` (`shouldBe` "")
+              inputValue recoveryField `matches` (`shouldBe` "")
 
     it "keeps client-only authentication forms semantically complete without scripts" $
       withBrowserApp $ \browser appConfig ->
         HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
           let baseUrl = HarchWeb.localServerBaseUrl server
-          runBrowserScenario
-            browser
-            ( do
-                visitWithoutScripts (baseUrl <> "/register")
-                assertAttribute (css "#registration-region form") "method" (`shouldBe` Just "dialog")
-                assertValue (byLabel "Password") (`shouldBe` "")
-                press (byLabel "Username") "Tab"
-                assertFocused (byLabel "Email address") (`shouldBe` True)
-                press (byLabel "Email address") "Tab"
-                assertFocused (byLabel "Display name (optional)") (`shouldBe` True)
-                press (byLabel "Display name (optional)") "Tab"
-                assertFocused (byLabel "Password") (`shouldBe` True)
-                visitWithoutScripts (baseUrl <> "/login")
-                assertAttribute (css "#login-region form") "method" (`shouldBe` Just "dialog")
-                assertText (byText "Choose Authenticator code above, then enter or paste its six-digit code.") (`shouldBe` "Choose Authenticator code above, then enter or paste its six-digit code.")
-                visitWithoutScripts (baseUrl <> "/verify?token=delivered-token")
-                assertAttribute (css "#verification-region form") "method" (`shouldBe` Just "dialog")
-                assertValue (byLabel "Verification token") (`shouldBe` "delivered-token")
-                press (byLabel "Verification token") "Tab"
-                assertFocused (byRole Button `named` "Verify email") (`shouldBe` True)
-                visitWithoutScripts (baseUrl <> "/mfa")
-                assertAttribute (css "#mfa-enrollment-region form") "method" (`shouldBe` Just "dialog")
-                assertText (byRole Button `named` "Start authenticator enrollment") (`shouldBe` "Start authenticator enrollment")
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            visitWithoutScripts (baseUrl <> "/register")
+            assertAllObserved do
+              attributeValue (css "#registration-region form") "method" `matches` (`shouldBe` Just "dialog")
+              inputValue (byLabel "Password") `matches` (`shouldBe` "")
+            press (byLabel "Username") "Tab"
+            assertAllObserved do
+              isFocused (byLabel "Email address") `satisfies` id
+            press (byLabel "Email address") "Tab"
+            assertAllObserved do
+              isFocused (byLabel "Display name (optional)") `satisfies` id
+            press (byLabel "Display name (optional)") "Tab"
+            assertAllObserved do
+              isFocused (byLabel "Password") `satisfies` id
+            visitWithoutScripts (baseUrl <> "/login")
+            assertAllObserved do
+              attributeValue (css "#login-region form") "method" `matches` (`shouldBe` Just "dialog")
+              textContent (byText "Choose Authenticator code above, then enter or paste its six-digit code.") `matches` (`shouldBe` "Choose Authenticator code above, then enter or paste its six-digit code.")
+            visitWithoutScripts (baseUrl <> "/verify?token=delivered-token")
+            assertAllObserved do
+              attributeValue (css "#verification-region form") "method" `matches` (`shouldBe` Just "dialog")
+              inputValue (byLabel "Verification token") `matches` (`shouldBe` "delivered-token")
+            press (byLabel "Verification token") "Tab"
+            assertAllObserved do
+              isFocused (byRole Button `named` "Verify email") `satisfies` id
+            visitWithoutScripts (baseUrl <> "/mfa")
+            assertAllObserved do
+              attributeValue (css "#mfa-enrollment-region form") "method" `matches` (`shouldBe` Just "dialog")
+              textContent (byRole Button `named` "Start authenticator enrollment") `matches` (`shouldBe` "Start authenticator enrollment")
 
     it "keeps MFA confirmation keyboard- and paste-usable after its server patch" $
       withBrowserApp $ \browser appConfig ->
         HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultPageRepository mfaEnrollmentBrowserWorkflow) $ \server -> do
           let mfaUrl = HarchWeb.localServerBaseUrl server <> "/mfa"
               codeField = byLabel "Authenticator code"
-          runBrowserScenario
-            browser
-            ( do
-                setCookie mfaUrl mfaEnrollmentCookieName sessionToken
-                visit mfaUrl
-                csrfToken <- documentCsrfToken
-                setCookie mfaUrl "__Host-harch-csrf" csrfToken
-                click (byRole Button `named` "Start authenticator enrollment")
-                assertFocused codeField (`shouldBe` True)
-                press codeField "Tab"
-                assertFocused (byRole Button `named` "Confirm authenticator") (`shouldBe` True)
-                paste codeField "123"
-                click (byRole Button `named` "Confirm authenticator")
-                assertAll
-                  ((,) <$> inputValue codeField <*> browserMetrics)
-                  ( \(code, metrics) ->
-                      (code `shouldBe` "")
-                        :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])]
-                  )
-                assertFocused codeField (`shouldBe` True)
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            setCookie mfaUrl mfaEnrollmentCookieName sessionToken
+            visit mfaUrl
+            csrfToken <- documentCsrfToken
+            setCookie mfaUrl "__Host-harch-csrf" csrfToken
+            click (byRole Button `named` "Start authenticator enrollment")
+            assertAllObserved do
+              isFocused codeField `satisfies` id
+            press codeField "Tab"
+            assertAllObserved do
+              isFocused (byRole Button `named` "Confirm authenticator") `satisfies` id
+            paste codeField "123"
+            click (byRole Button `named` "Confirm authenticator")
+            assertAllObserved do
+              inputValue codeField `matches` (`shouldBe` "")
+              browserMetrics `matches` \metrics ->
+                $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+              isFocused codeField `satisfies` id
 
     it "focuses a multi-error registration summary and follows its field link by keyboard" $
       withBrowserApp $ \browser appConfig ->
@@ -672,53 +573,40 @@ spec =
               emailField = byLabel "Email address"
               passwordField = byLabel "Password"
               usernameErrorLink = byRole Link `named` "Use a username with 3 to 20 letters, numbers, underscores, or hyphens."
-          runBrowserScenario
-            browser
-            ( do
-                visit registrationUrl
-                fill usernameField "no!"
-                fill emailField oversizedEmail
-                fill passwordField "correct horse battery staple"
-                click (byRole Button `named` "Create account")
-                assertFocused (css "#registration-error-summary") (`shouldBe` True)
-                assertText (byRole Heading `named` "Fix the following problems") (`shouldBe` "Fix the following problems")
-                assertAll
-                  ((,,,) <$> inputValue usernameField <*> inputValue emailField <*> inputValue passwordField <*> attributeValue passwordField "aria-describedby")
-                  ( \(username, email, password, describedBy) ->
-                      (username `shouldBe` "no!")
-                        :| [ email `shouldBe` oversizedEmail,
-                             password `shouldBe` "",
-                             describedBy `shouldBe` Just "registration-password-hint"
-                           ]
-                  )
-                press usernameErrorLink "Enter"
-                assertFocused usernameField (`shouldBe` True)
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            visit registrationUrl
+            fill usernameField "no!"
+            fill emailField oversizedEmail
+            fill passwordField "correct horse battery staple"
+            click (byRole Button `named` "Create account")
+            assertAllObserved do
+              isFocused (css "#registration-error-summary") `satisfies` id
+              textContent (byRole Heading `named` "Fix the following problems") `matches` (`shouldBe` "Fix the following problems")
+              inputValue usernameField `matches` (`shouldBe` "no!")
+              inputValue emailField `matches` (`shouldBe` oversizedEmail)
+              inputValue passwordField `matches` (`shouldBe` "")
+              attributeValue passwordField "aria-describedby" `matches` (`shouldBe` Just "registration-password-hint")
+            press usernameErrorLink "Enter"
+            assertAllObserved do
+              isFocused usernameField `satisfies` id
 
     it "resends a pending-profile verification email through the immediate capture path" $
       withBrowserApp $ \browser appConfig ->
         HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository pendingProfileWorkflow pendingProfileE2eSecurity) $ \server -> do
           let profileUrl = HarchWeb.localServerBaseUrl server <> "/profile"
-          runBrowserScenario
-            browser
-            ( do
-                setCookie profileUrl sessionCookieName sessionToken
-                visit profileUrl
-                csrfToken <- documentCsrfToken
-                setCookie profileUrl "__Host-harch-csrf" csrfToken
-                assertAll
-                  ((,) <$> textContent (byRole Heading) <*> textContent (byText "person@example.test"))
-                  (\(heading, email) -> (heading `shouldBe` "Profile") :| [email `shouldBe` "person@example.test"])
-                click (byRole Button `named` "Resend verification email")
-                assertAll
-                  ((,) <$> textContent (byText "Check your inbox for a verification link.") <*> browserMetrics)
-                  ( \(message, metrics) ->
-                      (message `shouldBe` "Check your inbox for a verification link.")
-                        :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {mutationRequestCount = 1}|])]
-                  )
-            )
-            `shouldReturn` Right ()
+          runBrowserSpec browser do
+            setCookie profileUrl sessionCookieName sessionToken
+            visit profileUrl
+            csrfToken <- documentCsrfToken
+            setCookie profileUrl "__Host-harch-csrf" csrfToken
+            assertAllObserved do
+              textContent (byRole Heading) `matches` (`shouldBe` "Profile")
+              textContent (byText "person@example.test") `matches` (`shouldBe` "person@example.test")
+            click (byRole Button `named` "Resend verification email")
+            assertAllObserved do
+              textContent (byText "Check your inbox for a verification link.") `matches` (`shouldBe` "Check your inbox for a verification link.")
+              browserMetrics `matches` \metrics ->
+                $([|metrics|] `shouldMatch` [p|BrowserMetrics {mutationRequestCount = 1}|])
 
     it "recovers one retained profile action after its signed durable session expires" $
       withTestAccountJwtFixture $ \environmentConfig _ -> do
@@ -749,44 +637,32 @@ spec =
                 passwordField = byLabel "Password"
                 authenticatorCodeField = byLabel "Authenticator code"
                 retryOriginalAction = byRole Button `named` "Retry original action"
-            runBrowserScenario
-              browser
-              ( do
-                  setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
-                  visit profileUrl
-                  assertText (byRole Heading `named` "Profile") (`shouldBe` "Profile")
-                  click profileSubmit
-                  assertAll
-                    ((,,) <$> attributeValue reauthenticationDialog "open" <*> inputValue identifierField <*> browserMetrics)
-                    ( \(open, identifier, metrics) ->
-                        (open `shouldBe` Just "")
-                          :| [ identifier `shouldBe` "",
-                               $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
-                             ]
-                    )
-                  fill identifierField "person@example.test"
-                  fill passwordField "correct horse battery staple"
-                  fill authenticatorCodeField reauthenticationTotpCode
-                  click (byRole Button `named` "Sign in")
-                  assertAll
-                    ((,,) <$> textContent (css "[data-web-api-reauthentication-status]") <*> attributeValue retryOriginalAction "hidden" <*> browserMetrics)
-                    ( \(status, hidden, metrics) ->
-                        (status `shouldBe` "Signed in. Confirm to retry the original action.")
-                          :| [ hidden `shouldBe` Nothing,
-                               $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
-                             ]
-                    )
-                  click retryOriginalAction
-                  assertAll
-                    ((,,) <$> textContent (byText "Check your inbox for a verification link.") <*> attributeValue reauthenticationDialog "open" <*> browserMetrics)
-                    ( \(message, open, metrics) ->
-                        (message `shouldBe` "Check your inbox for a verification link.")
-                          :| [ open `shouldBe` Nothing,
-                               $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
-                             ]
-                    )
-              )
-              `shouldReturn` Right ()
+            runBrowserSpec browser do
+              setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+              visit profileUrl
+              assertAllObserved do
+                textContent (byRole Heading `named` "Profile") `matches` (`shouldBe` "Profile")
+              click profileSubmit
+              assertAllObserved do
+                attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Just "")
+                inputValue identifierField `matches` (`shouldBe` "")
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+              fill identifierField "person@example.test"
+              fill passwordField "correct horse battery staple"
+              fill authenticatorCodeField reauthenticationTotpCode
+              click (byRole Button `named` "Sign in")
+              assertAllObserved do
+                textContent (css "[data-web-api-reauthentication-status]") `matches` (`shouldBe` "Signed in. Confirm to retry the original action.")
+                attributeValue retryOriginalAction "hidden" `matches` (`shouldBe` Nothing)
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+              click retryOriginalAction
+              assertAllObserved do
+                textContent (byText "Check your inbox for a verification link.") `matches` (`shouldBe` "Check your inbox for a verification link.")
+                attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Nothing)
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
         deliveryCount <- readIORef deliveryCountReference
         deliveryCount `shouldBe` 1
         sessions <- readIORef sessionsReference
