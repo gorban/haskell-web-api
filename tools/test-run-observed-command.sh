@@ -18,6 +18,12 @@ if ! grep -Fq 'tools/seed-test-database.sh' "$ci_workflow"; then
   exit 1
 fi
 
+if ! grep -Fq -- "--label 'Seed PostgreSQL test database'" "$repo_root/tools/seed-test-database.sh" \
+  || ! grep -Fq -- '--timeout 15m' "$repo_root/tools/seed-test-database.sh"; then
+  printf '%s\n' 'Database-seed wrapper does not keep its bounded cold-build timeout policy.' >&2
+  exit 1
+fi
+
 if ! grep -Fq 'tools/run-observed-command.sh' "$formatter_installer"; then
   printf '%s\n' 'Formatter installer does not invoke the observed-command wrapper.' >&2
   exit 1
