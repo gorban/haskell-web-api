@@ -511,6 +511,31 @@ retention, performs a replay, nor selects a presentation. The application
 remains responsible for its modal, focus, user confirmation, and calling the
 existing replay operation.
 
+**CSRF-rebinding refinement (AHI-4C, 2026-09-07): use that same refresh
+capability both before modal login and after it.** A page token bound to an
+expired durable session must fail; accepting it for a public login merely to
+make recovery convenient would weaken the binding contract. Before opening its
+modal, the reference adapter therefore refreshes the current protected URL:
+the normal typed authentication redirect supplies the ordinary public-login
+CSRF authority without an application fetch or a second CSRF parser. Once the
+ordinary login action has issued the new session, the adapter refreshes again
+to obtain the replacement session-bound authority before it offers the one
+explicit replay. A refresh failure cancels the retained envelope and returns
+focus; it never falls back to an old token.
+
+The typed continuation event is dispatched after normal response patches for
+every declared `ReauthenticationContinuation`, even if its navigation is
+absent. That lets an application observe successful modal authentication
+without requiring a particular login destination. A present navigation still
+remains the default framework behavior unless the application cancels this
+narrow event; only then does the recovery adapter take over and offer replay.
+The browser proof uses a genuinely RS256-signed, browser-deliverable cookie
+whose matching durable session expires after SSR, confirms the zero-effect
+challenge, authenticates through the ordinary MFA action, refreshes both CSRF
+authorities, and proves exactly one explicit replay. This is still only the
+account reference's supported recovery path; admission-grant, upload, and
+the remaining AHI-4C scenario matrix stay open.
+
 ### Decision record — PostgreSQL database-change ledger (AHI-4C, 2026-09-03)
 
 **Decision: extract the existing connection-scoped migration transaction into

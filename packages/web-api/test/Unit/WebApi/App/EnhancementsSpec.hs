@@ -109,6 +109,7 @@ spec = do
             :| [ Text.isInfixOf "harch:action-reauthentication-completed" reauthenticationBody `shouldBe` True,
                  Text.isInfixOf "harch:action-reauthentication-expired" reauthenticationBody `shouldBe` True,
                  Text.isInfixOf "refreshPageSecurityForRetainedAction" reauthenticationBody `shouldBe` True,
+                 Text.isInfixOf "const refreshed = await captureKernel()?.refreshPageSecurityForRetainedAction?.();" reauthenticationBody `shouldBe` True,
                  Text.isInfixOf "replayRetained" reauthenticationBody `shouldBe` True,
                  Text.isInfixOf "window.fetch" reauthenticationBody `shouldBe` False,
                  Text.isInfixOf "localStorage" reauthenticationBody `shouldBe` False,

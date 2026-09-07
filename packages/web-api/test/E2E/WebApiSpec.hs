@@ -3,27 +3,41 @@
 
 {-# E2E_SPEC #-}
 
+import Control.Monad (when)
+import Crypto.Error qualified as Crypto
 import Data.Aeson qualified as Aeson
+import Data.ByteString qualified as ByteString
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
+import Data.List (find)
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
 import HarchWeb.Account qualified as Account
 import HarchWeb.Email qualified as Email
 import HarchWeb.Password qualified as Password
+import HarchWeb.Secret qualified as Secret
 import HarchWeb.Session qualified as Session
+import HarchWeb.Time qualified as Time
+import HarchWeb.Totp qualified as Totp
 import Network.HTTP.Types qualified as Http
 import System.Directory (copyFile, createDirectory, doesFileExist, getCurrentDirectory)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
+import TestSupport.AccountJwt (withTestAccountJwtFixture)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..), VerificationResendAdmission (..), VerificationResendClaim (..), VerificationResendClaimSettlement (..))
+import WebApi.AccountJwt (AccountJwtRuntime, accountJwtAuthenticationPipeline, accountJwtIssuerFromRuntime, loadAccountJwtRuntime)
+import WebApi.AccountJwt qualified as AccountJwt
 import WebApi.AccountPages (AccountAction)
 import WebApi.AccountPrincipal (mkAccountPrincipal)
 import WebApi.App (buildApp, buildAppWithDatabaseAndAccountWorkflow, buildAppWithDatabaseAndAccountWorkflowAndSecurity, unavailableAccountWorkflow)
 import WebApi.AppEffect (AccountWorkflow (..))
-import WebApi.Config (AppConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
+import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes, totpEncryptionKey)
 import WebApi.Database (defaultPageRepository)
-import WebApi.Mfa (MfaStore (..))
+import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), LoginAttemptAdmission (..), LoginAttemptReservation (..), LoginAttemptStore (..))
+import WebApi.Mfa (MfaStore (..), StoredTotpEnrollment (..))
 import WebApi.Route (AppRoute (LoginRoute))
 import WebApi.Route qualified
 import WebApi.Session (AccountSessionStore (..), MfaEnrollmentSessionStore (..), mfaEnrollmentSessionCookiePolicy)
@@ -706,6 +720,78 @@ spec =
             )
             `shouldReturn` Right ()
 
+    it "recovers one retained profile action after its signed durable session expires" $
+      withTestAccountJwtFixture $ \environmentConfig _ -> do
+        runtime <- requiredAccountJwtRuntime environmentConfig
+        initialNow <- Time.currentUnixTimeNanoseconds
+        initialSessionId <- Session.generateSessionId
+        let initialSession =
+              Session.OpaqueSession
+                { Session.sessionId = initialSessionId,
+                  Session.sessionPrincipal = pendingProfileAccountId,
+                  Session.sessionIssuedAtNanoseconds = initialNow,
+                  Session.sessionExpiresAtNanoseconds = initialNow + 86400000000000
+                }
+            expiredInitialSession = initialSession {Session.sessionExpiresAtNanoseconds = initialNow}
+            issuer = accountJwtIssuerFromRuntime runtime
+        initialJwt <- issueInitialSessionJwt issuer initialSession
+        sessionsReference <- newIORef [initialSession]
+        profileLoadsReference <- newIORef (0 :: Int)
+        deliveryCountReference <- newIORef (0 :: Int)
+        workflow <- reauthenticationProfileWorkflow environmentConfig issuer sessionsReference profileLoadsReference deliveryCountReference
+        let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+        withBrowserApp $ \browser appConfig ->
+          HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+            let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                profileSubmit = byRole Button `named` "Resend verification email"
+                reauthenticationDialog = css "#reauthentication-dialog"
+                identifierField = byLabel "Email address or username"
+                passwordField = byLabel "Password"
+                authenticatorCodeField = byLabel "Authenticator code"
+                retryOriginalAction = byRole Button `named` "Retry original action"
+            runBrowserScenario
+              browser
+              ( do
+                  setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+                  visit profileUrl
+                  assertText (byRole Heading `named` "Profile") (`shouldBe` "Profile")
+                  click profileSubmit
+                  assertAll
+                    ((,,) <$> attributeValue reauthenticationDialog "open" <*> inputValue identifierField <*> browserMetrics)
+                    ( \(open, identifier, metrics) ->
+                        (open `shouldBe` Just "")
+                          :| [ identifier `shouldBe` "",
+                               $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                             ]
+                    )
+                  fill identifierField "person@example.test"
+                  fill passwordField "correct horse battery staple"
+                  fill authenticatorCodeField reauthenticationTotpCode
+                  click (byRole Button `named` "Sign in")
+                  assertAll
+                    ((,,) <$> textContent (css "[data-web-api-reauthentication-status]") <*> attributeValue retryOriginalAction "hidden" <*> browserMetrics)
+                    ( \(status, hidden, metrics) ->
+                        (status `shouldBe` "Signed in. Confirm to retry the original action.")
+                          :| [ hidden `shouldBe` Nothing,
+                               $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+                             ]
+                    )
+                  click retryOriginalAction
+                  assertAll
+                    ((,,) <$> textContent (byText "Check your inbox for a verification link.") <*> attributeValue reauthenticationDialog "open" <*> browserMetrics)
+                    ( \(message, open, metrics) ->
+                        (message `shouldBe` "Check your inbox for a verification link.")
+                          :| [ open `shouldBe` Nothing,
+                               $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
+                             ]
+                    )
+              )
+              `shouldReturn` Right ()
+        deliveryCount <- readIORef deliveryCountReference
+        deliveryCount `shouldBe` 1
+        sessions <- readIORef sessionsReference
+        find ((== initialSessionId) . Session.sessionId) sessions `shouldBe` Just expiredInitialSession
+
 withBrowserApp :: (BrowserConfig -> AppConfig -> IO a) -> IO a
 withBrowserApp action = do
   loadedConfig <- loadPlaywrightBrowserConfig
@@ -853,6 +939,137 @@ pendingProfileE2eSecurity =
         )
     )
     []
+
+-- | This fixture is deliberately stateful at the durable-session boundary:
+-- the first authenticated profile render uses a real signed JWT and active
+-- session, then the profile repository marks that same server-side session
+-- expired.  The action therefore proves a deliverable JWT is insufficient
+-- after durable expiry, while the modal login issues a fresh signed session
+-- through the ordinary account workflow.
+reauthenticationProfileWorkflow :: AppEnvironmentConfig -> AccountJwt.AccountJwtIssuer -> IORef [Session.OpaqueSession Account.AccountId] -> IORef Int -> IORef Int -> IO AccountWorkflow
+reauthenticationProfileWorkflow environmentConfig issuer sessionsReference profileLoadsReference deliveryCountReference = do
+  let password = Password.mkPassword "correct horse battery staple"
+      passwordHash = fromMaybe (error "expected deterministic test password hash") (Password.hashPasswordWithSalt Password.defaultPasswordHashingPolicy (ByteString.replicate 16 8) password)
+      credential = AccountCredential pendingProfileAccountId passwordHash True
+      totpSecret = fromMaybe (error "expected deterministic test TOTP secret") (Totp.mkTotpSecret reauthenticationTotpSecret)
+      encryptedTotpSecret = requiredEncryptedTotpSecret (Secret.encryptSecretWithNonce (totpEncryptionKey environmentConfig) (requiredEncryptionNonce (ByteString.replicate 12 8)) (Secret.mkSecretPlaintext (TextEncoding.encodeUtf8 (Totp.renderTotpSecret totpSecret))))
+      enrollment = StoredTotpEnrollment encryptedTotpSecret (Just 1) Nothing
+      sessionStore =
+        AccountSessionStore
+          { saveAccountSession = \session -> modifyIORef' sessionsReference (session :) >> pure (Right True),
+            loadAccountSession = \receivedSessionId -> do
+              sessions <- readIORef sessionsReference
+              pure (Right (find ((== receivedSessionId) . Session.sessionId) sessions)),
+            invalidateAccountSession = \_ _ -> pure (Right True)
+          }
+      profileStore =
+        AccountProfileStore
+          { findAccountProfile = \receivedAccountId -> do
+              firstProfileLoad <- atomicModifyIORef' profileLoadsReference (\count -> (count + 1, count == 0))
+              when firstProfileLoad (expireInitialProfileSession sessionsReference)
+              pure (Right (if receivedAccountId == pendingProfileAccountId then Just pendingProfile else Nothing))
+          }
+      mfaStore =
+        MfaStore
+          { saveUnconfirmedTotpEnrollment = \_ _ _ -> error "unexpected enrollment save",
+            loadTotpEnrollment = \_ -> pure (Right (Just enrollment)),
+            confirmTotpEnrollment = \_ _ _ -> error "unexpected enrollment confirmation",
+            loadUnusedRecoveryCodeHashes = \_ -> pure (Right []),
+            consumeRecoveryCodeHash = \_ _ _ -> pure (Right True),
+            markTotpCodeUsed = \_ _ -> pure (Right True)
+          }
+      credentialStore =
+        AccountCredentialStore
+          { findAccountCredentialByEmail = \_ -> pure (Right (Just credential)),
+            findAccountCredentialByUsername = \_ -> pure (Right (Just credential)),
+            replacePasswordHashIfCurrent = \_ _ _ -> pure (Right False)
+          }
+      permissiveAttemptStore =
+        LoginAttemptStore
+          { reserveLoginAttempt = \_ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation "reauthentication-login"))),
+            settleLoginAttempt = \_ _ -> pure (Right ()),
+            cancelLoginAttempt = \_ -> pure (Right ())
+          }
+  pure
+    unavailableAccountWorkflow
+      { accountWorkflowStore = pendingProfileAccountStore,
+        accountWorkflowEmailDelivery = Email.EmailDelivery (\_ -> modifyIORef' deliveryCountReference (+ 1)),
+        accountWorkflowClock = Time.currentUnixTimeNanoseconds,
+        accountWorkflowMfaStore = mfaStore,
+        accountWorkflowCredentialStore = credentialStore,
+        accountWorkflowLoginAttemptStore = permissiveAttemptStore,
+        accountWorkflowSessionStore = sessionStore,
+        accountWorkflowProfileStore = profileStore,
+        accountWorkflowTotpEncryptionKey = totpEncryptionKey environmentConfig,
+        accountWorkflowJwtIssuer = issuer,
+        accountWorkflowTotpClock = const 123456,
+        accountWorkflowVerificationUrl = \_ _ -> "https://account.example.test/verify"
+      }
+
+pendingProfileAccountStore :: AccountStore
+pendingProfileAccountStore =
+  AccountStore
+    { createPendingAccount = \_ _ -> error "unexpected account creation",
+      completePendingRegistrationDelivery = \_ -> pure (Right True),
+      releasePendingRegistrationDelivery = \_ -> pure (Right True),
+      reserveVerificationResend = \_ verification _ -> pure (Right (VerificationResendReserved (VerificationResendClaim (Account.storedVerificationAccountId verification) (Account.storedVerificationTokenDigest verification)))),
+      completeVerificationResend = \_ _ -> pure (Right VerificationResendClaimSettled),
+      releaseVerificationResend = \_ -> pure (Right VerificationResendClaimSettled),
+      replaceEmailVerification = \_ -> pure (Right True),
+      findEmailVerification = \_ -> error "unexpected verification lookup",
+      consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
+    }
+
+expireInitialProfileSession :: IORef [Session.OpaqueSession Account.AccountId] -> IO ()
+expireInitialProfileSession sessionsReference =
+  atomicModifyIORef' sessionsReference $ \sessions ->
+    ( map expireSession sessions,
+      ()
+    )
+  where
+    expireSession session =
+      session
+        { Session.sessionExpiresAtNanoseconds = Session.sessionIssuedAtNanoseconds session
+        }
+
+accountJwtSecurity :: AccountJwtRuntime -> AccountSessionStore -> HarchWeb.ApplicationSecurity AppRoute WebApi.Route.AppRequestContext ()
+accountJwtSecurity runtime sessionStore =
+  HarchWeb.AuthenticationEnabled
+    []
+    (HarchWeb.authenticationGuardFromPipeline (accountJwtAuthenticationPipeline sessionStore Time.currentUnixTimeNanoseconds runtime))
+    []
+
+requiredAccountJwtRuntime :: AppEnvironmentConfig -> IO AccountJwtRuntime
+requiredAccountJwtRuntime environmentConfig = do
+  loaded <- loadAccountJwtRuntime (accountJwtConfiguration environmentConfig)
+  case loaded of
+    Right runtime -> pure runtime
+    Left _ -> expectationFailure "expected test account-JWT runtime" >> error "unreachable"
+
+issueInitialSessionJwt :: AccountJwt.AccountJwtIssuer -> Session.OpaqueSession Account.AccountId -> IO HarchWeb.EncodedJwt
+issueInitialSessionJwt issuer session = do
+  issued <- AccountJwt.issueAccountSessionJwt issuer session
+  case issued of
+    Right encodedJwt -> pure encodedJwt
+    Left _ -> expectationFailure "expected a signed test account session JWT" >> error "unreachable"
+
+requiredEncryptionNonce :: ByteString.ByteString -> Secret.EncryptionNonce
+requiredEncryptionNonce value =
+  fromMaybe (error "expected test encryption nonce") (Secret.mkEncryptionNonce value)
+
+requiredEncryptedTotpSecret :: Crypto.CryptoFailable Text -> Text
+requiredEncryptedTotpSecret encrypted =
+  case encrypted of
+    Crypto.CryptoPassed value -> value
+    Crypto.CryptoFailed _ -> error "expected encrypted test TOTP secret"
+
+reauthenticationTotpSecret :: Text
+reauthenticationTotpSecret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+
+reauthenticationTotpCode :: Text
+reauthenticationTotpCode =
+  let secret = fromMaybe (error "expected deterministic test TOTP secret") (Totp.mkTotpSecret reauthenticationTotpSecret)
+   in Totp.totpCodeText (Totp.totpCode 123456 secret)
 
 localizedRegistrationWorkflow :: AccountWorkflow
 localizedRegistrationWorkflow =

@@ -4,8 +4,10 @@
 -- Harch's retained-action lifecycle.  It never reads, copies, stores, or
 -- submits the original form values: the capture kernel keeps that bounded
 -- envelope and performs its one permitted replay.  Nor does this adapter
--- reproduce the page-security GET; it invokes the navigation runtime's
--- installed capability before asking the kernel to replay.
+-- reproduce the page-security GET. It invokes the navigation runtime's
+-- installed capability first to replace an expired session-bound CSRF
+-- authority with the public-login authority, then again after successful
+-- authentication before asking the kernel to replay.
 --
 -- The application uses a direct native-dialog open because recovery has no
 -- standalone link invoker: the original protected form is its focus-return
@@ -61,12 +63,21 @@ reauthenticationRuntimeScript =
       "    closeDialog(recovery.dialog);",
       "    focusReturn(recovery);",
       "  };",
-      "  const startRecovery = (actionId) => {",
+      "  const startRecovery = async (actionId) => {",
       "    const dialog = recoveryDialog();",
       "    if (!(dialog instanceof HTMLDialogElement)) { captureKernel()?.cancel(actionId); return; }",
       "    if (activeRecovery) { disposeRecovery(activeRecovery); closeDialog(dialog); }",
       "    const invoker = document.activeElement instanceof HTMLElement ? document.activeElement : null;",
-      "    activeRecovery = { actionId, dialog, invoker };",
+      "    const recovery = { actionId, dialog, invoker };",
+      "    activeRecovery = recovery;",
+      "    try {",
+      "      const refreshed = await captureKernel()?.refreshPageSecurityForRetainedAction?.();",
+      "      if (!refreshed || activeRecovery?.actionId !== actionId) { disposeRecovery(recovery); focusReturn(recovery); return; }",
+      "    } catch (_error) {",
+      "      disposeRecovery(recovery);",
+      "      focusReturn(recovery);",
+      "      return;",
+      "    }",
       "    clearConfirmation(dialog);",
       "    if (!dialog.open) { dialog.showModal(); }",
       "    dialog.querySelector('#login-identifier')?.focus();",
@@ -97,7 +108,7 @@ reauthenticationRuntimeScript =
       "",
       "  document.addEventListener('harch:action-reauthentication-required', (event) => {",
       "    const actionId = event.detail?.actionId;",
-      "    if (typeof actionId === 'string' && actionId.length > 0) { startRecovery(actionId); }",
+      "    if (typeof actionId === 'string' && actionId.length > 0) { void startRecovery(actionId); }",
       "  });",
       "  document.addEventListener('harch:action-reauthentication-completed', (event) => {",
       "    if (!activeRecovery) { return; }",
