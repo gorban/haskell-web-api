@@ -16,11 +16,14 @@ where
 
 import Control.Monad.Except (ExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
+import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Foldable (for_)
 import Data.Maybe (listToMaybe, mapMaybe)
 import Data.Text (Text)
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Document (NavigationRuntime, RuntimeAsset)
 import HarchWeb.Document qualified as Document
+import HarchWeb.RequestId (RequestId, requestIdText)
 import HarchWeb.Security
   ( RequestHeadLimitFailure (..),
     applyRequestPathPrefix,
@@ -75,11 +78,18 @@ runEarlyRequestStages webApplication request requestPath policyResponseHeaders =
   for_ maybeStaticResponse $ \(staticRoutePath, staticResponse) ->
     earlyResponse (urlPathText (applyRequestPathPrefix (requestPathPrefix requestPolicyConfig request) (mkUrlPath staticRoutePath))) staticResponse
 
-routeLocationDecodeResponse :: Wai.Response
-routeLocationDecodeResponse = Wai.responseLBS Http.status400 [(Http.hContentType, "text/plain; charset=utf-8")] "Request target was rejected."
+-- | Render a framework-owned pre-routing failure with the opaque identifier
+-- already fixed at HTTP ingress. Only these Harch-owned plain-text bodies get
+-- a support-copyable value; arbitrary application protocol, streaming, and WAI
+-- response bodies remain application-owned. The remaining AHI-5-RID work covers
+-- application error presentations and audit joins.
+routeLocationDecodeResponse :: RequestId -> Wai.Response
+routeLocationDecodeResponse requestId = Wai.responseLBS Http.status400 [(Http.hContentType, "text/plain; charset=utf-8")] (requestRejectionBody "Request target was rejected." requestId)
 
-requestHeadLimitResponse :: RequestHeadLimitFailure -> Wai.Response
-requestHeadLimitResponse limitFailure = Wai.responseLBS status [(Http.hContentType, "text/plain; charset=utf-8")] "Request metadata was rejected."
+-- | As 'routeLocationDecodeResponse', while preserving the status selected by
+-- the request-head budget failure.
+requestHeadLimitResponse :: RequestId -> RequestHeadLimitFailure -> Wai.Response
+requestHeadLimitResponse requestId limitFailure = Wai.responseLBS status [(Http.hContentType, "text/plain; charset=utf-8")] (requestRejectionBody "Request metadata was rejected." requestId)
   where
     status =
       case limitFailure of
@@ -95,3 +105,8 @@ requestHeadLimitResponse limitFailure = Wai.responseLBS status [(Http.hContentTy
         RequestPathSegmentTooLarge -> Http.status414
         TooManyQueryFields -> Http.status414
         RequestQueryFieldTooLarge -> Http.status414
+
+requestRejectionBody :: Text -> RequestId -> LazyByteString.ByteString
+requestRejectionBody rejectionSummary requestId =
+  LazyByteString.fromStrict
+    (TextEncoding.encodeUtf8 (rejectionSummary <> " Request ID: " <> requestIdText requestId <> "."))

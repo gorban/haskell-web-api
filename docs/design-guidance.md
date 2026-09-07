@@ -3414,6 +3414,17 @@ that Harch does not have. The shipped scope deliberately does not authenticate
 production services; AHI-5's example audit workflow still needs that
 deployment adapter and the pending audit schema/repository slices.
 
+**Follow-up slice: correlate Harch-owned pre-routing rejection text with its
+header (AHI-5-RID, 2026-09-07).** The existing request-execution owner already
+mints the opaque ID before head validation and route decoding, so extend its
+private `EarlyStages` response interpreter rather than add a general response
+rewriter or an application error renderer. The two framework-owned plain-text
+rejections now accept that ID and render the same canonical value as the final
+`X-Request-ID` header for support copying. Application protocol, stream, and
+raw WAI bodies retain their representation ownership; authenticated/domain
+error presentations, exported observability/audit joins, and the runnable audit
+workflow remain AHI-5-RID follow-up work.
+
 ### Decision record — AHI-4C: one ASCII cookie-token grammar (2026-09-05)
 
 **Decision: extract the existing cookie-name token predicate into a small

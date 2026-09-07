@@ -151,7 +151,9 @@ spec = do
         Just rejectedRequestId -> do
           case TextEncoding.decodeUtf8' rejectedRequestId of
             Left failure -> expectationFailure (show failure)
-            Right rejectedRequestIdText -> HarchWeb.mkRequestId rejectedRequestIdText `shouldSatisfy` isJust
+            Right rejectedRequestIdText -> do
+              HarchWeb.mkRequestId rejectedRequestIdText `shouldSatisfy` isJust
+              readResponseBody headRejectedResponse `shouldReturn` "Request metadata was rejected. Request ID: " <> rejectedRequestIdText <> "."
     it "stores the account action decoder used by the WAI adapter" $ do
       let recognized =
             case HarchWeb.decodeClientAction

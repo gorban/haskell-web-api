@@ -142,7 +142,7 @@ reportRejectedInheritance webApplication requestId = \case
 headLimitedWaiApplication :: (Eq route) => RouteConcurrencyGateCache -> Application route action context authorization -> RequestId -> Wai.Application
 headLimitedWaiApplication routeGateCache webApplication requestId request respond =
   case validateRequestHead (requestHeadLimits (applicationRequestPolicy webApplication)) request of
-    Left limitFailure -> respond (requestHeadLimitResponse limitFailure)
+    Left limitFailure -> respond (requestHeadLimitResponse requestId limitFailure)
     Right () -> toValidatedWaiApplication routeGateCache webApplication requestId request respond
 
 -- | Only valid, budgeted request heads reach the ordinary request pipeline.
@@ -152,7 +152,7 @@ toValidatedWaiApplication :: (Eq route) => RouteConcurrencyGateCache -> Applicat
 toValidatedWaiApplication routeGateCache webApplication requestId request respond = do
   let requestPolicyConfig = applicationRequestPolicy webApplication
   case decodeRouteLocation (waiRequestRouteTarget requestPolicyConfig request) of
-    Left _ -> respond routeLocationDecodeResponse
+    Left _ -> respond (routeLocationDecodeResponse requestId)
     Right routeLocation -> do
       requestStartedAt <- getMonotonicTimeNSec
       let policyResponseHeaders = requestPolicyResponseHeaders requestPolicyConfig request
@@ -249,7 +249,7 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
 
 respondRouteLocationDecodeFailure :: RoutedRequestExecution route action context authorization -> IO Wai.ResponseReceived
 respondRouteLocationDecodeFailure routedRequestExecution =
-  routedRequestRespond routedRequestExecution routeLocationDecodeResponse
+  routedRequestRespond routedRequestExecution (routeLocationDecodeResponse (routedRequestId routedRequestExecution))
 
 -- | Admit the declaration selected exactly once by post-match execution. An
 -- ordinary unmatched route and an unknown client action have no declaration;

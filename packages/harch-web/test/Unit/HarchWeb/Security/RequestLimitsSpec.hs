@@ -18,7 +18,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.Text ()
 import Data.Text qualified as Text ()
-import Data.Text.Encoding qualified as TextEncoding ()
+import Data.Text.Encoding qualified as TextEncoding (decodeUtf8)
 import HarchWeb (Application (applicationRequestMiddleware, renderRequestResponse), MiddlewareResult (ContinueMiddleware), RequestBodyReadFailure (RequestBodyLimitExceeded), RequestHeadLimitFailure (InvalidRequestTargetEncoding, RequestCookieNameTooLarge, RequestCookieValueTooLarge, RequestHeaderValueTooLarge, RequestHeadersTooLarge, RequestPathSegmentTooLarge, RequestQueryFieldTooLarge, RequestTargetTooLarge, TooManyPathSegments, TooManyQueryFields, TooManyRequestCookies, TooManyRequestHeaders), RequestHeadLimits (requestCookieCountLimit, requestCookieNameByteLimit, requestCookieValueByteLimit, requestHeaderByteLimit, requestHeaderCountLimit, requestHeaderValueByteLimit, requestPathSegmentByteLimit, requestPathSegmentCountLimit, requestQueryFieldByteLimit, requestQueryFieldCountLimit, requestTargetByteLimit), RequestMiddleware (RequestMiddleware), RequestPolicyConfig (requestHeadLimits), RequestTransportLimits (requestNetworkTimeout, requestSlowlorisByteLimit), RouteRequest (RouteRequest), mkRequestConcurrencyLimit, mkRequestHeaderCountLimit, newRequestBodyChunkReader, readRequestBodyUpTo, requestByteLimit, requestConcurrencyLimitValue, requestItemCountLimit, requestTimeoutSeconds, requestTimeoutSecondsValue, toWaiApplication, unboundedRequestHeadLimits, validateRequestHead, warpDefaultRequestTransportLimits)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
@@ -344,9 +344,13 @@ spec = do
             ]
       responses <- traverse (\(limits, request, _) -> performWaiRequest (toWaiApplication (applicationFor limits)) request) cases
       responseBodies <- traverse readResponseBody responses
+      let requestRejectionBody response responseBody =
+            case lookup "X-Request-ID" (Wai.responseHeaders response) of
+              Nothing -> expectationFailure "request-head rejection lacked X-Request-ID"
+              Just requestId -> responseBody `shouldBe` "Request metadata was rejected. Request ID: " <> TextEncoding.decodeUtf8 requestId <> "."
       expectAll
         ( (map Wai.responseStatus responses `shouldBe` map (\(_, _, expectedStatus) -> expectedStatus) cases)
             :| ( map (\response -> lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/plain; charset=utf-8") responses
-                   <> map (`shouldBe` "Request metadata was rejected.") responseBodies
+                   <> zipWith requestRejectionBody responses responseBodies
                )
         )

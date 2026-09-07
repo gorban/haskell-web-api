@@ -32,7 +32,7 @@ import Network.HTTP.Client qualified as HttpClient ()
 import Network.HTTP.Types qualified as Http (ResponseHeaders, Status (statusCode, statusMessage), hAcceptRanges, hAllow, hCacheControl, hContentLength, hContentRange, hContentType, hETag, hIfModifiedSince, hIfNoneMatch, hLastModified, hLocation, hRange, status200, status201, status202, status204, status206, status302, status303, status304, status308, status400, status401, status403, status404, status405, status413, status415, status416, status422, status500, status503)
 import Network.Socket qualified as Socket (SockAddr (SockAddrInet, SockAddrUnix), tupleToHostAddress)
 import Network.Socket.ByteString qualified as SocketByteString ()
-import Network.Wai qualified as Wai (Request (isSecure, pathInfo, rawPathInfo, rawQueryString, requestHeaders, requestMethod), defaultRequest, responseHeaders, responseLBS, responseStatus, setRequestBodyChunks)
+import Network.Wai qualified as Wai (Request (isSecure, pathInfo, rawPathInfo, rawQueryString, requestHeaders, requestMethod), Response, defaultRequest, responseHeaders, responseLBS, responseStatus, setRequestBodyChunks)
 import Network.Wai.Handler.Warp qualified as Warp ()
 import System.Directory (createDirectoryIfMissing, createFileLink)
 import System.Environment ()
@@ -47,6 +47,12 @@ import TestCore.CustomAssertions ()
 import TestCore.Wai (nextRequestBodyChunk, performWaiRequest, readResponseBody, waiRequest)
 import Text.Read ()
 import Unit.HarchWeb.TestSupport (TestContext (requestLanguage, testContextPathPrefix), TestRoute (DataRoute, EventStreamRoute, KnownRoute, MissingRoute, QueryRoute), defaultContext, defaultRequestPolicy, emptyStaticAssets, expectMeasuredRequestTiming, expectMeasuredRootRequestTiming, hasTextAttribute, renderDocument, renderSampleResponse, rootPathApplication, sampleApplication, sampleApplicationWithConfig, sampleApplicationWithStaticAssets, samplePage, sampleRequestContextFromRequest, spanishContext, stripVolatileRequestTiming, testActionCodec, testPageSecurity, testRegionPatch, testTrustedForwardedProxy, trustedForwardedApplication, waiRequestWithRemoteHostAndHeaders, waitUntilIORefEquals)
+
+assertFrameworkRequestIdBody :: Text -> Wai.Response -> Expectation
+assertFrameworkRequestIdBody rejectionSummary response =
+  case lookup "X-Request-ID" (Wai.responseHeaders response) of
+    Nothing -> expectationFailure "framework rejection lacked X-Request-ID"
+    Just requestId -> readResponseBody response `shouldReturn` rejectionSummary <> " Request ID: " <> TextEncoding.decodeUtf8 requestId <> "."
 
 spec = do
   describe "toWaiApplication" $ do
@@ -3191,13 +3197,13 @@ spec = do
         readResponseBody missingResponse `shouldReturn` "Not Found"
         invalidResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "..", "secret.txt"])
         Wai.responseStatus invalidResponse `shouldBe` Http.status400
-        readResponseBody invalidResponse `shouldReturn` "Request target was rejected."
+        assertFrameworkRequestIdBody "Request target was rejected." invalidResponse
         malformedDynamicResponse <-
           performWaiRequest
             (toWaiApplication sampleApplication)
             ((waiRequest []) {Wai.rawPathInfo = "/known%2Fextra"})
         Wai.responseStatus malformedDynamicResponse `shouldBe` Http.status400
-        readResponseBody malformedDynamicResponse `shouldReturn` "Request target was rejected."
+        assertFrameworkRequestIdBody "Request target was rejected." malformedDynamicResponse
         rootResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets"])
         Wai.responseStatus rootResponse `shouldBe` Http.status404
         readResponseBody rootResponse `shouldReturn` "Not Found"
@@ -3213,7 +3219,7 @@ spec = do
       malformedResponse <- performWaiRequest (toWaiApplication malformedCodecApplication) (waiRequest ["known"])
       Wai.responseStatus malformedResponse `shouldBe` Http.status400
       lookup Http.hContentType (Wai.responseHeaders malformedResponse) `shouldBe` Just "text/plain; charset=utf-8"
-      readResponseBody malformedResponse `shouldReturn` "Request target was rejected."
+      assertFrameworkRequestIdBody "Request target was rejected." malformedResponse
 
     it "rejects an asset path reconstructed as an absolute filesystem path" $
       withSystemTempDirectory "harch-web-static-absolute-escape" $ \tempDirectory -> do
