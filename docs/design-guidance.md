@@ -493,6 +493,24 @@ existing validated action codec and its runtime interpreter, not a JavaScript
 callback registry, second fetch path, or framework-owned dialog. The remaining
 application modal and real-browser proof are still AHI-4C work.
 
+**Recovery-lifecycle refinement (AHI-4C, 2026-09-07): expose the existing
+navigation-owned page-security refresh through the capture-kernel capability,
+and report opaque retained-envelope expiry.** The application completion
+handler needs to refresh the current page's CSRF capability before it asks for
+the one allowed replay. Recreating that GET and its parsing in every modal
+would be a second security transport path, while a hard-coded application timer
+would drift from the endpoint's declared retention lifetime. The navigation
+runtime therefore installs its existing refresh operation on the capture
+kernel; before that runtime is available the capability safely reports failure.
+The kernel also emits an opaque expiry event when a retained entry reaches that
+configured lifetime. Cancellation is initiated by the application's own close
+control, and navigation already emits its existing lifecycle start event, so a
+broader callback registry would add source to the immediate capture kernel
+without solving an unowned state. Neither operation reveals fields, extends
+retention, performs a replay, nor selects a presentation. The application
+remains responsible for its modal, focus, user confirmation, and calling the
+existing replay operation.
+
 ### Decision record — PostgreSQL database-change ledger (AHI-4C, 2026-09-03)
 
 **Decision: extract the existing connection-scoped migration transaction into

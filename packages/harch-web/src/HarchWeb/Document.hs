@@ -975,6 +975,7 @@ defaultCaptureKernelScript =
       "      if (entry.state === actionState.Retained) {",
       "        capturedActions.delete(entry.id);",
       "        setStatus(entry, actionState.Recoverable, entry.control.dataset.harchActionRecoverableCopy || 'This action needs your attention.');",
+      "        document.dispatchEvent(new CustomEvent('harch:action-reauthentication-expired', { detail: { actionId: entry.id } }));",
       "        updateBeforeUnload();",
       "      }",
       "    }, retainedActionLifetime(entry));",
@@ -1113,6 +1114,7 @@ defaultCaptureKernelScript =
       "    cancel,",
       "    retry,",
       "    replayRetained,",
+      "    refreshPageSecurityForRetainedAction: async () => false,",
       "    eventTypes: CapturedEvent,",
       "  };",
       "})();"

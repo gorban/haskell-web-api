@@ -8,6 +8,7 @@ module WebApi.App.Shell
 where
 
 import HarchWeb qualified
+import WebApi.App.Reauthentication (reauthenticationRuntimeAsset)
 import WebApi.Components.Shell (AppShellProps (..), appPageShell)
 import WebApi.Config (AppConfig (..))
 import WebApi.Localization (AppMessage (SkipToMainContent), localizedMessage)
@@ -70,7 +71,7 @@ documentLanguage selectedLocale =
     )
 
 appRuntimeAssets :: [HarchWeb.RuntimeAsset]
-appRuntimeAssets = [HarchWeb.defaultDialogRuntime]
+appRuntimeAssets = [HarchWeb.defaultDialogRuntime, reauthenticationRuntimeAsset]
 
 -- | The application localizes and styles the declarative lifecycle adapter;
 -- Harch owns its stable main target, polite semantics, and runtime ordering.

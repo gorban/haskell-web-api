@@ -10,7 +10,8 @@ import Data.Text (Text)
 import HarchWeb qualified
 import WebApi.AccountPages.Forms (initialPendingProfileForm)
 import WebApi.AccountPages.Rendering
-  ( renderLoginPageHtml,
+  ( reauthenticationDialog,
+    renderLoginPageHtml,
     renderLogoutPageHtml,
     renderMfaEnrollmentPageHtml,
     renderPendingProfileRegionHtml,
@@ -67,7 +68,7 @@ renderPageBodyForLocale context locale pageModel =
     LogoutPage _ ->
       renderLogoutPageHtml context locale
     ProfilePage profilePage ->
-      renderProfilePageBody context profilePage
+      renderProfilePageBody context locale profilePage
     LanguagePage languagePage ->
       pageFrame
         PageFrameProps
@@ -97,13 +98,13 @@ renderPageBodyForLocale context locale pageModel =
             pageFrameContent = [renderCallToAction (notFoundPrimaryAction notFoundPage)]
           }
 
-renderProfilePageBody :: AppRequestContext -> ProfilePageModel -> HarchWeb.Html
-renderProfilePageBody context profilePage =
+renderProfilePageBody :: AppRequestContext -> AppLocale -> ProfilePageModel -> HarchWeb.Html
+renderProfilePageBody context locale profilePage =
   case profilePage of
     SignedOutProfilePage SignedOutProfilePageDetails {signedOutProfileHeading, signedOutProfileSummary, signedOutProfileSignInAction, signedOutProfileRegistrationAction} ->
       profilePageSection signedOutProfileHeading signedOutProfileSummary [renderCallToAction signedOutProfileSignInAction, renderCallToAction signedOutProfileRegistrationAction]
     PendingProfilePage PendingProfilePageDetails {pendingProfileHeading, pendingProfileSummary, pendingProfileEmail, pendingProfileUsername, pendingProfileDisplayName, pendingProfileResendPath, pendingProfileResendLabel, pendingProfileSignOutAction} ->
-      profilePageSection pendingProfileHeading pendingProfileSummary [profileIdentity (ProfileIdentityProps pendingProfileUsername pendingProfileDisplayName Nothing), renderPendingProfileRegionHtml context pendingProfileResendPath (initialPendingProfileForm pendingProfileEmail pendingProfileResendLabel), renderCallToAction pendingProfileSignOutAction]
+      profilePageSection pendingProfileHeading pendingProfileSummary [profileIdentity (ProfileIdentityProps pendingProfileUsername pendingProfileDisplayName Nothing), renderPendingProfileRegionHtml context pendingProfileResendPath (initialPendingProfileForm pendingProfileEmail pendingProfileResendLabel), renderCallToAction pendingProfileSignOutAction, reauthenticationDialog context locale]
     AuthenticatedProfilePage AuthenticatedProfilePageDetails {authenticatedProfileHeading, authenticatedProfileSummary, authenticatedProfileEmail, authenticatedProfileUsername, authenticatedProfileDisplayName, authenticatedProfileSignOutAction} ->
       profilePageSection authenticatedProfileHeading authenticatedProfileSummary [profileIdentity (ProfileIdentityProps authenticatedProfileUsername authenticatedProfileDisplayName (Just authenticatedProfileEmail)), renderCallToAction authenticatedProfileSignOutAction]
     UnavailableProfilePage UnavailableProfilePageDetails {unavailableProfileHeading, unavailableProfileSummary, unavailableProfileSignInAction} ->

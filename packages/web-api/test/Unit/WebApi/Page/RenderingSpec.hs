@@ -37,7 +37,13 @@ spec = do
                   )
               )
       pendingProfile
-        `shouldSatisfy` \html -> Text.isInfixOf "data-profile-resend=\"true\"" html && not (Text.isInfixOf "data-error-state=\"true\"" html)
+        `shouldSatisfy` \html ->
+          Text.isInfixOf "data-profile-resend=\"true\"" html
+            && Text.isInfixOf "<dialog id=\"reauthentication-dialog\"" html
+            && Text.isInfixOf "data-web-api-reauthentication-dialog" html
+            && Text.isInfixOf "data-harch-action-path=\"/login\"" html
+            && Text.isInfixOf "data-web-api-reauthentication-retry hidden" html
+            && not (Text.isInfixOf "data-error-state=\"true\"" html)
       let anonymousProfile =
             renderPageBody
               ( ProfilePage

@@ -404,6 +404,9 @@ spec = do
                  Text.isInfixOf "harch:action-reauthentication-required" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "harch:action-reauthentication-completed" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "refreshPageSecurityForRetainedAction" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "refreshPageSecurityForRetainedAction: async () => false" defaultCaptureKernelScript `shouldBe` True,
+                 Text.isInfixOf "harch:action-reauthentication-expired" defaultCaptureKernelScript `shouldBe` True,
+                 Text.isInfixOf "invalidate(entry);" defaultCaptureKernelScript `shouldBe` True,
                  Text.isInfixOf "localStorage" runtimeSources `shouldBe` False,
                  Text.isInfixOf "sessionStorage" runtimeSources `shouldBe` False,
                  length (show customLifetime) + length (showList [customLifetime] "") `shouldSatisfy` (> 0)

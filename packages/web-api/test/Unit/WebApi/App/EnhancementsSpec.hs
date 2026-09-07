@@ -11,6 +11,7 @@ import TestCore.Wai (performWaiRequest, readResponseBody, waiRequest)
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi (buildApp)
 import WebApi.App.Enhancements (pageEnhancementHooks)
+import WebApi.App.Reauthentication (reauthenticationRuntimeAsset)
 import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
 import WebApi.Config (AppConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
 import WebApi.Page (renderPage)
@@ -70,6 +71,7 @@ spec = do
       rootMountedShell <- renderedShell rootMountedConfig HomeRoute
       Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" homeShellWithoutAssets `shouldBe` True
       Text.isInfixOf "<script type=\"module\" src=\"/assets/dialog.js\" defer></script>" homeShellWithoutAssets `shouldBe` True
+      Text.isInfixOf "<script type=\"module\" src=\"/assets/reauthentication.js\" defer></script>" homeShellWithoutAssets `shouldBe` True
       Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" homeShell `shouldBe` True
       Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" rootMountedShell `shouldBe` True
       Text.isInfixOf "<nav data-navigation-region=\"primary\" class=\"harch-app-shell-navigation\">" homeShell `shouldBe` True
@@ -99,6 +101,20 @@ spec = do
       dialogBody <- readResponseBody dialogResponse
       Text.isInfixOf "dialog.showModal();" dialogBody `shouldBe` True
       Text.isInfixOf "harch:navigation-before-replace" dialogBody `shouldBe` True
+      reauthenticationResponse <- performWaiRequest (HarchWeb.toWaiApplication (buildApp navigationAppConfig)) (waiRequest ["assets", "reauthentication.js"])
+      Wai.responseStatus reauthenticationResponse `shouldBe` Http.status200
+      reauthenticationBody <- readResponseBody reauthenticationResponse
+      expectAll
+        ( (Text.isInfixOf "harch:action-reauthentication-required" reauthenticationBody `shouldBe` True)
+            :| [ Text.isInfixOf "harch:action-reauthentication-completed" reauthenticationBody `shouldBe` True,
+                 Text.isInfixOf "harch:action-reauthentication-expired" reauthenticationBody `shouldBe` True,
+                 Text.isInfixOf "refreshPageSecurityForRetainedAction" reauthenticationBody `shouldBe` True,
+                 Text.isInfixOf "replayRetained" reauthenticationBody `shouldBe` True,
+                 Text.isInfixOf "window.fetch" reauthenticationBody `shouldBe` False,
+                 Text.isInfixOf "localStorage" reauthenticationBody `shouldBe` False,
+                 Text.isInfixOf "sessionStorage" reauthenticationBody `shouldBe` False
+               ]
+        )
 
     it "serves bundled style, font, and resource assets through configured static roots" $ do
       stylesheetResponse <- performWaiRequest (HarchWeb.toWaiApplication (buildApp navigationAppConfig)) (waiRequest ["assets", "styles", "app.css"])
@@ -147,7 +163,8 @@ spec = do
       HarchWeb.shellDocumentLanguage spanishShellConfig `shouldBe` HarchWeb.locale "es"
       HarchWeb.shellNavigationItems shellConfig `shouldBe` []
       HarchWeb.shellRuntimeDescriptors shellConfig
-        `shouldBe` [HarchWeb.DeferredModule "harch-dialog" "/assets/dialog.js"]
+        `shouldBe` [HarchWeb.DeferredModule "harch-dialog" "/assets/dialog.js", HarchWeb.DeferredModule "web-api-reauthentication" "/assets/reauthentication.js"]
+      HarchWeb.runtimeAssetName reauthenticationRuntimeAsset `shouldBe` "web-api-reauthentication"
       HarchWeb.shellNavigationLifecycle shellConfig
         `shouldBe` Just
           ( (HarchWeb.mainNavigationLifecycle "Skip to main content")

@@ -178,6 +178,29 @@ a {
   background: rgb(10 16 30 / 65%);
 }
 
+.harch-account-pages-reauthentication-dialog {
+  width: min(100% - 2rem, 34rem);
+  max-block-size: min(90dvb, 44rem);
+  padding: var(--app-space-3);
+  overflow: auto;
+  border: 1px solid var(--app-color-border);
+  border-radius: var(--app-radius);
+  background: var(--app-color-surface);
+  color: var(--app-color-text);
+}
+
+.harch-account-pages-reauthentication-dialog::backdrop {
+  background: rgb(10 16 30 / 65%);
+}
+
+.harch-account-pages-reauthentication-dialog button {
+  min-block-size: 2.75rem;
+  padding-inline: var(--app-space-2);
+  border: 1px solid var(--app-color-border);
+  border-radius: var(--app-radius);
+  font: inherit;
+}
+
 .harch-app-controls-language-list {
   display: grid;
   gap: var(--app-space-1);

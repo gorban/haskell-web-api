@@ -6,6 +6,7 @@ module WebApi.AccountPages.Rendering
     logoutRegion,
     mfaEnrollmentRegion,
     pendingProfileRegion,
+    reauthenticationDialog,
     registrationRegion,
     renderLoginPage,
     renderLoginPageHtml,
@@ -76,6 +77,10 @@ data AccountPageCopy = AccountPageCopy
     accountRecoveryCodeLabel :: Text,
     accountRecoveryCodeHint :: Text,
     accountSignInLabel :: Text,
+    accountReauthenticationHeading :: Text,
+    accountReauthenticationCloseLabel :: Text,
+    accountReauthenticationRetryLabel :: Text,
+    accountReauthenticationReadyMessage :: Text,
     accountLogoutHeading :: Text,
     accountSignOutLabel :: Text,
     accountRecoveryCodesHeading :: Text,
@@ -113,6 +118,10 @@ accountPageCopy locale =
           accountRecoveryCodeLabel = "Recovery code",
           accountRecoveryCodeHint = "Choose Recovery code above, then enter or paste one saved recovery code.",
           accountSignInLabel = "Sign in",
+          accountReauthenticationHeading = "Sign in to continue",
+          accountReauthenticationCloseLabel = "Cancel sign in",
+          accountReauthenticationRetryLabel = "Retry original action",
+          accountReauthenticationReadyMessage = "Signed in. Confirm to retry the original action.",
           accountLogoutHeading = "Sign out",
           accountSignOutLabel = "Sign out",
           accountRecoveryCodesHeading = "Recovery codes",
@@ -146,6 +155,10 @@ accountPageCopy locale =
           accountRecoveryCodeLabel = "Codigo de recuperacion",
           accountRecoveryCodeHint = "Elige Codigo de recuperacion arriba e introduce o pega uno de tus codigos guardados.",
           accountSignInLabel = "Iniciar sesion",
+          accountReauthenticationHeading = "Inicia sesion para continuar",
+          accountReauthenticationCloseLabel = "Cancelar inicio de sesion",
+          accountReauthenticationRetryLabel = "Reintentar la accion original",
+          accountReauthenticationReadyMessage = "Sesion iniciada. Confirma para reintentar la accion original.",
           accountLogoutHeading = "Cerrar sesion",
           accountSignOutLabel = "Cerrar sesion",
           accountRecoveryCodesHeading = "Codigos de recuperacion",
@@ -228,6 +241,51 @@ loginRegion context locale form =
               submitButton (accountSignInLabel copy)
             ]
         ]
+
+-- | AHI-4C keeps recovery presentation in the application while reusing the
+-- same login region and action workflow as the standalone page. The capture
+-- kernel retains only the original action's opaque ID; this dialog contains no
+-- retained fields and its deferred application adapter owns opening, closing,
+-- focus return, and the user's explicit replay confirmation. A native browser
+-- never reaches this dialog: it follows the original action's ordinary native
+-- fallback instead.
+reauthenticationDialog :: AppRequestContext -> AppLocale -> HarchWeb.Html
+reauthenticationDialog context locale =
+  let copy = accountPageCopy locale
+   in HarchWeb.element
+        HarchWeb.dialogTag
+        [ HarchWeb.elementId reauthenticationDialogId,
+          HarchWeb.ariaLabelledBy reauthenticationHeadingId,
+          HarchWeb.dataFlag "harch-dialog-root",
+          HarchWeb.dataFlag "web-api-reauthentication-dialog",
+          HarchWeb.dataAttribute "harch-dialog-initial-focus-id" (HarchWeb.elementIdText loginIdentifierId),
+          HarchWeb.className (accountControlClass "reauthentication-dialog")
+        ]
+        [ HarchWeb.element HarchWeb.headingTwoTag [HarchWeb.elementId reauthenticationHeadingId] [HarchWeb.text (accountReauthenticationHeading copy)],
+          renderLoginRegionHtml context locale emptyLoginForm,
+          HarchWeb.element
+            HarchWeb.paragraphTag
+            [HarchWeb.role "status", HarchWeb.ariaLive "polite", HarchWeb.dataFlag "web-api-reauthentication-status", HarchWeb.hidden]
+            [],
+          HarchWeb.element
+            HarchWeb.buttonTag
+            [HarchWeb.inputType "button", HarchWeb.dataFlag "web-api-reauthentication-retry", HarchWeb.hidden]
+            [HarchWeb.text (accountReauthenticationRetryLabel copy)],
+          HarchWeb.element
+            HarchWeb.buttonTag
+            [HarchWeb.inputType "button", HarchWeb.ariaLabel (accountReauthenticationCloseLabel copy), HarchWeb.dataFlag "harch-dialog-close"]
+            [HarchWeb.text (accountReauthenticationCloseLabel copy)],
+          HarchWeb.element
+            HarchWeb.spanTag
+            [HarchWeb.hidden, HarchWeb.dataAttribute "web-api-reauthentication-ready-copy" (accountReauthenticationReadyMessage copy)]
+            []
+        ]
+
+reauthenticationDialogId :: HarchWeb.ElementId
+reauthenticationDialogId = HarchWeb.literalElementId "reauthentication-dialog"
+
+reauthenticationHeadingId :: HarchWeb.ElementId
+reauthenticationHeadingId = HarchWeb.literalElementId "reauthentication-dialog-heading"
 
 renderPendingProfileRegion :: AppRequestContext -> AccountActionTarget -> PendingProfileForm -> Text
 renderPendingProfileRegion context target form = HarchWeb.renderHtml (renderPendingProfileRegionHtml context target form)
@@ -541,3 +599,6 @@ autocompleteName = "name"
 autocompleteNewPassword = "new-password"
 autocompleteOneTimeCode = "one-time-code"
 autocompleteUsername = "username"
+
+accountControlClass :: Text -> HarchWeb.CssClass
+accountControlClass = HarchWeb.ScopedCssClass (HarchWeb.cssScope "account-pages")
