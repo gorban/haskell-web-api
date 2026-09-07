@@ -391,10 +391,10 @@ accountJwtAuthenticationPipeline sessionStore readClock runtime =
       HarchWeb.authenticationPrincipalEstablisher = establishAccountPrincipal sessionStore readClock,
       HarchWeb.authenticationAuthorization =
         HarchWeb.AuthenticationWithoutAuthorization
-          (\_ -> authenticationErrorResponse Http.status503 "Authorization is not configured for this application."),
+          (\endpointRequest -> authenticationErrorResponse (HarchWeb.requestContext (HarchWeb.endpointRouteRequest endpointRequest)) Http.status503 "Authorization is not configured for this application."),
       HarchWeb.authenticationAttachPrincipal = \principal context -> context {requestAccountPrincipal = Just principal},
       HarchWeb.authenticationChallenge = accountAuthenticationChallenge,
-      HarchWeb.authenticationUnavailable = \_ _ -> authenticationErrorResponse Http.status503 "Authentication is temporarily unavailable."
+      HarchWeb.authenticationUnavailable = \endpointRequest _ -> authenticationErrorResponse (HarchWeb.requestContext (HarchWeb.endpointRouteRequest endpointRequest)) Http.status503 "Authentication is temporarily unavailable."
     }
   where
     configuration = runtimeAccountJwtConfiguration runtime
@@ -416,17 +416,28 @@ accountAuthenticationChallenge endpointRequest _ =
             HarchWeb.requestContext = requestContext
           }
 
-authenticationErrorResponse :: Http.Status -> Text -> HarchWeb.NonPageResponse AppRoute AppRequestContext
-authenticationErrorResponse status message =
+-- | Preserve the application's text-body ownership while making its two
+-- authentication infrastructure failures support-correlatable on the Harch
+-- request rail. Pure pipeline tests may deliberately provide no correlation
+-- value; WAI ingress always supplies one. Other application error surfaces and
+-- audit joins remain AHI-5-RID follow-up work.
+authenticationErrorResponse :: AppRequestContext -> Http.Status -> Text -> HarchWeb.NonPageResponse AppRoute AppRequestContext
+authenticationErrorResponse requestContext status message =
   HarchWeb.NonPageBodyResponse
     HarchWeb.ResponseBody
       { HarchWeb.responseStatus = status,
         HarchWeb.responseContentType = "text/plain; charset=utf-8",
-        HarchWeb.responseBody = message,
+        HarchWeb.responseBody = messageWithRequestId requestContext message,
         HarchWeb.responseObservabilityAttributes = [],
         HarchWeb.responseLogEntries = [],
         HarchWeb.responseDatabaseOperations = []
       }
+
+messageWithRequestId :: AppRequestContext -> Text -> Text
+messageWithRequestId requestContext message =
+  case requestCorrelationId requestContext of
+    Nothing -> message
+    Just requestId -> message <> " Request ID: " <> HarchWeb.requestIdText requestId <> "."
 
 data AccountJwtClaims = AccountJwtClaims
   { accountJwtClaimAccountId :: Account.AccountId,

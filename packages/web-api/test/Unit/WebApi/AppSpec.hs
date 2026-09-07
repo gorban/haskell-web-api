@@ -755,7 +755,14 @@ spec = do
                     (HarchWeb.toWaiApplication runtimeApplication)
                     ((waiRequest ["profile"]) {Wai.requestHeaders = [("Cookie", TextEncoding.encodeUtf8 cookie)]})
                 Wai.responseStatus profileResponse `shouldBe` Http.status503
-                readResponseBody profileResponse `shouldReturn` "Authentication is temporarily unavailable."
+                case lookup "X-Request-ID" (Wai.responseHeaders profileResponse) of
+                  Nothing -> expectationFailure "authentication failure lacked X-Request-ID"
+                  Just requestId ->
+                    case TextEncoding.decodeUtf8' requestId of
+                      Left failure -> expectationFailure (show failure)
+                      Right requestIdText -> do
+                        HarchWeb.mkRequestId requestIdText `shouldSatisfy` isJust
+                        readResponseBody profileResponse `shouldReturn` "Authentication is temporarily unavailable. Request ID: " <> requestIdText <> "."
 
     it "selects the production and test SMTP authentication policies while constructing runtime workflows"
       $ bracket
@@ -1214,7 +1221,9 @@ spec = do
               [("Cookie", TextEncoding.encodeUtf8 runtimeCookie)]
           -- The signature has already been admitted when this controlled
           -- unavailable-session-store rail is selected.
-          profileResponseText `shouldBe` "Authentication is temporarily unavailable."
+          case Text.stripPrefix "Authentication is temporarily unavailable. Request ID: " profileResponseText >>= Text.stripSuffix "." of
+            Nothing -> expectationFailure "authentication failure lacked its request ID body suffix"
+            Just requestIdText -> HarchWeb.mkRequestId requestIdText `shouldSatisfy` isJust
           completionResult <- readIORef completionReference
           completionResult `shouldSatisfy` isNothing
           killThread serverThreadId
