@@ -35,14 +35,18 @@ module HarchWeb.Action.Codec
   ( ActionCodec (..),
     ActionCodecError (..),
     ActionEndpoint,
+    ActionCompletionPolicy (..),
     ActionMethod (..),
     ActionPath (..),
+    ActionReauthenticationPolicy (..),
     ClientActionDecodeResult (..),
     ClientActionIdempotencyKey,
     ClientActionPayload (..),
     action,
     actionEndpointMetadata,
+    actionCompletionPolicy,
     actionEndpointTarget,
+    actionReauthenticationPolicy,
     actionCodec,
     combineActionCodecs,
     declaredActionEndpointMetadata,
@@ -156,32 +160,54 @@ data DeclaredActionMetadata authorization
   = DefaultProtectedActionMetadata
   | ExplicitActionMetadata (EndpointMetadata authorization)
 
-data ActionEndpoint target context authorization action = ActionEndpoint target (ActionPath context) (DeclaredActionMetadata authorization) (ActionDecoder action)
+-- | The only action response whose typed navigation an application-owned
+-- reauthentication continuation may deliberately consume.  The normal case
+-- remains entirely framework-owned: patches settle and a typed navigation is
+-- applied immediately.  This declaration is intentionally narrower than a
+-- general JavaScript callback registry.
+data ActionCompletionPolicy
+  = ApplyActionResponse
+  | ReauthenticationContinuation
+  deriving (Eq, Show)
+
+-- | Whether the capture kernel may retain this declared action after Harch's
+-- recognized pre-handler authentication challenge.  Choosing this at the
+-- endpoint declaration, rather than a permissive form default, makes an
+-- action author's replay decision explicit before its bounded input snapshot
+-- can be kept in tab memory.
+data ActionReauthenticationPolicy
+  = DoNotRetain
+  | RetainForExplicitRetry
+  deriving (Eq, Show)
+
+data ActionEndpoint target context authorization action = ActionEndpoint target ActionReauthenticationPolicy ActionCompletionPolicy (ActionPath context) (DeclaredActionMetadata authorization) (ActionDecoder action)
 
 -- | A codec only stores declarations after their default metadata has been
 -- resolved and their metadata validated.  Keeping the authored declaration
 -- separate from this runtime representation makes the "unresolved default"
 -- state unrepresentable to transformations and dispatch.
-data ValidatedActionEndpoint target context authorization action = ValidatedActionEndpoint target (ActionPath context) (EndpointMetadata authorization) (ActionDecoder action)
+data ValidatedActionEndpoint target context authorization action = ValidatedActionEndpoint target ActionReauthenticationPolicy ActionCompletionPolicy (ActionPath context) (EndpointMetadata authorization) (ActionDecoder action)
 
 newtype ActionCodec target context authorization action = ActionCodec [ValidatedActionEndpoint target context authorization action]
 
-action :: target -> ActionPath context -> ActionDecoder actionValue -> ActionEndpoint target context authorization actionValue
-action target path = ActionEndpoint target path DefaultProtectedActionMetadata
+action :: target -> ActionReauthenticationPolicy -> ActionCompletionPolicy -> ActionPath context -> ActionDecoder actionValue -> ActionEndpoint target context authorization actionValue
+action target reauthenticationPolicy completionPolicy path = ActionEndpoint target reauthenticationPolicy completionPolicy path DefaultProtectedActionMetadata
 
 -- | Name an action's endpoint explicitly, including any anonymous or
 -- application-specific authorization requirement.
-actionWithMetadata :: target -> ActionPath context -> EndpointMetadata authorization -> ActionDecoder actionValue -> ActionEndpoint target context authorization actionValue
-actionWithMetadata target path metadata = ActionEndpoint target path (ExplicitActionMetadata metadata)
+actionWithMetadata :: target -> ActionReauthenticationPolicy -> ActionCompletionPolicy -> ActionPath context -> EndpointMetadata authorization -> ActionDecoder actionValue -> ActionEndpoint target context authorization actionValue
+actionWithMetadata target reauthenticationPolicy completionPolicy path metadata = ActionEndpoint target reauthenticationPolicy completionPolicy path (ExplicitActionMetadata metadata)
 
 -- | Declare an explicitly anonymous action. Unlike 'actionWithMetadata', this
 -- constructor cannot accidentally carry a protected requirement under a
 -- misleading name. Applications use 'actionWithMetadata' when a domain
 -- authorization requirement is part of the declaration.
-publicAction :: target -> ActionPath context -> EndpointName -> RouteTemplate -> ActionDecoder actionValue -> ActionEndpoint target context authorization actionValue
-publicAction target path endpointName routeTemplate =
+publicAction :: target -> ActionReauthenticationPolicy -> ActionCompletionPolicy -> ActionPath context -> EndpointName -> RouteTemplate -> ActionDecoder actionValue -> ActionEndpoint target context authorization actionValue
+publicAction target reauthenticationPolicy completionPolicy path endpointName routeTemplate =
   actionWithMetadata
     target
+    reauthenticationPolicy
+    completionPolicy
     path
     (mkEndpointMetadata endpointName routeTemplate EndpointMetadata.ActionEndpoint AllowUnauthenticated)
 
@@ -214,22 +240,22 @@ combineActionCodecs codecs =
 -- contains only validated declarations.
 declaredActionEndpointMetadata :: ActionCodec target context authorization action -> [EndpointMetadata authorization]
 declaredActionEndpointMetadata (ActionCodec endpoints) =
-  [metadata | ValidatedActionEndpoint _ _ metadata _ <- endpoints]
+  [metadata | ValidatedActionEndpoint _ _ _ _ metadata _ <- endpoints]
 
 -- | A one-endpoint codec is intrinsically free of duplicate endpoint declarations,
 -- but its default metadata is still derived from the supplied path. Keep that
 -- construction failure on the ordinary configuration rail rather than raising
 -- an exception for malformed paths.
-singleActionCodec :: target -> ActionPath context -> ActionDecoder action -> Either ActionCodecError (ActionCodec target context authorization action)
-singleActionCodec target path decoder =
-  actionCodec [action target path decoder]
+singleActionCodec :: target -> ActionReauthenticationPolicy -> ActionCompletionPolicy -> ActionPath context -> ActionDecoder action -> Either ActionCodecError (ActionCodec target context authorization action)
+singleActionCodec target reauthenticationPolicy completionPolicy path decoder =
+  actionCodec [action target reauthenticationPolicy completionPolicy path decoder]
 
 -- | Build one explicit endpoint declaration without an avoidable configuration
 -- failure rail. A supplied 'EndpointMetadata' is already validated, and one
 -- endpoint cannot duplicate another declaration.
-singleActionCodecWithMetadata :: target -> ActionPath context -> EndpointMetadata authorization -> ActionDecoder action -> ActionCodec target context authorization action
-singleActionCodecWithMetadata target path metadata decoder =
-  ActionCodec [ValidatedActionEndpoint target path metadata decoder]
+singleActionCodecWithMetadata :: target -> ActionReauthenticationPolicy -> ActionCompletionPolicy -> ActionPath context -> EndpointMetadata authorization -> ActionDecoder action -> ActionCodec target context authorization action
+singleActionCodecWithMetadata target reauthenticationPolicy completionPolicy path metadata decoder =
+  ActionCodec [ValidatedActionEndpoint target reauthenticationPolicy completionPolicy path metadata decoder]
 
 emptyActionCodec :: ActionCodec target context authorization action
 emptyActionCodec = ActionCodec []
@@ -241,7 +267,7 @@ actionEndpointMetadata :: ActionCodec target context authorization action -> con
 actionEndpointMetadata (ActionCodec endpoints) requestContext methodValue pathValue =
   listToMaybe
     [ metadata
-    | ValidatedActionEndpoint _ endpointActionPath metadata _ <- endpoints,
+    | ValidatedActionEndpoint _ _ _ endpointActionPath metadata _ <- endpoints,
       renderActionPath endpointActionPath requestContext == pathValue,
       actionMethodText (actionPathMethod endpointActionPath) == methodValue
     ]
@@ -254,7 +280,7 @@ actionEndpointTarget :: ActionCodec target context authorization action -> conte
 actionEndpointTarget (ActionCodec endpoints) requestContext methodValue pathValue =
   listToMaybe
     [ target
-    | ValidatedActionEndpoint target endpointActionPath _ _ <- endpoints,
+    | ValidatedActionEndpoint target _ _ endpointActionPath _ _ <- endpoints,
       renderActionPath endpointActionPath requestContext == pathValue,
       actionMethodText (actionPathMethod endpointActionPath) == methodValue
     ]
@@ -266,7 +292,7 @@ staticActionEndpointMetadata :: ActionCodec target context authorization action 
 staticActionEndpointMetadata (ActionCodec endpoints) methodValue pathValue =
   listToMaybe
     [ metadata
-    | ValidatedActionEndpoint _ endpointActionPath metadata _ <- endpoints,
+    | ValidatedActionEndpoint _ _ _ endpointActionPath metadata _ <- endpoints,
       actionStaticPath endpointActionPath == Just pathValue,
       actionMethodText (actionPathMethod endpointActionPath) == methodValue
     ]
@@ -289,9 +315,11 @@ mapActionCodec ::
 mapActionCodec embedTarget projectContext projectAuthorization embedAction (ActionCodec endpoints) =
   ActionCodec (map mapEndpoint endpoints)
   where
-    mapEndpoint (ValidatedActionEndpoint target path metadata decoder) =
+    mapEndpoint (ValidatedActionEndpoint target reauthenticationPolicy completionPolicy path metadata decoder) =
       ValidatedActionEndpoint
         (embedTarget target)
+        reauthenticationPolicy
+        completionPolicy
         (mapActionPath path)
         (mapMetadata metadata)
         (fmap embedAction decoder)
@@ -329,7 +357,7 @@ prefixActionCodecByContext ::
 prefixActionCodecByContext renderPrefix templatePrefix (ActionCodec endpoints) =
   ActionCodec <$> traverse prefixEndpoint endpoints
   where
-    prefixEndpoint (ValidatedActionEndpoint target childPath childMetadata decoder) = do
+    prefixEndpoint (ValidatedActionEndpoint target reauthenticationPolicy completionPolicy childPath childMetadata decoder) = do
       let prefixedPath =
             ActionPath
               { actionPathMethod = actionPathMethod childPath,
@@ -338,7 +366,7 @@ prefixActionCodecByContext renderPrefix templatePrefix (ActionCodec endpoints) =
                 actionStaticPath = Nothing
               }
       prefixedMetadata <- prefixMetadata childMetadata
-      pure (ValidatedActionEndpoint target prefixedPath prefixedMetadata decoder)
+      pure (ValidatedActionEndpoint target reauthenticationPolicy completionPolicy prefixedPath prefixedMetadata decoder)
 
     prefixMetadata metadata = do
       prefixedTemplate <- firstMetadataError (mkRouteTemplate (appendPrefix templatePrefix (EndpointMetadata.routeTemplateText (EndpointMetadata.endpointRouteTemplate metadata))))
@@ -354,11 +382,11 @@ appendPrefix prefix path
 validateActionMetadata :: ActionEndpoint target context authorization action -> Either ActionCodecError (ValidatedActionEndpoint target context authorization action)
 validateActionMetadata endpoint =
   case endpoint of
-    ActionEndpoint target path DefaultProtectedActionMetadata decoder -> do
+    ActionEndpoint target reauthenticationPolicy completionPolicy path DefaultProtectedActionMetadata decoder -> do
       metadata <- defaultActionMetadata path
-      pure (ValidatedActionEndpoint target path metadata decoder)
-    ActionEndpoint target path (ExplicitActionMetadata metadata) decoder ->
-      Right (ValidatedActionEndpoint target path metadata decoder)
+      pure (ValidatedActionEndpoint target reauthenticationPolicy completionPolicy path metadata decoder)
+    ActionEndpoint target reauthenticationPolicy completionPolicy path (ExplicitActionMetadata metadata) decoder ->
+      Right (ValidatedActionEndpoint target reauthenticationPolicy completionPolicy path metadata decoder)
 
 defaultActionMetadata :: ActionPath context -> Either ActionCodecError (EndpointMetadata authorization)
 defaultActionMetadata path = do
@@ -394,6 +422,28 @@ actionMethod :: (Eq target) => ActionCodec target context authorization action -
 actionMethod (ActionCodec endpoints) target =
   actionPathMethod <$> actionTargetPath endpoints target
 
+-- | Recover the explicit reauthentication retention decision for a declared
+-- target.  Rendering uses this same validated declaration; an absent target
+-- remains an ordinary configuration result.
+actionReauthenticationPolicy :: (Eq target) => ActionCodec target context authorization action -> target -> Maybe ActionReauthenticationPolicy
+actionReauthenticationPolicy (ActionCodec endpoints) target =
+  listToMaybe
+    [ endpointPolicy
+    | ValidatedActionEndpoint endpointTarget endpointPolicy _ _ _ _ <- endpoints,
+      endpointTarget == target
+    ]
+
+-- | Recover the explicit completion decision for a declared target.  Only
+-- 'ReauthenticationContinuation' permits the client runtime to offer its
+-- typed navigation to application recovery code.
+actionCompletionPolicy :: (Eq target) => ActionCodec target context authorization action -> target -> Maybe ActionCompletionPolicy
+actionCompletionPolicy (ActionCodec endpoints) target =
+  listToMaybe
+    [ endpointPolicy
+    | ValidatedActionEndpoint endpointTarget _ endpointPolicy _ _ _ <- endpoints,
+      endpointTarget == target
+    ]
+
 decodeAction :: ActionCodec target context authorization action -> ClientActionPayload context -> ClientActionDecodeResult action
 decodeAction (ActionCodec endpoints) payload =
   case filter (matchesActionPath payload) endpoints of
@@ -401,7 +451,7 @@ decodeAction (ActionCodec endpoints) payload =
     firstPathMatch : remainingPathMatches ->
       case filter (matchesActionMethod payload) (firstPathMatch : remainingPathMatches) of
         [] -> MethodNotAllowedClientAction (declaredMethods (firstPathMatch :| remainingPathMatches))
-        ValidatedActionEndpoint _ _ _ decoder : _ ->
+        ValidatedActionEndpoint _ _ _ _ _ decoder : _ ->
           case runActionDecoder decoder (clientActionFields payload) of
             (parseErrors, decodedAction) ->
               case decodedAction of
@@ -411,11 +461,11 @@ decodeAction (ActionCodec endpoints) payload =
                   maybe (DecodedClientAction actionValue) MalformedClientAction (nonEmpty parseErrors)
 
 matchesActionPath :: ClientActionPayload context -> ValidatedActionEndpoint target context authorization action -> Bool
-matchesActionPath payload (ValidatedActionEndpoint _ endpointActionPath _ _) =
+matchesActionPath payload (ValidatedActionEndpoint _ _ _ endpointActionPath _ _) =
   renderActionPath endpointActionPath (clientActionPayloadContext payload) == clientActionPath payload
 
 matchesActionMethod :: ClientActionPayload context -> ValidatedActionEndpoint target context authorization action -> Bool
-matchesActionMethod payload (ValidatedActionEndpoint _ endpointActionPath _ _) =
+matchesActionMethod payload (ValidatedActionEndpoint _ _ _ endpointActionPath _ _) =
   actionMethodText (actionPathMethod endpointActionPath) == clientActionMethod payload
 
 methodAt :: ActionMethod -> Text -> (context -> Text) -> ActionPath context
@@ -470,7 +520,7 @@ actionTargetPath :: (Eq target) => [ValidatedActionEndpoint target context autho
 actionTargetPath endpoints target =
   listToMaybe
     [ endpointActionPath
-    | ValidatedActionEndpoint endpointTargetValue endpointActionPath _ _ <- endpoints,
+    | ValidatedActionEndpoint endpointTargetValue _ _ endpointActionPath _ _ <- endpoints,
       endpointTargetValue == target
     ]
 
@@ -482,7 +532,7 @@ duplicateEndpoint endpoints =
       identity `elem` drop (index + 1) identities
     ]
   where
-    identities = [(actionPathMethod endpointActionPath, actionPathIdentity endpointActionPath) | ActionEndpoint _ endpointActionPath _ _ <- endpoints]
+    identities = [(actionPathMethod endpointActionPath, actionPathIdentity endpointActionPath) | ActionEndpoint _ _ _ endpointActionPath _ _ <- endpoints]
 
 duplicateValidatedEndpoint :: [ValidatedActionEndpoint target context authorization action] -> Maybe (ActionMethod, Text)
 duplicateValidatedEndpoint endpoints =
@@ -492,11 +542,11 @@ duplicateValidatedEndpoint endpoints =
       identity `elem` drop (index + 1) identities
     ]
   where
-    identities = [(actionPathMethod endpointActionPath, actionPathIdentity endpointActionPath) | ValidatedActionEndpoint _ endpointActionPath _ _ <- endpoints]
+    identities = [(actionPathMethod endpointActionPath, actionPathIdentity endpointActionPath) | ValidatedActionEndpoint _ _ _ endpointActionPath _ _ <- endpoints]
 
 declaredMethods :: NonEmpty (ValidatedActionEndpoint target context authorization action) -> NonEmpty ActionMethod
-declaredMethods (ValidatedActionEndpoint _ endpointActionPath _ _ :| remainingEndpoints) =
+declaredMethods (ValidatedActionEndpoint _ _ _ endpointActionPath _ _ :| remainingEndpoints) =
   firstMethod :| nub (filter (/= firstMethod) (map endpointMethod remainingEndpoints))
   where
     firstMethod = actionPathMethod endpointActionPath
-    endpointMethod (ValidatedActionEndpoint _ actionPathValue _ _) = actionPathMethod actionPathValue
+    endpointMethod (ValidatedActionEndpoint _ _ _ actionPathValue _ _) = actionPathMethod actionPathValue

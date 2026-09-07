@@ -68,6 +68,10 @@ spec = describe "Unit.Catalog.Domain" $ do
       `shouldBe` Just "/actions/refresh"
     Action.staticActionPath (moduleActionCodec moduleValue) RefreshCatalogTarget
       `shouldBe` Just "/actions/refresh"
+    Action.actionReauthenticationPolicy (moduleActionCodec moduleValue) RefreshCatalogTarget
+      `shouldBe` Just Action.DoNotRetain
+    Action.actionCompletionPolicy (moduleActionCodec moduleValue) RefreshCatalogTarget
+      `shouldBe` Just Action.ApplyActionResponse
     moduleActionRoute moduleValue catalogContext RefreshCatalogTarget
       `shouldBe` Just CatalogIndex
     let definition = moduleEndpoints moduleValue CatalogIndex

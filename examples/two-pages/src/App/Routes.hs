@@ -57,6 +57,8 @@ import HarchWeb
   )
 import HarchWeb.Action
   ( ActionCodec,
+    ActionCompletionPolicy (ApplyActionResponse),
+    ActionReauthenticationPolicy (DoNotRetain),
     formField,
     post,
     singleActionCodecWithMetadata,
@@ -243,6 +245,8 @@ twoPageActions :: ActionCodec TwoPageActionTarget () () TwoPageAction
 twoPageActions =
   singleActionCodecWithMetadata
     ()
+    DoNotRetain
+    ApplyActionResponse
     (post "/actions/subscribe")
     subscribeActionMetadata
     (SubscribeAction <$> singleOrDefault "" (formField "email" textValue))

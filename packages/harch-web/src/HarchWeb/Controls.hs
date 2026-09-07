@@ -49,10 +49,14 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb.Action
   ( ActionCodec,
+    ActionCompletionPolicy (..),
     ActionMethod,
+    ActionReauthenticationPolicy (..),
+    actionCompletionPolicy,
     actionMethod,
     actionMethodText,
     actionPath,
+    actionReauthenticationPolicy,
     staticActionPath,
   )
 import HarchWeb.Csrf (CsrfToken, csrfTokenText)
@@ -416,8 +420,8 @@ pageLink renderPageTarget target =
 
 actionForm :: (Eq target) => ActionCodec target context authorization action -> context -> target -> ActionFormAttributes -> [Html] -> ActionFormRendering
 actionForm codec context target attributes children =
-  case (actionPath codec context target, actionMethod codec target) of
-    (Just targetPath, Just targetMethod) -> CapturingActionForm (renderCapturingActionForm targetPath targetMethod attributes children)
+  case (actionPath codec context target, actionMethod codec target, actionReauthenticationPolicy codec target, actionCompletionPolicy codec target) of
+    (Just targetPath, Just targetMethod, Just reauthenticationPolicy, Just completionPolicy) -> CapturingActionForm (renderCapturingActionForm targetPath targetMethod reauthenticationPolicy completionPolicy attributes children)
     _ -> UndeclaredActionForm (renderUndeclaredActionForm children)
 
 -- | Render a form only for an action whose declaration proves that its path
@@ -425,8 +429,8 @@ actionForm codec context target attributes children =
 -- available through 'actionForm'.
 staticActionForm :: (Eq target) => ActionCodec target context authorization action -> target -> ActionFormAttributes -> [Html] -> ActionFormRendering
 staticActionForm codec target attributes children =
-  case (staticActionPath codec target, actionMethod codec target) of
-    (Just targetPath, Just targetMethod) -> CapturingActionForm (renderCapturingActionForm targetPath targetMethod attributes children)
+  case (staticActionPath codec target, actionMethod codec target, actionReauthenticationPolicy codec target, actionCompletionPolicy codec target) of
+    (Just targetPath, Just targetMethod, Just reauthenticationPolicy, Just completionPolicy) -> CapturingActionForm (renderCapturingActionForm targetPath targetMethod reauthenticationPolicy completionPolicy attributes children)
     _ -> UndeclaredActionForm (renderUndeclaredActionForm children)
 
 -- | A rendered action control is either capture-ready, or an explicit
@@ -445,8 +449,8 @@ renderActionForm actionFormRendering =
     CapturingActionForm renderedForm -> renderedForm
     UndeclaredActionForm renderedFallback -> renderedFallback
 
-renderCapturingActionForm :: Text -> ActionMethod -> ActionFormAttributes -> [Html] -> Html
-renderCapturingActionForm targetPath targetMethod attributes children =
+renderCapturingActionForm :: Text -> ActionMethod -> ActionReauthenticationPolicy -> ActionCompletionPolicy -> ActionFormAttributes -> [Html] -> Html
+renderCapturingActionForm targetPath targetMethod reauthenticationPolicy completionPolicy attributes children =
   element
     formTag
     ( maybe [] (pure . ariaLabel) (actionFormAriaLabel attributes)
@@ -454,6 +458,8 @@ renderCapturingActionForm targetPath targetMethod attributes children =
              dataAttribute "harch-action" "true",
              dataAttribute "harch-action-path" targetPath,
              dataAttribute "harch-action-method" (Text.toLower (actionMethodText targetMethod)),
+             dataAttribute "harch-action-reauthentication-policy" (renderReauthenticationPolicy reauthenticationPolicy),
+             dataAttribute "harch-action-completion" (renderCompletionPolicy completionPolicy),
              dataAttribute "harch-action-capabilities" (renderCapabilities (actionFormCapabilities attributes)),
              dataAttribute "harch-action-retention-ms" (Text.pack (show (retainedActionLifetimeMilliseconds (actionFormRetainedActionLifetime attributes))))
            ]
@@ -478,6 +484,18 @@ renderCapturingActionForm targetPath targetMethod attributes children =
     recoveryCopy = actionFormRecoveryCopy attributes
     nativeFallback = nativeFallbackFor attributes
     idempotency = idempotencyFor attributes
+
+renderReauthenticationPolicy :: ActionReauthenticationPolicy -> Text
+renderReauthenticationPolicy policy =
+  case policy of
+    DoNotRetain -> "do-not-retain"
+    RetainForExplicitRetry -> "retain-for-explicit-retry"
+
+renderCompletionPolicy :: ActionCompletionPolicy -> Text
+renderCompletionPolicy policy =
+  case policy of
+    ApplyActionResponse -> "apply-action-response"
+    ReauthenticationContinuation -> "reauthentication-continuation"
 
 renderUndeclaredActionForm :: [Html] -> Html
 renderUndeclaredActionForm children =

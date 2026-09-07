@@ -18,7 +18,7 @@ where
 
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Text (Text)
-import HarchWeb.Action (ActionCodec, post, singleActionCodecWithMetadata)
+import HarchWeb.Action (ActionCodec, ActionCompletionPolicy (ApplyActionResponse), ActionReauthenticationPolicy (DoNotRetain), post, singleActionCodecWithMetadata)
 import HarchWeb.ApplicationModule (ApplicationModule (..))
 import HarchWeb.Document (Page (..))
 import HarchWeb.EndpointMetadata
@@ -136,6 +136,8 @@ ordersActionCodec :: ActionCodec OrdersActionTarget OrdersContext OrdersPolicy O
 ordersActionCodec =
   singleActionCodecWithMetadata
     SubmitOrderTarget
+    DoNotRetain
+    ApplyActionResponse
     (post "/actions/submit")
     ( mkEndpointMetadata
         (requiredEndpointNameOrDie "orders.submit")

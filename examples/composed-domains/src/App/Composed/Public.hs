@@ -19,7 +19,7 @@ import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe (isJust)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
-import HarchWeb.Action (ActionCodec, ClientActionDecodeResult (DecodedClientAction), ClientActionPayload (..), actionCodec, decodeAction, formField, parseField, post, prefixActionCodecByContext, publicAction, required)
+import HarchWeb.Action (ActionCodec, ActionCompletionPolicy (ApplyActionResponse), ActionReauthenticationPolicy (DoNotRetain), ClientActionDecodeResult (DecodedClientAction), ClientActionPayload (..), actionCodec, decodeAction, formField, parseField, post, prefixActionCodecByContext, publicAction, required)
 import HarchWeb.ApplicationModule (ApplicationModule (..))
 import HarchWeb.Controls qualified as Controls
 import HarchWeb.Csrf
@@ -113,6 +113,8 @@ buildPublicModuleWithAdmissionWorkflow staticAssetsConfig csrfProtection _admiss
             actionCodec
               [ publicAction
                   AdmissionActionTarget
+                  DoNotRetain
+                  ApplyActionResponse
                   (post admissionActionPath)
                   (requiredEndpointNameOrDie "root.public.admission.submit")
                   (requiredRouteTemplateOrDie admissionActionPath)

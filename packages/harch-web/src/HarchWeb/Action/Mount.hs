@@ -52,9 +52,9 @@ mountActionCodecAtPrefix pathSegments endpointNamespace ActionCodecMountAdapter 
     mountCodec (ActionCodec endpoints) = ActionCodec <$> traverse mountEndpoint endpoints
     mountedPathPrefix = safeUrlText (encodeRouteLocation (RouteLocation (toList pathSegments) []))
     toList (firstPathSegment :| remainingPathSegments) = firstPathSegment : remainingPathSegments
-    mountEndpoint (ValidatedActionEndpoint childTarget childPath childMetadata decoder) = do
+    mountEndpoint (ValidatedActionEndpoint childTarget reauthenticationPolicy completionPolicy childPath childMetadata decoder) = do
       mountedMetadata <- mapMetadata childMetadata
-      pure (ValidatedActionEndpoint (actionMountEmbedTarget childTarget) (mountPath childPath) mountedMetadata (fmap actionMountEmbedAction decoder))
+      pure (ValidatedActionEndpoint (actionMountEmbedTarget childTarget) reauthenticationPolicy completionPolicy (mountPath childPath) mountedMetadata (fmap actionMountEmbedAction decoder))
     mountPath childPath =
       ActionPath
         { actionPathMethod = actionPathMethod childPath,

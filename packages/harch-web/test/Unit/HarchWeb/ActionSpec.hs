@@ -22,7 +22,7 @@ import Data.Text qualified as Text (isInfixOf, null, pack)
 import Data.Text.Encoding qualified as TextEncoding (encodeUtf8)
 import HarchWeb (ActionCapability (ConditionalLeaveConfirmation, HandlerSafeRetry, IdempotentMutationRetry, NativeFallback), ActionFormAttributes (actionFormCapabilities), ActionIdempotency (actionIdempotencyKey), ActionRecoveryCopy (actionCancelCopy, actionCancelledCopy, actionDelayedCopy, actionPendingCopy, actionReadyCopy, actionRecoverableCopy, actionRetryCopy), FormMethod (FormGet, FormPost), NativeActionFallback (NativeActionFallback, nativeActionFallbackCsrfToken, nativeActionFallbackMethod, nativeActionFallbackPath), actionForm, actionIdempotency, defaultActionFormAttributes, defaultActionRecoveryCopy, defaultCaptureKernelByteBudget, defaultCaptureKernelScript, defaultNavigationRuntimeScript, mkCsrfToken, mkRetainedActionLifetime, renderActionForm, renderHtml, retainedActionLifetimeMilliseconds, staticActionForm, text)
 import HarchWeb qualified as Web
-import HarchWeb.Action qualified as Action (ActionCodec, ActionCodecError (..), ActionCodecMountAdapter (..), ActionDecoder, ActionMethod (ActionDelete, ActionGet, ActionPatch, ActionPost, ActionPut), ClientActionDecodeResult (..), ClientActionParseError (DuplicateActionField, InvalidActionField, MissingActionField), ClientActionPayload (ClientActionPayload, clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod, clientActionPath, clientActionPayloadContext), action, actionCodec, actionEndpointMetadata, actionEndpointTarget, actionMethod, actionMethodText, actionPath, combineActionCodecs, decodeAction, delete, deleteAt, emptyActionCodec, exactlyOne, formField, get, getAt, mapActionCodec, methodAt, mountActionCodecAtPrefix, optional, parseField, patch, patchAt, post, postAt, prefixActionCodecByContext, publicAction, put, putAt, required, singleActionCodec, singleActionCodecWithMetadata, singleOrDefault, staticActionEndpointMetadata, staticActionPath, textValue)
+import HarchWeb.Action qualified as Action (ActionCodec, ActionCodecError (..), ActionCodecMountAdapter (..), ActionCompletionPolicy (..), ActionDecoder, ActionMethod (ActionDelete, ActionGet, ActionPatch, ActionPost, ActionPut), ActionReauthenticationPolicy (..), ClientActionDecodeResult (..), ClientActionParseError (DuplicateActionField, InvalidActionField, MissingActionField), ClientActionPayload (ClientActionPayload, clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod, clientActionPath, clientActionPayloadContext), action, actionCodec, actionCompletionPolicy, actionEndpointMetadata, actionEndpointTarget, actionMethod, actionMethodText, actionPath, actionReauthenticationPolicy, combineActionCodecs, decodeAction, delete, deleteAt, emptyActionCodec, exactlyOne, formField, get, getAt, mapActionCodec, methodAt, mountActionCodecAtPrefix, optional, parseField, patch, patchAt, post, postAt, prefixActionCodecByContext, publicAction, put, putAt, required, singleActionCodec, singleActionCodecWithMetadata, singleOrDefault, staticActionEndpointMetadata, staticActionPath, textValue)
 import HarchWeb.ApplicationModule (ActionMount (..), AuthorizationProjection (..), ContextProjection (..), mountActionCodec)
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.EndpointMetadata qualified as EndpointMetadata
@@ -83,6 +83,8 @@ spec = do
           childCodec =
             Action.singleActionCodecWithMetadata
               ChildSaveTarget
+              Action.DoNotRetain
+              Action.ApplyActionResponse
               (Action.postAt "/save" (\childContext -> "/catalog/" <> childContext <> "/save"))
               childMetadata
               (pure ChildSaved)
@@ -130,7 +132,7 @@ spec = do
               EndpointMetadata.ActionEndpoint
               EndpointMetadata.AllowUnauthenticated
           sourceCodec :: Action.ActionCodec Text Text () Text
-          sourceCodec = Action.singleActionCodecWithMetadata "save" (Action.post "/") metadata (pure "saved")
+          sourceCodec = Action.singleActionCodecWithMetadata "save" Action.DoNotRetain Action.ApplyActionResponse (Action.post "/") metadata (pure "saved")
           prefixedCodec = Action.prefixActionCodecByContext ("/tenants/" <>) "/{tenant}" sourceCodec
           expectedMetadata = metadata {EndpointMetadata.endpointRouteTemplate = EndpointMetadata.requiredRouteTemplateOrDie "/{tenant}"}
           payload = Action.ClientActionPayload "POST" "/tenants/42" [] Nothing Nothing "42"
@@ -156,7 +158,7 @@ spec = do
         Right _ -> expectationFailure "expected an invalid context-prefix template"
 
       let dynamicSource :: Action.ActionCodec Text Text () Text
-          dynamicSource = Action.singleActionCodecWithMetadata "save" (Action.postAt "/save" ("/save-" <>)) metadata (pure "saved")
+          dynamicSource = Action.singleActionCodecWithMetadata "save" Action.DoNotRetain Action.ApplyActionResponse (Action.postAt "/save" ("/save-" <>)) metadata (pure "saved")
       case Action.prefixActionCodecByContext ("/tenants/" <>) "/{tenant}/save" dynamicSource of
         Left codecError -> expectationFailure (show codecError)
         Right codec ->
@@ -178,9 +180,9 @@ spec = do
               EndpointMetadata.ActionEndpoint
               EndpointMetadata.RequireAuthenticated
           anonymousCodec :: Action.ActionCodec ChildActionTarget Text ChildPolicy ChildAction
-          anonymousCodec = Action.singleActionCodecWithMetadata ChildSaveTarget (Action.post "/save") anonymousMetadata (pure ChildSaved)
+          anonymousCodec = Action.singleActionCodecWithMetadata ChildSaveTarget Action.DoNotRetain Action.ApplyActionResponse (Action.post "/save") anonymousMetadata (pure ChildSaved)
           authenticatedCodec :: Action.ActionCodec ChildActionTarget Text ChildPolicy ChildAction
-          authenticatedCodec = Action.singleActionCodecWithMetadata ChildSaveTarget (Action.post "/authenticated-save") authenticatedMetadata (pure ChildSaved)
+          authenticatedCodec = Action.singleActionCodecWithMetadata ChildSaveTarget Action.DoNotRetain Action.ApplyActionResponse (Action.post "/authenticated-save") authenticatedMetadata (pure ChildSaved)
           mapCodec = Action.mapActionCodec (\ChildSaveTarget -> ParentCatalogActionTarget) (const "child") (\MaySaveCatalog -> MayManageCatalog) ParentCatalogAction
           mappedAnonymousCodec = mapCodec anonymousCodec
           mappedAuthenticatedCodec = mapCodec authenticatedCodec
@@ -221,7 +223,7 @@ spec = do
               EndpointMetadata.ActionEndpoint
               EndpointMetadata.AllowUnauthenticated
           childCodec :: Action.ActionCodec ChildActionTarget Text ChildPolicy ChildAction
-          childCodec = Action.singleActionCodecWithMetadata ChildSaveTarget (Action.post "/") metadata (pure ChildSaved)
+          childCodec = Action.singleActionCodecWithMetadata ChildSaveTarget Action.DoNotRetain Action.ApplyActionResponse (Action.post "/") metadata (pure ChildSaved)
       case Action.mountActionCodecAtPrefix
         (requiredPathSegment "catalog" :| [])
         "root.catalog"
@@ -261,7 +263,7 @@ spec = do
               EndpointMetadata.ActionEndpoint
               EndpointMetadata.RequireAuthenticated
           childCodec :: Action.ActionCodec ChildActionTarget Text ChildPolicy ChildAction
-          childCodec = Action.singleActionCodecWithMetadata ChildSaveTarget (Action.post "/") metadata (pure ChildSaved)
+          childCodec = Action.singleActionCodecWithMetadata ChildSaveTarget Action.DoNotRetain Action.ApplyActionResponse (Action.post "/") metadata (pure ChildSaved)
       case Action.mountActionCodecAtPrefix
         (requiredPathSegment "catalog" :| [])
         "root.catalog"
@@ -371,16 +373,36 @@ spec = do
       let customLifetime = fromMaybe (error "expected positive retained action lifetime") (mkRetainedActionLifetime 120000)
           customAttributes = defaultActionFormAttributes {Web.actionFormRetainedActionLifetime = customLifetime}
           renderedForm = renderHtml (renderActionForm (actionForm testActionCodec defaultContext "save" customAttributes [text "Save"]))
+          continuationCodec :: Action.ActionCodec Text TestContext () Text
+          continuationCodec =
+            case Action.singleActionCodec
+              "login"
+              Action.DoNotRetain
+              Action.ReauthenticationContinuation
+              (Action.post "/actions/login")
+              (pure "logged in") of
+              Right codec -> codec
+              Left codecError -> error (show codecError)
+          renderedContinuation = renderHtml (renderActionForm (actionForm continuationCodec defaultContext "login" defaultActionFormAttributes [text "Sign in"]))
           runtimeSources = defaultCaptureKernelScript <> defaultNavigationRuntimeScript
       expectAll
-        ( (mkRetainedActionLifetime 0 `shouldBe` Nothing)
+        ( (Action.actionReauthenticationPolicy testActionCodec "save" `shouldBe` Just Action.RetainForExplicitRetry)
             :| [ retainedActionLifetimeMilliseconds customLifetime `shouldBe` 120000,
+                 Action.actionCompletionPolicy testActionCodec "save" `shouldBe` Just Action.ApplyActionResponse,
+                 Action.actionReauthenticationPolicy testActionCodec "read" `shouldBe` Just Action.DoNotRetain,
+                 Action.actionCompletionPolicy continuationCodec "login" `shouldBe` Just Action.ReauthenticationContinuation,
+                 mkRetainedActionLifetime 0 `shouldBe` Nothing,
                  customLifetime == customLifetime `shouldBe` True,
                  customLifetime /= fromMaybe (error "expected a distinct positive retained action lifetime") (mkRetainedActionLifetime 120001) `shouldBe` True,
                  Text.isInfixOf "data-harch-action-retention-ms=\"120000\"" renderedForm `shouldBe` True,
+                 Text.isInfixOf "data-harch-action-reauthentication-policy=\"retain-for-explicit-retry\"" renderedForm `shouldBe` True,
+                 Text.isInfixOf "data-harch-action-reauthentication-policy=\"do-not-retain\"" renderedContinuation `shouldBe` True,
+                 Text.isInfixOf "data-harch-action-completion=\"reauthentication-continuation\"" renderedContinuation `shouldBe` True,
                  Text.isInfixOf "retainForReauthentication" defaultCaptureKernelScript `shouldBe` True,
+                 Text.isInfixOf "reauth !== 'retain-for-explicit-retry'" defaultCaptureKernelScript `shouldBe` True,
                  Text.isInfixOf "replayRetained" defaultCaptureKernelScript `shouldBe` True,
                  Text.isInfixOf "harch:action-reauthentication-required" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "harch:action-reauthentication-completed" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "refreshPageSecurityForRetainedAction" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "localStorage" runtimeSources `shouldBe` False,
                  Text.isInfixOf "sessionStorage" runtimeSources `shouldBe` False,
@@ -392,7 +414,7 @@ spec = do
       let staticCodec :: Action.ActionCodec Text TestContext () Text
           staticCodec =
             fromRight (error "invalid static action codec") $
-              Action.actionCodec [Action.action "save" (Action.post "/actions/save") (pure "save")]
+              Action.actionCodec [Action.action "save" Action.DoNotRetain Action.ApplyActionResponse (Action.post "/actions/save") (pure "save")]
           renderedForm = renderHtml (renderActionForm (staticActionForm staticCodec "save" defaultActionFormAttributes [text "Save"]))
           dynamicRenderedForm = renderHtml (renderActionForm (staticActionForm testActionCodec "save" defaultActionFormAttributes [text "Save"]))
       expectAll
@@ -408,13 +430,15 @@ spec = do
       let protectedCodec :: Action.ActionCodec Text TestContext () Text
           protectedCodec =
             fromRight (error "invalid protected action codec") $
-              Action.actionCodec [Action.action "save" (Action.post "/actions/save") (pure "save")]
+              Action.actionCodec [Action.action "save" Action.DoNotRetain Action.ApplyActionResponse (Action.post "/actions/save") (pure "save")]
           publicCodec :: Action.ActionCodec Text TestContext () Text
           publicCodec =
             fromRight (error "invalid public action codec") $
               Action.actionCodec
                 [ Action.publicAction
                     "status"
+                    Action.DoNotRetain
+                    Action.ApplyActionResponse
                     (Action.get "/actions/status")
                     (fromRight (error "invalid endpoint name") (EndpointMetadata.mkEndpointName "action.status"))
                     (fromRight (error "invalid route template") (EndpointMetadata.mkRouteTemplate "/actions/status"))
@@ -422,7 +446,7 @@ spec = do
                 ]
           invalidCodec :: Either Action.ActionCodecError (Action.ActionCodec Text TestContext () Text)
           invalidCodec =
-            Action.actionCodec [Action.action "broken" (Action.post "not-a-route") (pure "broken")]
+            Action.actionCodec [Action.action "broken" Action.DoNotRetain Action.ApplyActionResponse (Action.post "not-a-route") (pure "broken")]
       expectAll
         ( ( Action.actionEndpointMetadata protectedCodec defaultContext "POST" "/actions/save"
               `shouldBe` Just
@@ -566,14 +590,14 @@ spec = do
           methodCodec =
             fromRight (error "invalid test action codec") $
               Action.actionCodec
-                [ Action.action "get" (Action.get "/get") (pure "get"),
-                  Action.action "put" (Action.put "/put") (pure "put"),
-                  Action.action "patch" (Action.patch "/patch") (pure "patch"),
-                  Action.action "delete" (Action.delete "/delete") (pure "delete"),
-                  Action.action "dynamic" (Action.methodAt Action.ActionPost "/dynamic" (\actionContext -> testContextPathPrefix actionContext <> "/dynamic")) (Action.exactlyOne (Action.formField "name" Action.textValue))
+                [ Action.action "get" Action.DoNotRetain Action.ApplyActionResponse (Action.get "/get") (pure "get"),
+                  Action.action "put" Action.DoNotRetain Action.ApplyActionResponse (Action.put "/put") (pure "put"),
+                  Action.action "patch" Action.DoNotRetain Action.ApplyActionResponse (Action.patch "/patch") (pure "patch"),
+                  Action.action "delete" Action.DoNotRetain Action.ApplyActionResponse (Action.delete "/delete") (pure "delete"),
+                  Action.action "dynamic" Action.DoNotRetain Action.ApplyActionResponse (Action.methodAt Action.ActionPost "/dynamic" (\actionContext -> testContextPathPrefix actionContext <> "/dynamic")) (Action.exactlyOne (Action.formField "name" Action.textValue))
                 ]
           singleCodec :: Action.ActionCodec Text TestContext () Text
-          singleCodec = fromRight (error "invalid single action codec") (Action.singleActionCodec "single" (Action.post "/single") (pure "single"))
+          singleCodec = fromRight (error "invalid single action codec") (Action.singleActionCodec "single" Action.DoNotRetain Action.ApplyActionResponse (Action.post "/single") (pure "single"))
           explicitSingleMetadata :: EndpointMetadata.EndpointMetadata ()
           explicitSingleMetadata =
             EndpointMetadata.mkEndpointMetadata
@@ -582,11 +606,11 @@ spec = do
               EndpointMetadata.ActionEndpoint
               EndpointMetadata.AllowUnauthenticated
           explicitSingleCodec :: Action.ActionCodec Text TestContext () Text
-          explicitSingleCodec = Action.singleActionCodecWithMetadata "explicit-single" (Action.post "/explicit-single") explicitSingleMetadata (pure "explicit-single")
+          explicitSingleCodec = Action.singleActionCodecWithMetadata "explicit-single" Action.DoNotRetain Action.ApplyActionResponse (Action.post "/explicit-single") explicitSingleMetadata (pure "explicit-single")
           rootCodec :: Action.ActionCodec Text TestContext () Text
           rootCodec =
             fromRight (error "invalid root action codec") $
-              Action.actionCodec [Action.action "root" (Action.post "/") (pure "root")]
+              Action.actionCodec [Action.action "root" Action.DoNotRetain Action.ApplyActionResponse (Action.post "/") (pure "root")]
           payload methodValue path fields =
             Action.ClientActionPayload
               { Action.clientActionMethod = methodValue,
@@ -632,7 +656,7 @@ spec = do
                  Action.DuplicateActionEndpoint Action.ActionPost "/same" /= Action.DuplicateActionEndpoint Action.ActionGet "/same" `shouldBe` True
                ]
         )
-      case (Action.singleActionCodec "invalid" (Action.post "not-a-route") (pure "invalid") :: Either Action.ActionCodecError (Action.ActionCodec Text TestContext () Text)) of
+      case (Action.singleActionCodec "invalid" Action.DoNotRetain Action.ApplyActionResponse (Action.post "not-a-route") (pure "invalid") :: Either Action.ActionCodecError (Action.ActionCodec Text TestContext () Text)) of
         Left codecError -> codecError `shouldBe` Action.InvalidActionEndpointMetadata EndpointMetadata.InvalidRouteTemplate
         Right _ -> expectationFailure "expected invalid single action codec"
 
@@ -684,35 +708,35 @@ spec = do
           staticCodec =
             fromRight (error "invalid test action codec") $
               Action.actionCodec
-                [ Action.action "get" (Action.get "/get") (pure "get"),
-                  Action.action "post" (Action.post "/post") (pure "post"),
-                  Action.action "put" (Action.put "/put") (pure "put"),
-                  Action.action "patch" (Action.patch "/patch") (pure "patch"),
-                  Action.action "delete" (Action.delete "/delete") (pure "delete")
+                [ Action.action "get" Action.DoNotRetain Action.ApplyActionResponse (Action.get "/get") (pure "get"),
+                  Action.action "post" Action.DoNotRetain Action.ApplyActionResponse (Action.post "/post") (pure "post"),
+                  Action.action "put" Action.DoNotRetain Action.ApplyActionResponse (Action.put "/put") (pure "put"),
+                  Action.action "patch" Action.DoNotRetain Action.ApplyActionResponse (Action.patch "/patch") (pure "patch"),
+                  Action.action "delete" Action.DoNotRetain Action.ApplyActionResponse (Action.delete "/delete") (pure "delete")
                 ]
           duplicateMethodCodec :: Action.ActionCodec Text TestContext () Text
           duplicateMethodCodec =
             fromRight (error "invalid test action codec") $
               Action.actionCodec
-                [ Action.action "first-get" (Action.getAt "/first-get" (const "/same")) (pure "first-get"),
-                  Action.action "second-get" (Action.getAt "/second-get" (const "/same")) (pure "second-get"),
-                  Action.action "post" (Action.postAt "/post" (const "/same")) (pure "post"),
-                  Action.action "put" (Action.putAt "/put" (const "/same")) (pure "put")
+                [ Action.action "first-get" Action.DoNotRetain Action.ApplyActionResponse (Action.getAt "/first-get" (const "/same")) (pure "first-get"),
+                  Action.action "second-get" Action.DoNotRetain Action.ApplyActionResponse (Action.getAt "/second-get" (const "/same")) (pure "second-get"),
+                  Action.action "post" Action.DoNotRetain Action.ApplyActionResponse (Action.postAt "/post" (const "/same")) (pure "post"),
+                  Action.action "put" Action.DoNotRetain Action.ApplyActionResponse (Action.putAt "/put" (const "/same")) (pure "put")
                 ]
           dynamicMethodCodec :: Action.ActionCodec Text TestContext () Text
           dynamicMethodCodec =
             fromRight (error "invalid dynamic action codec") $
               Action.actionCodec
-                [ Action.action "put" (Action.putAt "/put" (const "/put")) (pure "put"),
-                  Action.action "patch" (Action.patchAt "/patch" (const "/patch")) (pure "patch"),
-                  Action.action "delete" (Action.deleteAt "/delete" (const "/delete")) (pure "delete")
+                [ Action.action "put" Action.DoNotRetain Action.ApplyActionResponse (Action.putAt "/put" (const "/put")) (pure "put"),
+                  Action.action "patch" Action.DoNotRetain Action.ApplyActionResponse (Action.patchAt "/patch" (const "/patch")) (pure "patch"),
+                  Action.action "delete" Action.DoNotRetain Action.ApplyActionResponse (Action.deleteAt "/delete" (const "/delete")) (pure "delete")
                 ]
           optionalCodec =
             fromRight (error "invalid test action codec") $
-              Action.actionCodec [Action.action () (Action.post "/optional") (Action.optional (Action.formField "name" (Action.parseField nonEmptyValue)))]
+              Action.actionCodec [Action.action () Action.DoNotRetain Action.ApplyActionResponse (Action.post "/optional") (Action.optional (Action.formField "name" (Action.parseField nonEmptyValue)))]
           defaultCodec =
             fromRight (error "invalid test action codec") $
-              Action.actionCodec [Action.action () (Action.post "/default") (Action.singleOrDefault "guest" (Action.formField "name" (Action.parseField nonEmptyValue)))]
+              Action.actionCodec [Action.action () Action.DoNotRetain Action.ApplyActionResponse (Action.post "/default") (Action.singleOrDefault "guest" (Action.formField "name" (Action.parseField nonEmptyValue)))]
           actionPayload methodValue path fields =
             Action.ClientActionPayload methodValue path fields Nothing Nothing defaultContext
           nonEmptyValue fieldText = if Text.null fieldText then Nothing else Just fieldText
@@ -737,7 +761,7 @@ spec = do
           unsupportedCodec :: Action.ActionCodec Text TestContext () Text
           unsupportedCodec =
             fromRight (error "invalid test action codec") $
-              Action.actionCodec [Action.action "put" (Action.put "/put") (pure "put")]
+              Action.actionCodec [Action.action "put" Action.DoNotRetain Action.ApplyActionResponse (Action.put "/put") (pure "put")]
           nativeAttributes =
             defaultActionFormAttributes
               { actionFormCapabilities = [NativeFallback (NativeActionFallback "/native" FormPost testFallbackCsrfToken)]
@@ -760,12 +784,12 @@ spec = do
           invalidDecoder = Compose (const (Compose ([], Nothing)))
           invalidCodec =
             fromRight (error "invalid test action codec") $
-              Action.actionCodec [Action.action () (Action.post "/invalid") invalidDecoder]
+              Action.actionCodec [Action.action () Action.DoNotRetain Action.ApplyActionResponse (Action.post "/invalid") invalidDecoder]
           errorWithValueDecoder :: Action.ActionDecoder Text
           errorWithValueDecoder = Compose (const (Compose ([Action.InvalidActionField "email"], Just "ignored")))
           errorWithValueCodec =
             fromRight (error "invalid test action codec") $
-              Action.actionCodec [Action.action () (Action.post "/error-with-value") errorWithValueDecoder]
+              Action.actionCodec [Action.action () Action.DoNotRetain Action.ApplyActionResponse (Action.post "/error-with-value") errorWithValueDecoder]
           payload methodValue path =
             Action.ClientActionPayload
               { Action.clientActionMethod = methodValue,
@@ -788,6 +812,8 @@ spec = do
               Action.actionCodec
                 [ Action.action
                     ()
+                    Action.DoNotRetain
+                    Action.ApplyActionResponse
                     (Action.post "/validate")
                     ( (,)
                         <$> Action.required (Action.formField "email" Action.textValue)
@@ -805,10 +831,10 @@ spec = do
               }
           defaultCodec =
             fromRight (error "invalid test action codec") $
-              Action.actionCodec [Action.action () (Action.post "/default") (Action.singleOrDefault "guest" (Action.formField "name" Action.textValue))]
+              Action.actionCodec [Action.action () Action.DoNotRetain Action.ApplyActionResponse (Action.post "/default") (Action.singleOrDefault "guest" (Action.formField "name" Action.textValue))]
           optionalCodec =
             fromRight (error "invalid test action codec") $
-              Action.actionCodec [Action.action () (Action.post "/optional") (Action.optional (Action.formField "name" Action.textValue))]
+              Action.actionCodec [Action.action () Action.DoNotRetain Action.ApplyActionResponse (Action.post "/optional") (Action.optional (Action.formField "name" Action.textValue))]
       Action.decodeAction validationCodec (validationPayload [("email", "one"), ("email", "two")])
         `shouldBe` Action.MalformedClientAction (Action.DuplicateActionField "email" :| [Action.MissingActionField "code"])
       Action.decodeAction validationCodec (validationPayload [("email", "one"), ("code", "invalid")])
@@ -823,7 +849,7 @@ spec = do
         `shouldBe` Action.DecodedClientAction Nothing
 
     it "rejects ambiguous endpoint declarations during codec construction" $ do
-      case Action.actionCodec [Action.action () (Action.post "/duplicate") (pure ()), Action.action () (Action.post "/duplicate") (pure ())] of
+      case Action.actionCodec [Action.action () Action.DoNotRetain Action.ApplyActionResponse (Action.post "/duplicate") (pure ()), Action.action () Action.DoNotRetain Action.ApplyActionResponse (Action.post "/duplicate") (pure ())] of
         Left codecError -> do
           codecError `shouldBe` Action.DuplicateActionEndpoint Action.ActionPost "/duplicate"
           show codecError `shouldBe` "DuplicateActionEndpoint ActionPost \"/duplicate\""
@@ -832,9 +858,9 @@ spec = do
     it "rejects a later duplicate declaration after checking every earlier endpoint" $ do
       let codec =
             Action.actionCodec
-              [ Action.action "first" (Action.post "/first") (pure "first"),
-                Action.action "second" (Action.post "/second") (pure "second"),
-                Action.action "duplicate" (Action.post "/first") (pure "duplicate")
+              [ Action.action "first" Action.DoNotRetain Action.ApplyActionResponse (Action.post "/first") (pure "first"),
+                Action.action "second" Action.DoNotRetain Action.ApplyActionResponse (Action.post "/second") (pure "second"),
+                Action.action "duplicate" Action.DoNotRetain Action.ApplyActionResponse (Action.post "/first") (pure "duplicate")
               ] ::
               Either Action.ActionCodecError (Action.ActionCodec Text TestContext () Text)
       case codec of

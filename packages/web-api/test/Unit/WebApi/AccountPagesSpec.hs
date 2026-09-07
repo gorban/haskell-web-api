@@ -893,8 +893,8 @@ spec = do
     it "raises the codec-construction error for a duplicate endpoint declaration" $ do
       let duplicateEndpoints :: [Action.ActionEndpoint AccountActionTarget () () AccountAction]
           duplicateEndpoints =
-            [ Action.action RegisterAccountTarget (Action.postAt "/dup" (const "/dup")) (pure LogoutAccount),
-              Action.action LoginAccountTarget (Action.postAt "/dup" (const "/dup")) (pure LogoutAccount)
+            [ Action.action RegisterAccountTarget Action.DoNotRetain Action.ApplyActionResponse (Action.postAt "/dup" (const "/dup")) (pure LogoutAccount),
+              Action.action LoginAccountTarget Action.DoNotRetain Action.ApplyActionResponse (Action.postAt "/dup" (const "/dup")) (pure LogoutAccount)
             ]
       evaluate (buildActionCodecOrDie duplicateEndpoints `seq` ())
         `shouldThrow` \case
@@ -922,6 +922,10 @@ spec = do
         fmap endpointDeclarationFields (accountActionEndpointMetadata "POST" path defaultRequestContext)
           `shouldBe` Just (expectedName, template, HarchWeb.ActionEndpoint, expectedAccess path)
       accountActionEndpointMetadata "GET" "/register" defaultRequestContext `shouldBe` Nothing
+      Action.actionReauthenticationPolicy accountActions UpdateProfileTarget `shouldBe` Just Action.RetainForExplicitRetry
+      Action.actionReauthenticationPolicy accountActions LoginAccountTarget `shouldBe` Just Action.DoNotRetain
+      Action.actionCompletionPolicy accountActions LoginAccountTarget `shouldBe` Just Action.ReauthenticationContinuation
+      Action.actionCompletionPolicy accountActions UpdateProfileTarget `shouldBe` Just Action.ApplyActionResponse
 
     it "derives comparable, printable representations for every account action target" $ do
       let targets =

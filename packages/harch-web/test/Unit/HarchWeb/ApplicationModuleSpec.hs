@@ -220,6 +220,8 @@ spec =
                 moduleActionCodec =
                   Action.singleActionCodecWithMetadata
                     ChildSaveTarget
+                    Action.DoNotRetain
+                    Action.ApplyActionResponse
                     (Action.post "/save")
                     childMetadata
                     (pure SaveChildItem),
@@ -746,6 +748,8 @@ duplicateActionCodec :: Action.ActionCodec ParentActionTarget Int ParentAuthoriz
 duplicateActionCodec =
   Action.singleActionCodecWithMetadata
     ParentSaveTarget
+    Action.DoNotRetain
+    Action.ApplyActionResponse
     (Action.postAt "/catalog/save" (const "/catalog/save"))
     ( EndpointMetadata.mkEndpointMetadata
         (EndpointMetadata.requiredEndpointNameOrDie "root.other-save")
@@ -977,6 +981,8 @@ childActionCodec :: Action.ActionCodec ChildActionTarget Text ChildAuthorization
 childActionCodec =
   Action.singleActionCodecWithMetadata
     ChildSaveTarget
+    Action.DoNotRetain
+    Action.ApplyActionResponse
     (Action.postAt "/save" (\childContext -> "/" <> childContext <> "/save"))
     childActionMetadata
     (pure SaveChildItem)

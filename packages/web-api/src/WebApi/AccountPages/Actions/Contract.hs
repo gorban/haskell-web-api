@@ -19,9 +19,11 @@ import Data.Text qualified as Text
 import HarchWeb qualified
 import HarchWeb.Action
   ( ActionCodec,
+    ActionCompletionPolicy (..),
     ActionDecoder,
     ActionEndpoint,
     ActionPath,
+    ActionReauthenticationPolicy (..),
     FieldValue,
     actionCodec,
     actionEndpointMetadata,
@@ -124,7 +126,27 @@ accountActionEndpoints =
 -- none rely on an implicit public default.
 declaredAccountAction :: AccountActionTarget -> ActionPath AppRequestContext -> ActionDecoder action -> ActionEndpoint AccountActionTarget AppRequestContext () action
 declaredAccountAction target path =
-  actionWithMetadata target path (accountActionMetadata target)
+  actionWithMetadata target (reauthenticationPolicy target) (completionPolicy target) path (accountActionMetadata target)
+
+reauthenticationPolicy :: AccountActionTarget -> ActionReauthenticationPolicy
+reauthenticationPolicy target =
+  case target of
+    UpdateProfileTarget -> RetainForExplicitRetry
+    RegisterAccountTarget -> DoNotRetain
+    VerifyEmailTarget -> DoNotRetain
+    EnrollMfaTarget -> DoNotRetain
+    LoginAccountTarget -> DoNotRetain
+    LogoutAccountTarget -> DoNotRetain
+
+completionPolicy :: AccountActionTarget -> ActionCompletionPolicy
+completionPolicy target =
+  case target of
+    LoginAccountTarget -> ReauthenticationContinuation
+    RegisterAccountTarget -> ApplyActionResponse
+    VerifyEmailTarget -> ApplyActionResponse
+    EnrollMfaTarget -> ApplyActionResponse
+    UpdateProfileTarget -> ApplyActionResponse
+    LogoutAccountTarget -> ApplyActionResponse
 
 accountActionMetadata :: AccountActionTarget -> HarchWeb.EndpointMetadata ()
 accountActionMetadata target =

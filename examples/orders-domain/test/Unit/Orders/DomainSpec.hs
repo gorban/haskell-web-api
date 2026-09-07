@@ -68,6 +68,10 @@ spec = describe "Unit.Orders.Domain" $ do
       `shouldBe` Just "/actions/submit"
     Action.staticActionPath (moduleActionCodec moduleValue) SubmitOrderTarget
       `shouldBe` Just "/actions/submit"
+    Action.actionReauthenticationPolicy (moduleActionCodec moduleValue) SubmitOrderTarget
+      `shouldBe` Just Action.DoNotRetain
+    Action.actionCompletionPolicy (moduleActionCodec moduleValue) SubmitOrderTarget
+      `shouldBe` Just Action.ApplyActionResponse
     moduleActionRoute moduleValue ordersContext SubmitOrderTarget `shouldBe` Just OrdersIndex
     let definition = moduleEndpoints moduleValue OrdersIndex
     routeNavigationLabel definition `shouldBe` Just "Orders"

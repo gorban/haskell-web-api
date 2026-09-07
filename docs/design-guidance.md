@@ -469,6 +469,30 @@ store its fields in `localStorage`, `sessionStorage`, telemetry, or a server
 retry table. This extends the existing action/capture ownership boundary rather
 than adding a modal dispatcher or an application-specific mutation retry API.
 
+**Continuation refinement (AHI-4C, 2026-09-07): make replay eligibility and
+login-navigation interception explicit in the existing action declaration.**
+The initial retained-action primitive correctly kept the envelope in the
+capture kernel, but an application could not submit its ordinary login action
+and observe a successful typed `ReplaceHistory` navigation before the default
+runtime performed it. Reimplementing the fetch/CSRF/action protocol in an
+application runtime would create a competing action owner and risk losing
+capture ordering, credentials, or response semantics.
+
+`ActionReauthenticationPolicy` therefore requires every `ActionEndpoint` to
+choose `RetainForExplicitRetry` or `DoNotRetain`; the decision renders from the
+validated endpoint declaration and the capture kernel refuses to retain any
+other action. `ActionCompletionPolicy` separately names the narrow
+`ReauthenticationContinuation` case. After applying the normal response
+patches, the navigation runtime emits a cancelable completion event only for
+that declared case. An application with an opaque retained ID may consume the
+typed navigation, refresh page security, and offer the kernel's one-time
+replay; without an active recovery it does nothing and ordinary login retains
+its normal navigation. The event carries no captured fields and neither
+extends the lifetime nor grants a second replay. This is an extension of the
+existing validated action codec and its runtime interpreter, not a JavaScript
+callback registry, second fetch path, or framework-owned dialog. The remaining
+application modal and real-browser proof are still AHI-4C work.
+
 ### Decision record — PostgreSQL database-change ledger (AHI-4C, 2026-09-03)
 
 **Decision: extract the existing connection-scoped migration transaction into

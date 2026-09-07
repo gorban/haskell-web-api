@@ -18,7 +18,7 @@ where
 
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Text (Text)
-import HarchWeb.Action (ActionCodec, post, singleActionCodecWithMetadata)
+import HarchWeb.Action (ActionCodec, ActionCompletionPolicy (ApplyActionResponse), ActionReauthenticationPolicy (DoNotRetain), post, singleActionCodecWithMetadata)
 import HarchWeb.ApplicationModule (ApplicationModule (..))
 import HarchWeb.Document (Page (..))
 import HarchWeb.EndpointMetadata
@@ -134,6 +134,8 @@ catalogActionCodec :: ActionCodec CatalogActionTarget CatalogContext CatalogPoli
 catalogActionCodec =
   singleActionCodecWithMetadata
     RefreshCatalogTarget
+    DoNotRetain
+    ApplyActionResponse
     (post "/actions/refresh")
     ( mkEndpointMetadata
         (requiredEndpointNameOrDie "catalog.refresh")

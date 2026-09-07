@@ -86,7 +86,7 @@ controlRouteHref (ControlRoute target) = fromMaybe (error "expected a safe URL")
 
 controlActionCodec :: Action.ActionCodec Text.Text () () Text.Text
 controlActionCodec =
-  case Action.actionCodec [Action.action "/actions/subscribe" (Action.post "/actions/subscribe") (pure "/actions/subscribe")] of
+  case Action.actionCodec [Action.action "/actions/subscribe" Action.DoNotRetain Action.ApplyActionResponse (Action.post "/actions/subscribe") (pure "/actions/subscribe")] of
     Left codecError -> error (show codecError)
     Right codec -> codec
 

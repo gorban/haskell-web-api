@@ -19,7 +19,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding (decodeUtf8, encodeUtf8)
 import HarchWeb
-import HarchWeb.Action qualified as Action (ActionCodec, action, actionCodec, formField, getAt, postAt, required, textValue)
+import HarchWeb.Action qualified as Action (ActionCodec, ActionCompletionPolicy (ApplyActionResponse), ActionReauthenticationPolicy (DoNotRetain, RetainForExplicitRetry), action, actionCodec, formField, getAt, postAt, required, textValue)
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe (unsafeTrustHtml)
 import HarchWeb.Observability qualified as Observability (ConnectionObservability (observabilityConnectionSpan), HttpServerMetrics (httpServerMetricAttributes), ObservabilityAttribute (attributeName, attributeValue), ObservabilityAttributeValue (IntAttribute, TextAttribute), RequestObservability (observabilityHttpServerMetrics, observabilityRequestSpan), RequestSpan (requestSpanAttributes), buildConnectionObservability)
@@ -133,9 +133,11 @@ testActionCodec =
   case Action.actionCodec
     [ Action.action
         "save"
+        Action.RetainForExplicitRetry
+        Action.ApplyActionResponse
         (Action.postAt "/known" renderKnownActionPath)
         (("save:" <>) <$> Action.required (Action.formField "email" Action.textValue)),
-      Action.action "read" (Action.getAt "/known" renderKnownActionPath) (pure "read")
+      Action.action "read" Action.DoNotRetain Action.ApplyActionResponse (Action.getAt "/known" renderKnownActionPath) (pure "read")
     ] of
     Left codecError -> error (show codecError)
     Right codec -> codec
