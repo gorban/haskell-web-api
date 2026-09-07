@@ -184,6 +184,10 @@ buildAppWithDatabaseAndOptionalReportersAndSecurity config pageRepository !accou
           )
             { Site.siteRequestContextFromRequest =
                 requestContextFromWaiRequest (requestPolicy config),
+              -- Public web traffic never inherits a caller-supplied request
+              -- correlation ID. A production service adapter must establish
+              -- service identity and its separate propagation capability.
+              Site.siteRequestIdIngress = HarchWeb.freshRequestIdIngress,
               Site.siteStaticAssets = staticAssets config,
               Site.siteRuntimeAssets = appRuntimeAssets,
               Site.siteNavigationRuntimePathPrefix = requestPathPrefix,

@@ -3281,6 +3281,29 @@ second dispatcher or request vault is introduced. Trusted service propagation
 remains a separate capability, not an ordinary client header or a property of
 authentication alone.
 
+**Follow-up decision: make trusted propagation an adapter-neutral extension of
+that ingress, not a new Harch service-authentication framework.** The public
+default is `freshRequestIdIngress`, which ignores every inbound request-ID
+header. A deployment that has already authenticated a service supplies
+`authenticatedServiceRequestIdIngress`: it must separately map that identity
+to `RequestIdPropagationCapability` before Harch reads one bounded,
+canonical UUIDv4 `X-Request-ID` value. The application adapter can decide how
+to establish identity (mTLS, a mesh assertion, a signed service token, or
+another mechanism) without Harch owning those transports; it cannot inject an
+arbitrary correlation value because validation and fallback remain in the
+framework. Multiple, oversized, malformed, and non-UTF-8 inherited values
+fall back to the already minted ID with a value-free private diagnostic. The
+outbound helper renders only the standard header for a trusted synchronous
+call; trace/span propagation remains independently owned by the caller.
+
+This was an extend-versus-new-abstraction decision: request execution already
+creates the ID before every HTTP response path and `Application` already owns
+the typed ingress configuration. A parallel middleware or a general HTTP
+client layer would duplicate the former or invent a framework-owned transport
+that Harch does not have. The shipped scope deliberately does not authenticate
+production services; AHI-5's example audit workflow still needs that
+deployment adapter and the pending audit schema/repository slices.
+
 ### Decision record — AHI-4C: one ASCII cookie-token grammar (2026-09-05)
 
 **Decision: extract the existing cookie-name token predicate into a small

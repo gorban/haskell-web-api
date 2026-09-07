@@ -30,7 +30,7 @@ import HarchWeb.Csrf (CsrfProtection)
 import HarchWeb.Document (Document, NavigationRuntime, Page, RuntimeAsset)
 import HarchWeb.EndpointSecurity (ApplicationSecurity, EndpointMetadata (endpointName), EndpointName)
 import HarchWeb.Observability qualified as Observability
-import HarchWeb.RequestId (RequestId)
+import HarchWeb.RequestId (RequestId, RequestIdIngress)
 import HarchWeb.Routing (RouteCodec, RouteRequest)
 import HarchWeb.Security (RequestConcurrencyLimit, RequestPolicyConfig)
 import HarchWeb.SecurityEvent (ModuleName, SecurityEventRoot)
@@ -81,6 +81,10 @@ data Application route action context authorization = Application
     -- middleware, routing, or endpoint guard runs. The application ingress
     -- adapter may retain it in its typed context but cannot choose it.
     requestContextFromRequest :: Wai.Request -> RequestId -> context -> context,
+    -- | Service-to-service correlation policy at framework ingress. The
+    -- public-web default is 'HarchWeb.RequestId.freshRequestIdIngress'; an
+    -- accepting adapter must authenticate a service and grant propagation.
+    applicationRequestIdIngress :: RequestIdIngress,
     applicationNavigationRuntime :: Maybe NavigationRuntime,
     -- | Ordered, application-selected behavior adapters served by the
     -- framework's early response boundary. The first asset owning a request

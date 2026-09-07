@@ -33,7 +33,7 @@ import Data.Text.Encoding.Error qualified as TextEncodingError
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Csrf (PageSecurity, pageSecurityRuntimeNonce)
-import HarchWeb.RequestId (RequestId, newRequestId, requestIdText)
+import HarchWeb.RequestId (RequestId, RequestIdIngressResult (..), requestIdText, resolveRequestIdIngress)
 import HarchWeb.Routing
   ( RouteDispatch (..),
     RouteLocation,
@@ -124,9 +124,20 @@ toWaiApplication webApplication = do
 -- request. The generated value is then fixed for the rest of this request.
 requestIdentifiedWaiApplication :: (Eq route) => Wai.Middleware -> RouteConcurrencyGateCache -> Application route action context authorization -> Wai.Application
 requestIdentifiedWaiApplication gateMiddleware routeGateCache webApplication request respond = do
-  requestId <- newRequestId
+  (requestId, ingressResult) <- resolveRequestIdIngress (applicationRequestIdIngress webApplication) request
+  reportRejectedInheritance webApplication requestId ingressResult
   let respondWithRequestId = respond . applyRequestIdResponseHeader requestId
   gateMiddleware (headLimitedWaiApplication routeGateCache webApplication requestId) request respondWithRequestId
+
+-- | This private, value-free diagnostic lets an operator investigate a
+-- misconfigured trusted caller without making arbitrary header text available
+-- to logs. Public callers do not produce it because their header is ignored.
+reportRejectedInheritance :: Application route action context authorization -> RequestId -> RequestIdIngressResult -> IO ()
+reportRejectedInheritance webApplication requestId = \case
+  RejectedInheritedRequestId ->
+    reportApplicationLog webApplication ("request.id=" <> requestIdText requestId <> " harch.request_id.inheritance=invalid")
+  FreshRequestId -> pure ()
+  InheritedRequestId -> pure ()
 
 headLimitedWaiApplication :: (Eq route) => RouteConcurrencyGateCache -> Application route action context authorization -> RequestId -> Wai.Application
 headLimitedWaiApplication routeGateCache webApplication requestId request respond =

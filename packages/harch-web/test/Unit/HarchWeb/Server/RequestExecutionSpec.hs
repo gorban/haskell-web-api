@@ -57,6 +57,68 @@ spec = do
       Wai.responseHeaders response `shouldBe` [(Http.hContentType, "text/html; charset=utf-8")]
       readResponseBody response `shouldReturn` "A page response was missing its CSP nonce."
 
+    it "propagates correlation between trusted synchronous services without retaining bad input" $ do
+      diagnosticLogs <- newIORef []
+      upstreamApplication <- toWaiApplication sampleApplication
+      upstreamResponse <- performWaiRequest (pure upstreamApplication) (waiRequest ["known"])
+      case lookup "X-Request-ID" (Wai.responseHeaders upstreamResponse) of
+        Nothing -> expectationFailure "upstream response lacked request ID"
+        Just upstreamRequestId ->
+          case HarchWeb.mkRequestId (TextEncoding.decodeUtf8 upstreamRequestId) of
+            Nothing -> expectationFailure "upstream response request ID was not UUIDv4"
+            Just upstreamRequestIdValue -> do
+              let trustedIngress =
+                    HarchWeb.authenticatedServiceRequestIdIngress
+                      ( \request ->
+                          pure $
+                            case lookup "X-Test-Service" (Wai.requestHeaders request) of
+                              Just "propagating-service" -> Just True
+                              Just "authenticated-service" -> Just False
+                              _ -> Nothing
+                      )
+                      ( \hasPropagationCapability ->
+                          if hasPropagationCapability
+                            then Just HarchWeb.requestIdPropagationCapability
+                            else Nothing
+                      )
+                  downstreamApplication =
+                    sampleApplication
+                      { HarchWeb.applicationRequestIdIngress = trustedIngress,
+                        HarchWeb.reportApplicationLog = \entry -> modifyIORef' diagnosticLogs (<> [entry])
+                      }
+                  downstreamRequest =
+                    (waiRequest ["known"])
+                      { Wai.requestHeaders =
+                          [ HarchWeb.requestIdHeader upstreamRequestIdValue,
+                            ("X-Test-Service", "propagating-service")
+                          ]
+                      }
+                  malformedDownstreamRequest =
+                    downstreamRequest
+                      { Wai.requestHeaders =
+                          [ ("X-Request-ID", "malformed-id-must-not-be-logged"),
+                            ("X-Test-Service", "propagating-service")
+                          ]
+                      }
+              downstreamWaiApplication <- toWaiApplication downstreamApplication
+              propagatedResponse <- performWaiRequest (pure downstreamWaiApplication) downstreamRequest
+              malformedResponse <- performWaiRequest (pure downstreamWaiApplication) malformedDownstreamRequest
+              let propagatedRequestId = lookup "X-Request-ID" (Wai.responseHeaders propagatedResponse)
+                  malformedRequestId = lookup "X-Request-ID" (Wai.responseHeaders malformedResponse)
+              expectAll
+                ( (propagatedRequestId `shouldBe` Just upstreamRequestId)
+                    :| [ malformedRequestId `shouldNotBe` Just upstreamRequestId,
+                         malformedRequestId `shouldSatisfy` maybe False (isJust . HarchWeb.mkRequestId . TextEncoding.decodeUtf8)
+                       ]
+                )
+              readIORef diagnosticLogs >>= \case
+                [entry] ->
+                  expectAll
+                    ( (Text.isInfixOf "harch.request_id.inheritance=invalid" entry `shouldBe` True)
+                        :| [Text.isInfixOf "malformed-id-must-not-be-logged" entry `shouldBe` False]
+                    )
+                entries -> expectationFailure ("expected one sanitized inheritance diagnostic, got " <> show entries)
+
     it "attaches the matched root route facts to a guard security event" $ do
       emitted <- newIORef []
       let delivery =
