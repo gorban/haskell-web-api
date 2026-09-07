@@ -31,6 +31,13 @@ The smaller `two-pages-example` has its own fixed local configuration and does n
 | `WEB_API_MIGRATION_DATABASE_PASSWORD` | Migration-only PostgreSQL password. | unset |
 | `WEB_API_MIGRATION_DATABASE_SSL_MODE` | Migration-only equivalent of `DATABASE_SSL_MODE`. | unset; libpq's own default is used |
 | `WEB_API_MIGRATION_DATABASE_SSL_ROOT_CERT` | Migration-only equivalent of `DATABASE_SSL_ROOT_CERT`. | unset |
+| `WEB_API_AUDIT_SCHEDULER_DATABASE_HOST` | Direct PostgreSQL host for the example account-audit scheduler bootstrap. | unset |
+| `WEB_API_AUDIT_SCHEDULER_DATABASE_PORT` | Direct PostgreSQL port for the example account-audit scheduler bootstrap. | unset |
+| `WEB_API_AUDIT_SCHEDULER_DATABASE_NAME` | Database in which the account-audit jobs are registered. | unset |
+| `WEB_API_AUDIT_SCHEDULER_DATABASE_USER` | Must be the fixed least-privileged `web_api_audit_scheduler` role. | unset |
+| `WEB_API_AUDIT_SCHEDULER_DATABASE_PASSWORD` | Scheduler-login password used only by the migration setup command. | unset |
+| `WEB_API_AUDIT_SCHEDULER_DATABASE_SSL_MODE` | Scheduler-bootstrap equivalent of `DATABASE_SSL_MODE`. | unset; libpq's own default is used |
+| `WEB_API_AUDIT_SCHEDULER_DATABASE_SSL_ROOT_CERT` | Scheduler-bootstrap equivalent of `DATABASE_SSL_ROOT_CERT`. | unset |
 | `SMTP_HOST` | SMTP server host for application email delivery. | `127.0.0.1` |
 | `SMTP_PORT` | SMTP server port. | `5025` |
 | `SMTP_HELO_NAME` | HELO/EHLO name sent to the SMTP server. | `localhost` |
@@ -98,13 +105,15 @@ The smaller `two-pages-example` has its own fixed local configuration and does n
 | `SETUP_AUTOSTART_DATABASE` | Allow setup tooling to plan local PostgreSQL startup if unreachable. | `true` |
 | `SETUP_AUTOSTART_JAEGER` | Allow setup tooling to plan local Jaeger startup if configured but unreachable. | `false` |
 
-The `SETUP_AUTOSTART_*` values and `WEB_API_MIGRATION_DATABASE_*` credentials belong to setup and
-migration planning, not the runtime request path read by `cabal run exe:haskell-web-api`. Setup hooks
-and verification paths read them from the same four layers. Migration overrides are all-or-nothing:
-setting any one `WEB_API_MIGRATION_DATABASE_*` value requires the five identity values; the two TLS
-values are then optional but use the same validation rules as runtime. Runtime and migration PostgreSQL
-identities are deliberately separate; see [SETUP.md](../SETUP.md) for database creation, migration, and
-test prerequisites. The supported PostgreSQL major version is currently 17.
+The `SETUP_AUTOSTART_*`, `WEB_API_MIGRATION_DATABASE_*`, and
+`WEB_API_AUDIT_SCHEDULER_DATABASE_*` values belong to setup and migration planning, not the runtime
+request path read by `cabal run exe:haskell-web-api`. Setup hooks and verification paths read them from
+the same four layers. Each connection prefix is all-or-nothing: setting any value for a prefix requires
+its five identity values; its two TLS values are then optional but use the same validation rules as
+runtime. Runtime, migration, and scheduler PostgreSQL identities are deliberately separate. The scheduler
+user name is fixed so `pg_cron` records the least-privileged job owner; its password is supplied by the
+deployment, never runtime configuration. See [SETUP.md](../SETUP.md) for database creation, migration,
+and test prerequisites. The supported PostgreSQL major version is currently 17.
 
 ## PostgreSQL transport policy
 

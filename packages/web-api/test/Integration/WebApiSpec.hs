@@ -315,14 +315,48 @@ spec = do
           inheritedEnvironment <- getEnvironment
           databaseSetupExecutable <- testBuildToolPath "haskell-web-api-db"
           withSystemTempDirectory "haskell-web-api-audit-db" $ \workingDirectory -> do
-            (_, _, _, processHandle) <-
-              createProcess
-                ( (proc databaseSetupExecutable ["migrate"])
-                    { cwd = Just workingDirectory,
-                      env = Just (databaseSetupEnvironment inheritedEnvironment)
-                    }
-                )
-            waitForProcess processHandle `shouldReturn` ExitSuccess
+            let runMigrate = do
+                  (_, _, _, processHandle) <-
+                    createProcess
+                      ( (proc databaseSetupExecutable ["migrate"])
+                          { cwd = Just workingDirectory,
+                            env = Just (databaseSetupEnvironment inheritedEnvironment)
+                          }
+                      )
+                  waitForProcess processHandle
+            runMigrate `shouldReturn` ExitSuccess
+            -- The second installation must update the same named pg_cron jobs,
+            -- rather than creating another active maintenance schedule.
+            runMigrate `shouldReturn` ExitSuccess
+
+          scheduledJobs <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT jobname || '|' || database || '|' || username || '|' || active::TEXT || '|' || schedule || '|' || command FROM cron.job WHERE jobname IN ('account-audit-maintenance', 'web-api-cron-run-details-retention') ORDER BY jobname;"
+          scheduledJobs
+            `shouldBe` ( ExitSuccess,
+                         "account-audit-maintenance|web_api_dev|web_api_audit_scheduler|true|0 3 * * *|SELECT account_audit.maintain_activity_partitions();\nweb-api-cron-run-details-retention|web_api_dev|web_api_audit_scheduler|true|41 3 * * *|DELETE FROM cron.job_run_details WHERE username = current_user AND end_time IS NOT NULL AND end_time < statement_timestamp() - interval '30 days';\n",
+                         ""
+                       )
+
+          schedulerMaintenance <-
+            runPsql
+              inheritedEnvironment
+              "web_api_audit_scheduler"
+              "web_api_audit_scheduler"
+              "SELECT account_audit.maintain_activity_partitions();"
+          case schedulerMaintenance of
+            (ExitSuccess, _, "") -> pure ()
+            _ -> expectationFailure "expected the scheduler to invoke only the safe no-argument maintenance wrapper"
+
+          runPsql
+            inheritedEnvironment
+            "web_api_audit_scheduler"
+            "web_api_audit_scheduler"
+            "DELETE FROM cron.job_run_details WHERE username = current_user AND end_time IS NOT NULL AND end_time < statement_timestamp() - interval '30 days';"
+            `shouldReturn` (ExitSuccess, "", "")
 
           runPsql
             inheritedEnvironment

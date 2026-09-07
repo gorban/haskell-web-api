@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {-# SPEC #-}
@@ -5,6 +6,8 @@
 import Control.Exception (evaluate)
 import Control.Monad (void)
 import Data.Either (fromRight)
+import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.List (isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
@@ -13,8 +16,11 @@ import HarchWeb.EndpointMetadata (mkEndpointName, mkRouteTemplate)
 import HarchWeb.Localization (locale)
 import HarchWeb.RequestId (mkRequestId)
 import HarchWeb.SecurityEvent (RouteObservation (..), requiredModuleNameOrDie)
+import System.Exit (ExitCode (ExitFailure, ExitSuccess))
+import Unit.WebApi.TestSupport (migrationPostgresTestConfig, postgresTestConfig)
 import WebApi.ActivityAudit
-import WebApi.Postgres.Testing (accountAuditAppendResultFixStatements, accountAuditControlledAppendPolicyStatements, accountAuditInitialMaintenanceStatements, accountAuditInsertPolicyFixStatements, accountAuditMigrationStatements, accountAuditRuntimeReconciliationStatements)
+import WebApi.Config (DatabaseConfig (..))
+import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), accountAuditAppendResultFixStatements, accountAuditControlledAppendPolicyStatements, accountAuditInitialMaintenanceStatements, accountAuditInsertPolicyFixStatements, accountAuditMaintenanceJobName, accountAuditMaintenanceSchedule, accountAuditMigrationStatements, accountAuditRuntimeReconciliationStatements, bootstrapAccountAuditSchedulerWithRunner, cronRunDetailsRetentionJobName, cronRunDetailsRetentionSchedule, installAccountAuditSchedulerStatements)
 
 spec = describe "WebApi.ActivityAudit" $ do
   it "encodes every closed audit event with a stable code, version, and bounded detail" $ do
@@ -85,6 +91,64 @@ spec = describe "WebApi.ActivityAudit" $ do
                auditMigrationExpectation "runtime scope literal" ("VALUES ('runtime\"role', 'default')" `Text.isInfixOf` reconciliationSql)
              ]
       )
+
+  it "keeps the example scheduler contract on fixed safe maintenance commands" $ do
+    let schedulerSql = Text.unlines installAccountAuditSchedulerStatements
+    expectAll
+      ( (accountAuditMaintenanceJobName `shouldBe` "account-audit-maintenance")
+          :| [ accountAuditMaintenanceSchedule `shouldBe` "0 3 * * *",
+               cronRunDetailsRetentionJobName `shouldBe` "web-api-cron-run-details-retention",
+               cronRunDetailsRetentionSchedule `shouldBe` "41 3 * * *",
+               ("SELECT account_audit.maintain_activity_partitions();" `Text.isInfixOf` schedulerSql) `shouldBe` True,
+               ("username = current_user" `Text.isInfixOf` schedulerSql) `shouldBe` True,
+               ("interval '30 days'" `Text.isInfixOf` schedulerSql) `shouldBe` True
+             ]
+      )
+
+  it "reconciles the scheduler login as owner before registering jobs through its direct connection" $ do
+    recordedCommandsReference <- newIORef ([] :: [PostgresCommand])
+    let schedulerDatabaseConfig =
+          postgresTestConfig
+            { databaseUser = "web_api_audit_scheduler",
+              databasePassword = "scheduler's-secret"
+            }
+        successfulRunner postgresCommand = do
+          modifyIORef' recordedCommandsReference (<> [postgresCommand])
+          pure (PostgresCommandResult ExitSuccess Text.empty Text.empty)
+    bootstrapAccountAuditSchedulerWithRunner successfulRunner migrationPostgresTestConfig schedulerDatabaseConfig
+      `shouldReturn` Right ()
+    recordedCommands <- readIORef recordedCommandsReference
+    fmap postgresEnvironment recordedCommands
+      `shouldBe` [ [("PGPASSWORD", "owner-secret")],
+                   [("PGPASSWORD", "scheduler's-secret")],
+                   [("PGPASSWORD", "scheduler's-secret")]
+                 ]
+    fmap postgresArguments recordedCommands
+      `shouldSatisfy` \case
+        [ownerArguments, schedulerArguments, cleanupArguments] ->
+          any ("ALTER ROLE web_api_audit_scheduler WITH LOGIN PASSWORD 'scheduler''s-secret'" `isInfixOf`) ownerArguments
+            && "web_api_audit_scheduler" `elem` schedulerArguments
+            && "web_api_audit_scheduler" `elem` cleanupArguments
+        _ -> False
+
+  it "does not open the scheduler connection when owner-side login reconciliation fails" $ do
+    recordedCommandsReference <- newIORef ([] :: [PostgresCommand])
+    let schedulerDatabaseConfig =
+          postgresTestConfig
+            { databaseUser = "web_api_audit_scheduler",
+              databasePassword = "scheduler-secret"
+            }
+        failedResult = PostgresCommandResult (ExitFailure 1) Text.empty "owner connection failed"
+        failingOwnerRunner postgresCommand = do
+          modifyIORef' recordedCommandsReference (<> [postgresCommand])
+          pure failedResult
+    result <- bootstrapAccountAuditSchedulerWithRunner failingOwnerRunner migrationPostgresTestConfig schedulerDatabaseConfig
+    result
+      `shouldSatisfy` \case
+        Left _ -> True
+        Right () -> False
+    recordedCommands <- readIORef recordedCommandsReference
+    fmap postgresEnvironment recordedCommands `shouldBe` [[("PGPASSWORD", "owner-secret")]]
   where
     allAccountAuditEvents =
       [ PendingRegistrationDelivered RegistrationCreated,

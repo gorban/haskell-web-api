@@ -3,6 +3,7 @@
 module TestSupport.RealPostgres
   ( databaseSetupEnvironment,
     containerizedPsqlScriptContents,
+    defaultAuditSchedulerPostgresConfig,
     defaultMigrationPostgresConfig,
     defaultPostgresContainerImage,
     defaultRealPostgresConfig,
@@ -117,6 +118,13 @@ defaultMigrationPostgresConfig =
       databasePassword = "web_api_owner"
     }
 
+defaultAuditSchedulerPostgresConfig :: DatabaseConfig
+defaultAuditSchedulerPostgresConfig =
+  defaultMigrationPostgresConfig
+    { databaseUser = "web_api_audit_scheduler",
+      databasePassword = "web_api_audit_scheduler"
+    }
+
 databaseSetupEnvironment :: [(String, String)] -> [(String, String)]
 databaseSetupEnvironment inheritedEnvironment =
   [ ("DATABASE_HOST", Text.unpack (databaseHost defaultRealPostgresConfig)),
@@ -129,6 +137,11 @@ databaseSetupEnvironment inheritedEnvironment =
     ("WEB_API_MIGRATION_DATABASE_NAME", Text.unpack (databaseName defaultMigrationPostgresConfig)),
     ("WEB_API_MIGRATION_DATABASE_USER", Text.unpack (databaseUser defaultMigrationPostgresConfig)),
     ("WEB_API_MIGRATION_DATABASE_PASSWORD", Text.unpack (databasePassword defaultMigrationPostgresConfig)),
+    ("WEB_API_AUDIT_SCHEDULER_DATABASE_HOST", Text.unpack (databaseHost defaultAuditSchedulerPostgresConfig)),
+    ("WEB_API_AUDIT_SCHEDULER_DATABASE_PORT", show (databasePort defaultAuditSchedulerPostgresConfig)),
+    ("WEB_API_AUDIT_SCHEDULER_DATABASE_NAME", Text.unpack (databaseName defaultAuditSchedulerPostgresConfig)),
+    ("WEB_API_AUDIT_SCHEDULER_DATABASE_USER", Text.unpack (databaseUser defaultAuditSchedulerPostgresConfig)),
+    ("WEB_API_AUDIT_SCHEDULER_DATABASE_PASSWORD", Text.unpack (databasePassword defaultAuditSchedulerPostgresConfig)),
     ("PATH", lookupValue "PATH" inheritedEnvironment)
   ]
     <> filter
@@ -144,7 +157,12 @@ databaseSetupEnvironment inheritedEnvironment =
                         "WEB_API_MIGRATION_DATABASE_PORT",
                         "WEB_API_MIGRATION_DATABASE_NAME",
                         "WEB_API_MIGRATION_DATABASE_USER",
-                        "WEB_API_MIGRATION_DATABASE_PASSWORD"
+                        "WEB_API_MIGRATION_DATABASE_PASSWORD",
+                        "WEB_API_AUDIT_SCHEDULER_DATABASE_HOST",
+                        "WEB_API_AUDIT_SCHEDULER_DATABASE_PORT",
+                        "WEB_API_AUDIT_SCHEDULER_DATABASE_NAME",
+                        "WEB_API_AUDIT_SCHEDULER_DATABASE_USER",
+                        "WEB_API_AUDIT_SCHEDULER_DATABASE_PASSWORD"
                       ]
       )
       inheritedEnvironment

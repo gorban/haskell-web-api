@@ -93,7 +93,7 @@ spec = do
                              "-p",
                              "127.0.0.1:5432:5432",
                              "-d",
-                             "docker.io/library/postgres:17"
+                             "localhost/haskell-web-api/postgres-pgcron:17-1.6.7"
                            ]
                          )
                        ]
@@ -193,7 +193,7 @@ spec = do
                   "-p",
                   "127.0.0.1:5432:5432",
                   "-d",
-                  "docker.io/library/postgres:17"
+                  "localhost/haskell-web-api/postgres-pgcron:17-1.6.7"
                 ]
 
     it "surfaces real runner stderr failures from docker"

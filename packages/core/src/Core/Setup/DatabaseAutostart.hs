@@ -70,8 +70,16 @@ databaseAutostartArguments setupConfig = do
       "-p",
       Text.unpack portBinding,
       "-d",
-      "docker.io/library/postgres:17"
+      postgresContainerImage
     ]
+
+-- | The repository's local bootstrap must match the tested database feature
+-- set.  In particular, AHI-5's account-audit maintenance needs @pg_cron@ to
+-- be preloaded at server start, which the stock PostgreSQL image cannot do.
+-- The application-level build helper materializes this pinned local image
+-- before an opt-in autostart is used.
+postgresContainerImage :: String
+postgresContainerImage = "localhost/haskell-web-api/postgres-pgcron:17-1.6.7"
 
 renderPortBinding :: TcpEndpoint -> Either Text Text
 renderPortBinding endpoint =

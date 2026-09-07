@@ -378,19 +378,27 @@ The current committed support target for those real-database flows is PostgreSQL
 when `SETUP_AUTOSTART_DATABASE=true`, `DATABASE_HOST` is `127.0.0.1` or `0.0.0.0`, and the configured
 database is unreachable. It tries Podman first, then Docker, uses the configured `DATABASE_HOST`,
 `DATABASE_PORT`, and `DATABASE_NAME` values for reachability/binding, and bootstraps the local container
-with the fixed PostgreSQL migration superuser `web_api_owner` / `web_api_owner`.
+with the fixed PostgreSQL migration superuser `web_api_owner` / `web_api_owner`. It starts the same
+pinned PostgreSQL 17 + `pg_cron` image used by CI and the real-database tests; build that local image
+once before enabling autostart:
+
+```bash
+bash tools/build-postgres-pgcron-test-image.sh
+```
 
 If you prefer to start PostgreSQL yourself, want to use a remote/shared database, or need a different
 bootstrap shape, disable that behavior with `SETUP_AUTOSTART_DATABASE=false` and start a matching local
-container manually instead. One straightforward option is:
+container manually instead. Account-audit setup requires the reviewed PostgreSQL 17 + `pg_cron` image;
+build and start the repository's pinned development image rather than a stock PostgreSQL image:
 
 ```bash
+bash tools/build-postgres-pgcron-test-image.sh
 docker run --name web-api-postgres \
   -e POSTGRES_USER=web_api_owner \
   -e POSTGRES_PASSWORD=web_api_owner \
   -e POSTGRES_DB=web_api_dev \
   -p 127.0.0.1:5432:5432 \
-  -d docker.io/library/postgres:17
+  -d localhost/haskell-web-api/postgres-pgcron:17-1.6.7
 ```
 - **podman**: just replace `docker` with `podman` in the above command, but make sure you have the Podman
   socket enabled on your host.
@@ -406,6 +414,14 @@ export WEB_API_MIGRATION_DATABASE_PORT=5432
 export WEB_API_MIGRATION_DATABASE_NAME=web_api_dev
 export WEB_API_MIGRATION_DATABASE_USER=web_api_owner
 export WEB_API_MIGRATION_DATABASE_PASSWORD=web_api_owner
+
+# A separately authenticated, least-privileged bootstrap connection. Do not
+# reuse these development credentials in a deployed environment.
+export WEB_API_AUDIT_SCHEDULER_DATABASE_HOST=127.0.0.1
+export WEB_API_AUDIT_SCHEDULER_DATABASE_PORT=5432
+export WEB_API_AUDIT_SCHEDULER_DATABASE_NAME=web_api_dev
+export WEB_API_AUDIT_SCHEDULER_DATABASE_USER=web_api_audit_scheduler
+export WEB_API_AUDIT_SCHEDULER_DATABASE_PASSWORD=web_api_audit_scheduler
 ```
 
 Then apply the Haskell-managed migrations and seed data from this repository:
@@ -415,8 +431,13 @@ cabal run exe:haskell-web-api-db -- migrate-and-seed
 ```
 
 That command intentionally does **not** read the runtime app config files. Instead, it requires separate
-owner-level credentials from the environment variables shown above so migrations do not depend on the
-runtime application's minimal-access user.
+owner-level migration and direct scheduler credentials from the environment variables shown above, so
+migrations and job ownership do not depend on the runtime application's minimal-access user. `migrate`
+and `migrate-and-seed` first run the safe account-audit partition-maintenance wrapper, then idempotently
+install `account-audit-maintenance` at `0 3 * * *` UTC and the owned 30-day pg_cron run-detail cleanup at
+`41 3 * * *`. The job owner is `web_api_audit_scheduler`; the migration owner never schedules on its
+behalf. The setup command does not wait for pg_cron's clock. Another deployment can invoke the same
+no-argument maintenance wrapper from a managed scheduler with its own reviewed operational schedule.
 
 Your runtime `./.env` / `./.env.local` values should keep describing the application's own connection user.
 The future database-backed runtime path should use a minimal-access account there, while migrations should
@@ -526,7 +547,7 @@ podman run -d --pod web-api-dev --name web-api-postgres \
   -e POSTGRES_USER=web_api_owner \
   -e POSTGRES_PASSWORD=web_api_owner \
   -e POSTGRES_DB=web_api_dev \
-  docker.io/library/postgres:17
+  localhost/haskell-web-api/postgres-pgcron:17-1.6.7
 
 podman run -d --pod web-api-dev --name web-api-jaeger \
   -e COLLECTOR_OTLP_ENABLED=true \

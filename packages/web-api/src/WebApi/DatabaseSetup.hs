@@ -9,7 +9,9 @@ module WebApi.DatabaseSetup
   ( DatabaseSetupCommand (..),
     DatabaseSetupDependencies (..),
     DatabaseSetupError (..),
+    loadAccountAuditSchedulerConfig,
     loadDatabaseSetupConfig,
+    parseAccountAuditSchedulerConfig,
     parseDatabaseSetupCommand,
     parseDatabaseSetupConfig,
     renderDatabaseSetupError,
@@ -20,6 +22,7 @@ module WebApi.DatabaseSetup
   )
 where
 
+import Control.Monad (void)
 import Control.Monad.Except (runExceptT)
 import Core.Config (ConfigParseError (..), parsePositiveInt)
 import Core.Control.Error (liftEitherWith)
@@ -29,6 +32,10 @@ import Data.Text qualified as Text
 import System.Environment (getEnvironment)
 import System.IO (Handle, hPutStrLn)
 import WebApi.Config (DatabaseConfig (..), committedEnvDefaults, parseDatabaseTransportSecurity, parseRuntimeDatabaseConfig, singletonDatabasePoolCapacity)
+import WebApi.Postgres.ActivityAuditScheduler
+  ( accountAuditSchedulerRoleName,
+    bootstrapAccountAuditScheduler,
+  )
 import WebApi.Postgres.Migration
   ( runPostgresMigrationsForRuntime,
     runPostgresSeed,
@@ -48,14 +55,18 @@ data DatabaseSetupError
   = InvalidDatabaseSetupCommand [String]
   | DatabaseSetupConfigLoadError ConfigParseError
   | DatabaseSetupRuntimeConfigLoadError ConfigParseError
+  | DatabaseSetupAuditSchedulerConfigLoadError ConfigParseError
   | DatabaseSetupMigrationError PostgresRunnerError
+  | DatabaseSetupAuditSchedulerError PostgresRunnerError
   | DatabaseSetupSeedError PostgresRunnerError
   deriving (Eq, Show)
 
 data DatabaseSetupDependencies = DatabaseSetupDependencies
   { databaseSetupLoadMigrationConfig :: IO (Either ConfigParseError DatabaseConfig),
     databaseSetupLoadRuntimeConfig :: IO (Either ConfigParseError DatabaseConfig),
+    databaseSetupLoadAuditSchedulerConfig :: IO (Either ConfigParseError DatabaseConfig),
     databaseSetupRunMigrations :: DatabaseConfig -> DatabaseConfig -> IO (Either PostgresRunnerError ()),
+    databaseSetupInstallAuditScheduler :: DatabaseConfig -> DatabaseConfig -> IO (Either PostgresRunnerError ()),
     databaseSetupRunSeed :: DatabaseConfig -> IO (Either PostgresRunnerError ())
   }
 
@@ -63,6 +74,17 @@ loadDatabaseSetupConfig :: IO (Either ConfigParseError DatabaseConfig)
 loadDatabaseSetupConfig =
   fmap
     ( parseDatabaseSetupConfig
+        . map (bimap Text.pack Text.pack)
+    )
+    getEnvironment
+
+-- | The example pg_cron adapter always authenticates directly as the fixed,
+-- least-privileged scheduler role. It has separate connection configuration so
+-- deployments can keep scheduler and provisioning credentials distinct.
+loadAccountAuditSchedulerConfig :: IO (Either ConfigParseError DatabaseConfig)
+loadAccountAuditSchedulerConfig =
+  fmap
+    ( parseAccountAuditSchedulerConfig
         . map (bimap Text.pack Text.pack)
     )
     getEnvironment
@@ -76,13 +98,24 @@ loadRuntimeDatabaseConfig =
     getEnvironment
 
 parseDatabaseSetupConfig :: [(Text, Text)] -> Either ConfigParseError DatabaseConfig
-parseDatabaseSetupConfig environmentEntries =
+parseDatabaseSetupConfig =
+  parseDatabaseConfig "WEB_API_MIGRATION_DATABASE"
+
+parseAccountAuditSchedulerConfig :: [(Text, Text)] -> Either ConfigParseError DatabaseConfig
+parseAccountAuditSchedulerConfig environmentEntries = do
+  databaseConfig <- parseDatabaseConfig "WEB_API_AUDIT_SCHEDULER_DATABASE" environmentEntries
+  if databaseUser databaseConfig == accountAuditSchedulerRoleName
+    then Right databaseConfig
+    else Left (InvalidConfigValue "WEB_API_AUDIT_SCHEDULER_DATABASE_USER" (databaseUser databaseConfig))
+
+parseDatabaseConfig :: Text -> [(Text, Text)] -> Either ConfigParseError DatabaseConfig
+parseDatabaseConfig prefix environmentEntries =
   DatabaseConfig
-    <$> requiredConfigValue "WEB_API_MIGRATION_DATABASE_HOST"
-    <*> (parsePositiveInt "WEB_API_MIGRATION_DATABASE_PORT" =<< requiredConfigValue "WEB_API_MIGRATION_DATABASE_PORT")
-    <*> requiredConfigValue "WEB_API_MIGRATION_DATABASE_NAME"
-    <*> requiredConfigValue "WEB_API_MIGRATION_DATABASE_USER"
-    <*> requiredConfigValue "WEB_API_MIGRATION_DATABASE_PASSWORD"
+    <$> requiredConfigValue "HOST"
+    <*> (parsePositiveInt (configKey "PORT") =<< requiredConfigValue "PORT")
+    <*> requiredConfigValue "NAME"
+    <*> requiredConfigValue "USER"
+    <*> requiredConfigValue "PASSWORD"
     -- Not sourced from the environment: one migration transaction has no
     -- concurrent request thread to starve, but it does use the shared libpq
     -- conninfo encoder.  Keep the bounded, committed default rather than
@@ -92,15 +125,16 @@ parseDatabaseSetupConfig environmentEntries =
     -- runtime pool, so this required record field is inert on this path.
     <*> pure singletonDatabasePoolCapacity
     <*> parseDatabaseTransportSecurity
-      "WEB_API_MIGRATION_DATABASE_SSL_MODE"
-      "WEB_API_MIGRATION_DATABASE_SSL_ROOT_CERT"
-      (lookup "WEB_API_MIGRATION_DATABASE_SSL_MODE" environmentEntries)
-      (lookup "WEB_API_MIGRATION_DATABASE_SSL_ROOT_CERT" environmentEntries)
+      (configKey "SSL_MODE")
+      (configKey "SSL_ROOT_CERT")
+      (lookup (configKey "SSL_MODE") environmentEntries)
+      (lookup (configKey "SSL_ROOT_CERT") environmentEntries)
   where
-    requiredConfigValue key =
-      case lookup key environmentEntries of
+    configKey suffix = prefix <> "_" <> suffix
+    requiredConfigValue suffix =
+      case lookup (configKey suffix) environmentEntries of
         Just value -> Right value
-        Nothing -> Left (MissingConfigValue key)
+        Nothing -> Left (MissingConfigValue (configKey suffix))
 
 migrationDatabaseConnectTimeoutSeconds :: Int
 migrationDatabaseConnectTimeoutSeconds = 10
@@ -124,8 +158,12 @@ renderDatabaseSetupError setupError =
       "Failed to load database setup config: " <> show loadError
     DatabaseSetupRuntimeConfigLoadError loadError ->
       "Failed to load runtime database config: " <> show loadError
+    DatabaseSetupAuditSchedulerConfigLoadError loadError ->
+      "Failed to load account-audit scheduler config: " <> show loadError
     DatabaseSetupMigrationError runnerError ->
       "Failed to apply database migrations: " <> Text.unpack (renderRunnerError runnerError)
+    DatabaseSetupAuditSchedulerError runnerError ->
+      "Failed to install account-audit scheduler: " <> Text.unpack (renderRunnerError runnerError)
     DatabaseSetupSeedError runnerError ->
       "Failed to apply database seed data: " <> Text.unpack (renderRunnerError runnerError)
 
@@ -149,27 +187,32 @@ runDatabaseSetupCommand =
 
 runDatabaseSetupCommandWith :: DatabaseSetupDependencies -> DatabaseSetupCommand -> IO (Either DatabaseSetupError ())
 runDatabaseSetupCommandWith dependencies setupCommand =
-  runExceptT $ do
-    migrationDatabaseConfig <- liftEitherWith DatabaseSetupConfigLoadError (databaseSetupLoadMigrationConfig dependencies)
-    runtimeDatabaseConfig <- liftEitherWith DatabaseSetupRuntimeConfigLoadError (databaseSetupLoadRuntimeConfig dependencies)
-    runCommandWithConfig migrationDatabaseConfig runtimeDatabaseConfig
+  runExceptT $
+    case setupCommand of
+      SeedDatabase -> do
+        migrationDatabaseConfig <- liftEitherWith DatabaseSetupConfigLoadError (databaseSetupLoadMigrationConfig dependencies)
+        liftEitherWith DatabaseSetupSeedError (databaseSetupRunSeed dependencies migrationDatabaseConfig)
+      MigrateDatabase -> void runMigrationsAndInstallScheduler
+      MigrateAndSeedDatabase -> do
+        migrationDatabaseConfig <- runMigrationsAndInstallScheduler
+        liftEitherWith DatabaseSetupSeedError (databaseSetupRunSeed dependencies migrationDatabaseConfig)
   where
-    runCommandWithConfig migrationDatabaseConfig runtimeDatabaseConfig =
-      case setupCommand of
-        MigrateDatabase ->
-          liftEitherWith DatabaseSetupMigrationError (databaseSetupRunMigrations dependencies migrationDatabaseConfig runtimeDatabaseConfig)
-        SeedDatabase ->
-          liftEitherWith DatabaseSetupSeedError (databaseSetupRunSeed dependencies migrationDatabaseConfig)
-        MigrateAndSeedDatabase ->
-          liftEitherWith DatabaseSetupMigrationError (databaseSetupRunMigrations dependencies migrationDatabaseConfig runtimeDatabaseConfig)
-            >> liftEitherWith DatabaseSetupSeedError (databaseSetupRunSeed dependencies migrationDatabaseConfig)
+    runMigrationsAndInstallScheduler = do
+      migrationDatabaseConfig <- liftEitherWith DatabaseSetupConfigLoadError (databaseSetupLoadMigrationConfig dependencies)
+      runtimeDatabaseConfig <- liftEitherWith DatabaseSetupRuntimeConfigLoadError (databaseSetupLoadRuntimeConfig dependencies)
+      auditSchedulerDatabaseConfig <- liftEitherWith DatabaseSetupAuditSchedulerConfigLoadError (databaseSetupLoadAuditSchedulerConfig dependencies)
+      liftEitherWith DatabaseSetupMigrationError (databaseSetupRunMigrations dependencies migrationDatabaseConfig runtimeDatabaseConfig)
+      liftEitherWith DatabaseSetupAuditSchedulerError (databaseSetupInstallAuditScheduler dependencies migrationDatabaseConfig auditSchedulerDatabaseConfig)
+      pure migrationDatabaseConfig
 
 defaultDatabaseSetupDependencies :: DatabaseSetupDependencies
 defaultDatabaseSetupDependencies =
   DatabaseSetupDependencies
     { databaseSetupLoadMigrationConfig = loadDatabaseSetupConfig,
       databaseSetupLoadRuntimeConfig = loadRuntimeDatabaseConfig,
+      databaseSetupLoadAuditSchedulerConfig = loadAccountAuditSchedulerConfig,
       databaseSetupRunMigrations = runPostgresMigrationsForRuntime,
+      databaseSetupInstallAuditScheduler = bootstrapAccountAuditScheduler,
       databaseSetupRunSeed = runPostgresSeed
     }
 

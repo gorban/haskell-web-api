@@ -1,5 +1,6 @@
 module WebApi.Postgres.Testing
   ( module WebApi.Postgres.ActivityAuditMigration,
+    module WebApi.Postgres.ActivityAuditScheduler,
     module WebApi.Postgres.AccountRepository,
     module WebApi.Postgres.LoginAttemptRepository,
     module WebApi.Postgres.MfaEnrollmentSessionRepository,
@@ -13,6 +14,7 @@ where
 
 import WebApi.Postgres.AccountRepository
 import WebApi.Postgres.ActivityAuditMigration
+import WebApi.Postgres.ActivityAuditScheduler
 import WebApi.Postgres.LoginAttemptRepository
 import WebApi.Postgres.MfaEnrollmentSessionRepository
 import WebApi.Postgres.MfaRepository

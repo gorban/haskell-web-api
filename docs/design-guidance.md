@@ -3272,11 +3272,26 @@ parent or a child: function privilege plus the security-definer owner remain
 the actual mutation boundary. Real-role tests prove both sides rather than
 treating RLS alone as a table-privilege substitute.
 
-This shipped slice creates/validates partitions and exact shared counters but
-does not yet install the scheduler connection/job, expose a Haskell
-repository, or make account mutations atomic with audit append. Those remain
-AHI-5's schedule/bootstrap and workflow integration follow-ups; it must not be
-described as a completed audit capability.
+**Scheduler/bootstrap follow-up (2026-09-07): use an application-owned direct
+connection adapter, not a Harch scheduler abstraction.** `pg_cron` attributes
+a job to its connected PostgreSQL login, so having the migration owner call
+`cron.schedule` and later pretending the job is least-privileged would be a
+false security boundary. `WebApi.DatabaseSetup` now loads a separately
+configured connection whose user must be `web_api_audit_scheduler`; the owner
+first reconciles only that login, and a distinct connection then installs the
+two fixed named jobs. The adapter is deliberately a thin fail-fast
+`IO (Either PostgresRunnerError ())` workflow rather than a custom monad or a
+generic scheduler capability: Kubernetes, systemd, or a managed scheduler can
+call the same no-argument PostgreSQL wrapper without depending on web-api.
+
+This extends the existing application setup/dependency record and PostgreSQL
+runner instead of adding anything to Harch. Tests verify the configured job
+owner, database, active flag, exact schedules and commands, and call the
+repository-owned maintenance and cleanup SQL directly; they do not test
+pg_cron's clock. The current slice still does not expose a Haskell audit
+repository or make account mutations atomic with audit append. Those workflow
+follow-ups remain necessary, so this is not described as a completed audit
+capability.
 
 ### Decision record — AHI-5-RID: opaque UUIDv4 request-correlation kernel (2026-09-05)
 

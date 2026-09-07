@@ -839,7 +839,8 @@ withClearedSetupEnvironment :: IO a -> IO a
 withClearedSetupEnvironment =
   withClearedEnvironmentPrefixes
     [ "SETUP_AUTOSTART_",
-      "WEB_API_MIGRATION_DATABASE_"
+      "WEB_API_MIGRATION_DATABASE_",
+      "WEB_API_AUDIT_SCHEDULER_DATABASE_"
     ]
 
 withFakePsqlScriptResults :: [(Text, PostgresCommandResult)] -> (FilePath -> IO a) -> IO a

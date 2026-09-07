@@ -13,17 +13,28 @@ import System.IO.Temp (withSystemTempFile)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, withContainerizedPsqlOnPath)
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi.Config (DatabaseConfig (..), DatabaseSslMode (..), DatabaseTransportSecurity (..))
-import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupDependencies (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupCommand)
+import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupDependencies (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseAccountAuditSchedulerConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupCommand)
 import WebApi.DatabaseSetup qualified as DatabaseSetup
-import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), seedStatements)
+import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), accountAuditSchedulerRoleName, seedStatements)
 
 runDatabaseSetupCommandWith :: IO (Either ConfigParseError DatabaseConfig) -> IO (Either ConfigParseError DatabaseConfig) -> (DatabaseConfig -> DatabaseConfig -> IO (Either PostgresRunnerError ())) -> (DatabaseConfig -> IO (Either PostgresRunnerError ())) -> DatabaseSetupCommand -> IO (Either DatabaseSetupError ())
-runDatabaseSetupCommandWith loadMigrationConfig loadRuntimeConfig runMigrations runSeed =
+runDatabaseSetupCommandWith loadMigrationConfig loadRuntimeConfig runMigrations =
+  runDatabaseSetupCommandWithAuditScheduler
+    loadMigrationConfig
+    loadRuntimeConfig
+    (pure (Right auditSchedulerPostgresTestConfig))
+    runMigrations
+    (\_ _ -> pure (Right ()))
+
+runDatabaseSetupCommandWithAuditScheduler :: IO (Either ConfigParseError DatabaseConfig) -> IO (Either ConfigParseError DatabaseConfig) -> IO (Either ConfigParseError DatabaseConfig) -> (DatabaseConfig -> DatabaseConfig -> IO (Either PostgresRunnerError ())) -> (DatabaseConfig -> DatabaseConfig -> IO (Either PostgresRunnerError ())) -> (DatabaseConfig -> IO (Either PostgresRunnerError ())) -> DatabaseSetupCommand -> IO (Either DatabaseSetupError ())
+runDatabaseSetupCommandWithAuditScheduler loadMigrationConfig loadRuntimeConfig loadAuditSchedulerConfig runMigrations installAuditScheduler runSeed =
   DatabaseSetup.runDatabaseSetupCommandWith
     DatabaseSetupDependencies
       { databaseSetupLoadMigrationConfig = loadMigrationConfig,
         databaseSetupLoadRuntimeConfig = loadRuntimeConfig,
+        databaseSetupLoadAuditSchedulerConfig = loadAuditSchedulerConfig,
         databaseSetupRunMigrations = runMigrations,
+        databaseSetupInstallAuditScheduler = installAuditScheduler,
         databaseSetupRunSeed = runSeed
       }
 
@@ -33,7 +44,9 @@ runDatabaseSetupArgsWith loadMigrationConfig loadRuntimeConfig runMigrations run
     DatabaseSetupDependencies
       { databaseSetupLoadMigrationConfig = loadMigrationConfig,
         databaseSetupLoadRuntimeConfig = loadRuntimeConfig,
+        databaseSetupLoadAuditSchedulerConfig = pure (Right auditSchedulerPostgresTestConfig),
         databaseSetupRunMigrations = runMigrations,
+        databaseSetupInstallAuditScheduler = \_ _ -> pure (Right ()),
         databaseSetupRunSeed = runSeed
       }
 
@@ -82,17 +95,23 @@ spec = do
     it "renders load, migration, and seed failures explicitly" $ do
       let loadError = InvalidConfigValue "WEB_API_MIGRATION_DATABASE_PORT" "0"
           runtimeLoadError = MissingConfigValue "DATABASE_PASSWORD"
+          schedulerLoadError = MissingConfigValue "WEB_API_AUDIT_SCHEDULER_DATABASE_PASSWORD"
           migrationRunnerError = UnexpectedQueryRows "expected exactly one row" ["first", "second"]
+          schedulerRunnerError = PostgresMigrationFailed "scheduler unavailable"
           nativeMigrationRunnerError = PostgresMigrationFailed "PostgreSQL migration command failed"
           seedRunnerError = UnexpectedQueryRows "expected exactly one row" ["seed"]
       renderDatabaseSetupError (DatabaseSetupConfigLoadError loadError)
         `shouldBe` "Failed to load database setup config: InvalidConfigValue \"WEB_API_MIGRATION_DATABASE_PORT\" \"0\""
       renderDatabaseSetupError (DatabaseSetupRuntimeConfigLoadError runtimeLoadError)
         `shouldBe` "Failed to load runtime database config: MissingConfigValue \"DATABASE_PASSWORD\""
+      renderDatabaseSetupError (DatabaseSetupAuditSchedulerConfigLoadError schedulerLoadError)
+        `shouldBe` "Failed to load account-audit scheduler config: MissingConfigValue \"WEB_API_AUDIT_SCHEDULER_DATABASE_PASSWORD\""
       renderDatabaseSetupError (DatabaseSetupMigrationError migrationRunnerError)
         `shouldBe` "Failed to apply database migrations: expected exactly one row: row-count=2"
       renderDatabaseSetupError (DatabaseSetupMigrationError nativeMigrationRunnerError)
         `shouldBe` "Failed to apply database migrations: PostgreSQL migration command failed"
+      renderDatabaseSetupError (DatabaseSetupAuditSchedulerError schedulerRunnerError)
+        `shouldBe` "Failed to install account-audit scheduler: scheduler unavailable"
       renderDatabaseSetupError (DatabaseSetupSeedError seedRunnerError)
         `shouldBe` "Failed to apply database seed data: expected exactly one row: row-count=1"
       let failedCommandRunnerError =
@@ -209,6 +228,25 @@ spec = do
                         databaseTransportSecurity = DatabaseTransportLibpqDefault
                       }
 
+  describe "parseAccountAuditSchedulerConfig" $ do
+    it "requires a direct connection using the fixed least-privileged scheduler identity" $ do
+      parseAccountAuditSchedulerConfig
+        [ ("WEB_API_AUDIT_SCHEDULER_DATABASE_HOST", "127.0.0.1"),
+          ("WEB_API_AUDIT_SCHEDULER_DATABASE_PORT", "5432"),
+          ("WEB_API_AUDIT_SCHEDULER_DATABASE_NAME", "web_api_dev"),
+          ("WEB_API_AUDIT_SCHEDULER_DATABASE_USER", "web_api_audit_scheduler"),
+          ("WEB_API_AUDIT_SCHEDULER_DATABASE_PASSWORD", "scheduler-secret")
+        ]
+        `shouldBe` Right (auditSchedulerPostgresTestConfig {databasePoolCapacity = requiredDatabasePoolCapacity 1})
+      parseAccountAuditSchedulerConfig
+        [ ("WEB_API_AUDIT_SCHEDULER_DATABASE_HOST", "127.0.0.1"),
+          ("WEB_API_AUDIT_SCHEDULER_DATABASE_PORT", "5432"),
+          ("WEB_API_AUDIT_SCHEDULER_DATABASE_NAME", "web_api_dev"),
+          ("WEB_API_AUDIT_SCHEDULER_DATABASE_USER", "web_api_owner"),
+          ("WEB_API_AUDIT_SCHEDULER_DATABASE_PASSWORD", "owner-secret")
+        ]
+        `shouldBe` Left (InvalidConfigValue "WEB_API_AUDIT_SCHEDULER_DATABASE_USER" "web_api_owner")
+
   describe "runDatabaseSetupCommand" $ do
     it "uses the default migration environment loader and psql seed runner for single-command setup"
       $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_HOST" (Just "127.0.0.1")
@@ -271,6 +309,13 @@ spec = do
         (\_ -> pure (Right ()))
         MigrateDatabase
         `shouldReturn` Left (DatabaseSetupConfigLoadError loadError)
+      runDatabaseSetupCommandWith
+        (pure (Left loadError))
+        unexpectedRuntimeLoader
+        unexpectedMigrationRunner
+        (\_ -> pure (Right ()))
+        SeedDatabase
+        `shouldReturn` Left (DatabaseSetupConfigLoadError loadError)
       readIORef recordedStepsReference `shouldReturn` []
 
     it "returns runtime configuration load errors before running database commands" $ do
@@ -289,6 +334,23 @@ spec = do
         unexpectedSeedRunner
         MigrateDatabase
         `shouldReturn` Left (DatabaseSetupRuntimeConfigLoadError loadError)
+      readIORef recordedStepsReference `shouldReturn` []
+
+    it "requires scheduler configuration before changing a migration-managed database" $ do
+      recordedStepsReference <- newIORef ([] :: [Text])
+      let loadError = MissingConfigValue "WEB_API_AUDIT_SCHEDULER_DATABASE_PASSWORD"
+          unexpectedMigrationRunner _ _ =
+            modifyIORef' recordedStepsReference (<> ["migrate"])
+              >> pure (Right ())
+      runDatabaseSetupCommandWithAuditScheduler
+        (pure (Right migrationPostgresTestConfig))
+        (pure (Right postgresTestConfig))
+        (pure (Left loadError))
+        unexpectedMigrationRunner
+        (\_ _ -> pure (Right ()))
+        (\_ -> pure (Right ()))
+        MigrateDatabase
+        `shouldReturn` Left (DatabaseSetupAuditSchedulerConfigLoadError loadError)
       readIORef recordedStepsReference `shouldReturn` []
 
     it "runs migrations and seed data in order with the loaded database config" $ do
@@ -310,6 +372,29 @@ spec = do
         `shouldReturn` Right ()
       readIORef recordedStepsReference
         `shouldReturn` ["migrate:web_api_owner->web_api_app:web_api_prod", "seed:web_api_owner:web_api_prod"]
+
+    it "stops after scheduling failure before seed data and preserves its runner error" $ do
+      recordedStepsReference <- newIORef ([] :: [Text])
+      let schedulerError = PostgresMigrationFailed "scheduler unavailable"
+          successfulMigrations _ _ =
+            modifyIORef' recordedStepsReference (<> ["migrate"])
+              >> pure (Right ())
+          failingScheduler _ _ =
+            modifyIORef' recordedStepsReference (<> ["scheduler"])
+              >> pure (Left schedulerError)
+          unexpectedSeed _ =
+            modifyIORef' recordedStepsReference (<> ["seed"])
+              >> pure (Right ())
+      runDatabaseSetupCommandWithAuditScheduler
+        (pure (Right migrationPostgresTestConfig))
+        (pure (Right postgresTestConfig))
+        (pure (Right auditSchedulerPostgresTestConfig))
+        successfulMigrations
+        failingScheduler
+        unexpectedSeed
+        MigrateAndSeedDatabase
+        `shouldReturn` Left (DatabaseSetupAuditSchedulerError schedulerError)
+      readIORef recordedStepsReference `shouldReturn` ["migrate", "scheduler"]
 
     it "maps single-command migration failures explicitly" $ do
       let migrationError =
@@ -450,7 +535,15 @@ spec = do
 withDefaultDatabaseSetupEnvironment :: IO a -> IO a
 withDefaultDatabaseSetupEnvironment =
   withDatabaseConfigEnvironment "WEB_API_MIGRATION_DATABASE" defaultMigrationPostgresConfig
+    . withDatabaseConfigEnvironment "WEB_API_AUDIT_SCHEDULER_DATABASE" auditSchedulerPostgresTestConfig
     . withDatabaseConfigEnvironment "DATABASE" defaultRealPostgresConfig
+
+auditSchedulerPostgresTestConfig :: DatabaseConfig
+auditSchedulerPostgresTestConfig =
+  defaultMigrationPostgresConfig
+    { databaseUser = accountAuditSchedulerRoleName,
+      databasePassword = "scheduler-secret"
+    }
 
 withDatabaseConfigEnvironment :: String -> DatabaseConfig -> IO a -> IO a
 withDatabaseConfigEnvironment prefix databaseConfig =
