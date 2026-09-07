@@ -133,6 +133,7 @@ library
     WebApi.Page.Rendering
     WebApi.Postgres.AccountRepository
     WebApi.Postgres.ActivityAuditMigration
+    WebApi.Postgres.ActivityAuditRepository
     WebApi.Postgres.ActivityAuditScheduler
     WebApi.Postgres.LoginAttemptRepository
     WebApi.Postgres.MfaEnrollmentSessionRepository
@@ -233,6 +234,7 @@ test-suite haskell-web-api-tests
     Unit.WebApi.Page.RenderingSpec
     Unit.WebApi.PageSpec
     Unit.WebApi.Postgres.AccountRepositorySpec
+    Unit.WebApi.Postgres.ActivityAuditRepositorySpec
     Unit.WebApi.Postgres.LoginAttemptRepositorySpec
     Unit.WebApi.Postgres.MfaEnrollmentSessionRepositorySpec
     Unit.WebApi.Postgres.MfaRepositorySpec

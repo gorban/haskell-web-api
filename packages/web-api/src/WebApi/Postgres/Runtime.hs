@@ -16,11 +16,13 @@ module WebApi.Postgres.Runtime
     renderRuntimeConnectionErrorMessage,
     renderRuntimeResultErrorMessage,
     runPooledRowsQuery,
+    runPooledNullableParameterizedRowsQuery,
     runPooledParameterizedRowsQuery,
     runPooledScalarQuery,
     runRequiredScalarCommand,
     runRowsCommand,
     runRuntimeRowsQuery,
+    runRuntimeNullableParameterizedRowsQuery,
     runRuntimeParameterizedRowsQuery,
     runRuntimeScalarQuery,
     runPostgresCommand,
@@ -211,10 +213,18 @@ runRuntimeRowsQuery databaseConfig sql =
 
 runRuntimeParameterizedRowsQuery :: DatabaseConfig -> Text -> [Text] -> IO (Either Text [[Text]])
 runRuntimeParameterizedRowsQuery databaseConfig sql parameters =
+  runRuntimeNullableParameterizedRowsQuery databaseConfig sql (fmap Just parameters)
+
+-- | Executes a parameterized query without replacing PostgreSQL @NULL@ with a
+-- sentinel value.  The non-null helper remains the ordinary repository API;
+-- this sibling is for an adapter whose declared database function has
+-- meaningful nullable fields.
+runRuntimeNullableParameterizedRowsQuery :: DatabaseConfig -> Text -> [Maybe Text] -> IO (Either Text [[Text]])
+runRuntimeNullableParameterizedRowsQuery databaseConfig sql parameters =
   bracket
     (LibPQ.connectdb (runtimeConnectionString databaseConfig))
     LibPQ.finish
-    (runRuntimeParameterizedQueryRows sql parameters)
+    (runRuntimeNullableParameterizedQueryRows sql parameters)
 
 -- | The pooled counterparts of 'runRuntimeScalarQuery' / 'runRuntimeRowsQuery'
 -- / 'runRuntimeParameterizedRowsQuery': same query execution and row
@@ -231,7 +241,15 @@ runPooledRowsQuery pool sql =
 
 runPooledParameterizedRowsQuery :: PostgresPool -> Text -> [Text] -> IO (Either Text [[Text]])
 runPooledParameterizedRowsQuery pool sql parameters =
-  withPooledConnection pool (runRuntimeParameterizedQueryRows sql parameters)
+  runPooledNullableParameterizedRowsQuery pool sql (fmap Just parameters)
+
+-- | The pooled nullable counterpart of
+-- 'runRuntimeNullableParameterizedRowsQuery'.  Keeping nullable values in the
+-- parameter representation lets a repository call a typed PostgreSQL
+-- function without collapsing absence into an application-chosen text value.
+runPooledNullableParameterizedRowsQuery :: PostgresPool -> Text -> [Maybe Text] -> IO (Either Text [[Text]])
+runPooledNullableParameterizedRowsQuery pool sql parameters =
+  withPooledConnection pool (runRuntimeNullableParameterizedQueryRows sql parameters)
 
 runRuntimeQueryRows :: Text -> LibPQ.Connection -> IO (Either Text [Text])
 runRuntimeQueryRows sql =
@@ -239,14 +257,14 @@ runRuntimeQueryRows sql =
     (\connection -> LibPQ.exec connection (TextEncoding.encodeUtf8 sql))
     readRuntimeQueryRows
 
-runRuntimeParameterizedQueryRows :: Text -> [Text] -> LibPQ.Connection -> IO (Either Text [[Text]])
-runRuntimeParameterizedQueryRows sql parameters =
+runRuntimeNullableParameterizedQueryRows :: Text -> [Maybe Text] -> LibPQ.Connection -> IO (Either Text [[Text]])
+runRuntimeNullableParameterizedQueryRows sql parameters =
   runRuntimeQuery
     ( \connection ->
         LibPQ.execParams
           connection
           (TextEncoding.encodeUtf8 sql)
-          (fmap parameterValue parameters)
+          (fmap nullableParameterValue parameters)
           LibPQ.Text
     )
     readRuntimeQueryTable
@@ -265,6 +283,9 @@ runRuntimeQuery runQuery readRows connection = do
 parameterValue :: Text -> Maybe (LibPQ.Oid, ByteString.ByteString, LibPQ.Format)
 parameterValue value =
   Just (LibPQ.Oid 0, TextEncoding.encodeUtf8 value, LibPQ.Text)
+
+nullableParameterValue :: Maybe Text -> Maybe (LibPQ.Oid, ByteString.ByteString, LibPQ.Format)
+nullableParameterValue = (>>= parameterValue)
 
 readRuntimeQueryRows :: LibPQ.Result -> IO (Either Text [Text])
 readRuntimeQueryRows result = do
