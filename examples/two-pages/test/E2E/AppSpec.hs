@@ -219,6 +219,7 @@ spec =
           waitForBlockedRequestsMatching "**/actions/subscribe"
           fill emailField "second@example.com"
           submit subscriptionForm
+          waitForBlockedRequestCountMatching "**/actions/subscribe" 2
           assertAllObserved do
             (mutationRequestCount <$> browserMetrics) `matches` (`shouldBe` 2)
           releaseRequestsMatching "**/actions/subscribe"

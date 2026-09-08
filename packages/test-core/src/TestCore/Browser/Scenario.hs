@@ -39,6 +39,7 @@ module TestCore.Browser.Scenario
     submit,
     visit,
     visitWithoutScripts,
+    waitForBlockedRequestCountMatching,
     waitForBlockedRequestsMatching,
   )
 where
@@ -188,6 +189,15 @@ blockRequestsMatching patternText = simpleCommand "blockRequestsMatching" ["patt
 -- Playwright routing state to scenarios.
 waitForBlockedRequestsMatching :: Text -> BrowserScenario ()
 waitForBlockedRequestsMatching patternText = simpleCommand "waitForBlockedRequestsMatching" ["pattern" .= patternText]
+
+-- | Wait until at least the requested number of requests have reached a
+-- deliberate blocker.  Use this before releasing a blocker shared by
+-- concurrent requests, so a request that has been dispatched but has not yet
+-- reached Playwright routing cannot be stranded behind a retired handler.
+-- The runner rejects non-positive counts at the JSON boundary.
+waitForBlockedRequestCountMatching :: Text -> Int -> BrowserScenario ()
+waitForBlockedRequestCountMatching patternText expectedCount =
+  simpleCommand "waitForBlockedRequestCountMatching" ["pattern" .= patternText, "count" .= expectedCount]
 
 releaseRequestsMatching :: Text -> BrowserScenario ()
 releaseRequestsMatching patternText = simpleCommand "releaseRequestsMatching" ["pattern" .= patternText]

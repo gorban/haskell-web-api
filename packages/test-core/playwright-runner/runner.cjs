@@ -90,6 +90,7 @@ async function execute(request) {
     case 'historyForward': return requirePage().goForward({ waitUntil: 'commit', timeout: timeout() });
     case 'blockRequestsMatching': return blockRequestsMatching(requireString(request.pattern, 'request pattern'));
     case 'waitForBlockedRequestsMatching': return waitForBlockedRequestsMatching(requireString(request.pattern, 'request pattern'));
+    case 'waitForBlockedRequestCountMatching': return waitForBlockedRequestCountMatching(requireString(request.pattern, 'request pattern'), positiveInteger(request.count, 'blocked request count'));
     case 'releaseRequestsMatching': return releaseRequestsMatching(requireString(request.pattern, 'request pattern'));
     case 'failBlockedRequestsMatching': return failBlockedRequestsMatching(requireString(request.pattern, 'request pattern'));
     case 'observeMany': return observeMany(request.observations);
@@ -227,11 +228,15 @@ async function blockRequestsMatching(pattern) {
 }
 
 async function waitForBlockedRequestsMatching(pattern) {
+  return waitForBlockedRequestCountMatching(pattern, 1);
+}
+
+async function waitForBlockedRequestCountMatching(pattern, expectedCount) {
   const blocked = state.blockedRequests.get(pattern);
   if (!blocked) throw new Error(`request pattern is not blocked: ${pattern}`);
   const deadline = Date.now() + timeout();
-  while (blocked.pendingRoutes.length === 0) {
-    if (Date.now() >= deadline) throw new Error(`timed out waiting for a blocked request matching: ${pattern}`);
+  while (blocked.pendingRoutes.length < expectedCount) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${expectedCount} blocked requests matching: ${pattern}`);
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   return null;
