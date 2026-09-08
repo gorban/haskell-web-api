@@ -638,6 +638,37 @@ spec =
         readIORef profileLoadsReference `shouldReturn` 1
         readIORef deliveryCountReference `shouldReturn` 0
 
+    it "expires a retained profile action without leaving the reauthentication dialog open" $
+      withTestAccountJwtFixture $ \environmentConfig _ -> do
+        runtime <- requiredAccountJwtRuntime environmentConfig
+        initialNow <- Time.currentUnixTimeNanoseconds
+        initialSessionId <- Session.generateSessionId
+        let initialSession = Session.OpaqueSession initialSessionId pendingProfileAccountId initialNow (initialNow + 86400000000000)
+            issuer = accountJwtIssuerFromRuntime runtime
+        initialJwt <- issueInitialSessionJwt issuer initialSession
+        sessionsReference <- newIORef [initialSession]
+        profileLoadsReference <- newIORef (0 :: Int)
+        deliveryCountReference <- newIORef (0 :: Int)
+        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession environmentConfig issuer sessionsReference profileLoadsReference deliveryCountReference
+        let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+        withBrowserApp $ \browser appConfig ->
+          HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+            let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                profileSubmit = byRole Button `named` "Resend verification email"
+                reauthenticationDialog = css "#reauthentication-dialog"
+            runBrowserSpec browser do
+              setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+              visit profileUrl
+              _ <- runPageScript "document.querySelector('[data-profile-resend] form').dataset.harchActionRetentionMs = '1000'"
+              click profileSubmit
+              assertAllObserved do
+                attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Nothing)
+                textContent (css "[data-profile-resend] [data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
+                isFocused profileSubmit `satisfies` id
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+        readIORef deliveryCountReference `shouldReturn` 0
+
     it "recovers one retained profile action after its signed durable session expires" $
       withTestAccountJwtFixture $ \environmentConfig _ -> do
         runtime <- requiredAccountJwtRuntime environmentConfig
