@@ -277,7 +277,11 @@ async function releaseRequestsMatching(pattern) {
       resolve();
     }
   }
-  await state.context.unroute(pattern, blocked.handler);
+  // The captured routes have already been continued and the handler now
+  // passes any racing follow-up request through.  Route deregistration can
+  // wait for a browser navigation to settle, so it must not hold the command
+  // protocol (or the native-fallback path) hostage.
+  void state.context.unroute(pattern, blocked.handler).catch(() => {});
   return null;
 }
 
@@ -297,7 +301,10 @@ async function failBlockedRequestsMatching(pattern) {
       resolve();
     }
   }
-  await state.context.unroute(pattern, blocked.handler);
+  // As above, completion of the already-issued abort is independent of
+  // Playwright finishing route deregistration.  Keep that cleanup detached
+  // so the browser can take its error-driven native fallback immediately.
+  void state.context.unroute(pattern, blocked.handler).catch(() => {});
   return null;
 }
 
