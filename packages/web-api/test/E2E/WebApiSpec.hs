@@ -688,6 +688,80 @@ spec =
         sessions <- readIORef sessionsReference
         find ((== initialSessionId) . Session.sessionId) sessions `shouldBe` Just expiredInitialSession
 
+    it "keeps one retained profile action available through corrected password and MFA failures" $
+      withTestAccountJwtFixture $ \environmentConfig _ -> do
+        runtime <- requiredAccountJwtRuntime environmentConfig
+        initialNow <- Time.currentUnixTimeNanoseconds
+        initialSessionId <- Session.generateSessionId
+        let initialSession =
+              Session.OpaqueSession
+                { Session.sessionId = initialSessionId,
+                  Session.sessionPrincipal = pendingProfileAccountId,
+                  Session.sessionIssuedAtNanoseconds = initialNow,
+                  Session.sessionExpiresAtNanoseconds = initialNow + 86400000000000
+                }
+            issuer = accountJwtIssuerFromRuntime runtime
+        initialJwt <- issueInitialSessionJwt issuer initialSession
+        sessionsReference <- newIORef [initialSession]
+        profileLoadsReference <- newIORef (0 :: Int)
+        deliveryCountReference <- newIORef (0 :: Int)
+        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession environmentConfig issuer sessionsReference profileLoadsReference deliveryCountReference
+        let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+        withBrowserApp $ \browser appConfig ->
+          HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+            let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                profileSubmit = byRole Button `named` "Resend verification email"
+                reauthenticationDialog = css "#reauthentication-dialog"
+                identifierField = byLabel "Email address or username"
+                passwordField = byLabel "Password"
+                authenticatorCodeField = byLabel "Authenticator code"
+                retryOriginalAction = css "[data-web-api-reauthentication-retry]"
+                loginForm = css "#login-region form"
+            runBrowserSpec browser do
+              setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+              visit profileUrl
+              click profileSubmit
+              fill identifierField "person@example.test"
+              fill passwordField "incorrect password"
+              fill authenticatorCodeField reauthenticationTotpCode
+              click (byRole Button `named` "Sign in")
+              assertAllObserved do
+                attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Just "")
+                attributeValue loginForm "aria-busy" `matches` (`shouldBe` Nothing)
+                attributeValue retryOriginalAction "hidden" `matches` (`shouldBe` Just "")
+                inputValue passwordField `matches` (`shouldBe` "")
+                inputValue authenticatorCodeField `matches` (`shouldBe` "")
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+              fill identifierField "person@example.test"
+              fill passwordField "correct horse battery staple"
+              fill authenticatorCodeField "000000"
+              click (byRole Button `named` "Sign in")
+              assertAllObserved do
+                attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Just "")
+                attributeValue loginForm "aria-busy" `matches` (`shouldBe` Nothing)
+                attributeValue retryOriginalAction "hidden" `matches` (`shouldBe` Just "")
+                inputValue passwordField `matches` (`shouldBe` "")
+                inputValue authenticatorCodeField `matches` (`shouldBe` "")
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
+              fill identifierField "person@example.test"
+              fill passwordField "correct horse battery staple"
+              fill authenticatorCodeField reauthenticationTotpCode
+              click (byRole Button `named` "Sign in")
+              assertAllObserved do
+                textContent (css "[data-web-api-reauthentication-status]") `matches` (`shouldBe` "Signed in. Confirm to retry the original action.")
+                attributeValue retryOriginalAction "hidden" `matches` (`shouldBe` Nothing)
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
+              click retryOriginalAction
+              assertAllObserved do
+                textContent (byText "Check your inbox for a verification link.") `matches` (`shouldBe` "Check your inbox for a verification link.")
+                attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Nothing)
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 5}|])
+        readIORef deliveryCountReference `shouldReturn` 1
+
     it "does not open a second reauthentication dialog when replay is rejected again" $
       withTestAccountJwtFixture $ \environmentConfig _ -> do
         runtime <- requiredAccountJwtRuntime environmentConfig

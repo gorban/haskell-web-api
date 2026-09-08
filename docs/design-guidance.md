@@ -482,16 +482,18 @@ capture ordering, credentials, or response semantics.
 choose `RetainForExplicitRetry` or `DoNotRetain`; the decision renders from the
 validated endpoint declaration and the capture kernel refuses to retain any
 other action. `ActionCompletionPolicy` separately names the narrow
-`ReauthenticationContinuation` case. After applying the normal response
-patches, the navigation runtime emits a cancelable completion event only for
-that declared case. An application with an opaque retained ID may consume the
-typed navigation, refresh page security, and offer the kernel's one-time
+`ReauthenticationContinuation` case. After applying normal response patches,
+the navigation runtime emits a cancelable completion event only for a
+successful response from that declared case. A rejected credential or MFA
+response keeps its ordinary field/form patch, but cannot expose or authorize a
+retained-action replay. An application with an opaque retained ID may consume
+the typed navigation, refresh page security, and offer the kernel's one-time
 replay; without an active recovery it does nothing and ordinary login retains
 its normal navigation. The event carries no captured fields and neither
-extends the lifetime nor grants a second replay. This is an extension of the
-existing validated action codec and its runtime interpreter, not a JavaScript
-callback registry, second fetch path, or framework-owned dialog. The remaining
-application modal and real-browser proof are still AHI-4C work.
+extends the lifetime nor grants a second replay. This extends the existing
+validated action codec and its runtime interpreter rather than adding a
+JavaScript callback registry, second fetch path, or framework-owned dialog.
+The remaining application modal and real-browser proof are still AHI-4C work.
 
 **Recovery-lifecycle refinement (AHI-4C, 2026-09-07): expose the existing
 navigation-owned page-security refresh through the capture-kernel capability,
@@ -524,11 +526,14 @@ explicit replay. A refresh failure cancels the retained envelope and returns
 focus; it never falls back to an old token.
 
 The typed continuation event is dispatched after normal response patches for
-every declared `ReauthenticationContinuation`, even if its navigation is
-absent. That lets an application observe successful modal authentication
-without requiring a particular login destination. A present navigation still
-remains the default framework behavior unless the application cancels this
-narrow event; only then does the recovery adapter take over and offer replay.
+every successful declared `ReauthenticationContinuation`, even if its
+navigation is absent. A 4xx credential/MFA patch deliberately does not emit
+it: the user may correct login details within the retained lifetime, but only
+successful authentication can make replay available. That lets an application
+observe successful modal authentication without requiring a particular login
+destination. A present navigation still remains the default framework behavior
+unless the application cancels this narrow event; only then does the recovery
+adapter take over and offer replay.
 The browser proof uses a genuinely RS256-signed, browser-deliverable cookie
 whose matching durable session expires after SSR, confirms the zero-effect
 challenge, authenticates through the ordinary MFA action, refreshes both CSRF

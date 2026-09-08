@@ -469,7 +469,7 @@ defaultNavigationRuntimeScript =
       "    if (response.status === 401 && response.headers.get('X-Harch-Action-Reauthenticate') === 'required') {",
       "      return { reauthenticationRequired: true };",
       "    }",
-      "    return { actionResponse, reauthenticationRequired: false };",
+      "    return { actionResponse, reauthenticationRequired: false, responseSucceeded: response.ok };",
       "  }",
       "",
       "  async function navigateActionResponse(navigation) {",
@@ -513,7 +513,7 @@ defaultNavigationRuntimeScript =
       "          return;",
       "        }",
       "        const navigation = applyActionResponse(outcome.actionResponse);",
-      "        const completion = capturedAction.completion === 'reauthentication-continuation'",
+      "        const completion = outcome.responseSucceeded && capturedAction.completion === 'reauthentication-continuation'",
       "          ? new CustomEvent('harch:action-reauthentication-completed', { cancelable: true, detail: { navigation } })",
       "          : null;",
       "        if (completion) { document.dispatchEvent(completion); }",
@@ -861,7 +861,10 @@ data PageShell route context = PageShell
 -- installed before any framework control in the body can become interactive;
 -- larger behavior modules consume its queue after they load.  A claimed action
 -- may present patches, focus, or typed navigation only after its settlement
--- succeeds.  Explicit cancellation and every enhanced-navigation start
+-- succeeds.  A declared reauthentication continuation is narrower still: its
+-- completion event is emitted only after a successful action response, so an
+-- ordinary rejected credential patch cannot authorize or expose a retained
+-- action replay.  Explicit cancellation and every enhanced-navigation start
 -- invalidate outstanding claims before later transport completions can affect
 -- the document.  A new capture from one control supersedes its older claim;
 -- captures from distinct controls remain independent.  This cancels client
