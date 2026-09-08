@@ -230,6 +230,24 @@ spec =
           assertAllObserved do
             currentUrl `matches` (`shouldBe` admissionUrl)
 
+    it "keeps an unavailable admission credential store recoverable without navigating or clearing its draft" $
+      withAdmissionBrowserAndServerWithCredentialState permissiveAdmissionAttemptStore [] BrowserAdmissionCredentialStoreUnavailable $ \browser server -> do
+        let admissionUrl = localServerBaseUrl server <> "/public/admission"
+            loginField = byLabel "Admission name"
+            codeField = byLabel "One-time code"
+        runBrowserSpec browser do
+          visit admissionUrl
+          fill loginField "support_operator"
+          fill codeField browserAdmissionCode
+          submit (byRole Form `named` "Admission")
+          assertAllObserved do
+            currentUrl `matches` (`shouldBe` admissionUrl)
+            textContent (css "[data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
+            inputValue loginField `matches` (`shouldBe` "support_operator")
+            inputValue codeField `matches` (`shouldBe` browserAdmissionCode)
+            browserMetrics `matches` \metrics ->
+              $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+
     it "submits the same admission workflow through its CSRF-protected native fallback" $
       withAdmissionBrowserAndServer $ \browser server -> do
         let admissionUrl = localServerBaseUrl server <> "/public/admission"
@@ -259,21 +277,28 @@ withAdmissionBrowserAndServerWith :: AdmissionAttemptStore -> (BrowserConfig -> 
 withAdmissionBrowserAndServerWith attemptStore = withAdmissionBrowserAndServerWithStoredSessions attemptStore []
 
 withAdmissionBrowserAndServerWithStoredSessions :: AdmissionAttemptStore -> [OpaqueSession AdmissionPrincipalId] -> (BrowserConfig -> LocalTestServer -> IO a) -> IO a
-withAdmissionBrowserAndServerWithStoredSessions attemptStore storedSessions action = do
+withAdmissionBrowserAndServerWithStoredSessions attemptStore storedSessions = withAdmissionBrowserAndServerWithCredentialState attemptStore storedSessions AdmissionCredentialStoreAvailable
+
+withAdmissionBrowserAndServerWithCredentialState :: AdmissionAttemptStore -> [OpaqueSession AdmissionPrincipalId] -> AdmissionCredentialStoreState -> (BrowserConfig -> LocalTestServer -> IO a) -> IO a
+withAdmissionBrowserAndServerWithCredentialState attemptStore storedSessions credentialState action = do
   loadedConfig <- loadPlaywrightBrowserConfig
   browser <-
     case loadedConfig of
       Left loadError -> expectationFailure loadError >> fail "unreachable"
       Right config -> pure config
-  admissionApplication <- admissionBrowserApplication attemptStore storedSessions
+  admissionApplication <- admissionBrowserApplication attemptStore storedSessions credentialState
   withLocalTestServer admissionApplication (action browser)
 
 composedBrowserApplication :: Application RootRoute RootAction ComposedContext RootAuthorization
 composedBrowserApplication =
   Site.buildSiteApplication (buildComposedSiteWithSecurityDependencies (browserDependencies browserCsrfProtection) browserSecurity)
 
-admissionBrowserApplication :: AdmissionAttemptStore -> [OpaqueSession AdmissionPrincipalId] -> IO (Application RootRoute RootAction ComposedContext RootAuthorization)
-admissionBrowserApplication attemptStore storedSessions = do
+data AdmissionCredentialStoreState
+  = AdmissionCredentialStoreAvailable
+  | BrowserAdmissionCredentialStoreUnavailable
+
+admissionBrowserApplication :: AdmissionAttemptStore -> [OpaqueSession AdmissionPrincipalId] -> AdmissionCredentialStoreState -> IO (Application RootRoute RootAction ComposedContext RootAuthorization)
+admissionBrowserApplication attemptStore storedSessions credentialState = do
   sessions <- newIORef storedSessions
   usedCounters <- newIORef ([] :: [Word64])
   let loginName = requiredBrowser "admission login" (mkAdmissionLoginName "support_operator")
@@ -304,11 +329,18 @@ admissionBrowserApplication attemptStore storedSessions = do
               atomicModifyIORef' sessions (\saved -> (filter ((/= requestedSessionId) . mkAdmissionSessionId . sessionId) saved, Right True))
           }
       credentialStore =
-        AdmissionCredentialStore
-          { findAdmissionCredential = \receivedLogin -> pure (Right (if receivedLogin == loginName then Just credential else Nothing)),
-            markAdmissionTotpCounterUsed = \_ counter ->
-              atomicModifyIORef' usedCounters (\used -> if counter `elem` used then (used, Right False) else (counter : used, Right True))
-          }
+        case credentialState of
+          AdmissionCredentialStoreAvailable ->
+            AdmissionCredentialStore
+              { findAdmissionCredential = \receivedLogin -> pure (Right (if receivedLogin == loginName then Just credential else Nothing)),
+                markAdmissionTotpCounterUsed = \_ counter ->
+                  atomicModifyIORef' usedCounters (\used -> if counter `elem` used then (used, Right False) else (counter : used, Right True))
+              }
+          BrowserAdmissionCredentialStoreUnavailable ->
+            AdmissionCredentialStore
+              { findAdmissionCredential = \_ -> pure (Left AdmissionCredentialStoreUnavailable),
+                markAdmissionTotpCounterUsed = \_ _ -> pure (Left AdmissionCredentialStoreUnavailable)
+              }
       proofConfig =
         AdmissionProofConfig
           { admissionProofCredentials = credentialStore,
