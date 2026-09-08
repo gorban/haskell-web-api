@@ -526,9 +526,17 @@ make the image build run the coverage/test gate first, opt in explicitly:
 podman build --target runtime-with-tests -t localhost/haskell-web-api:dev .
 ```
 
+That target installs Chromium and runs the repository-owned unit-coverage boundary plus the selected
+two-pages browser behavior. Its test stage writes the web-api package's local override that disables optional
+PostgreSQL and Jaeger autostart: a Docker build sandbox does not own those services or a container daemon,
+and this target is not a replacement for the local integration-and-E2E gate against the PostgreSQL and Jaeger
+prerequisites documented above.
+
 The tracked runtime image now includes `libpq` for in-process PostgreSQL queries plus `certbot` and
 `openssl`, so normal runtime traffic does not need the `psql` CLI and later ACME walkthroughs can use either
-backend without rebuilding the image.
+backend without rebuilding the image. It is based on Debian rather than Alpine so its glibc, ICU, and C++
+runtime ABI matches the build stage; Alpine's compatibility layer is not a supported deployment target for
+this executable.
 
 2. Create a pod that exposes all three services on localhost:
 
@@ -593,10 +601,13 @@ cabal run exe:haskell-web-api-db -- migrate-and-seed
 
 ```bash
 podman run -d --pod web-api-dev --name web-api \
-  -v "$PWD/podman.env:/app/.env:ro" \
-  -v "$PWD/podman.env.local:/app/.env.local:ro" \
+  -v "$PWD/podman.env:/app/.env:ro,Z" \
+  -v "$PWD/podman.env.local:/app/.env.local:ro,Z" \
   localhost/haskell-web-api:dev
 ```
+
+On a non-SELinux host, omit the `,Z` suffixes. They relabel the two bind-mounted configuration files for
+this private Podman container; they do not change the files' content.
 
 7. Useful checks after startup:
 

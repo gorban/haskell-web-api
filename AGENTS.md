@@ -70,6 +70,10 @@ packages/test-core/playwright-runner playwright install chromium`, then seed the
 ```sh
 cabal run haskell-web-api-db -- migrate-and-seed
 ./tools/check-cabal-packages.sh
+./tools/test-check-executable-file-metadata.sh
+./tools/check-executable-file-metadata.sh
+./tools/test-ci-workflow-policy.sh
+./tools/check-ci-workflow-policy.sh
 ./tools/run-optimized-build-check.sh
 ./tools/run-code-coverage-check.sh
 ./.github/scripts/formatting-checks.sh

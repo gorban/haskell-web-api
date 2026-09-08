@@ -3,6 +3,12 @@
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
+
+# Docker's dependency-cache layer must mirror the Cabal project before either
+# the native manifest checks below or a remote image build can give useful
+# feedback.  Keep this structural packaging check in the normal CI gate.
+"$repo_root/tools/test-dockerfile-manifest-layer.sh"
+
 core_test_support_files=(
   src/TestCore/Prelude.hs
   src/TestCore/CustomAssertions.hs
