@@ -23,6 +23,9 @@ const state = {
   scriptsEnabled: null,
   mobileViewport: null,
   countHardNavigations: false,
+  documentIdentity: null,
+  documentRequestCount: 0,
+  accountedDocumentRequestCount: 0,
   metrics: emptyMetrics(),
   blockedRequests: new Map(),
 };
@@ -132,6 +135,7 @@ async function createContext(scriptsEnabled) {
     if (metrics.mutation) state.metrics.mutationRequestCount += 1;
   });
   await state.context.addInitScript(() => {
+    window.__testCoreDocumentIdentity = Math.random().toString(36).slice(2);
     const originalFetch = window.fetch;
     window.fetch = function (...arguments_) {
       const [input, init] = arguments_;
@@ -149,14 +153,19 @@ async function createContext(scriptsEnabled) {
   });
   state.page = await state.context.newPage();
   state.countHardNavigations = false;
+  state.documentIdentity = null;
+  state.documentRequestCount = 0;
+  state.accountedDocumentRequestCount = 0;
   state.metrics = emptyMetrics();
   state.blockedRequests = new Map();
 
   state.page.on('request', (request) => {
     if (state.countHardNavigations && request.isNavigationRequest() && request.frame() === state.page.mainFrame()) {
+      state.documentRequestCount += 1;
       state.metrics.hardNavigationCount += 1;
     }
   });
+
 }
 
 async function emulateMobileViewport(width, height) {
@@ -199,7 +208,11 @@ async function visit(url, scriptsEnabled) {
   requireString(url, 'visit URL');
   if (!state.context || state.scriptsEnabled !== scriptsEnabled) await createContext(scriptsEnabled);
   state.countHardNavigations = false;
-  await requirePage().goto(url, { waitUntil: 'commit', timeout: timeout() });
+  const page = requirePage();
+  await page.goto(url, { waitUntil: 'commit', timeout: timeout() });
+  state.documentIdentity = await page.evaluate(() => window.__testCoreDocumentIdentity);
+  state.documentRequestCount = 0;
+  state.accountedDocumentRequestCount = 0;
   state.metrics = emptyMetrics();
   state.countHardNavigations = true;
   return null;
@@ -221,9 +234,13 @@ async function setCookie(url, name, value) {
 async function blockRequestsMatching(pattern) {
   if (state.blockedRequests.has(pattern)) throw new Error(`request pattern is already blocked: ${pattern}`);
   const pendingRoutes = [];
-  const handler = (route) => new Promise((resolve, reject) => pendingRoutes.push({ route, resolve, reject }));
-  state.blockedRequests.set(pattern, { handler, pendingRoutes });
-  await state.context.route(pattern, handler);
+  const blocked = { acceptingRequests: true, handler: null, pendingRoutes };
+  blocked.handler = (route) => {
+    if (!blocked.acceptingRequests) return route.continue();
+    return new Promise((resolve, reject) => pendingRoutes.push({ route, resolve, reject }));
+  };
+  state.blockedRequests.set(pattern, blocked);
+  await state.context.route(pattern, blocked.handler);
   return null;
 }
 
@@ -245,7 +262,12 @@ async function waitForBlockedRequestCountMatching(pattern, expectedCount) {
 async function releaseRequestsMatching(pattern) {
   const blocked = state.blockedRequests.get(pattern);
   if (!blocked) throw new Error(`request pattern is not blocked: ${pattern}`);
+  blocked.acceptingRequests = false;
   state.blockedRequests.delete(pattern);
+  // Keep the handler just long enough to release captured routes, but switch
+  // it to pass-through first. A release can immediately cause a follow-up
+  // request, which must neither wait in this queue nor lose the captured
+  // route's intended continuation.
   for (const { route, resolve } of blocked.pendingRoutes) {
     try {
       const continued = route.continue();
@@ -255,14 +277,17 @@ async function releaseRequestsMatching(pattern) {
       resolve();
     }
   }
-  void state.context.unroute(pattern, blocked.handler).catch(() => {});
+  await state.context.unroute(pattern, blocked.handler);
   return null;
 }
 
 async function failBlockedRequestsMatching(pattern) {
   const blocked = state.blockedRequests.get(pattern);
   if (!blocked) throw new Error(`request pattern is not blocked: ${pattern}`);
+  blocked.acceptingRequests = false;
   state.blockedRequests.delete(pattern);
+  // See releaseRequestsMatching: later requests pass through while the
+  // captured request still receives the requested failure.
   for (const { route, resolve } of blocked.pendingRoutes) {
     try {
       const aborted = route.abort('failed');
@@ -272,7 +297,7 @@ async function failBlockedRequestsMatching(pattern) {
       resolve();
     }
   }
-  void state.context.unroute(pattern, blocked.handler).catch(() => {});
+  await state.context.unroute(pattern, blocked.handler);
   return null;
 }
 
@@ -290,9 +315,36 @@ async function observe(observation) {
     case 'focused': return resolveLocator(observation.locator).evaluate((element) => document.activeElement === element);
     case 'visible': return resolveLocator(observation.locator).isVisible({ timeout: timeout() });
     case 'currentUrl': return requirePage().url();
-    case 'browserMetrics': return { ...state.metrics };
+    case 'browserMetrics': return browserMetrics();
     default: throw new Error(`unsupported browser observation: ${observation.kind}`);
   }
+}
+
+async function browserMetrics() {
+  const documentIdentity = await currentDocumentIdentity();
+  if (state.countHardNavigations && documentIdentity !== state.documentIdentity) {
+    const requestWasObserved = state.documentRequestCount !== state.accountedDocumentRequestCount;
+    state.documentIdentity = documentIdentity;
+    state.accountedDocumentRequestCount = state.documentRequestCount;
+    if (!requestWasObserved) state.metrics.hardNavigationCount += 1;
+  }
+  return { ...state.metrics };
+}
+
+async function currentDocumentIdentity() {
+  const deadline = Date.now() + timeout();
+  while (true) {
+    try {
+      return await requirePage().evaluate(() => window.__testCoreDocumentIdentity);
+    } catch (error) {
+      if (!isNavigationInterruption(error) || Date.now() >= deadline) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+}
+
+function isNavigationInterruption(error) {
+  return error instanceof Error && error.message.includes('Execution context was destroyed');
 }
 
 function resolveLocator(spec, root = requirePage()) {
