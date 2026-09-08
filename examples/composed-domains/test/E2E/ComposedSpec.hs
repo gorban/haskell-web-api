@@ -248,6 +248,24 @@ spec =
             browserMetrics `matches` \metrics ->
               $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
 
+    it "keeps corrupt encrypted admission credentials recoverable without navigating or clearing its draft" $
+      withAdmissionBrowserAndServerWithCredentialState permissiveAdmissionAttemptStore [] BrowserAdmissionCredentialStoreCorrupt $ \browser server -> do
+        let admissionUrl = localServerBaseUrl server <> "/public/admission"
+            loginField = byLabel "Admission name"
+            codeField = byLabel "One-time code"
+        runBrowserSpec browser do
+          visit admissionUrl
+          fill loginField "support_operator"
+          fill codeField browserAdmissionCode
+          submit (byRole Form `named` "Admission")
+          assertAllObserved do
+            currentUrl `matches` (`shouldBe` admissionUrl)
+            textContent (css "[data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
+            inputValue loginField `matches` (`shouldBe` "support_operator")
+            inputValue codeField `matches` (`shouldBe` browserAdmissionCode)
+            browserMetrics `matches` \metrics ->
+              $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+
     it "submits the same admission workflow through its CSRF-protected native fallback" $
       withAdmissionBrowserAndServer $ \browser server -> do
         let admissionUrl = localServerBaseUrl server <> "/public/admission"
@@ -296,6 +314,7 @@ composedBrowserApplication =
 data AdmissionCredentialStoreState
   = AdmissionCredentialStoreAvailable
   | BrowserAdmissionCredentialStoreUnavailable
+  | BrowserAdmissionCredentialStoreCorrupt
 
 admissionBrowserApplication :: AdmissionAttemptStore -> [OpaqueSession AdmissionPrincipalId] -> AdmissionCredentialStoreState -> IO (Application RootRoute RootAction ComposedContext RootAuthorization)
 admissionBrowserApplication attemptStore storedSessions credentialState = do
@@ -318,6 +337,11 @@ admissionBrowserApplication attemptStore storedSessions credentialState = do
                 )
           )
       credential = StoredAdmissionCredential principalId encryptedSecret Nothing
+      corruptCredential =
+        StoredAdmissionCredential
+          principalId
+          (requiredBrowser "corrupt encrypted admission TOTP secret" (mkEncryptedAdmissionTotpSecret "not-an-encrypted-envelope"))
+          Nothing
       sessionStore =
         AdmissionSessionStore
           { saveAdmissionSession = \session -> do
@@ -340,6 +364,11 @@ admissionBrowserApplication attemptStore storedSessions credentialState = do
             AdmissionCredentialStore
               { findAdmissionCredential = \_ -> pure (Left AdmissionCredentialStoreUnavailable),
                 markAdmissionTotpCounterUsed = \_ _ -> pure (Left AdmissionCredentialStoreUnavailable)
+              }
+          BrowserAdmissionCredentialStoreCorrupt ->
+            AdmissionCredentialStore
+              { findAdmissionCredential = \receivedLogin -> pure (Right (if receivedLogin == loginName then Just corruptCredential else Nothing)),
+                markAdmissionTotpCounterUsed = \_ _ -> pure (Left AdmissionCredentialStoreCorrupt)
               }
       proofConfig =
         AdmissionProofConfig
