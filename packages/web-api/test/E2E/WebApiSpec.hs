@@ -626,7 +626,7 @@ spec =
         sessionsReference <- newIORef [initialSession]
         profileLoadsReference <- newIORef (0 :: Int)
         deliveryCountReference <- newIORef (0 :: Int)
-        workflow <- reauthenticationProfileWorkflow environmentConfig issuer sessionsReference profileLoadsReference deliveryCountReference
+        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession environmentConfig issuer sessionsReference profileLoadsReference deliveryCountReference
         let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
         withBrowserApp $ \browser appConfig ->
           HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
@@ -687,6 +687,46 @@ spec =
         deliveryCount `shouldBe` 1
         sessions <- readIORef sessionsReference
         find ((== initialSessionId) . Session.sessionId) sessions `shouldBe` Just expiredInitialSession
+
+    it "does not open a second reauthentication dialog when replay is rejected again" $
+      withTestAccountJwtFixture $ \environmentConfig _ -> do
+        runtime <- requiredAccountJwtRuntime environmentConfig
+        initialNow <- Time.currentUnixTimeNanoseconds
+        initialSessionId <- Session.generateSessionId
+        let initialSession = Session.OpaqueSession initialSessionId pendingProfileAccountId initialNow (initialNow + 86400000000000)
+            issuer = accountJwtIssuerFromRuntime runtime
+        initialJwt <- issueInitialSessionJwt issuer initialSession
+        sessionsReference <- newIORef [initialSession]
+        profileLoadsReference <- newIORef (0 :: Int)
+        deliveryCountReference <- newIORef (0 :: Int)
+        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresIssuedSessions environmentConfig issuer sessionsReference profileLoadsReference deliveryCountReference
+        let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+        withBrowserApp $ \browser appConfig ->
+          HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+            let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                profileSubmit = byRole Button `named` "Resend verification email"
+                reauthenticationDialog = css "#reauthentication-dialog"
+                identifierField = byLabel "Email address or username"
+                passwordField = byLabel "Password"
+                authenticatorCodeField = byLabel "Authenticator code"
+                retryOriginalAction = byRole Button `named` "Retry original action"
+            runBrowserSpec browser do
+              setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+              visit profileUrl
+              click profileSubmit
+              fill identifierField "person@example.test"
+              fill passwordField "correct horse battery staple"
+              fill authenticatorCodeField reauthenticationTotpCode
+              click (byRole Button `named` "Sign in")
+              assertAllObserved do
+                textContent (css "[data-web-api-reauthentication-status]") `matches` (`shouldBe` "Signed in. Confirm to retry the original action.")
+              click retryOriginalAction
+              assertAllObserved do
+                attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Nothing)
+                textContent (css "[data-profile-resend] [data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
+        readIORef deliveryCountReference `shouldReturn` 0
 
 withBrowserApp :: (BrowserConfig -> AppConfig -> IO a) -> IO a
 withBrowserApp action = do
@@ -842,8 +882,12 @@ pendingProfileE2eSecurity =
 -- expired.  The action therefore proves a deliverable JWT is insufficient
 -- after durable expiry, while the modal login issues a fresh signed session
 -- through the ordinary account workflow.
-reauthenticationProfileWorkflow :: AppEnvironmentConfig -> AccountJwt.AccountJwtIssuer -> IORef [Session.OpaqueSession Account.AccountId] -> IORef Int -> IORef Int -> IO AccountWorkflow
-reauthenticationProfileWorkflow environmentConfig issuer sessionsReference profileLoadsReference deliveryCountReference = do
+data ReauthenticationSessionExpiry
+  = ReauthenticationExpiresInitialSession
+  | ReauthenticationExpiresIssuedSessions
+
+reauthenticationProfileWorkflow :: ReauthenticationSessionExpiry -> AppEnvironmentConfig -> AccountJwt.AccountJwtIssuer -> IORef [Session.OpaqueSession Account.AccountId] -> IORef Int -> IORef Int -> IO AccountWorkflow
+reauthenticationProfileWorkflow sessionExpiry environmentConfig issuer sessionsReference profileLoadsReference deliveryCountReference = do
   let password = Password.mkPassword "correct horse battery staple"
       passwordHash = fromMaybe (error "expected deterministic test password hash") (Password.hashPasswordWithSalt Password.defaultPasswordHashingPolicy (ByteString.replicate 16 8) password)
       credential = AccountCredential pendingProfileAccountId passwordHash True
@@ -852,7 +896,7 @@ reauthenticationProfileWorkflow environmentConfig issuer sessionsReference profi
       enrollment = StoredTotpEnrollment encryptedTotpSecret (Just 1) Nothing
       sessionStore =
         AccountSessionStore
-          { saveAccountSession = \session -> modifyIORef' sessionsReference (session :) >> pure (Right True),
+          { saveAccountSession = \session -> modifyIORef' sessionsReference (sessionForFixture session :) >> pure (Right True),
             loadAccountSession = \receivedSessionId -> do
               sessions <- readIORef sessionsReference
               pure (Right (find ((== receivedSessionId) . Session.sessionId) sessions)),
@@ -886,6 +930,10 @@ reauthenticationProfileWorkflow environmentConfig issuer sessionsReference profi
             settleLoginAttempt = \_ _ -> pure (Right ()),
             cancelLoginAttempt = \_ -> pure (Right ())
           }
+      sessionForFixture session =
+        case sessionExpiry of
+          ReauthenticationExpiresInitialSession -> session
+          ReauthenticationExpiresIssuedSessions -> session {Session.sessionExpiresAtNanoseconds = Session.sessionIssuedAtNanoseconds session}
   pure
     unavailableAccountWorkflow
       { accountWorkflowStore = pendingProfileAccountStore,
