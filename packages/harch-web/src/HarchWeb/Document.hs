@@ -509,10 +509,14 @@ defaultNavigationRuntimeScript =
       "          }",
       "          return;",
       "        }",
+      "        const navigation = applyActionResponse(outcome.actionResponse);",
+      "        if (!outcome.responseSucceeded) {",
+      "          settlement.recoverable();",
+      "          return;",
+      "        }",
       "        if (!settlement.completed()) {",
       "          return;",
       "        }",
-      "        const navigation = applyActionResponse(outcome.actionResponse);",
       "        const completion = outcome.responseSucceeded && capturedAction.completion === 'reauthentication-continuation'",
       "          ? new CustomEvent('harch:action-reauthentication-completed', { cancelable: true, detail: { navigation } })",
       "          : null;",
@@ -861,7 +865,9 @@ data PageShell route context = PageShell
 -- installed before any framework control in the body can become interactive;
 -- larger behavior modules consume its queue after they load.  A claimed action
 -- may present patches, focus, or typed navigation only after its settlement
--- succeeds.  A declared reauthentication continuation is narrower still: its
+-- succeeds. A non-success action response may first present its typed patch,
+-- but then always settles recoverably before it can complete or navigate. A
+-- declared reauthentication continuation is narrower still: its
 -- completion event is emitted only after a successful action response, so an
 -- ordinary rejected credential patch cannot authorize or expose a retained
 -- action replay.  Explicit cancellation and every enhanced-navigation start

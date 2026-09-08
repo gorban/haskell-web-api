@@ -190,7 +190,7 @@ movedSpec = do
                  Text.isInfixOf "harch:navigation-before-replace" defaultDialogRuntimeScript `shouldBe` True,
                  Text.isInfixOf "if (!settlement.completed())" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "async function navigateActionResponse(navigation)" defaultNavigationRuntimeScript `shouldBe` True,
-                 Text.isInfixOf "if (!settlement.completed()) {\n          return;\n        }\n        const navigation = applyActionResponse(outcome.actionResponse);" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "const navigation = applyActionResponse(outcome.actionResponse);\n        if (!outcome.responseSucceeded) {\n          settlement.recoverable();\n          return;\n        }\n        if (!settlement.completed())" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "harch:navigation-start" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "capturedActions.forEach((entry) => invalidate(entry));" defaultCaptureKernelScript `shouldBe` True,
                  Text.isInfixOf "const supersedeControl = (control)" defaultCaptureKernelScript `shouldBe` True,

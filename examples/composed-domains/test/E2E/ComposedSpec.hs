@@ -110,6 +110,21 @@ spec =
             browserMetrics `matches` \metrics ->
               $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
 
+    it "rejects a mismatched admission CSRF submission without issuing admission or navigating" $
+      withAdmissionBrowserAndServer $ \browser server -> do
+        let admissionUrl = localServerBaseUrl server <> "/public/admission"
+        runBrowserSpec browser do
+          visit admissionUrl
+          fill (byLabel "Admission name") "support_operator"
+          fill (byLabel "One-time code") browserAdmissionCode
+          _ <- runPageScript "document.body.dataset.harchCsrfToken = 'not-the-rendered-admission-token'; true"
+          submit (byRole Form `named` "Admission")
+          assertAllObserved do
+            currentUrl `matches` (`shouldBe` admissionUrl)
+            textContent (css "[data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
+            browserMetrics `matches` \metrics ->
+              $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+
     it "submits the same admission workflow through its CSRF-protected native fallback" $
       withAdmissionBrowserAndServer $ \browser server -> do
         let admissionUrl = localServerBaseUrl server <> "/public/admission"

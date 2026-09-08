@@ -632,7 +632,7 @@ spec =
               click (byRole Button `named` "Resend verification email")
               assertAllObserved do
                 attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Nothing)
-                textContent (css "[data-profile-resend] [data-harch-action-status]") `matches` (`shouldBe` "Completed.")
+                textContent (css "[data-profile-resend] [data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
                 browserMetrics `matches` \metrics ->
                   $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
         readIORef profileLoadsReference `shouldReturn` 1

@@ -541,6 +541,20 @@ authorities, and proves exactly one explicit replay. This is still only the
 account reference's supported recovery path; admission-grant, upload, and
 the remaining AHI-4C scenario matrix stay open.
 
+**Action-response failure refinement (AHI-4C, 2026-09-08): preserve typed
+patches but settle every non-success action response on the capture kernel's
+recoverable rail.** The navigation runtime already owns the fetch result,
+typed action-response interpretation, patches, focus, and navigation. Letting
+an application special-case a 403 after that interpreter would duplicate the
+response owner and could accidentally navigate or label a rejected mutation as
+successful. The runtime therefore applies any safe 4xx response patch first,
+then settles recoverably before completion events or navigation. This keeps
+422 validation feedback useful, makes CSRF/authorization/resource rejection
+visibly non-successful, and ensures a 4xx cannot authorize reauthentication
+continuation or history mutation. The composed admission browser proof alters
+the submitted page token while retaining the genuine host cookie and verifies
+that the action neither establishes admission nor navigates.
+
 ### Decision record — PostgreSQL database-change ledger (AHI-4C, 2026-09-03)
 
 **Decision: extract the existing connection-scoped migration transaction into
