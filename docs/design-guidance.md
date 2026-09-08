@@ -3444,6 +3444,17 @@ raw WAI bodies retain their representation ownership; authenticated/domain
 error presentations, exported observability/audit joins, and the runnable audit
 workflow remain AHI-5-RID follow-up work.
 
+**Follow-up slice: attach web-api audit attribution at the existing post-match
+boundary (AHI-5, 2026-09-08).** `Site.siteAttachRouteObservation` already runs
+only after the root has selected the typed route and endpoint metadata and
+before its guards/handler.  `web-api` extends its existing request context at
+that point with the root-owned module name, resolved allowlisted locale,
+declared endpoint name, and declared route template.  It does not reparse a
+URL, create an application matcher, or accept action input as audit metadata.
+The value is intentionally absent at ingress and remains an application-owned
+input to a future atomic account-session/audit operation; this slice does not
+claim that operation has shipped.
+
 ### Decision record — AHI-4C: one ASCII cookie-token grammar (2026-09-05)
 
 **Decision: extract the existing cookie-name token predicate into a small

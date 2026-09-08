@@ -10,6 +10,12 @@
 -- runtime and unavailable workflows must share one process-wide password-work
 -- gate, while this module remains the explicit application/site composition
 -- boundary.
+--
+-- AHI-5 extends that boundary through 'Site.siteAttachRouteObservation': the
+-- root attaches declared endpoint facts only after typed route selection,
+-- rather than deriving audit attribution from a URL or action input.  This is
+-- deliberately only the trusted-context handoff; the follow-up atomic
+-- account-session and audit write has not shipped yet.
 module WebApi.App
   ( buildAppWithDatabase,
     buildAppWithDatabaseAndAccountWorkflow,
@@ -67,7 +73,7 @@ import WebApi.Config
 import WebApi.Database (PageRepository, defaultPageRepository)
 import WebApi.Postgres.Pool (PostgresPool, closePostgresPool, newPostgresPool)
 import WebApi.Postgres.Runtime (buildRuntimePostgresPageRepository)
-import WebApi.Response (apiNotFoundResponse, selectResponseWithDatabaseAndAccountWorkflow, spacesLocation)
+import WebApi.Response (apiNotFoundResponse, renderLocale, selectResponseWithDatabaseAndAccountWorkflow, spacesLocation)
 import WebApi.Route
   ( AppRequestContext (..),
     AppRoute (..),
@@ -184,6 +190,21 @@ buildAppWithDatabaseAndOptionalReportersAndSecurity config pageRepository !accou
           )
             { Site.siteRequestContextFromRequest =
                 requestContextFromWaiRequest (requestPolicy config),
+              -- Decision (AHI-5, 2026-09-08): reuse Site's existing
+              -- post-match attribution boundary.  The root derives audit
+              -- route facts from declared metadata and locale, never a URL
+              -- or client-submitted value.
+              Site.siteAttachRouteObservation = \_ metadata requestContext ->
+                requestContext
+                  { requestRouteObservation =
+                      Just
+                        ( HarchWeb.rootRouteObservation
+                            (HarchWeb.requiredModuleNameOrDie "web-api")
+                            (appRequestLocale (requestLocale requestContext))
+                            (HarchWeb.endpointName metadata)
+                            (HarchWeb.endpointRouteTemplate metadata)
+                        )
+                  },
               -- Public web traffic never inherits a caller-supplied request
               -- correlation ID. A production service adapter must establish
               -- service identity and its separate propagation capability.
@@ -199,6 +220,8 @@ buildAppWithDatabaseAndOptionalReportersAndSecurity config pageRepository !accou
         )
     )
   where
+    appRequestLocale = HarchWeb.locale . renderLocale
+
     configureReporters site =
       case maybeReporters of
         Nothing -> site

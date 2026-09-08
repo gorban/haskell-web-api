@@ -122,6 +122,7 @@ spec = do
               { requestLocale = Spanish,
                 requestLocaleIsExplicit = False,
                 requestCorrelationId = Just requestIdFixture,
+                requestRouteObservation = Nothing,
                 requestClientAddress = requestClientAddress defaultRequestContext,
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
@@ -310,6 +311,7 @@ spec = do
             { requestLocale = Spanish,
               requestLocaleIsExplicit = False,
               requestCorrelationId = Just requestIdFixture,
+              requestRouteObservation = Nothing,
               requestClientAddress = requestClientAddress defaultRequestContext,
               requestPathPrefix = requestPathPrefix defaultRequestContext,
               requestQueryParameters = [],
@@ -317,7 +319,7 @@ spec = do
               requestMfaEnrollmentSessionId = Nothing
             }
         )
-        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just (RequestId \"550e8400-e29b-41d4-a716-446655440000\"), requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestAccountPrincipal = Nothing, requestMfaEnrollmentSessionId = Nothing}"
+        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just (RequestId \"550e8400-e29b-41d4-a716-446655440000\"), requestRouteObservation = Nothing, requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestAccountPrincipal = Nothing, requestMfaEnrollmentSessionId = Nothing}"
       show
         ( CallToAction
             { callToActionLabel = "Return home",
@@ -443,6 +445,7 @@ spec = do
               { requestLocale = Spanish,
                 requestLocaleIsExplicit = False,
                 requestCorrelationId = Just requestIdFixture,
+                requestRouteObservation = Nothing,
                 requestClientAddress = requestClientAddress defaultRequestContext,
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
@@ -584,6 +587,7 @@ spec = do
               { requestLocale = Spanish,
                 requestLocaleIsExplicit = False,
                 requestCorrelationId = Just requestIdFixture,
+                requestRouteObservation = Nothing,
                 requestClientAddress = requestClientAddress defaultRequestContext,
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
@@ -714,6 +718,7 @@ spec = do
               { requestLocale = Spanish,
                 requestLocaleIsExplicit = False,
                 requestCorrelationId = Just requestIdFixture,
+                requestRouteObservation = Nothing,
                 requestClientAddress = requestClientAddress defaultRequestContext,
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
@@ -769,7 +774,7 @@ spec = do
       show [Page WebApi.Route.HomePage, Api WebApi.Route.StatusApi]
         `shouldBe` "[HomeRoute,StatusApiRoute]"
       show [requestContext]
-        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just (RequestId \"550e8400-e29b-41d4-a716-446655440000\"), requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestAccountPrincipal = Nothing, requestMfaEnrollmentSessionId = Nothing}]"
+        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just (RequestId \"550e8400-e29b-41d4-a716-446655440000\"), requestRouteObservation = Nothing, requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestAccountPrincipal = Nothing, requestMfaEnrollmentSessionId = Nothing}]"
 
       show [callToAction]
         `shouldBe` "[CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = SafeUrl \"/\"}]"

@@ -72,6 +72,24 @@ spec = do
       actualResponse <- HarchWeb.renderResponse application secondRequest
       assertRenderedPageResult expectedResponse actualResponse
 
+    it "attaches trusted declared route facts after root route selection" $ do
+      let selectedRoute = LoginRoute
+          selectedMetadata = WebApi.Route.endpointMetadata selectedRoute
+          selectedContext = defaultRequestContext {requestLocale = WebApi.Route.Spanish}
+          observedContext = HarchWeb.applicationAttachRouteObservation pureApplication selectedRoute selectedMetadata selectedContext
+      expectAll
+        ( (requestRouteObservation defaultRequestContext `shouldBe` Nothing)
+            :| [ requestRouteObservation observedContext
+                   `shouldBe` Just
+                     ( HarchWeb.rootRouteObservation
+                         (HarchWeb.requiredModuleNameOrDie "web-api")
+                         (HarchWeb.locale "es")
+                         (HarchWeb.endpointName selectedMetadata)
+                         (HarchWeb.endpointRouteTemplate selectedMetadata)
+                     )
+               ]
+        )
+
     it "uses one framework-owned request ID in context and replaces a public or application-supplied header" $ do
       observedRequestId <- newIORef Nothing
       observedRequestObservability <- newIORef []

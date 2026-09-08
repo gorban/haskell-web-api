@@ -75,6 +75,10 @@ data AppRequestContext = AppRequestContext
   { requestLocale :: AppLocale,
     requestLocaleIsExplicit :: Bool,
     requestCorrelationId :: Maybe HarchWeb.RequestId,
+    -- | Trusted attribution attached only after the root has selected a route
+    -- and endpoint declaration.  Request paths and action input cannot supply
+    -- facts for the application-owned audit projection.
+    requestRouteObservation :: Maybe HarchWeb.RouteObservation,
     requestClientAddress :: HarchWeb.ClientAddress,
     requestPathPrefix :: HarchWeb.PathPrefix,
     requestQueryParameters :: [(Text, Text)],
@@ -209,6 +213,7 @@ defaultRequestContext =
     { requestLocale = English,
       requestLocaleIsExplicit = False,
       requestCorrelationId = Nothing,
+      requestRouteObservation = Nothing,
       requestClientAddress = HarchWeb.defaultClientAddress,
       requestPathPrefix = HarchWeb.emptyPathPrefix,
       requestQueryParameters = [],
