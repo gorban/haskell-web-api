@@ -669,6 +669,40 @@ spec =
                   $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
         readIORef deliveryCountReference `shouldReturn` 0
 
+    it "discards a retained profile action when enhanced navigation starts" $
+      withTestAccountJwtFixture $ \environmentConfig _ -> do
+        runtime <- requiredAccountJwtRuntime environmentConfig
+        initialNow <- Time.currentUnixTimeNanoseconds
+        initialSessionId <- Session.generateSessionId
+        let initialSession = Session.OpaqueSession initialSessionId pendingProfileAccountId initialNow (initialNow + 86400000000000)
+            issuer = accountJwtIssuerFromRuntime runtime
+        initialJwt <- issueInitialSessionJwt issuer initialSession
+        sessionsReference <- newIORef [initialSession]
+        profileLoadsReference <- newIORef (0 :: Int)
+        deliveryCountReference <- newIORef (0 :: Int)
+        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession environmentConfig issuer sessionsReference profileLoadsReference deliveryCountReference
+        let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+        withBrowserApp $ \browser appConfig ->
+          HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+            let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                spacesUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/spaces"
+                reauthenticationDialog = css "#reauthentication-dialog"
+            runBrowserSpec browser do
+              setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+              visit profileUrl
+              click (byRole Button `named` "Resend verification email")
+              assertAllObserved do
+                attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Just "")
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+              _ <- runPageScript "Array.from(document.querySelectorAll('nav a')).find((link) => link.textContent === 'Home')?.click(); true"
+              assertAllObserved do
+                currentUrl `matches` (`shouldBe` spacesUrl)
+                textContent (byRole Heading) `matches` (`shouldBe` "Site under construction")
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 1}|])
+        readIORef deliveryCountReference `shouldReturn` 0
+
     it "recovers one retained profile action after its signed durable session expires" $
       withTestAccountJwtFixture $ \environmentConfig _ -> do
         runtime <- requiredAccountJwtRuntime environmentConfig
