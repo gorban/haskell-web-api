@@ -608,6 +608,35 @@ spec =
               browserMetrics `matches` \metrics ->
                 $([|metrics|] `shouldMatch` [p|BrowserMetrics {mutationRequestCount = 1}|])
 
+    it "does not retain a CSRF-rejected action in the durable account fixture" $
+      withTestAccountJwtFixture $ \environmentConfig _ -> do
+        runtime <- requiredAccountJwtRuntime environmentConfig
+        initialNow <- Time.currentUnixTimeNanoseconds
+        initialSessionId <- Session.generateSessionId
+        let initialSession = Session.OpaqueSession initialSessionId pendingProfileAccountId initialNow (initialNow + 86400000000000)
+            issuer = accountJwtIssuerFromRuntime runtime
+        initialJwt <- issueInitialSessionJwt issuer initialSession
+        sessionsReference <- newIORef [initialSession]
+        profileLoadsReference <- newIORef (0 :: Int)
+        deliveryCountReference <- newIORef (0 :: Int)
+        workflow <- reauthenticationProfileWorkflow ReauthenticationKeepsSessions environmentConfig issuer sessionsReference profileLoadsReference deliveryCountReference
+        let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+        withBrowserApp $ \browser appConfig ->
+          HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+            let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                reauthenticationDialog = css "#reauthentication-dialog"
+            runBrowserSpec browser do
+              setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+              visit profileUrl
+              setCookie profileUrl "__Host-harch-csrf" "not-the-rendered-page-token"
+              click (byRole Button `named` "Resend verification email")
+              assertAllObserved do
+                attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Nothing)
+                textContent (css "[data-profile-resend] [data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+        readIORef deliveryCountReference `shouldReturn` 0
+
     it "recovers one retained profile action after its signed durable session expires" $
       withTestAccountJwtFixture $ \environmentConfig _ -> do
         runtime <- requiredAccountJwtRuntime environmentConfig
@@ -957,7 +986,8 @@ pendingProfileE2eSecurity =
 -- after durable expiry, while the modal login issues a fresh signed session
 -- through the ordinary account workflow.
 data ReauthenticationSessionExpiry
-  = ReauthenticationExpiresInitialSession
+  = ReauthenticationKeepsSessions
+  | ReauthenticationExpiresInitialSession
   | ReauthenticationExpiresIssuedSessions
 
 reauthenticationProfileWorkflow :: ReauthenticationSessionExpiry -> AppEnvironmentConfig -> AccountJwt.AccountJwtIssuer -> IORef [Session.OpaqueSession Account.AccountId] -> IORef Int -> IORef Int -> IO AccountWorkflow
@@ -1006,6 +1036,7 @@ reauthenticationProfileWorkflow sessionExpiry environmentConfig issuer sessionsR
           }
       sessionForFixture session =
         case sessionExpiry of
+          ReauthenticationKeepsSessions -> session
           ReauthenticationExpiresInitialSession -> session
           ReauthenticationExpiresIssuedSessions -> session {Session.sessionExpiresAtNanoseconds = Session.sessionIssuedAtNanoseconds session}
   pure
