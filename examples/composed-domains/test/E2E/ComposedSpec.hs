@@ -20,7 +20,7 @@ import HarchWeb.Csrf qualified as Csrf
 import HarchWeb.LoginProtection (defaultLoginProtectionPolicy)
 import HarchWeb.RequestContext (RequestContext (..), RequestIdentity (..))
 import HarchWeb.Secret (encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
-import HarchWeb.Session (OpaqueSession (..))
+import HarchWeb.Session (OpaqueSession (..), mkSessionId)
 import HarchWeb.Site qualified as Site
 import HarchWeb.Time (unixTimeNanoseconds, unixTimeSeconds)
 import HarchWeb.Totp (mkTotpSecret, renderTotpSecret, totpCode, totpCodeText)
@@ -174,6 +174,62 @@ spec =
             inputValue loginField `matches` (`shouldBe` "support_operator")
             inputValue codeField `matches` (`shouldBe` browserAdmissionCode)
 
+    it "keeps an unknown admission principal indistinguishable while preserving its draft" $
+      withAdmissionBrowserAndServer $ \browser server -> do
+        let admissionUrl = localServerBaseUrl server <> "/public/admission"
+            loginField = byLabel "Admission name"
+            codeField = byLabel "One-time code"
+        runBrowserSpec browser do
+          visit admissionUrl
+          fill loginField "unknown_operator"
+          fill codeField browserAdmissionCode
+          submit (byRole Form `named` "Admission")
+          assertAllObserved do
+            currentUrl `matches` (`shouldBe` admissionUrl)
+            textContent (css "[data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
+            inputValue loginField `matches` (`shouldBe` "unknown_operator")
+            inputValue codeField `matches` (`shouldBe` browserAdmissionCode)
+            browserMetrics `matches` \metrics ->
+              $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+
+    it "keeps a throttled admission attempt recoverable without navigating or clearing its draft" $
+      withAdmissionBrowserAndServerWith throttledAdmissionAttemptStore $ \browser server -> do
+        let admissionUrl = localServerBaseUrl server <> "/public/admission"
+            loginField = byLabel "Admission name"
+            codeField = byLabel "One-time code"
+        runBrowserSpec browser do
+          visit admissionUrl
+          fill loginField "support_operator"
+          fill codeField browserAdmissionCode
+          submit (byRole Form `named` "Admission")
+          assertAllObserved do
+            currentUrl `matches` (`shouldBe` admissionUrl)
+            textContent (css "[data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
+            inputValue loginField `matches` (`shouldBe` "support_operator")
+            inputValue codeField `matches` (`shouldBe` browserAdmissionCode)
+            browserMetrics `matches` \metrics ->
+              $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+
+    it "redirects a browser-deliverable expired admission cookie to a fresh challenge" $
+      withAdmissionBrowserAndServerWithStoredSessions permissiveAdmissionAttemptStore [expiredAdmissionBrowserSession] $ \browser server -> do
+        let admissionUrl = localServerBaseUrl server <> "/en/public/admission"
+            loginUrl = localServerBaseUrl server <> "/en/public/login"
+        runBrowserSpec browser do
+          setCookie loginUrl "__Host-composed-admission" expiredAdmissionBrowserSessionValue
+          visit loginUrl
+          assertAllObserved do
+            currentUrl `matches` (`shouldBe` admissionUrl)
+
+    it "redirects a browser-deliverable revoked admission cookie to a fresh challenge" $
+      withAdmissionBrowserAndServerWithStoredSessions permissiveAdmissionAttemptStore [] $ \browser server -> do
+        let admissionUrl = localServerBaseUrl server <> "/en/public/admission"
+            loginUrl = localServerBaseUrl server <> "/en/public/login"
+        runBrowserSpec browser do
+          setCookie loginUrl "__Host-composed-admission" expiredAdmissionBrowserSessionValue
+          visit loginUrl
+          assertAllObserved do
+            currentUrl `matches` (`shouldBe` admissionUrl)
+
     it "submits the same admission workflow through its CSRF-protected native fallback" $
       withAdmissionBrowserAndServer $ \browser server -> do
         let admissionUrl = localServerBaseUrl server <> "/public/admission"
@@ -197,22 +253,28 @@ withBrowserAndServer action = do
   withLocalTestServer composedBrowserApplication (action browser)
 
 withAdmissionBrowserAndServer :: (BrowserConfig -> LocalTestServer -> IO a) -> IO a
-withAdmissionBrowserAndServer action = do
+withAdmissionBrowserAndServer = withAdmissionBrowserAndServerWith permissiveAdmissionAttemptStore
+
+withAdmissionBrowserAndServerWith :: AdmissionAttemptStore -> (BrowserConfig -> LocalTestServer -> IO a) -> IO a
+withAdmissionBrowserAndServerWith attemptStore = withAdmissionBrowserAndServerWithStoredSessions attemptStore []
+
+withAdmissionBrowserAndServerWithStoredSessions :: AdmissionAttemptStore -> [OpaqueSession AdmissionPrincipalId] -> (BrowserConfig -> LocalTestServer -> IO a) -> IO a
+withAdmissionBrowserAndServerWithStoredSessions attemptStore storedSessions action = do
   loadedConfig <- loadPlaywrightBrowserConfig
   browser <-
     case loadedConfig of
       Left loadError -> expectationFailure loadError >> fail "unreachable"
       Right config -> pure config
-  admissionApplication <- admissionBrowserApplication
+  admissionApplication <- admissionBrowserApplication attemptStore storedSessions
   withLocalTestServer admissionApplication (action browser)
 
 composedBrowserApplication :: Application RootRoute RootAction ComposedContext RootAuthorization
 composedBrowserApplication =
   Site.buildSiteApplication (buildComposedSiteWithSecurityDependencies (browserDependencies browserCsrfProtection) browserSecurity)
 
-admissionBrowserApplication :: IO (Application RootRoute RootAction ComposedContext RootAuthorization)
-admissionBrowserApplication = do
-  sessions <- newIORef ([] :: [OpaqueSession AdmissionPrincipalId])
+admissionBrowserApplication :: AdmissionAttemptStore -> [OpaqueSession AdmissionPrincipalId] -> IO (Application RootRoute RootAction ComposedContext RootAuthorization)
+admissionBrowserApplication attemptStore storedSessions = do
+  sessions <- newIORef storedSessions
   usedCounters <- newIORef ([] :: [Word64])
   let loginName = requiredBrowser "admission login" (mkAdmissionLoginName "support_operator")
       principalId = requiredBrowser "admission principal" (mkAdmissionPrincipalId "browser-operator")
@@ -247,12 +309,6 @@ admissionBrowserApplication = do
             markAdmissionTotpCounterUsed = \_ counter ->
               atomicModifyIORef' usedCounters (\used -> if counter `elem` used then (used, Right False) else (counter : used, Right True))
           }
-      attemptStore =
-        AdmissionAttemptStore
-          { reserveAdmissionAttempt = \_ _ -> pure (Right (AdmissionAttemptReserved (AdmissionAttemptReservation "browser-reservation"))),
-            settleAdmissionAttempt = \_ _ -> pure (Right ()),
-            cancelAdmissionAttempt = \_ -> pure (Right ())
-          }
       proofConfig =
         AdmissionProofConfig
           { admissionProofCredentials = credentialStore,
@@ -268,6 +324,33 @@ admissionBrowserApplication = do
   case buildComposedSiteWithAdmissionSecurityDependencies (browserDependencies admissionBrowserCsrfProtection) (AdmissionEnabled sessionConfig proofConfig) browserSecurity of
     Left _ -> expectationFailure "expected admission-enabled browser site" >> fail "unreachable"
     Right site -> pure (Site.buildSiteApplication site)
+
+permissiveAdmissionAttemptStore :: AdmissionAttemptStore
+permissiveAdmissionAttemptStore =
+  AdmissionAttemptStore
+    { reserveAdmissionAttempt = \_ _ -> pure (Right (AdmissionAttemptReserved (AdmissionAttemptReservation "browser-reservation"))),
+      settleAdmissionAttempt = \_ _ -> pure (Right ()),
+      cancelAdmissionAttempt = \_ -> pure (Right ())
+    }
+
+throttledAdmissionAttemptStore :: AdmissionAttemptStore
+throttledAdmissionAttemptStore =
+  AdmissionAttemptStore
+    { reserveAdmissionAttempt = \_ _ -> pure (Right (AdmissionAttemptThrottled (unixTimeNanoseconds 123456000000001))),
+      settleAdmissionAttempt = \_ _ -> pure (Right ()),
+      cancelAdmissionAttempt = \_ -> pure (Right ())
+    }
+
+expiredAdmissionBrowserSessionValue :: Text
+expiredAdmissionBrowserSessionValue = "0123456789abcdef0123456789abcdef"
+
+expiredAdmissionBrowserSession :: OpaqueSession AdmissionPrincipalId
+expiredAdmissionBrowserSession =
+  OpaqueSession
+    (requiredBrowser "expired admission session ID" (mkSessionId expiredAdmissionBrowserSessionValue))
+    (requiredBrowser "expired admission principal" (mkAdmissionPrincipalId "browser-operator"))
+    (unixTimeNanoseconds 123456000000000)
+    (unixTimeNanoseconds 123456000000000)
 
 browserAdmissionCode :: Text
 browserAdmissionCode =
