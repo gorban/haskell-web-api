@@ -151,6 +151,29 @@ spec =
             browserMetrics `matches` \metrics ->
               $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
 
+    it "rejects a replayed admission TOTP without navigating or clearing the new draft" $
+      withAdmissionBrowserAndServer $ \browser server -> do
+        let admissionUrl = localServerBaseUrl server <> "/public/admission"
+            loginUrl = localServerBaseUrl server <> "/en/public/login"
+            loginField = byLabel "Admission name"
+            codeField = byLabel "One-time code"
+        runBrowserSpec browser do
+          visit admissionUrl
+          fill loginField "support_operator"
+          fill codeField browserAdmissionCode
+          submit (byRole Form `named` "Admission")
+          assertAllObserved do
+            currentUrl `matches` (`shouldBe` loginUrl)
+          visit admissionUrl
+          fill loginField "support_operator"
+          fill codeField browserAdmissionCode
+          submit (byRole Form `named` "Admission")
+          assertAllObserved do
+            currentUrl `matches` (`shouldBe` admissionUrl)
+            textContent (css "[data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
+            inputValue loginField `matches` (`shouldBe` "support_operator")
+            inputValue codeField `matches` (`shouldBe` browserAdmissionCode)
+
     it "submits the same admission workflow through its CSRF-protected native fallback" $
       withAdmissionBrowserAndServer $ \browser server -> do
         let admissionUrl = localServerBaseUrl server <> "/public/admission"
