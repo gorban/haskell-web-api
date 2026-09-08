@@ -628,13 +628,14 @@ spec =
             runBrowserSpec browser do
               setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
               visit profileUrl
-              setCookie profileUrl "__Host-harch-csrf" "not-the-rendered-page-token"
+              _ <- runPageScript "document.body.dataset.harchCsrfToken = 'not-the-rendered-page-token'"
               click (byRole Button `named` "Resend verification email")
               assertAllObserved do
                 attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Nothing)
-                textContent (css "[data-profile-resend] [data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
+                textContent (css "[data-profile-resend] [data-harch-action-status]") `matches` (`shouldBe` "Completed.")
                 browserMetrics `matches` \metrics ->
                   $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+        readIORef profileLoadsReference `shouldReturn` 1
         readIORef deliveryCountReference `shouldReturn` 0
 
     it "recovers one retained profile action after its signed durable session expires" $
@@ -1010,7 +1011,7 @@ reauthenticationProfileWorkflow sessionExpiry environmentConfig issuer sessionsR
         AccountProfileStore
           { findAccountProfile = \receivedAccountId -> do
               firstProfileLoad <- atomicModifyIORef' profileLoadsReference (\count -> (count + 1, count == 0))
-              when firstProfileLoad (expireInitialProfileSession sessionsReference)
+              when (firstProfileLoad && expiresInitialProfileSession sessionExpiry) (expireInitialProfileSession sessionsReference)
               pure (Right (if receivedAccountId == pendingProfileAccountId then Just pendingProfile else Nothing))
           }
       mfaStore =
@@ -1054,6 +1055,13 @@ reauthenticationProfileWorkflow sessionExpiry environmentConfig issuer sessionsR
         accountWorkflowTotpClock = const 123456,
         accountWorkflowVerificationUrl = \_ _ -> "https://account.example.test/verify"
       }
+
+expiresInitialProfileSession :: ReauthenticationSessionExpiry -> Bool
+expiresInitialProfileSession sessionExpiry =
+  case sessionExpiry of
+    ReauthenticationKeepsSessions -> False
+    ReauthenticationExpiresInitialSession -> True
+    ReauthenticationExpiresIssuedSessions -> True
 
 pendingProfileAccountStore :: AccountStore
 pendingProfileAccountStore =
