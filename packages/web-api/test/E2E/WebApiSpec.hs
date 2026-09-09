@@ -844,6 +844,62 @@ spec =
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 5}|])
             readIORef deliveryCountReference `shouldReturn` 1
 
+        it "settles a retained profile action on ordinary domain validation before a fresh submission" $ \(browser, appConfig) ->
+          withTestAccountJwtFixture $ \environmentConfig _ -> do
+            runtime <- requiredAccountJwtRuntime environmentConfig
+            initialNow <- Time.currentUnixTimeNanoseconds
+            initialSessionId <- Session.generateSessionId
+            let initialSession =
+                  Session.OpaqueSession
+                    { Session.sessionId = initialSessionId,
+                      Session.sessionPrincipal = pendingProfileAccountId,
+                      Session.sessionIssuedAtNanoseconds = initialNow,
+                      Session.sessionExpiresAtNanoseconds = initialNow + 86400000000000
+                    }
+                issuer = accountJwtIssuerFromRuntime runtime
+            initialJwt <- issueInitialSessionJwt issuer initialSession
+            sessionsReference <- newIORef [initialSession]
+            profileLoadsReference <- newIORef (0 :: Int)
+            deliveryCountReference <- newIORef (0 :: Int)
+            workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
+            let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+            HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+              let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                  profileSubmit = byRole Button `named` "Resend verification email"
+                  reauthenticationDialog = css "#reauthentication-dialog"
+                  identifierField = byLabel "Email address or username"
+                  passwordField = byLabel "Password"
+                  authenticatorCodeField = byLabel "Authenticator code"
+                  retryOriginalAction = byRole Button `named` "Retry original action"
+                  profileMessage = css "#profile-region [data-account-message]"
+              runBrowserSpec browser do
+                setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+                visit profileUrl
+                _ <- runPageScript "const intent = document.querySelector('[data-profile-resend] input[name=\"intent\"]'); if (intent) intent.value = 'invalid-profile-intent'; true"
+                click profileSubmit
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                fill identifierField "person@example.test"
+                fill passwordField "correct horse battery staple"
+                fill authenticatorCodeField reauthenticationTotpCode
+                click (byRole Button `named` "Sign in")
+                assertAllObserved do
+                  textContent (css "[data-web-api-reauthentication-status]") `shouldEqual` "Signed in. Confirm to retry the original action."
+                  attributeValue retryOriginalAction "hidden" `shouldEqual` Nothing
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+                click retryOriginalAction
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
+                  textContent profileMessage `shouldEqual` "Choose a profile action."
+                  attributeValue profileMessage "role" `shouldEqual` Just "alert"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
+                click profileSubmit
+                assertAllObserved do
+                  textContent (byText "Check your inbox for a verification link.") `shouldEqual` "Check your inbox for a verification link."
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
+            readIORef deliveryCountReference `shouldReturn` 1
+
         it "keeps one retained profile action through a throttled login before one successful retry" $ \(browser, appConfig) ->
           withTestAccountJwtFixture $ \environmentConfig _ -> do
             runtime <- requiredAccountJwtRuntime environmentConfig
