@@ -120,8 +120,8 @@ jobs:
         if: steps.dos2unix.outcome == 'success'
         id: playwright
         run: |
-          npm ci --prefix packages/test-core/playwright-runner
           cd packages/test-core/playwright-runner
+          npm ci
           npx playwright install chromium --with-deps
 
       - name: Wait for prerequisite services

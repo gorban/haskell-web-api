@@ -64,8 +64,8 @@ change; do not bypass the existing ignore rule.
 
 Before pushing, run the same checks that CI runs from the repository root. Ensure the local PostgreSQL,
 Jaeger, LLVM `ld.lld`, Node.js 24, and Playwright Chromium prerequisites are available. Install the browser
-dependencies with `npm ci --prefix packages/test-core/playwright-runner` and `npx --prefix
-packages/test-core/playwright-runner playwright install chromium`, then seed the test database and run:
+dependencies from `packages/test-core/playwright-runner` with `npm ci` and
+`npx playwright install chromium`, then seed the test database and run:
 
 ```sh
 cabal run haskell-web-api-db -- migrate-and-seed
