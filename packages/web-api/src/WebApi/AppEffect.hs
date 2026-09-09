@@ -25,6 +25,7 @@ import HarchWeb.Secret (SecretEncryptionKey)
 import HarchWeb.Time (UnixTimeNanoseconds, UnixTimeSeconds)
 import WebApi.Account (AccountProfileStore, AccountStore, RegistrationDeliveryTimeout)
 import WebApi.AccountJwt (AccountJwtIssuer)
+import WebApi.AccountSessionAudit (AccountSessionAuditStore)
 import WebApi.Login (AccountCredentialStore, LoginAttemptStore)
 import WebApi.Mfa (MfaStore)
 import WebApi.Route (AppRequestContext)
@@ -45,6 +46,7 @@ data AccountWorkflow = AccountWorkflow
     accountWorkflowCredentialStore :: AccountCredentialStore,
     accountWorkflowLoginAttemptStore :: LoginAttemptStore,
     accountWorkflowSessionStore :: AccountSessionStore,
+    accountWorkflowSessionAuditStore :: AccountSessionAuditStore,
     accountWorkflowMfaEnrollmentSessionStore :: MfaEnrollmentSessionStore,
     accountWorkflowProfileStore :: AccountProfileStore,
     accountWorkflowTotpEncryptionKey :: SecretEncryptionKey,

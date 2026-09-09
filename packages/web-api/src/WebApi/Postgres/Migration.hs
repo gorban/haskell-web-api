@@ -37,6 +37,9 @@ import WebApi.Postgres.ActivityAuditMigration
     accountAuditInsertPolicyFixStatements,
     accountAuditMigrationStatements,
     accountAuditRuntimeReconciliationStatements,
+    accountAuditSessionIssueConflictFixStatements,
+    accountAuditSessionIssueInsertPrivilegeFixStatements,
+    accountAuditSessionIssueStatements,
   )
 import WebApi.Postgres.Pool (runtimeConnectionString)
 import WebApi.Postgres.Runtime
@@ -101,7 +104,10 @@ webApiDatabaseChanges =
     change "account-audit-controlled-append-policy-v1" accountAuditInsertPolicyFixStatements,
     change "account-audit-controlled-append-rls-v2" accountAuditControlledAppendPolicyStatements,
     change "account-audit-append-result-v1" accountAuditAppendResultFixStatements,
-    change "account-audit-initial-maintenance-v1" accountAuditInitialMaintenanceStatements
+    change "account-audit-initial-maintenance-v1" accountAuditInitialMaintenanceStatements,
+    change "account-audit-session-issue-v1" accountAuditSessionIssueStatements,
+    change "account-audit-session-issue-conflict-fix-v1" accountAuditSessionIssueConflictFixStatements,
+    change "account-audit-session-issue-insert-privilege-fix-v1" accountAuditSessionIssueInsertPrivilegeFixStatements
   ]
   where
     change changeId statements =

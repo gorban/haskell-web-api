@@ -17,6 +17,9 @@ module WebApi.Postgres.ActivityAuditMigration
     accountAuditControlledAppendPolicyStatements,
     accountAuditAppendResultFixStatements,
     accountAuditInitialMaintenanceStatements,
+    accountAuditSessionIssueStatements,
+    accountAuditSessionIssueConflictFixStatements,
+    accountAuditSessionIssueInsertPrivilegeFixStatements,
     accountAuditRuntimeReconciliationStatements,
   )
 where
@@ -94,6 +97,7 @@ accountAuditRuntimeReconciliationStatements databaseName runtimeRoleName =
     "REVOKE ALL ON ALL FUNCTIONS IN SCHEMA account_audit FROM " <> quotedIdentifier runtimeRoleName <> ";",
     "GRANT USAGE ON SCHEMA account_audit TO " <> quotedIdentifier runtimeRoleName <> ";",
     "GRANT EXECUTE ON FUNCTION account_audit.append_activity(TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) TO " <> quotedIdentifier runtimeRoleName <> ";",
+    "GRANT EXECUTE ON FUNCTION account_audit.issue_account_session_with_activity(TEXT, TEXT, BIGINT, BIGINT, TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) TO " <> quotedIdentifier runtimeRoleName <> ";",
     "INSERT INTO account_audit.runtime_scope (runtime_role_name, audit_scope_id) VALUES (" <> quotedLiteral runtimeRoleName <> ", 'default') ON CONFLICT (runtime_role_name) DO NOTHING;"
   ]
 
@@ -139,6 +143,79 @@ accountAuditInitialMaintenanceStatements :: [Text]
 accountAuditInitialMaintenanceStatements =
   [ "DO $$ BEGIN PERFORM account_audit.maintain_activity_partitions(); END $$;"
   ]
+
+-- | The application-owned first @AuditRequired@ operation.  It is one SQL
+-- statement under the runtime connection's transaction: a collision returns
+-- no row, while a successful session insert calls the existing controlled
+-- audit append before returning the session identity.
+accountAuditSessionIssueStatements :: [Text]
+accountAuditSessionIssueStatements =
+  [ "GRANT USAGE ON SCHEMA web_api TO account_audit_owner;",
+    "GRANT INSERT ON TABLE web_api.account_sessions TO account_audit_owner;",
+    issueAccountSessionWithActivityFunction,
+    "ALTER FUNCTION account_audit.issue_account_session_with_activity(TEXT, TEXT, BIGINT, BIGINT, TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) OWNER TO account_audit_owner;",
+    "REVOKE ALL ON FUNCTION account_audit.issue_account_session_with_activity(TEXT, TEXT, BIGINT, BIGINT, TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) FROM PUBLIC;"
+  ]
+
+-- | Forward correction for the original session/audit operation. A
+-- @RETURNS TABLE(session_id TEXT)@ declaration creates a PL/pgSQL output
+-- variable named @session_id@, so PostgreSQL cannot resolve an unqualified
+-- @ON CONFLICT (session_id)@ target. Its recorded SQL names the primary-key
+-- constraint explicitly. It must remain byte-for-byte stable for deployed
+-- database ledgers; the later insert-privilege correction handles the least-
+-- privilege consequence of that target.
+accountAuditSessionIssueConflictFixStatements :: [Text]
+accountAuditSessionIssueConflictFixStatements =
+  [ Text.replace
+      "ON CONFLICT (session_id) DO NOTHING;"
+      "ON CONFLICT ON CONSTRAINT account_sessions_pkey DO NOTHING;"
+      issueAccountSessionWithActivityFunction
+  ]
+
+-- | The explicit conflict target parses but requires SELECT privilege on the
+-- referenced table.  Preserve the audit owner's narrow INSERT-only grant by
+-- catching the expected duplicate-key outcome around the plain insert rather
+-- than broadening it to table reads. This is a new migration because the
+-- prior corrective statement may already be present in a deployed ledger.
+accountAuditSessionIssueInsertPrivilegeFixStatements :: [Text]
+accountAuditSessionIssueInsertPrivilegeFixStatements =
+  [ Text.replace
+      "  INSERT INTO web_api.account_sessions (session_id, account_id, issued_at_nanoseconds, expires_at_nanoseconds)\n  VALUES (p_session_id, p_account_id, p_issued_at_nanoseconds, p_expires_at_nanoseconds)\n  ON CONFLICT (session_id) DO NOTHING;\n  GET DIAGNOSTICS v_inserted = ROW_COUNT;\n  IF v_inserted = 0 THEN RETURN; END IF;"
+      "  BEGIN\n    INSERT INTO web_api.account_sessions (session_id, account_id, issued_at_nanoseconds, expires_at_nanoseconds)\n    VALUES (p_session_id, p_account_id, p_issued_at_nanoseconds, p_expires_at_nanoseconds);\n  EXCEPTION WHEN unique_violation THEN\n    RETURN;\n  END;"
+      issueAccountSessionWithActivityFunction
+  ]
+
+issueAccountSessionWithActivityFunction :: Text
+issueAccountSessionWithActivityFunction =
+  Text.unlines
+    [ "CREATE OR REPLACE FUNCTION account_audit.issue_account_session_with_activity(",
+      "  p_session_id TEXT, p_account_id TEXT, p_issued_at_nanoseconds BIGINT, p_expires_at_nanoseconds BIGINT,",
+      "  p_audit_account_id TEXT, p_request_id TEXT, p_event_code TEXT, p_payload_version SMALLINT, p_payload_detail TEXT,",
+      "  p_route_endpoint_name TEXT, p_route_mount_chain TEXT, p_route_template TEXT, p_route_locale TEXT",
+      ") RETURNS TABLE(session_id TEXT)",
+      "LANGUAGE plpgsql",
+      "SECURITY DEFINER",
+      "SET search_path = pg_catalog, account_audit, web_api",
+      "AS $$",
+      "DECLARE v_inserted BIGINT;",
+      "BEGIN",
+      "  IF p_account_id <> p_audit_account_id THEN",
+      "    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'account session audit subject does not match session principal';",
+      "  END IF;",
+      "  INSERT INTO web_api.account_sessions (session_id, account_id, issued_at_nanoseconds, expires_at_nanoseconds)",
+      "  VALUES (p_session_id, p_account_id, p_issued_at_nanoseconds, p_expires_at_nanoseconds)",
+      "  ON CONFLICT (session_id) DO NOTHING;",
+      "  GET DIAGNOSTICS v_inserted = ROW_COUNT;",
+      "  IF v_inserted = 0 THEN RETURN; END IF;",
+      "  PERFORM activity_id FROM account_audit.append_activity(",
+      "    p_audit_account_id, p_request_id, p_event_code, p_payload_version, p_payload_detail,",
+      "    p_route_endpoint_name, p_route_mount_chain, p_route_template, p_route_locale",
+      "  );",
+      "  session_id := p_session_id;",
+      "  RETURN NEXT;",
+      "END;",
+      "$$;"
+    ]
 
 createRole :: Text -> Text
 createRole roleName =

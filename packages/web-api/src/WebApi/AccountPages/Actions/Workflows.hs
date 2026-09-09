@@ -53,6 +53,16 @@ import WebApi.AccountPages.FieldIds
 import WebApi.AccountPages.Forms
 import WebApi.AccountPages.Validation (Validation, invalid, valid, validate3, validationResult)
 import WebApi.AccountPrincipal (accountPrincipalSessionId)
+import WebApi.AccountSessionAudit
+  ( AccountSessionAuditStore (..),
+    AccountSessionAuditStoreError (..),
+  )
+import WebApi.ActivityAudit
+  ( AccountActivity (..),
+    AccountAuditEvent (AccountSessionIssued),
+    AuditAuthenticationMethod (..),
+    auditRouteObservationFromTrusted,
+  )
 import WebApi.AppEffect
   ( AccountWorkflow (..),
     AppFailure (..),
@@ -90,8 +100,8 @@ import WebApi.Session
     MfaEnrollmentSessionStore (..),
     MfaEnrollmentSessionStoreError,
     invalidateAccountSession,
-    issueAccountSession,
     mfaEnrollmentSessionCookiePolicy,
+    prepareAccountSession,
   )
 
 handleRegistrationSubmission :: AccountActionRequest -> RegistrationSubmission -> AccountActionWorkflow
@@ -370,9 +380,10 @@ loginProofFocusId proofChoice =
 
 issueLoginSession :: AccountActionRequest -> Text -> LoginProofChoice -> UnixTimeNanoseconds -> Account.AccountId -> AccountActionWorkflow
 issueLoginSession actionRequest identifierValue proofChoice nowNanoseconds accountId = do
-  issuedSession <- issueAccountSessionNow accountId nowNanoseconds
   let form message statusKind = LoginForm identifierValue (Just proofChoice) (FormStatusMessage (FormStatus message statusKind))
-  case issuedSession of
+      unavailable = loginResponse (accountActionResponseContext actionRequest Http.status503 (Just loginIdentifierId) []) (form (localized actionRequest SignInUnavailable) FormStatusFailure)
+  preparedSession <- prepareAccountSessionNow accountId nowNanoseconds
+  case preparedSession of
     Left storeError -> throwClientActionFailure (loginResponse (accountActionResponseContext actionRequest Http.status503 (Just loginIdentifierId) []) (form (localized actionRequest SignInUnavailable) FormStatusFailure)) LoginSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
     -- AHI-4C keeps the credential-bearing login document out of browser Back
     -- history.  The destination is an application route, not a serialized
@@ -380,42 +391,69 @@ issueLoginSession actionRequest identifierValue proofChoice nowNanoseconds accou
     Right opaqueSession -> do
       issuedJwt <- issueLoginJwt opaqueSession
       case issuedJwt of
-        Left issueError -> do
-          -- No browser credential has been sent when JWT issuance fails. Best
-          -- effort durable revocation prevents an orphaned usable session;
-          -- either failure remains a generic unavailable login response.
-          _ <- invalidateAccountSessionNow (sessionId opaqueSession)
-          throwClientActionFailure
-            (loginResponse (accountActionResponseContext actionRequest Http.status503 (Just loginIdentifierId) []) (form (localized actionRequest SignInUnavailable) FormStatusFailure))
-            LoginJwtIssueFailure
-            "AccountJwtIssueError"
-            (accountJwtIssueErrorMessage issueError)
+        Left issueError ->
+          throwClientActionFailure unavailable LoginJwtIssueFailure "AccountJwtIssueError" (accountJwtIssueErrorMessage issueError)
         Right (jwt, cookiePolicy) ->
           case HarchWeb.renderAuthenticationCookie cookiePolicy jwt of
-            Nothing -> do
-              _ <- invalidateAccountSessionNow (sessionId opaqueSession)
-              throwClientActionFailure
-                (loginResponse (accountActionResponseContext actionRequest Http.status503 (Just loginIdentifierId) []) (form (localized actionRequest SignInUnavailable) FormStatusFailure))
-                LoginJwtIssueFailure
-                "AccountJwtCookieError"
-                "issued account JWT cannot be rendered as a cookie"
-            Just renderedCookie ->
-              pure
-                ( ( loginResponse
-                      (accountActionResponseContext actionRequest Http.status200 Nothing [HarchWeb.csrfClearCookieHeader, setCookieHeader renderedCookie])
-                      (form (localized actionRequest SignedIn) FormStatusSuccess)
-                  )
-                    { HarchWeb.clientActionNavigation =
-                        HarchWeb.NavigateInternal
-                          HarchWeb.ReplaceHistory
-                          (HarchWeb.RouteRequest ProfileRoute (HarchWeb.clientActionContext actionRequest))
-                    }
-                )
+            Nothing ->
+              throwClientActionFailure unavailable LoginJwtIssueFailure "AccountJwtCookieError" "issued account JWT cannot be rendered as a cookie"
+            Just renderedCookie -> do
+              persistedSession <- persistLoginSessionWithAudit actionRequest proofChoice opaqueSession
+              case persistedSession of
+                Left storeError ->
+                  throwClientActionFailure unavailable LoginSessionFailure "AccountSessionAuditStoreError" (sessionAuditStoreErrorMessage storeError)
+                Right False ->
+                  throwClientActionFailure unavailable LoginSessionFailure "AccountSessionAuditStoreError" "account session identifier collision"
+                Right True ->
+                  pure
+                    ( ( loginResponse
+                          (accountActionResponseContext actionRequest Http.status200 Nothing [HarchWeb.csrfClearCookieHeader, setCookieHeader renderedCookie])
+                          (form (localized actionRequest SignedIn) FormStatusSuccess)
+                      )
+                        { HarchWeb.clientActionNavigation =
+                            HarchWeb.NavigateInternal
+                              HarchWeb.ReplaceHistory
+                              (HarchWeb.RouteRequest ProfileRoute (HarchWeb.clientActionContext actionRequest))
+                        }
+                    )
 
-issueAccountSessionNow :: Account.AccountId -> UnixTimeNanoseconds -> AppM publicFailure (Either AccountSessionStoreError (OpaqueSession Account.AccountId))
-issueAccountSessionNow accountId nowNanoseconds = do
+prepareAccountSessionNow :: Account.AccountId -> UnixTimeNanoseconds -> AppM publicFailure (Either AccountSessionStoreError (OpaqueSession Account.AccountId))
+prepareAccountSessionNow accountId nowNanoseconds =
+  liftIO (prepareAccountSession accountId nowNanoseconds)
+
+persistLoginSessionWithAudit :: AccountActionRequest -> LoginProofChoice -> OpaqueSession Account.AccountId -> AppM publicFailure (Either AccountSessionAuditStoreError Bool)
+persistLoginSessionWithAudit actionRequest proofChoice opaqueSession = do
   workflow <- accountWorkflow
-  liftIO (issueAccountSession (accountWorkflowSessionStore workflow) accountId nowNanoseconds)
+  case loginSessionActivity actionRequest proofChoice (sessionPrincipal opaqueSession) of
+    Left storeError -> pure (Left storeError)
+    Right activity -> liftIO (saveAccountSessionWithAudit (accountWorkflowSessionAuditStore workflow) opaqueSession activity)
+
+loginSessionActivity :: AccountActionRequest -> LoginProofChoice -> Account.AccountId -> Either AccountSessionAuditStoreError AccountActivity
+loginSessionActivity actionRequest proofChoice accountId = do
+  requestId <- maybe (Left AccountSessionAuditStoreCorruptData) Right (requestCorrelationId context)
+  route <- traverse (either (const (Left AccountSessionAuditStoreCorruptData)) Right . auditRouteObservationFromTrusted) (requestRouteObservation context)
+  pure
+    AccountActivity
+      { activitySubject = accountId,
+        activityRequestId = requestId,
+        activityEvent = AccountSessionIssued (auditMethod proofChoice),
+        activityRoute = route
+      }
+  where
+    context = HarchWeb.clientActionContext actionRequest
+
+auditMethod :: LoginProofChoice -> AuditAuthenticationMethod
+auditMethod proofChoice =
+  case proofChoice of
+    LoginAuthenticatorProof -> TotpAuthenticationMethod
+    LoginRecoveryProof -> RecoveryCodeAuthenticationMethod
+
+sessionAuditStoreErrorMessage :: AccountSessionAuditStoreError -> Text
+sessionAuditStoreErrorMessage storeError =
+  case storeError of
+    AccountSessionAuditStoreUnavailable -> "account session audit store unavailable"
+    AccountSessionAuditCapacityExceeded -> "account audit partition capacity is exhausted"
+    AccountSessionAuditStoreCorruptData -> "account session audit store returned corrupt data"
 
 issueLoginJwt :: OpaqueSession Account.AccountId -> AppM publicFailure (Either AccountJwtIssueError (HarchWeb.EncodedJwt, HarchWeb.AuthenticationCookiePolicy))
 issueLoginJwt opaqueSession = do

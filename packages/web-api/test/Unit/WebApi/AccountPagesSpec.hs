@@ -7,6 +7,7 @@ import Control.Concurrent (threadDelay)
 import Control.Exception (ErrorCall (..), IOException, displayException, evaluate, try)
 import Control.Monad (forM_)
 import Data.ByteString qualified as ByteString
+import Data.Either (fromRight)
 import Data.Foldable (toList)
 import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find, isInfixOf)
@@ -22,11 +23,15 @@ import HarchWeb.Action qualified as Action
 import HarchWeb.Csrf qualified as Csrf
 import HarchWeb.Email (EmailAddress, EmailDelivery (..), mkEmailAddress)
 import HarchWeb.Email qualified as Email
+import HarchWeb.EndpointMetadata (mkEndpointName, mkRouteTemplate)
+import HarchWeb.Localization qualified as Localization
 import HarchWeb.LoginProtection qualified as LoginProtection
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Password qualified as Password
 import HarchWeb.RecoveryCode qualified as RecoveryCode
+import HarchWeb.RequestId (mkRequestId)
 import HarchWeb.Secret qualified as Secret
+import HarchWeb.SecurityEvent (RouteObservation (..), requiredModuleNameOrDie)
 import HarchWeb.Session (OpaqueSession (..), SessionId, mkSessionId)
 import HarchWeb.Session qualified as Session
 import HarchWeb.Time (UnixTimeNanoseconds, unixTimeSecondsFromNanoseconds)
@@ -41,6 +46,8 @@ import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWork
 import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buildActionCodecOrDie)
 import WebApi.AccountPages.Validation (Validation, invalid, valid, validate3, validate4, validationResult)
 import WebApi.AccountPrincipal (mkAccountPrincipal)
+import WebApi.AccountSessionAudit (AccountSessionAuditStore (..), AccountSessionAuditStoreError (..))
+import WebApi.ActivityAudit (AccountActivity (..), AccountAuditEvent (AccountSessionIssued), AuditAuthenticationMethod (..))
 import WebApi.App (buildRuntimeAppWithDatabaseBuilder, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.AppEffect qualified as AppEffect
@@ -668,6 +675,7 @@ spec = do
                 accountWorkflowCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow,
                 accountWorkflowLoginAttemptStore = accountWorkflowLoginAttemptStore unavailableAccountWorkflow,
                 accountWorkflowSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow,
+                accountWorkflowSessionAuditStore = accountWorkflowSessionAuditStore unavailableAccountWorkflow,
                 accountWorkflowMfaEnrollmentSessionStore = accountWorkflowMfaEnrollmentSessionStore unavailableAccountWorkflow,
                 accountWorkflowProfileStore = accountWorkflowProfileStore unavailableAccountWorkflow,
                 accountWorkflowTotpEncryptionKey = accountWorkflowTotpEncryptionKey unavailableAccountWorkflow,
@@ -961,6 +969,7 @@ spec = do
                 accountWorkflowCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow,
                 accountWorkflowLoginAttemptStore = accountWorkflowLoginAttemptStore unavailableAccountWorkflow,
                 accountWorkflowSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow,
+                accountWorkflowSessionAuditStore = accountWorkflowSessionAuditStore unavailableAccountWorkflow,
                 accountWorkflowMfaEnrollmentSessionStore = accountWorkflowMfaEnrollmentSessionStore unavailableAccountWorkflow,
                 accountWorkflowProfileStore = accountWorkflowProfileStore unavailableAccountWorkflow,
                 accountWorkflowTotpEncryptionKey = accountWorkflowTotpEncryptionKey unavailableAccountWorkflow,
@@ -1205,6 +1214,7 @@ spec = do
           passwordHash = fromMaybe (error "expected test password hash") (Password.hashPasswordWithSalt Password.defaultPasswordHashingPolicy (ByteString.replicate 16 7) password)
           totpSecret = fromMaybe (error "expected TOTP secret") (Totp.mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
           encryptedTotpSecret = requiredSecretEnvelope (Secret.encryptSecretWithNonce (totpEncryptionKey defaultAppEnvironmentConfig) (requiredSecretNonce (ByteString.replicate 12 7)) (Secret.mkSecretPlaintext (TextEncoding.encodeUtf8 (Totp.renderTotpSecret totpSecret))))
+          auditRequestId = fromMaybe (error "expected request id") (mkRequestId "550e8400-e29b-41d4-a716-446655440000")
           credentialStore = AccountCredentialStore (\email -> (email `shouldBe` emailAddress) >> pure (Right (Just (AccountCredential accountId passwordHash True)))) (\_ -> pure (error "unexpected username credential lookup")) (\_ _ _ -> pure (Right False))
           mfaStore =
             MfaStore
@@ -1221,11 +1231,24 @@ spec = do
                 loadAccountSession = \_ -> pure (Right Nothing),
                 invalidateAccountSession = \session invalidatedAt -> modifyIORef' invalidatedSessionsReference (<> [(session, invalidatedAt)]) >> pure (Right True)
               }
+          sessionAuditStore =
+            AccountSessionAuditStore $ \session activity -> do
+              activitySubject activity `shouldBe` accountId
+              activityRequestId activity `shouldBe` auditRequestId
+              case activityRoute activity of
+                Nothing -> pure ()
+                Just _ -> expectationFailure "expected no route observation in the default request context"
+              case activityEvent activity of
+                AccountSessionIssued TotpAuthenticationMethod -> pure ()
+                _ -> expectationFailure "expected a TOTP account-session audit event"
+              modifyIORef' savedSessionsReference (<> [session])
+              pure (Right True)
           workflow =
             unavailableAccountWorkflow
               { accountWorkflowCredentialStore = credentialStore,
                 accountWorkflowMfaStore = mfaStore,
                 accountWorkflowSessionStore = sessionStore,
+                accountWorkflowSessionAuditStore = sessionAuditStore,
                 accountWorkflowLoginAttemptStore = permissiveLoginAttemptStore,
                 accountWorkflowJwtIssuer =
                   testAccountJwtIssuer
@@ -1238,7 +1261,8 @@ spec = do
                 accountWorkflowClock = atomicModifyIORef' clockReference (\value -> (value + 1, value)),
                 accountWorkflowTotpClock = unixTimeSecondsFromNanoseconds
               }
-          loginRequest fields = typedAccountActionRequest "POST" "/login" fields defaultRequestContext
+          loginContext = defaultRequestContext {requestCorrelationId = Just auditRequestId}
+          loginRequest fields = typedAccountActionRequest "POST" "/login" fields loginContext
           loginFields = [("identifier", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("totpCode", Totp.totpCodeText (Totp.totpCode 123456 totpSecret))]
       invalidEmail <- handleAccountAction workflow (loginRequest [("identifier", "not an identifier!")])
       invalidEmail `shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-error-summary") "valid email address"
@@ -1250,7 +1274,7 @@ spec = do
           Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` 200
           HarchWeb.clientActionFocusId response `shouldBe` Nothing
           HarchWeb.clientActionNavigation response
-            `shouldBe` HarchWeb.NavigateInternal HarchWeb.ReplaceHistory (HarchWeb.RouteRequest ProfileRoute defaultRequestContext)
+            `shouldBe` HarchWeb.NavigateInternal HarchWeb.ReplaceHistory (HarchWeb.RouteRequest ProfileRoute loginContext)
           HarchWeb.clientActionHeaders response
             `shouldSatisfy` any ((== "Set-Cookie") . fst)
           case find (Text.isPrefixOf "__Host-harch-session=" . TextEncoding.decodeUtf8 . snd) (HarchWeb.clientActionHeaders response) of
@@ -1298,8 +1322,9 @@ spec = do
           totpSecret = fromMaybe (error "expected TOTP secret") (Totp.mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
           encryptedTotpSecret = requiredSecretEnvelope (Secret.encryptSecretWithNonce (totpEncryptionKey defaultAppEnvironmentConfig) (requiredSecretNonce (ByteString.replicate 12 8)) (Secret.mkSecretPlaintext (TextEncoding.encodeUtf8 (Totp.renderTotpSecret totpSecret))))
           confirmedEnrollment = StoredTotpEnrollment encryptedTotpSecret (Just 1) Nothing
-          loginRequest requestContext fields = typedAccountActionRequest "POST" "/login" fields requestContext
-          spanishLoginRequest fields = typedAccountActionRequest "POST" "/es/login" fields spanishRequestContext
+          auditRequestId = fromMaybe (error "expected request id") (mkRequestId "550e8400-e29b-41d4-a716-446655440000")
+          loginRequest requestContext fields = typedAccountActionRequest "POST" "/login" fields (requestContext {requestCorrelationId = Just auditRequestId})
+          spanishLoginRequest fields = typedAccountActionRequest "POST" "/es/login" fields (spanishRequestContext {requestCorrelationId = Just auditRequestId})
           logoutRequest = typedAccountActionRequest "POST" "/logout" []
           workflowFor credentialResult enrollmentResult sessionSaveResult invalidationResult =
             unavailableAccountWorkflow
@@ -1319,6 +1344,12 @@ spec = do
                       loadAccountSession = \_ -> pure (Right Nothing),
                       invalidateAccountSession = \_ _ -> pure invalidationResult
                     },
+                accountWorkflowSessionAuditStore =
+                  AccountSessionAuditStore $ \_ _ ->
+                    pure $
+                      case sessionSaveResult of
+                        Left _ -> Left AccountSessionAuditStoreUnavailable
+                        Right saved -> Right saved,
                 accountWorkflowLoginAttemptStore = permissiveLoginAttemptStore,
                 accountWorkflowJwtIssuer = testAccountJwtIssuer,
                 accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
@@ -1332,6 +1363,25 @@ spec = do
           uppercaseUsernameFields = [("identifier", "Person_01"), ("password", "correct horse battery staple"), ("proof", "totp"), ("totpCode", validCode)]
           emailUsernameFields = [("identifier", "person_01"), ("password", "correct horse battery staple"), ("proof", "totp"), ("totpCode", validCode)]
           validWorkflow = workflowFor (Right (Just confirmedCredential)) (Right (Just confirmedEnrollment)) (Right True) (Right True)
+          auditStoreFailure storeError =
+            validWorkflow
+              { accountWorkflowSessionAuditStore = AccountSessionAuditStore (\_ _ -> pure (Left storeError))
+              }
+          overflowSessionWorkflow = validWorkflow {accountWorkflowClock = pure maxBound}
+          overlongAuditMountRoute =
+            RouteObservation
+              { observedEndpointName = fromRight (error "expected valid endpoint name") (mkEndpointName "account.login"),
+                observedMountChain = requiredModuleNameOrDie (Text.replicate 128 "a") :| [requiredModuleNameOrDie (Text.replicate 128 "b"), requiredModuleNameOrDie (Text.replicate 128 "c"), requiredModuleNameOrDie (Text.replicate 128 "d"), requiredModuleNameOrDie "e"],
+                observedRouteTemplate = fromRight (error "expected valid route template") (mkRouteTemplate "/login"),
+                observedLocale = Localization.locale "en"
+              }
+          validAuditRoute =
+            RouteObservation
+              { observedEndpointName = fromRight (error "expected valid endpoint name") (mkEndpointName "account.login"),
+                observedMountChain = requiredModuleNameOrDie "web-api" :| [],
+                observedRouteTemplate = fromRight (error "expected valid route template") (mkRouteTemplate "/login"),
+                observedLocale = Localization.locale "en"
+              }
           recoveryCode = fromMaybe (error "expected a valid recovery code") (RecoveryCode.mkRecoveryCode "0123456789ABCDEF0123")
           recoveryHash = fromMaybe (error "expected a recovery-code hash") (RecoveryCode.hashRecoveryCodeWithSalt testPasswordHashingPolicy "0123456789abcdef" recoveryCode)
           recoveryMfaStore =
@@ -1458,6 +1508,44 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-recovery-code") "Sign-in was rejected")
       handleAccountAction recoveryWorkflow (loginRequest defaultRequestContext recoveryFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
+      recoveryAuditMethods <- newIORef []
+      let recoveryAuditWorkflow =
+            recoveryWorkflow
+              { accountWorkflowSessionAuditStore =
+                  AccountSessionAuditStore $ \_ activity -> do
+                    modifyIORef' recoveryAuditMethods (activityEvent activity :)
+                    pure (Right True)
+              }
+      handleAccountAction recoveryAuditWorkflow (loginRequest defaultRequestContext recoveryFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
+      readIORef recoveryAuditMethods >>= \case
+        [AccountSessionIssued RecoveryCodeAuthenticationMethod] -> pure ()
+        _ -> expectationFailure "expected one recovery-code account-session audit event"
+      handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Right (Just confirmedEnrollment)) (Right False) (Right True)) (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
+      handleAccountAction (auditStoreFailure AccountSessionAuditCapacityExceeded) (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
+      handleAccountAction (auditStoreFailure AccountSessionAuditStoreCorruptData) (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
+      handleAccountAction validWorkflow (typedAccountActionRequest "POST" "/login" validFields defaultRequestContext)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
+      handleAccountAction validWorkflow (loginRequest (defaultRequestContext {requestRouteObservation = Just overlongAuditMountRoute}) validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
+      capturedAuditRoutes <- newIORef []
+      let routeCapturingWorkflow =
+            validWorkflow
+              { accountWorkflowSessionAuditStore =
+                  AccountSessionAuditStore $ \_ activity -> do
+                    modifyIORef' capturedAuditRoutes (activityRoute activity :)
+                    pure (Right True)
+              }
+      handleAccountAction routeCapturingWorkflow (loginRequest (defaultRequestContext {requestRouteObservation = Just validAuditRoute}) validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
+      readIORef capturedAuditRoutes >>= \case
+        [Just _] -> pure ()
+        _ -> expectationFailure "expected the trusted route observation to be recorded with the account-session audit activity"
+      handleAccountAction overflowSessionWorkflow (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
       handleAccountAction canonicalUsernameWorkflow (loginRequest defaultRequestContext usernameFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
       handleAccountAction canonicalUsernameWorkflow (loginRequest defaultRequestContext uppercaseUsernameFields)
@@ -1537,14 +1625,20 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "no esta disponible")
       jwtFailureSavedSessions <- newIORef []
       jwtFailureInvalidatedSessions <- newIORef []
+      jwtFailureAtomicPersistenceCalls <- newIORef (0 :: Int)
       let jwtFailureSessionStore =
             (accountWorkflowSessionStore validWorkflow)
               { saveAccountSession = \session -> modifyIORef' jwtFailureSavedSessions (session :) >> pure (Right True),
                 invalidateAccountSession = \session _ -> modifyIORef' jwtFailureInvalidatedSessions (session :) >> pure (Right True)
               }
+          jwtFailureAuditStore =
+            AccountSessionAuditStore $ \_ _ -> do
+              modifyIORef' jwtFailureAtomicPersistenceCalls (+ 1)
+              pure (Right True)
           issuerFailureWorkflow =
             validWorkflow
               { accountWorkflowSessionStore = jwtFailureSessionStore,
+                accountWorkflowSessionAuditStore = jwtFailureAuditStore,
                 accountWorkflowJwtIssuer =
                   testAccountJwtIssuer
                     { issueAccountSessionJwt = \_ -> pure (Left AccountJwtIssueFailed)
@@ -1553,6 +1647,7 @@ spec = do
           unrenderableJwtWorkflow =
             validWorkflow
               { accountWorkflowSessionStore = jwtFailureSessionStore,
+                accountWorkflowSessionAuditStore = jwtFailureAuditStore,
                 accountWorkflowJwtIssuer =
                   testAccountJwtIssuer
                     { issueAccountSessionJwt = \_ -> pure (Right (HarchWeb.encodedJwtFromBytes (ByteString.singleton 255)))
@@ -1564,8 +1659,13 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
       savedJwtFailureSessions <- readIORef jwtFailureSavedSessions
       invalidatedJwtFailureSessions <- readIORef jwtFailureInvalidatedSessions
-      invalidatedJwtFailureSessions
-        `shouldBe` map Session.sessionId savedJwtFailureSessions
+      atomicPersistenceCalls <- readIORef jwtFailureAtomicPersistenceCalls
+      expectAll
+        ( (savedJwtFailureSessions `shouldBe` [])
+            :| [ invalidatedJwtFailureSessions `shouldBe` [],
+                 atomicPersistenceCalls `shouldBe` 0
+               ]
+        )
       handleAccountAction validWorkflow (spanishLoginRequest validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "Has iniciado sesion")
       exhaustedLoginBudget <- Password.newPasswordWorkGate (fromMaybe (error "expected a positive password-work budget") (Password.mkPasswordWorkBudget 8))

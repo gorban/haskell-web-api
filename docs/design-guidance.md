@@ -3455,6 +3455,25 @@ The value is intentionally absent at ingress and remains an application-owned
 input to a future atomic account-session/audit operation; this slice does not
 claim that operation has shipped.
 
+**Follow-up slice: atomically issue the web-api account session and its
+required audit activity (AHI-5, 2026-09-08).** The generic
+`AccountSessionStore` remains the generic session-lifecycle port, but login
+does not use its independent save operation. It instead prepares the opaque
+session, signs and renders its JWT without exposing it, then gives both the
+session and closed
+`AccountActivity` to the new application-owned `AccountSessionAuditStore`.
+Its PostgreSQL adapter makes one call to a security-definer function: it
+inserts `web_api.account_sessions` and invokes the existing scope-deriving
+`account_audit.append_activity` before returning success. A collision returns
+no row; audit capacity or any storage fault produces no cookie or success
+response. The function's owner has only the narrowly needed session-insert
+privilege, and the runtime role has execute-only access to this audit
+operation; its pre-existing generic session-table privileges are not enlarged
+or redefined here. This avoids both a generic post-commit logger and ambient
+transaction state. The remaining AHI-5 work is the other selected
+audit-producing mutations; this slice alone does not claim the whole audit
+catalog is atomic.
+
 ### Decision record — AHI-4C: one ASCII cookie-token grammar (2026-09-05)
 
 **Decision: extract the existing cookie-name token predicate into a small

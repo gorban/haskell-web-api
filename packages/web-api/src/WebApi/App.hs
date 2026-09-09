@@ -14,8 +14,12 @@
 -- AHI-5 extends that boundary through 'Site.siteAttachRouteObservation': the
 -- root attaches declared endpoint facts only after typed route selection,
 -- rather than deriving audit attribution from a URL or action input.  This is
--- deliberately only the trusted-context handoff; the follow-up atomic
--- account-session and audit write has not shipped yet.
+-- the trusted-context handoff consumed by the application-owned atomic
+-- account-session/audit operation.  The generic session port remains
+-- available for ordinary session lifecycle operations; login uses the
+-- narrower operation so it cannot commit the session without its required
+-- audit activity. Other selected audit-producing mutations remain AHI-5
+-- follow-up work.
 module WebApi.App
   ( buildAppWithDatabase,
     buildAppWithDatabaseAndAccountWorkflow,

@@ -6,6 +6,7 @@ module WebApi.Session
     MfaEnrollmentSessionStore (..),
     MfaEnrollmentSessionStoreError (..),
     issueAccountSession,
+    prepareAccountSession,
     issueMfaEnrollmentSession,
     mfaEnrollmentSessionCookiePolicy,
   )
@@ -48,11 +49,20 @@ data AccountSessionStore = AccountSessionStore
 issueAccountSession :: AccountSessionStore -> AccountId -> UnixTimeNanoseconds -> IO (Either AccountSessionStoreError (OpaqueSession AccountId))
 issueAccountSession sessionStore accountId issuedAtNanoseconds =
   runExceptT $ do
-    expiresAtNanoseconds <- fromMaybeError AccountSessionStoreCorruptData (boundedExpiration (sessionCookieMaxAgeSeconds defaultSessionCookiePolicy) issuedAtNanoseconds)
-    opaqueSession <- liftIO (generateOpaqueSession accountId issuedAtNanoseconds expiresAtNanoseconds)
+    opaqueSession <- liftEitherWith id (prepareAccountSession accountId issuedAtNanoseconds)
     saved <- liftSessionStore (saveAccountSession sessionStore opaqueSession)
     guardError AccountSessionStoreCorruptData saved
     pure opaqueSession
+
+-- | Allocates the bearer identifier and computes the bounded expiry without
+-- persisting it.  Login can therefore sign and render a credential before its
+-- application-owned atomic session/audit operation commits, while the legacy
+-- generic session store retains its ordinary save path.
+prepareAccountSession :: AccountId -> UnixTimeNanoseconds -> IO (Either AccountSessionStoreError (OpaqueSession AccountId))
+prepareAccountSession accountId issuedAtNanoseconds =
+  runExceptT $ do
+    expiresAtNanoseconds <- fromMaybeError AccountSessionStoreCorruptData (boundedExpiration (sessionCookieMaxAgeSeconds defaultSessionCookiePolicy) issuedAtNanoseconds)
+    liftIO (generateOpaqueSession accountId issuedAtNanoseconds expiresAtNanoseconds)
 
 data MfaEnrollmentSessionStoreError
   = MfaEnrollmentSessionStoreUnavailable

@@ -394,6 +394,52 @@ spec = do
             (ExitSuccess, resultText, "") -> resultText `shouldContain` "|0\n"
             _ -> expectationFailure "expected the controlled audit append to return one committed ID"
 
+          -- AHI-5's first AuditRequired mutation is deliberately a separate
+          -- controlled operation, not a best-effort append after the old
+          -- session insert.  The runtime role sees one function result only;
+          -- the security-definer function owns the session insert and appends
+          -- the closed audit event in that same statement transaction.
+          runPsql
+            inheritedEnvironment
+            "web_api_owner"
+            "web_api_owner"
+            "DELETE FROM web_api.accounts WHERE account_id = 'account_audit_atomic_test'; INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds) VALUES ('account_audit_atomic_test', 'account-audit-atomic@example.test', 'test-hash', 1);"
+            `shouldReturn` (ExitSuccess, "", "")
+          atomicSessionIssue <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "SELECT session_id FROM account_audit.issue_account_session_with_activity('account-audit-atomic-session', 'account_audit_atomic_test', 100, 200, 'account_audit_atomic_test', '550e8400-e29b-41d4-a716-446655440001', 'account-session-issued', 1::SMALLINT, 'password', NULL, NULL, NULL, NULL);"
+          atomicSessionIssue `shouldBe` (ExitSuccess, "account-audit-atomic-session\n", "")
+          committedAtomicRows <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT (SELECT count(*)::TEXT FROM web_api.account_sessions WHERE session_id = 'account-audit-atomic-session') || '|' || (SELECT count(*)::TEXT FROM account_audit.activity WHERE account_id = 'account_audit_atomic_test' AND event_code = 'account-session-issued');"
+          committedAtomicRows `shouldBe` (ExitSuccess, "1|1\n", "")
+
+          -- The invalid event reaches append_activity only after the function
+          -- has attempted its session insert. PostgreSQL must roll that insert
+          -- back with the rejected append; we test our transaction contract,
+          -- rather than any scheduler behavior.
+          rejectedAtomicSessionIssue <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "SELECT session_id FROM account_audit.issue_account_session_with_activity('account-audit-rejected-session', 'account_audit_atomic_test', 101, 201, 'account_audit_atomic_test', '550e8400-e29b-41d4-a716-446655440002', 'not-an-account-audit-event', 1::SMALLINT, 'password', NULL, NULL, NULL, NULL);"
+          fst3 rejectedAtomicSessionIssue `shouldNotBe` ExitSuccess
+          thd3 rejectedAtomicSessionIssue `shouldContain` "account audit append received invalid typed fields"
+          rolledBackAtomicSession <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT count(*)::TEXT FROM web_api.account_sessions WHERE session_id = 'account-audit-rejected-session';"
+          rolledBackAtomicSession `shouldBe` (ExitSuccess, "0\n", "")
+
           directRuntimeRead <-
             runPsql
               inheritedEnvironment

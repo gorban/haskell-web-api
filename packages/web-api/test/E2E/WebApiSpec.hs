@@ -32,6 +32,7 @@ import WebApi.AccountJwt (AccountJwtRuntime, accountJwtAuthenticationPipeline, a
 import WebApi.AccountJwt qualified as AccountJwt
 import WebApi.AccountPages (AccountAction)
 import WebApi.AccountPrincipal (mkAccountPrincipal)
+import WebApi.AccountSessionAudit (AccountSessionAuditStore (..))
 import WebApi.App (buildApp, buildAppWithDatabaseAndAccountWorkflow, buildAppWithDatabaseAndAccountWorkflowAndSecurity, unavailableAccountWorkflow)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes, totpEncryptionKey)
@@ -1072,6 +1073,9 @@ reauthenticationProfileWorkflow sessionExpiry environmentConfig issuer sessionsR
               pure (Right (find ((== receivedSessionId) . Session.sessionId) sessions)),
             invalidateAccountSession = \_ _ -> pure (Right True)
           }
+      sessionAuditStore =
+        AccountSessionAuditStore
+          (\session _ -> modifyIORef' sessionsReference (sessionForFixture session :) >> pure (Right True))
       profileStore =
         AccountProfileStore
           { findAccountProfile = \receivedAccountId -> do
@@ -1114,6 +1118,7 @@ reauthenticationProfileWorkflow sessionExpiry environmentConfig issuer sessionsR
         accountWorkflowCredentialStore = credentialStore,
         accountWorkflowLoginAttemptStore = permissiveAttemptStore,
         accountWorkflowSessionStore = sessionStore,
+        accountWorkflowSessionAuditStore = sessionAuditStore,
         accountWorkflowProfileStore = profileStore,
         accountWorkflowTotpEncryptionKey = totpEncryptionKey environmentConfig,
         accountWorkflowJwtIssuer = issuer,
