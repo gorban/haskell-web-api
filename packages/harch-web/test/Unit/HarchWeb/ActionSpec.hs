@@ -403,6 +403,7 @@ spec = do
                  Text.isInfixOf "replayRetained" defaultCaptureKernelScript `shouldBe` True,
                  Text.isInfixOf "harch:action-reauthentication-required" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "harch:action-reauthentication-completed" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "if (actionId !== null) {\n            document.dispatchEvent(new CustomEvent('harch:action-reauthentication-required', { detail: { actionId } }));\n          } else {\n            settlement.recoverable();\n          }" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "const completion = outcome.responseSucceeded && capturedAction.completion === 'reauthentication-continuation'" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "if (!outcome.responseSucceeded) {\n          settlement.recoverable();\n          return;\n        }" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "if (navigation && (!completion || !completion.defaultPrevented))" defaultNavigationRuntimeScript `shouldBe` True,

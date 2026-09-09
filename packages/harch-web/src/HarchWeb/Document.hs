@@ -506,6 +506,8 @@ defaultNavigationRuntimeScript =
       "          const actionId = settlement.retainForReauthentication();",
       "          if (actionId !== null) {",
       "            document.dispatchEvent(new CustomEvent('harch:action-reauthentication-required', { detail: { actionId } }));",
+      "          } else {",
+      "            settlement.recoverable();",
       "          }",
       "          return;",
       "        }",
@@ -867,6 +869,8 @@ data PageShell route context = PageShell
 -- may present patches, focus, or typed navigation only after its settlement
 -- succeeds. A non-success action response may first present its typed patch,
 -- but then always settles recoverably before it can complete or navigate. A
+-- reauthentication challenge retains only an explicitly replay-eligible action;
+-- a non-retained action settles recoverably instead of remaining claimed. A
 -- declared reauthentication continuation is narrower still: its
 -- completion event is emitted only after a successful action response, so an
 -- ordinary rejected credential patch cannot authorize or expose a retained

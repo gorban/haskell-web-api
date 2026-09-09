@@ -639,6 +639,33 @@ spec =
         readIORef profileLoadsReference `shouldReturn` 1
         readIORef deliveryCountReference `shouldReturn` 0
 
+    it "does not retain an expired-session logout action" $
+      withTestAccountJwtFixture $ \environmentConfig _ -> do
+        runtime <- requiredAccountJwtRuntime environmentConfig
+        initialNow <- Time.currentUnixTimeNanoseconds
+        initialSessionId <- Session.generateSessionId
+        let initialSession = Session.OpaqueSession initialSessionId pendingProfileAccountId initialNow (initialNow + 86400000000000)
+            issuer = accountJwtIssuerFromRuntime runtime
+        initialJwt <- issueInitialSessionJwt issuer initialSession
+        sessionsReference <- newIORef [initialSession]
+        profileLoadsReference <- newIORef (0 :: Int)
+        deliveryCountReference <- newIORef (0 :: Int)
+        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresAfterInitialSessionLookup permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
+        let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+        withBrowserApp $ \browser appConfig ->
+          HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+            let logoutUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/logout"
+                logoutSubmit = byRole Button `named` "Sign out"
+            runBrowserSpec browser do
+              setCookie logoutUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+              visit logoutUrl
+              click logoutSubmit
+              assertAllObserved do
+                textContent (css "#logout-region [data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+        readIORef sessionsReference `shouldReturn` [initialSession {Session.sessionExpiresAtNanoseconds = initialNow}]
+
     it "expires a retained profile action without leaving the reauthentication dialog open" $
       withTestAccountJwtFixture $ \environmentConfig _ -> do
         runtime <- requiredAccountJwtRuntime environmentConfig
@@ -1141,6 +1168,7 @@ pendingProfileE2eSecurity =
 data ReauthenticationSessionExpiry
   = ReauthenticationKeepsSessions
   | ReauthenticationExpiresInitialSession
+  | ReauthenticationExpiresAfterInitialSessionLookup
   | ReauthenticationExpiresIssuedSessions
 
 data ReauthenticationProfileFixture = ReauthenticationProfileFixture
@@ -1159,6 +1187,7 @@ permissiveReauthenticationLoginAttemptStore =
 
 reauthenticationProfileWorkflow :: ReauthenticationSessionExpiry -> LoginAttemptStore -> AppEnvironmentConfig -> AccountJwt.AccountJwtIssuer -> ReauthenticationProfileFixture -> IO AccountWorkflow
 reauthenticationProfileWorkflow sessionExpiry attemptStore environmentConfig issuer fixture = do
+  sessionLookupsReference <- newIORef (0 :: Int)
   let sessionsReference = reauthenticationProfileSessions fixture
       profileLoadsReference = reauthenticationProfileLoads fixture
       deliveryCountReference = reauthenticationProfileDeliveries fixture
@@ -1174,8 +1203,12 @@ reauthenticationProfileWorkflow sessionExpiry attemptStore environmentConfig iss
           { saveAccountSession = \session -> modifyIORef' sessionsReference (sessionForFixture session :) >> pure (Right True),
             loadAccountSession = \receivedSessionId -> do
               sessions <- readIORef sessionsReference
+              firstSessionLookup <- atomicModifyIORef' sessionLookupsReference (\count -> (count + 1, count == 0))
+              when (firstSessionLookup && expiresAfterInitialSessionLookup sessionExpiry) (expireInitialProfileSession sessionsReference)
               pure (Right (find ((== receivedSessionId) . Session.sessionId) sessions)),
-            invalidateAccountSession = \_ _ -> pure (Right True)
+            invalidateAccountSession = \receivedSessionId _ -> do
+              modifyIORef' sessionsReference (filter ((/= receivedSessionId) . Session.sessionId))
+              pure (Right True)
           }
       sessionAuditStore =
         AccountSessionAuditStore
@@ -1206,6 +1239,7 @@ reauthenticationProfileWorkflow sessionExpiry attemptStore environmentConfig iss
         case sessionExpiry of
           ReauthenticationKeepsSessions -> session
           ReauthenticationExpiresInitialSession -> session
+          ReauthenticationExpiresAfterInitialSessionLookup -> session
           ReauthenticationExpiresIssuedSessions -> session {Session.sessionExpiresAtNanoseconds = Session.sessionIssuedAtNanoseconds session}
   pure
     unavailableAccountWorkflow
@@ -1229,7 +1263,16 @@ expiresInitialProfileSession sessionExpiry =
   case sessionExpiry of
     ReauthenticationKeepsSessions -> False
     ReauthenticationExpiresInitialSession -> True
+    ReauthenticationExpiresAfterInitialSessionLookup -> False
     ReauthenticationExpiresIssuedSessions -> True
+
+expiresAfterInitialSessionLookup :: ReauthenticationSessionExpiry -> Bool
+expiresAfterInitialSessionLookup sessionExpiry =
+  case sessionExpiry of
+    ReauthenticationExpiresAfterInitialSessionLookup -> True
+    ReauthenticationKeepsSessions -> False
+    ReauthenticationExpiresInitialSession -> False
+    ReauthenticationExpiresIssuedSessions -> False
 
 pendingProfileAccountStore :: AccountStore
 pendingProfileAccountStore =
