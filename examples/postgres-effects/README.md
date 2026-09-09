@@ -128,6 +128,35 @@ This is operator/reporting access only. Do not turn it into an account-facing
 activity page or API, and do not export account IDs, request IDs, or activity
 values as metric labels or ordinary logs.
 
+### Request-ID audit lookup
+
+Given an identifier copied from the response header or a framework-owned error
+body, use the protected reader connection and a `psql` variable rather than
+splicing it into SQL. The audit lookup is deliberately non-unique: one request
+can have several activities, while RLS hides rows in scopes not granted to this
+reader.
+
+```sh
+test -n "$request_id"
+psql "$AUDIT_READER_DATABASE_URL" --no-psqlrc --set=ON_ERROR_STOP=1 \
+  --set=request_id="$request_id" <<'SQL'
+SELECT occurred_at, account_id, request_id, event_code, payload_detail,
+       route_template
+FROM account_audit.activity
+WHERE request_id = :'request_id'::text
+ORDER BY occurred_at, activity_id
+LIMIT 100;
+SQL
+```
+
+The same ID in an ungranted scope must not appear. A zero-row result is not
+evidence that the identifier is invalid: it can mean that the request had no
+account subject, required audit persistence rolled back, the record is outside
+retention, or the reader lacks the relevant scope. Use the
+[logging-and-telemetry support workflow](../logging-and-telemetry/README.md#support-workflow)
+to correlate any available private logs and OTLP spans without treating either
+best-effort channel as an audit substitute.
+
 The owner, not the runtime or reader role, inspects partition capacity before
 the configured high-water mark is exceeded:
 

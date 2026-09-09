@@ -54,9 +54,53 @@ Harch creates an opaque `RequestId` at request ingress and makes it available
 to trusted application context and telemetry-safe route observation. `web-api`
 uses that ID to correlate selected account-security audit rows with the request
 that produced them, but the framework does not persist audit history or expose
-an audit reader. The remaining response/log/span/audit presentation sweep is
-tracked separately; do not promise a universal public error-body join from this
-guide.
+an audit reader. Framework-owned HTTP errors present the same safe identifier
+in their body; application protocols retain ownership of their own body format.
+
+### Support workflow
+
+Start with the response header (or the identifier displayed by a
+framework-owned error page), never a caller-provided `X-Request-ID` value. For
+example, preserve response headers from a reproducible request and copy the
+server-generated value:
+
+```sh
+curl --silent --show-error --dump-header response.headers --output /dev/null \
+  http://127.0.0.1:5001/api/status
+request_id="$(awk 'tolower($1) == "x-request-id:" { print $2 }' response.headers | tr -d '\r' | head -n 1)"
+test -n "$request_id"
+printf '%s\n' "$request_id"
+```
+
+The application reporter writes to stderr. A request-specific application
+diagnostic is rendered as `ERROR request.id=<UUID> <message>`, so use an exact
+field prefix rather than a broad substring match:
+
+```sh
+rg -F "request.id=$request_id " web-api.stderr.log
+```
+
+For the local Jaeger instance above, the configured OTLP service name is
+`web-api` and the exported server span attribute is `harch.request.id`. The
+following query uses Jaeger's actual HTTP API and URL-encodes the JSON tag
+filter; it is also a convenient check that the copied ID reaches the configured
+backend:
+
+```sh
+curl --fail --silent --show-error --get \
+  --data-urlencode 'service=web-api' \
+  --data-urlencode "tags={\"harch.request.id\":\"$request_id\"}" \
+  --data-urlencode 'limit=20' \
+  http://127.0.0.1:16686/api/traces | jq .
+```
+
+The PostgreSQL reader lookup belongs to the separate
+[account-activity guide](../postgres-effects/README.md#request-id-audit-lookup),
+which uses a reader login and RLS; possession of an identifier does not grant
+access. A log or span can legitimately be absent when its delivery is disabled,
+sampled out, queued and dropped, or rejected by its exporter. An unknown-account
+rejection has an ID but no account-audit row, and a required audit failure rolls
+back the mutation rather than manufacturing a successful audit record.
 
 | Signal | Owner and delivery policy | Data/retention boundary |
 | --- | --- | --- |
