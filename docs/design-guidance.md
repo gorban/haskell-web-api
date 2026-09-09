@@ -3767,3 +3767,28 @@ Treat every complete document and every region patch as an accessibility surface
 Unit tests should prove route totals, codecs, escaping, and action results. Browser tests should prove
 the architectural timing invariants that unit tests cannot: a module may be delayed, but a visible
 framework control must not lose the user's event or entered value.
+
+### Browser fixture ownership (2026-09-09)
+
+The reference application's browser suite uses Hspec's existing `aroundAll` and
+`aroundAllWith` hooks to share immutable configuration/assets and one server per
+independent application variant. `TestSupport.BrowserApp` adapts the existing
+bracketed loopback-server fixture; it adds no alternate server lifecycle or
+exception interpreter. Default-page, authentication-challenge, and registration
+scenarios are marked for parallel execution against their shared server.
+
+Each `runBrowserSpec` still owns a fresh browser session, including cookies,
+interception, metrics, and failure artifacts. Stateful reauthentication examples
+retain their own servers and mutable session/counter fixtures: their deliberate
+expiry, throttling, and delivery assertions require ownership of that state.
+Singleton application variants use `aroundWith` for a per-example server while
+reusing the suite's immutable assets. An assertion failure does not restart the
+shared server or erase application state; independent-request interference must
+be investigated rather than hidden by fixture resets or automatic retries.
+
+Focused integration checks exercise the actual fixture hooks: the same server
+remains usable after a request exception and an ordinary assertion failure, both
+server and assets are released after the group, and application-construction failure releases the
+outer assets without running an example. Server-startup/shutdown or deliberately
+broken-application tests must retain dedicated scopes when introduced here, so a
+listener failure is not silently reclassified as unrelated browser failures.

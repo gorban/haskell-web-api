@@ -216,8 +216,10 @@ test-suite haskell-web-api-tests
   -- manifest check verify it against test/ rather than suppress Cabal's warning.
   other-modules:
     E2E.WebApiSpec
+    Integration.BrowserFixtureSpec
     Integration.WebApiSpec
     TestSupport.AccountJwt
+    TestSupport.BrowserApp
     TestSupport.RealPostgres
     Unit.WebApi.AccountJwtSpec
     Unit.WebApi.AccountPagesSpec

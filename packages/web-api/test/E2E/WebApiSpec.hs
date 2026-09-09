@@ -23,10 +23,8 @@ import HarchWeb.Session qualified as Session
 import HarchWeb.Time qualified as Time
 import HarchWeb.Totp qualified as Totp
 import Network.HTTP.Types qualified as Http
-import System.Directory (copyFile, createDirectory, doesFileExist, getCurrentDirectory)
-import System.FilePath (takeDirectory, (</>))
-import System.IO.Temp (withSystemTempDirectory)
 import TestSupport.AccountJwt (withTestAccountJwtFixture)
+import TestSupport.BrowserApp (withBrowserApp, withBrowserServer)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..), VerificationResendAdmission (..), VerificationResendClaim (..), VerificationResendClaimSettlement (..))
 import WebApi.AccountJwt (AccountJwtRuntime, accountJwtAuthenticationPipeline, accountJwtIssuerFromRuntime, loadAccountJwtRuntime)
 import WebApi.AccountJwt qualified as AccountJwt
@@ -35,7 +33,7 @@ import WebApi.AccountPrincipal (mkAccountPrincipal)
 import WebApi.AccountSessionAudit (AccountSessionAuditStore (..))
 import WebApi.App (buildApp, buildAppWithDatabaseAndAccountWorkflow, buildAppWithDatabaseAndAccountWorkflowAndSecurity, unavailableAccountWorkflow)
 import WebApi.AppEffect (AccountWorkflow (..))
-import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes, totpEncryptionKey)
+import WebApi.Config (AppConfig, AppEnvironmentConfig (..), totpEncryptionKey)
 import WebApi.Database (defaultPageRepository)
 import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), LoginAttemptAdmission (..), LoginAttemptReservation (..), LoginAttemptStore (..))
 import WebApi.Mfa (MfaStore (..), StoredTotpEnrollment (..))
@@ -43,965 +41,912 @@ import WebApi.Route (AppRoute (LoginRoute))
 import WebApi.Route qualified
 import WebApi.Session (AccountSessionStore (..), MfaEnrollmentSessionStore (..), mfaEnrollmentSessionCookiePolicy)
 
+-- | Share immutable browser configuration and assets for the suite, and one
+-- server per application variant for independent scenarios. Hspec's existing
+-- around-all hooks retain the bracketed server and asset lifetimes; each
+-- runBrowserSpec still owns a fresh browser, cookies, interception, and artifacts.
+-- Shared groups may run concurrently. Stateful reauthentication examples keep
+-- their own servers, session stores, counters, and JWT fixtures because their
+-- failures and expiry transitions deliberately depend on those local states.
 spec =
-  describe "stacked application real-browser smoke coverage" $ do
-    it "redirects the root route to the complete Spaces SSR document" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
-          let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
-          runBrowserSpec browser do
-            visit homeUrl
-            assertAllObserved do
-              currentUrl `shouldEqual` (HarchWeb.localServerBaseUrl server <> "/spaces")
-              textContent (byRole Heading) `shouldEqual` "Site under construction"
+  aroundAll withBrowserApp $
+    describe "stacked application real-browser smoke coverage" $ do
+      aroundAllWith (withBrowserServer buildApp) $
+        parallel $
+          describe "default application" $ do
+            it "redirects the root route to the complete Spaces SSR document" $ \(browser, server) -> do
+              let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
+              runBrowserSpec browser do
+                visit homeUrl
+                assertAllObserved do
+                  currentUrl `shouldEqual` (HarchWeb.localServerBaseUrl server <> "/spaces")
+                  textContent (byRole Heading) `shouldEqual` "Site under construction"
 
-    it "keeps direct second-page loads and script-disabled root redirects usable" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
-          let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
-              secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
-          runBrowserSpec browser do
-            visit secondUrl
-            assertAllObserved do
-              textContent (byRole Heading) `shouldEqual` "Second"
-            visitWithoutScripts homeUrl
-            assertAllObserved do
-              currentUrl `shouldEqual` (HarchWeb.localServerBaseUrl server <> "/spaces")
-              textContent (byRole Heading) `shouldEqual` "Site under construction"
+            it "keeps direct second-page loads and script-disabled root redirects usable" $ \(browser, server) -> do
+              let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
+                  secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
+              runBrowserSpec browser do
+                visit secondUrl
+                assertAllObserved do
+                  textContent (byRole Heading) `shouldEqual` "Second"
+                visitWithoutScripts homeUrl
+                assertAllObserved do
+                  currentUrl `shouldEqual` (HarchWeb.localServerBaseUrl server <> "/spaces")
+                  textContent (byRole Heading) `shouldEqual` "Site under construction"
 
-    it "redirects Spanish roots to localized Spaces SSR content while scripts are disabled" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
-          let spanishHomeUrl = HarchWeb.localServerBaseUrl server <> "/es"
-          runBrowserSpec browser do
-            visitWithoutScripts spanishHomeUrl
-            assertAllObserved do
-              currentUrl `shouldEqual` (HarchWeb.localServerBaseUrl server <> "/es/spaces")
-              textContent (byRole Heading) `shouldEqual` "Sitio en construcción"
-              attributeValue (css "html") "lang" `shouldEqual` Just "es"
+            it "redirects Spanish roots to localized Spaces SSR content while scripts are disabled" $ \(browser, server) -> do
+              let spanishHomeUrl = HarchWeb.localServerBaseUrl server <> "/es"
+              runBrowserSpec browser do
+                visitWithoutScripts spanishHomeUrl
+                assertAllObserved do
+                  currentUrl `shouldEqual` (HarchWeb.localServerBaseUrl server <> "/es/spaces")
+                  textContent (byRole Heading) `shouldEqual` "Sitio en construcción"
+                  attributeValue (css "html") "lang" `shouldEqual` Just "es"
 
-    it "serves the app-home spaces placeholder through SSR and enhanced navigation" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
-          let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
-              secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
-              spacesUrl = HarchWeb.localServerBaseUrl server <> "/spaces"
-              spanishSpacesUrl = HarchWeb.localServerBaseUrl server <> "/es/spaces"
-          runBrowserSpec browser do
-            visit homeUrl
-            assertAllObserved do
-              currentUrl `shouldEqual` spacesUrl
-              textContent (byRole Heading) `shouldEqual` "Site under construction"
-            visit secondUrl
-            click (byRole Link `named` "Spaces")
-            assertAllObserved do
-              currentUrl `shouldEqual` spacesUrl
-              textContent (byRole Heading) `shouldEqual` "Site under construction"
-              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
-            visitWithoutScripts spanishSpacesUrl
-            assertAllObserved do
-              textContent (byRole Heading) `shouldEqual` "Sitio en construcción"
-              textContent (byText "Sigan este espacio.") `shouldEqual` "Sigan este espacio."
+            it "serves the app-home spaces placeholder through SSR and enhanced navigation" $ \(browser, server) -> do
+              let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
+                  secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
+                  spacesUrl = HarchWeb.localServerBaseUrl server <> "/spaces"
+                  spanishSpacesUrl = HarchWeb.localServerBaseUrl server <> "/es/spaces"
+              runBrowserSpec browser do
+                visit homeUrl
+                assertAllObserved do
+                  currentUrl `shouldEqual` spacesUrl
+                  textContent (byRole Heading) `shouldEqual` "Site under construction"
+                visit secondUrl
+                click (byRole Link `named` "Spaces")
+                assertAllObserved do
+                  currentUrl `shouldEqual` spacesUrl
+                  textContent (byRole Heading) `shouldEqual` "Site under construction"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                visitWithoutScripts spanishSpacesUrl
+                assertAllObserved do
+                  textContent (byRole Heading) `shouldEqual` "Sitio en construcción"
+                  textContent (byText "Sigan este espacio.") `shouldEqual` "Sigan este espacio."
 
-    it "serves the app-home profile landing through SSR and enhanced navigation" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (challengedBrowserApp appConfig) $ \server -> do
-          let secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
-              loginUrl = HarchWeb.localServerBaseUrl server <> "/login"
-              profileUrl = HarchWeb.localServerBaseUrl server <> "/profile"
-              spanishProfileUrl = HarchWeb.localServerBaseUrl server <> "/es/profile"
-          runBrowserSpec browser do
-            visit secondUrl
-            _ <-
-              runPageScript
-                "const link = document.querySelector('nav a'); link.focus(); const style = getComputedStyle(link); link.dataset.testFocusVisibleStyle = String(link.matches(':focus-visible') && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0); true"
-            assertAllObserved do
-              attributeValue (byRole Link `named` "Home") "data-test-focus-visible-style" `shouldEqual` Just "true"
-            click (byRole Link `named` "Profile")
-            assertAllObserved do
-              currentUrl `shouldEqual` loginUrl
-              textContent (byRole Heading) `shouldEqual` "Sign in"
-              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
-            visitWithoutScripts profileUrl
-            assertAllObserved do
-              textContent (byRole Heading) `shouldEqual` "Sign in"
-            visitWithoutScripts spanishProfileUrl
-            assertAllObserved do
-              textContent (byRole Heading) `shouldEqual` "Iniciar sesion"
+            it "opens the language picker accessibly and navigates its typed choices" $ \(browser, server) -> do
+              let baseUrl = HarchWeb.localServerBaseUrl server
+                  secondUrl = baseUrl <> "/second"
+                  spanishLanguageUrl = baseUrl <> "/es/language"
+                  languageTrigger = byRole Link `named` "Language"
+                  englishChoice = byRole Link `named` "English"
+                  spanishChoice = byRole Link `named` "Spanish"
+                  closeControl = byRole Button `named` "Close language picker"
+              runBrowserSpec browser do
+                visit secondUrl
+                assertAllObserved do
+                  attributeValue (css "html") "lang" `shouldEqual` Just "en"
+                reload
+                assertAllObserved do
+                  attributeValue (css "html") "lang" `shouldEqual` Just "en"
+                click languageTrigger
+                assertAllObserved do
+                  attributeValue (css "#language-dialog") "open" `shouldEqual` Just ""
+                  isFocused englishChoice `satisfies` id
+                _ <-
+                  runPageScript
+                    "const dialog = document.querySelector('#language-dialog'); document.querySelector('nav a').focus(); dialog.dataset.testBackgroundContained = String(dialog.contains(document.activeElement)); true"
+                assertAllObserved do
+                  attributeValue (css "#language-dialog") "data-test-background-contained" `shouldEqual` Just "true"
+                press englishChoice "Tab"
+                assertAllObserved do
+                  isFocused spanishChoice `satisfies` id
+                press spanishChoice "Tab"
+                assertAllObserved do
+                  isFocused closeControl `satisfies` id
+                press closeControl "Tab"
+                assertAllObserved do
+                  isFocused englishChoice `satisfies` id
+                press (css "#language-dialog") "Escape"
+                assertAllObserved do
+                  isFocused languageTrigger `satisfies` id
+                click languageTrigger
+                click spanishChoice
+                assertAllObserved do
+                  currentUrl `shouldEqual` spanishLanguageUrl
+                  textContent (byRole Heading `named` "Elige un idioma") `shouldEqual` "Elige un idioma"
+                  textContent (byRole Status) `shouldEqual` "web-api: Language"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
+                  attributeValue (css "html") "lang" `shouldEqual` Just "es"
+                assertAllObserved do
+                  attributeValue (css "#language-dialog") "open" `shouldEqual` Nothing
+                historyBack
+                assertAllObserved do
+                  attributeValue (css "html") "lang" `shouldEqual` Just "en"
+                historyForward
+                assertAllObserved do
+                  attributeValue (css "html") "lang" `shouldEqual` Just "es"
 
-    it "opens the language picker accessibly and navigates its typed choices" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
-          let baseUrl = HarchWeb.localServerBaseUrl server
-              secondUrl = baseUrl <> "/second"
-              spanishLanguageUrl = baseUrl <> "/es/language"
-              languageTrigger = byRole Link `named` "Language"
-              englishChoice = byRole Link `named` "English"
-              spanishChoice = byRole Link `named` "Spanish"
-              closeControl = byRole Button `named` "Close language picker"
-          runBrowserSpec browser do
-            visit secondUrl
-            assertAllObserved do
-              attributeValue (css "html") "lang" `shouldEqual` Just "en"
-            reload
-            assertAllObserved do
-              attributeValue (css "html") "lang" `shouldEqual` Just "en"
-            click languageTrigger
-            assertAllObserved do
-              attributeValue (css "#language-dialog") "open" `shouldEqual` Just ""
-              isFocused englishChoice `satisfies` id
-            _ <-
-              runPageScript
-                "const dialog = document.querySelector('#language-dialog'); document.querySelector('nav a').focus(); dialog.dataset.testBackgroundContained = String(dialog.contains(document.activeElement)); true"
-            assertAllObserved do
-              attributeValue (css "#language-dialog") "data-test-background-contained" `shouldEqual` Just "true"
-            press englishChoice "Tab"
-            assertAllObserved do
-              isFocused spanishChoice `satisfies` id
-            press spanishChoice "Tab"
-            assertAllObserved do
-              isFocused closeControl `satisfies` id
-            press closeControl "Tab"
-            assertAllObserved do
-              isFocused englishChoice `satisfies` id
-            press (css "#language-dialog") "Escape"
-            assertAllObserved do
-              isFocused languageTrigger `satisfies` id
-            click languageTrigger
-            click spanishChoice
-            assertAllObserved do
-              currentUrl `shouldEqual` spanishLanguageUrl
-              textContent (byRole Heading `named` "Elige un idioma") `shouldEqual` "Elige un idioma"
-              textContent (byRole Status) `shouldEqual` "web-api: Language"
-              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
-              attributeValue (css "html") "lang" `shouldEqual` Just "es"
-            assertAllObserved do
-              attributeValue (css "#language-dialog") "open" `shouldEqual` Nothing
-            historyBack
-            assertAllObserved do
-              attributeValue (css "html") "lang" `shouldEqual` Just "en"
-            historyForward
-            assertAllObserved do
-              attributeValue (css "html") "lang" `shouldEqual` Just "es"
+            it "keeps the Help FAB usable in a desktop narrow-width, layout-zoomed viewport and absent at its destination" $ \(browser, server) -> do
+              let baseUrl = HarchWeb.localServerBaseUrl server
+                  secondUrl = baseUrl <> "/second"
+                  helpUrl = baseUrl <> "/help"
+                  helpFab = byRole Link `named` "Help and support"
+              runBrowserSpec browser do
+                setViewportSize 320 480
+                visit secondUrl
+                _ <-
+                  runPageScript
+                    "document.documentElement.style.zoom = '2'; const fab = document.querySelector('[data-help-fab]'); fab.focus(); const box = fab.getBoundingClientRect(); const overlaps = [...document.querySelectorAll('#app-main a, #app-main button, #app-main input, #app-main select')].filter((control) => control !== fab && !control.closest('dialog')).some((control) => { const other = control.getBoundingClientRect(); return box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top; }); fab.dataset.testGeometry = String(box.width >= 44 && box.height >= 44 && box.right <= window.innerWidth && box.bottom <= window.innerHeight && !overlaps && getComputedStyle(fab).outlineStyle !== 'none'); true"
+                assertAllObserved do
+                  attributeValue helpFab "data-test-geometry" `shouldEqual` Just "true"
+                press helpFab "Enter"
+                assertAllObserved do
+                  currentUrl `shouldEqual` helpUrl
+                  textContent (byRole Heading `named` "Help and support") `shouldEqual` "Help and support"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                _ <- runPageScript "document.body.dataset.testNoHelpFab = String(!document.querySelector('[data-help-fab]')); true"
+                assertAllObserved do
+                  attributeValue (css "body") "data-test-no-help-fab" `shouldEqual` Just "true"
+                visitWithoutScripts secondUrl
+                press helpFab "Enter"
+                assertAllObserved do
+                  currentUrl `shouldEqual` helpUrl
+                  textContent (byRole Heading) `shouldEqual` "Help and support"
 
-    it "keeps language selection and dialog startup failure complete without enhanced behavior" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (challengedBrowserApp appConfig) $ \server -> do
-          let baseUrl = HarchWeb.localServerBaseUrl server
-              secondUrl = baseUrl <> "/second"
-              languageUrl = baseUrl <> "/language"
-              spanishLanguageUrl = baseUrl <> "/es/language"
-          runBrowserSpec browser do
-            blockRequestsMatching "**/assets/dialog.js"
-            visit secondUrl
-            click (byRole Link `named` "Language")
-            failBlockedRequestsMatching "**/assets/dialog.js"
-            assertAllObserved do
-              currentUrl `shouldEqual` languageUrl
-              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 1}|])
-            visitWithoutScripts secondUrl
-            press (byRole Link `named` "Language") "Enter"
-            assertAllObserved do
-              currentUrl `shouldEqual` languageUrl
-              textContent (byRole Heading) `shouldEqual` "Choose a language"
-            press (byRole Link `named` "Spanish") "Enter"
-            assertAllObserved do
-              currentUrl `shouldEqual` spanishLanguageUrl
-              textContent (byRole Heading) `shouldEqual` "Elige un idioma"
+            it "uses the responsive document viewport on mobile for Help FAB navigation and history" $ \(browser, server) -> do
+              let baseUrl = HarchWeb.localServerBaseUrl server
+                  secondUrl = baseUrl <> "/second"
+                  helpUrl = baseUrl <> "/help"
+                  helpFab = byRole Link `named` "Help and support"
+              runBrowserSpec browser do
+                emulateMobileViewport 320 480
+                visit secondUrl
+                _ <-
+                  runPageScript
+                    "const viewport = document.querySelector('meta[name=viewport]'); const fab = document.querySelector('[data-help-fab]'); const box = fab.getBoundingClientRect(); const policy = viewport && viewport.content === 'width=device-width, initial-scale=1'; document.body.dataset.testMobileViewport = String(policy && window.innerWidth === 320 && document.documentElement.scrollWidth <= window.innerWidth && box.width >= 44 && box.height >= 44 && box.right <= window.innerWidth && box.bottom <= window.innerHeight); true"
+                assertAllObserved do
+                  attributeValue (css "body") "data-test-mobile-viewport" `shouldEqual` Just "true"
+                press helpFab "Enter"
+                assertAllObserved do
+                  currentUrl `shouldEqual` helpUrl
+                  textContent (byRole Heading `named` "Help and support") `shouldEqual` "Help and support"
+                historyBack
+                assertAllObserved do
+                  currentUrl `shouldEqual` secondUrl
+                  textContent (byRole Heading `named` "Second") `shouldEqual` "Second"
+                _ <-
+                  runPageScript
+                    "const viewport = document.querySelector('meta[name=viewport]'); const fab = document.querySelector('[data-help-fab]'); const box = fab.getBoundingClientRect(); document.body.dataset.testMobileHistoryViewport = String(viewport && viewport.content === 'width=device-width, initial-scale=1' && document.documentElement.scrollWidth <= window.innerWidth && box.width >= 44 && box.height >= 44); true"
+                assertAllObserved do
+                  attributeValue (css "body") "data-test-mobile-history-viewport" `shouldEqual` Just "true"
 
-    it "keeps the Help FAB usable in a desktop narrow-width, layout-zoomed viewport and absent at its destination" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
-          let baseUrl = HarchWeb.localServerBaseUrl server
-              secondUrl = baseUrl <> "/second"
-              helpUrl = baseUrl <> "/help"
-              helpFab = byRole Link `named` "Help and support"
-          runBrowserSpec browser do
-            setViewportSize 320 480
-            visit secondUrl
-            _ <-
-              runPageScript
-                "document.documentElement.style.zoom = '2'; const fab = document.querySelector('[data-help-fab]'); fab.focus(); const box = fab.getBoundingClientRect(); const overlaps = [...document.querySelectorAll('#app-main a, #app-main button, #app-main input, #app-main select')].filter((control) => control !== fab && !control.closest('dialog')).some((control) => { const other = control.getBoundingClientRect(); return box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top; }); fab.dataset.testGeometry = String(box.width >= 44 && box.height >= 44 && box.right <= window.innerWidth && box.bottom <= window.innerHeight && !overlaps && getComputedStyle(fab).outlineStyle !== 'none'); true"
-            assertAllObserved do
-              attributeValue helpFab "data-test-geometry" `shouldEqual` Just "true"
-            press helpFab "Enter"
-            assertAllObserved do
-              currentUrl `shouldEqual` helpUrl
-              textContent (byRole Heading `named` "Help and support") `shouldEqual` "Help and support"
-              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
-            _ <- runPageScript "document.body.dataset.testNoHelpFab = String(!document.querySelector('[data-help-fab]')); true"
-            assertAllObserved do
-              attributeValue (css "body") "data-test-no-help-fab" `shouldEqual` Just "true"
-            visitWithoutScripts secondUrl
-            press helpFab "Enter"
-            assertAllObserved do
-              currentUrl `shouldEqual` helpUrl
-              textContent (byRole Heading) `shouldEqual` "Help and support"
+            it "focuses and announces one lifecycle for keyboard navigation, history, and final redirected URLs" $ \(browser, server) -> do
+              let baseUrl = HarchWeb.localServerBaseUrl server
+                  secondUrl = baseUrl <> "/second"
+                  spacesUrl = baseUrl <> "/spaces"
+                  mainContent = css "#app-main"
+                  routeStatus = css "[data-navigation-route-status]"
+              runBrowserSpec browser do
+                setViewportSize 320 480
+                visit secondUrl
+                assertAllObserved do
+                  textContent routeStatus `shouldEqual` ""
+                _ <-
+                  runPageScript
+                    "window.__ahi8HistoryLength = history.length; const status = document.querySelector('[data-navigation-route-status]'); let count = 0; status.dataset.testMutationCount = '0'; new MutationObserver((records) => { count += records.filter((record) => record.type === 'childList' || record.type === 'characterData').length; status.dataset.testMutationCount = String(count); }).observe(status, { childList: true, characterData: true, subtree: true }); document.documentElement.style.zoom = '2'; true"
+                press (byRole Link `named` "Spaces") "Enter"
+                assertAllObserved do
+                  currentUrl `shouldEqual` spacesUrl
+                  isFocused mainContent `satisfies` id
+                _ <-
+                  runPageScript
+                    "const main = document.querySelector('#app-main'); const box = main.getBoundingClientRect(); const sampleX = Math.min(window.innerWidth - 1, Math.max(0, box.left + 1)); const sampleY = Math.min(window.innerHeight - 1, Math.max(0, box.top + 1)); const topElement = document.elementFromPoint(sampleX, sampleY); const style = getComputedStyle(main); main.dataset.testFocusUnobscured = String(document.activeElement === main && box.top >= 0 && box.top < window.innerHeight && (topElement === main || main.contains(topElement)) && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0); true"
+                assertAllObserved do
+                  currentUrl `shouldEqual` spacesUrl
+                  textContent (css "title") `shouldEqual` "web-api: Spaces"
+                  textContent (byRole Heading) `shouldEqual` "Site under construction"
+                  textContent routeStatus `shouldEqual` "web-api: Spaces"
+                  isFocused mainContent `satisfies` id
+                  attributeValue routeStatus "data-test-mutation-count" `shouldEqual` Just "1"
+                  attributeValue mainContent "data-test-focus-unobscured" `shouldEqual` Just "true"
+                historyBack
+                assertAllObserved do
+                  currentUrl `shouldEqual` secondUrl
+                  textContent (css "title") `shouldEqual` "web-api: Second"
+                  textContent routeStatus `shouldEqual` "web-api: Second"
+                  attributeValue routeStatus "data-test-mutation-count" `shouldEqual` Just "2"
+                  isFocused mainContent `satisfies` id
+                historyForward
+                assertAllObserved do
+                  currentUrl `shouldEqual` spacesUrl
+                  textContent routeStatus `shouldEqual` "web-api: Spaces"
+                  attributeValue routeStatus "data-test-mutation-count" `shouldEqual` Just "3"
+                  attributeValue (byRole Link `named` "Spaces") "aria-current" `shouldEqual` Just "page"
+                _ <- runPageScript "document.querySelector('#app-main').dataset.testHistoryStable = String(history.length === window.__ahi8HistoryLength + 1); true"
+                assertAllObserved do
+                  attributeValue mainContent "data-test-history-stable" `shouldEqual` Just "true"
+                visit secondUrl
+                press (byRole Link `named` "Home") "Enter"
+                assertAllObserved do
+                  currentUrl `shouldEqual` spacesUrl
+                  textContent (css "title") `shouldEqual` "web-api: Spaces"
+                  textContent routeStatus `shouldEqual` "web-api: Spaces"
+                  isFocused mainContent `satisfies` id
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
 
-    it "uses the responsive document viewport on mobile for Help FAB navigation and history" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
-          let baseUrl = HarchWeb.localServerBaseUrl server
-              secondUrl = baseUrl <> "/second"
-              helpUrl = baseUrl <> "/help"
-              helpFab = byRole Link `named` "Help and support"
-          runBrowserSpec browser do
-            emulateMobileViewport 320 480
-            visit secondUrl
-            _ <-
-              runPageScript
-                "const viewport = document.querySelector('meta[name=viewport]'); const fab = document.querySelector('[data-help-fab]'); const box = fab.getBoundingClientRect(); const policy = viewport && viewport.content === 'width=device-width, initial-scale=1'; document.body.dataset.testMobileViewport = String(policy && window.innerWidth === 320 && document.documentElement.scrollWidth <= window.innerWidth && box.width >= 44 && box.height >= 44 && box.right <= window.innerWidth && box.bottom <= window.innerHeight); true"
-            assertAllObserved do
-              attributeValue (css "body") "data-test-mobile-viewport" `shouldEqual` Just "true"
-            press helpFab "Enter"
-            assertAllObserved do
-              currentUrl `shouldEqual` helpUrl
-              textContent (byRole Heading `named` "Help and support") `shouldEqual` "Help and support"
-            historyBack
-            assertAllObserved do
-              currentUrl `shouldEqual` secondUrl
-              textContent (byRole Heading `named` "Second") `shouldEqual` "Second"
-            _ <-
-              runPageScript
-                "const viewport = document.querySelector('meta[name=viewport]'); const fab = document.querySelector('[data-help-fab]'); const box = fab.getBoundingClientRect(); document.body.dataset.testMobileHistoryViewport = String(viewport && viewport.content === 'width=device-width, initial-scale=1' && document.documentElement.scrollWidth <= window.innerWidth && box.width >= 44 && box.height >= 44); true"
-            assertAllObserved do
-              attributeValue (css "body") "data-test-mobile-history-viewport" `shouldEqual` Just "true"
+            it "falls back natively for failed, incompatible, and unsafe final responses without announcing success" $ \(browser, server) -> do
+              let baseUrl = HarchWeb.localServerBaseUrl server
+                  secondUrl = baseUrl <> "/second"
+                  spacesUrl = baseUrl <> "/spaces"
+                  routeStatus = byRole Status
+                  assertNativeFallback = assertAllObserved do
+                    currentUrl `shouldEqual` secondUrl
+                    textContent (byRole Heading) `shouldEqual` "Second"
+                    textContent routeStatus `shouldEqual` ""
+                    $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
+              runBrowserSpec browser do
+                visit spacesUrl
+                blockRequestsMatching "**/second"
+                press (byRole Link `named` "Second") "Enter"
+                failBlockedRequestsMatching "**/second"
+                assertNativeFallback
+                visit spacesUrl
+                _ <-
+                  runPageScript
+                    "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: response.url, text: async () => '<!DOCTYPE html><html><head><title>Incompatible</title></head><body><main>Missing lifecycle markers</main></body></html>' }; }; true"
+                press (byRole Link `named` "Second") "Enter"
+                assertNativeFallback
+                visit spacesUrl
+                _ <-
+                  runPageScript
+                    "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: 'https://outside.example/redirect', text: () => response.text() }; }; true"
+                press (byRole Link `named` "Second") "Enter"
+                assertNativeFallback
+                visit spacesUrl
+                _ <-
+                  runPageScript
+                    "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: '://malformed', text: () => response.text() }; }; true"
+                press (byRole Link `named` "Second") "Enter"
+                assertNativeFallback
 
-    it "focuses and announces one lifecycle for keyboard navigation, history, and final redirected URLs" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
-          let baseUrl = HarchWeb.localServerBaseUrl server
-              secondUrl = baseUrl <> "/second"
-              spacesUrl = baseUrl <> "/spaces"
-              mainContent = css "#app-main"
-              routeStatus = css "[data-navigation-route-status]"
-          runBrowserSpec browser do
-            setViewportSize 320 480
-            visit secondUrl
-            assertAllObserved do
-              textContent routeStatus `shouldEqual` ""
-            _ <-
-              runPageScript
-                "window.__ahi8HistoryLength = history.length; const status = document.querySelector('[data-navigation-route-status]'); let count = 0; status.dataset.testMutationCount = '0'; new MutationObserver((records) => { count += records.filter((record) => record.type === 'childList' || record.type === 'characterData').length; status.dataset.testMutationCount = String(count); }).observe(status, { childList: true, characterData: true, subtree: true }); document.documentElement.style.zoom = '2'; true"
-            press (byRole Link `named` "Spaces") "Enter"
-            assertAllObserved do
-              currentUrl `shouldEqual` spacesUrl
-              isFocused mainContent `satisfies` id
-            _ <-
-              runPageScript
-                "const main = document.querySelector('#app-main'); const box = main.getBoundingClientRect(); const sampleX = Math.min(window.innerWidth - 1, Math.max(0, box.left + 1)); const sampleY = Math.min(window.innerHeight - 1, Math.max(0, box.top + 1)); const topElement = document.elementFromPoint(sampleX, sampleY); const style = getComputedStyle(main); main.dataset.testFocusUnobscured = String(document.activeElement === main && box.top >= 0 && box.top < window.innerHeight && (topElement === main || main.contains(topElement)) && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0); true"
-            assertAllObserved do
-              currentUrl `shouldEqual` spacesUrl
-              textContent (css "title") `shouldEqual` "web-api: Spaces"
-              textContent (byRole Heading) `shouldEqual` "Site under construction"
-              textContent routeStatus `shouldEqual` "web-api: Spaces"
-              isFocused mainContent `satisfies` id
-              attributeValue routeStatus "data-test-mutation-count" `shouldEqual` Just "1"
-              attributeValue mainContent "data-test-focus-unobscured" `shouldEqual` Just "true"
-            historyBack
-            assertAllObserved do
-              currentUrl `shouldEqual` secondUrl
-              textContent (css "title") `shouldEqual` "web-api: Second"
-              textContent routeStatus `shouldEqual` "web-api: Second"
-              attributeValue routeStatus "data-test-mutation-count" `shouldEqual` Just "2"
-              isFocused mainContent `satisfies` id
-            historyForward
-            assertAllObserved do
-              currentUrl `shouldEqual` spacesUrl
-              textContent routeStatus `shouldEqual` "web-api: Spaces"
-              attributeValue routeStatus "data-test-mutation-count" `shouldEqual` Just "3"
-              attributeValue (byRole Link `named` "Spaces") "aria-current" `shouldEqual` Just "page"
-            _ <- runPageScript "document.querySelector('#app-main').dataset.testHistoryStable = String(history.length === window.__ahi8HistoryLength + 1); true"
-            assertAllObserved do
-              attributeValue mainContent "data-test-history-stable" `shouldEqual` Just "true"
-            visit secondUrl
-            press (byRole Link `named` "Home") "Enter"
-            assertAllObserved do
-              currentUrl `shouldEqual` spacesUrl
-              textContent (css "title") `shouldEqual` "web-api: Spaces"
-              textContent routeStatus `shouldEqual` "web-api: Spaces"
-              isFocused mainContent `satisfies` id
-              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+            it "keeps delayed-runtime and scripts-disabled keyboard navigation native, including the skip link" $ \(browser, server) -> do
+              let baseUrl = HarchWeb.localServerBaseUrl server
+                  secondUrl = baseUrl <> "/second"
+                  spacesUrl = baseUrl <> "/spaces"
+                  mainContent = css "#app-main"
+              runBrowserSpec browser do
+                blockRequestsMatching "**/assets/navigation.js"
+                visit secondUrl
+                press (byRole Link `named` "Spaces") "Enter"
+                assertAllObserved do
+                  currentUrl `shouldEqual` spacesUrl
+                  textContent (byRole Status) `shouldEqual` ""
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
+                releaseRequestsMatching "**/assets/navigation.js"
+                visitWithoutScripts secondUrl
+                press (css "body") "Tab"
+                assertAllObserved do
+                  isFocused (byRole Link `named` "Skip to main content") `satisfies` id
+                press (byRole Link `named` "Skip to main content") "Enter"
+                assertAllObserved do
+                  isFocused mainContent `satisfies` id
+                press (byRole Link `named` "Spaces") "Enter"
+                assertAllObserved do
+                  currentUrl `shouldEqual` spacesUrl
+                  textContent (byRole Heading) `shouldEqual` "Site under construction"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
 
-    it "keeps only the newest overlapping enhanced navigation lifecycle" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (challengedBrowserApp appConfig) $ \server -> do
-          let baseUrl = HarchWeb.localServerBaseUrl server
-              spacesUrl = baseUrl <> "/spaces"
-              loginUrl = baseUrl <> "/login"
-              routeStatus = css "[data-navigation-route-status]"
-          runBrowserSpec browser do
-            visit spacesUrl
-            blockRequestsMatching "**/second"
-            _ <-
-              runPageScript
-                "const status = document.querySelector('[data-navigation-route-status]'); let count = 0; status.dataset.testMutationCount = '0'; new MutationObserver((records) => { count += records.filter((record) => record.type === 'childList' || record.type === 'characterData').length; status.dataset.testMutationCount = String(count); }).observe(status, { childList: true, characterData: true, subtree: true }); true"
-            press (byRole Link `named` "Second") "Enter"
-            waitForBlockedRequestsMatching "**/second"
-            press (byRole Link `named` "Profile") "Enter"
-            releaseRequestsMatching "**/second"
-            assertAllObserved do
-              currentUrl `shouldEqual` loginUrl
-              textContent (byRole Heading) `shouldEqual` "Sign in"
-              textContent routeStatus `shouldEqual` "web-api: Sign in"
-              attributeValue routeStatus "data-test-mutation-count" `shouldEqual` Just "1"
-              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 2, hardNavigationCount = 0}|])
-              isFocused (css "#app-main") `satisfies` id
+            it "accepts pasted and autofill-compatible login values, clears secrets, and keeps focus visible when narrow and zoomed" $ \(browser, server) -> do
+              let loginUrl = HarchWeb.localServerBaseUrl server <> "/login"
+                  identifierField = byLabel "Email address or username"
+                  passwordField = byLabel "Password"
+                  proofField = byLabel "Verification method"
+                  authenticatorField = byLabel "Authenticator code"
+                  recoveryField = byLabel "Recovery code"
+              runBrowserSpec browser do
+                setViewportSize 320 480
+                visit loginUrl
+                _ <-
+                  runPageScript
+                    "const field = document.querySelector('#login-identifier'); field.value = 'not an identifier!'; field.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'not an identifier!' })); true"
+                paste passwordField "short"
+                paste authenticatorField "1"
+                press identifierField "Tab"
+                assertAllObserved do
+                  isFocused passwordField `satisfies` id
+                press passwordField "Tab"
+                assertAllObserved do
+                  isFocused proofField `satisfies` id
+                press proofField "Tab"
+                assertAllObserved do
+                  isFocused authenticatorField `satisfies` id
+                click (byRole Button `named` "Sign in")
+                assertAllObserved do
+                  isFocused (css "#login-error-summary") `satisfies` id
+                  inputValue identifierField `shouldEqual` "not an identifier!"
+                  inputValue passwordField `shouldEqual` ""
+                  inputValue authenticatorField `shouldEqual` ""
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                _ <-
+                  runPageScript
+                    "const proof = document.querySelector('#login-proof'); proof.value = 'recovery'; proof.dispatchEvent(new Event('change', { bubbles: true })); const identifier = document.querySelector('#login-identifier'); identifier.value = 'person@example.test'; identifier.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'person@example.test' })); document.documentElement.style.zoom = '2'; true"
+                paste passwordField "correct horse battery staple"
+                paste recoveryField "pasted-recovery"
+                _ <-
+                  runPageScript
+                    "const field = document.querySelector('#login-recovery-code'); field.focus(); field.scrollIntoView({ block: 'nearest' }); const box = field.getBoundingClientRect(); field.dataset.testFocusVisible = String(field === document.activeElement && box.top >= 0 && box.bottom <= window.innerHeight); field.dataset.testFocusVisible"
+                assertAllObserved do
+                  attributeValue recoveryField "data-test-focus-visible" `shouldEqual` Just "true"
+                click (byRole Button `named` "Sign in")
+                assertAllObserved do
+                  inputValue identifierField `shouldEqual` "person@example.test"
+                  inputValue passwordField `shouldEqual` ""
+                  inputValue authenticatorField `shouldEqual` ""
+                  inputValue recoveryField `shouldEqual` ""
 
-    it "falls back natively for failed, incompatible, and unsafe final responses without announcing success" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
-          let baseUrl = HarchWeb.localServerBaseUrl server
-              secondUrl = baseUrl <> "/second"
-              spacesUrl = baseUrl <> "/spaces"
-              routeStatus = byRole Status
-              assertNativeFallback = assertAllObserved do
-                currentUrl `shouldEqual` secondUrl
-                textContent (byRole Heading) `shouldEqual` "Second"
-                textContent routeStatus `shouldEqual` ""
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
-          runBrowserSpec browser do
-            visit spacesUrl
-            blockRequestsMatching "**/second"
-            press (byRole Link `named` "Second") "Enter"
-            failBlockedRequestsMatching "**/second"
-            assertNativeFallback
-            visit spacesUrl
-            _ <-
-              runPageScript
-                "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: response.url, text: async () => '<!DOCTYPE html><html><head><title>Incompatible</title></head><body><main>Missing lifecycle markers</main></body></html>' }; }; true"
-            press (byRole Link `named` "Second") "Enter"
-            assertNativeFallback
-            visit spacesUrl
-            _ <-
-              runPageScript
-                "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: 'https://outside.example/redirect', text: () => response.text() }; }; true"
-            press (byRole Link `named` "Second") "Enter"
-            assertNativeFallback
-            visit spacesUrl
-            _ <-
-              runPageScript
-                "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: '://malformed', text: () => response.text() }; }; true"
-            press (byRole Link `named` "Second") "Enter"
-            assertNativeFallback
+            it "keeps client-only authentication forms semantically complete without scripts" $ \(browser, server) -> do
+              let baseUrl = HarchWeb.localServerBaseUrl server
+              runBrowserSpec browser do
+                visitWithoutScripts (baseUrl <> "/register")
+                assertAllObserved do
+                  attributeValue (css "#registration-region form") "method" `shouldEqual` Just "dialog"
+                  inputValue (byLabel "Password") `shouldEqual` ""
+                press (byLabel "Username") "Tab"
+                assertAllObserved do
+                  isFocused (byLabel "Email address") `satisfies` id
+                press (byLabel "Email address") "Tab"
+                assertAllObserved do
+                  isFocused (byLabel "Display name (optional)") `satisfies` id
+                press (byLabel "Display name (optional)") "Tab"
+                assertAllObserved do
+                  isFocused (byLabel "Password") `satisfies` id
+                visitWithoutScripts (baseUrl <> "/login")
+                assertAllObserved do
+                  attributeValue (css "#login-region form") "method" `shouldEqual` Just "dialog"
+                  textContent (byText "Choose Authenticator code above, then enter or paste its six-digit code.") `shouldEqual` "Choose Authenticator code above, then enter or paste its six-digit code."
+                visitWithoutScripts (baseUrl <> "/verify?token=delivered-token")
+                assertAllObserved do
+                  attributeValue (css "#verification-region form") "method" `shouldEqual` Just "dialog"
+                  inputValue (byLabel "Verification token") `shouldEqual` "delivered-token"
+                press (byLabel "Verification token") "Tab"
+                assertAllObserved do
+                  isFocused (byRole Button `named` "Verify email") `satisfies` id
+                visitWithoutScripts (baseUrl <> "/mfa")
+                assertAllObserved do
+                  attributeValue (css "#mfa-enrollment-region form") "method" `shouldEqual` Just "dialog"
+                  textContent (byRole Button `named` "Start authenticator enrollment") `shouldEqual` "Start authenticator enrollment"
 
-    it "keeps delayed-runtime and scripts-disabled keyboard navigation native, including the skip link" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
-          let baseUrl = HarchWeb.localServerBaseUrl server
-              secondUrl = baseUrl <> "/second"
-              spacesUrl = baseUrl <> "/spaces"
-              mainContent = css "#app-main"
-          runBrowserSpec browser do
-            blockRequestsMatching "**/assets/navigation.js"
-            visit secondUrl
-            press (byRole Link `named` "Spaces") "Enter"
-            assertAllObserved do
-              currentUrl `shouldEqual` spacesUrl
-              textContent (byRole Status) `shouldEqual` ""
-              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
-            releaseRequestsMatching "**/assets/navigation.js"
-            visitWithoutScripts secondUrl
-            press (css "body") "Tab"
-            assertAllObserved do
-              isFocused (byRole Link `named` "Skip to main content") `satisfies` id
-            press (byRole Link `named` "Skip to main content") "Enter"
-            assertAllObserved do
-              isFocused mainContent `satisfies` id
-            press (byRole Link `named` "Spaces") "Enter"
-            assertAllObserved do
-              currentUrl `shouldEqual` spacesUrl
-              textContent (byRole Heading) `shouldEqual` "Site under construction"
-              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
+      aroundAllWith (withBrowserServer challengedBrowserApp) $
+        parallel $
+          describe "profile authentication challenges" $ do
+            it "serves the app-home profile landing through SSR and enhanced navigation" $ \(browser, server) -> do
+              let secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
+                  loginUrl = HarchWeb.localServerBaseUrl server <> "/login"
+                  profileUrl = HarchWeb.localServerBaseUrl server <> "/profile"
+                  spanishProfileUrl = HarchWeb.localServerBaseUrl server <> "/es/profile"
+              runBrowserSpec browser do
+                visit secondUrl
+                _ <-
+                  runPageScript
+                    "const link = document.querySelector('nav a'); link.focus(); const style = getComputedStyle(link); link.dataset.testFocusVisibleStyle = String(link.matches(':focus-visible') && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0); true"
+                assertAllObserved do
+                  attributeValue (byRole Link `named` "Home") "data-test-focus-visible-style" `shouldEqual` Just "true"
+                click (byRole Link `named` "Profile")
+                assertAllObserved do
+                  currentUrl `shouldEqual` loginUrl
+                  textContent (byRole Heading) `shouldEqual` "Sign in"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                visitWithoutScripts profileUrl
+                assertAllObserved do
+                  textContent (byRole Heading) `shouldEqual` "Sign in"
+                visitWithoutScripts spanishProfileUrl
+                assertAllObserved do
+                  textContent (byRole Heading) `shouldEqual` "Iniciar sesion"
 
-    it "preserves Spanish registration input until the delayed runtime sends its localized patch" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultPageRepository localizedRegistrationWorkflow) $ \server -> do
-          let registrationUrl = HarchWeb.localServerBaseUrl server <> "/es/register"
-              usernameField = byLabel "Nombre de usuario"
-              emailField = byLabel "Direccion de correo"
-              passwordField = byLabel "Contrasena"
-          runBrowserSpec browser do
-            blockRequestsMatching "**/assets/navigation.js"
-            visit registrationUrl
-            assertAllObserved do
-              textContent (byRole Heading) `shouldEqual` "Crea tu cuenta"
-            fill usernameField "person_01"
-            _ <-
-              runPageScript
-                "const field = document.querySelector('#registration-email'); field.value = 'person@example.test'; field.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'person@example.test' })); true"
-            paste passwordField "correct horse battery staple"
-            click (byRole Button `named` "Crear cuenta")
-            assertAllObserved do
-              currentUrl `shouldEqual` registrationUrl
-              inputValue usernameField `shouldEqual` "person_01"
-              inputValue emailField `shouldEqual` "person@example.test"
-              inputValue passwordField `shouldEqual` "correct horse battery staple"
-              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 0}|])
-            releaseRequestsMatching "**/assets/navigation.js"
-            assertAllObserved do
-              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {mutationRequestCount = 1}|])
-              textContent (byText "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") `shouldEqual` "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion."
-              inputValue passwordField `shouldEqual` ""
+            it "keeps language selection and dialog startup failure complete without enhanced behavior" $ \(browser, server) -> do
+              let baseUrl = HarchWeb.localServerBaseUrl server
+                  secondUrl = baseUrl <> "/second"
+                  languageUrl = baseUrl <> "/language"
+                  spanishLanguageUrl = baseUrl <> "/es/language"
+              runBrowserSpec browser do
+                blockRequestsMatching "**/assets/dialog.js"
+                visit secondUrl
+                click (byRole Link `named` "Language")
+                failBlockedRequestsMatching "**/assets/dialog.js"
+                assertAllObserved do
+                  currentUrl `shouldEqual` languageUrl
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 1}|])
+                visitWithoutScripts secondUrl
+                press (byRole Link `named` "Language") "Enter"
+                assertAllObserved do
+                  currentUrl `shouldEqual` languageUrl
+                  textContent (byRole Heading) `shouldEqual` "Choose a language"
+                press (byRole Link `named` "Spanish") "Enter"
+                assertAllObserved do
+                  currentUrl `shouldEqual` spanishLanguageUrl
+                  textContent (byRole Heading) `shouldEqual` "Elige un idioma"
 
-    it "accepts pasted and autofill-compatible login values, clears secrets, and keeps focus visible when narrow and zoomed" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
-          let loginUrl = HarchWeb.localServerBaseUrl server <> "/login"
-              identifierField = byLabel "Email address or username"
-              passwordField = byLabel "Password"
-              proofField = byLabel "Verification method"
-              authenticatorField = byLabel "Authenticator code"
-              recoveryField = byLabel "Recovery code"
-          runBrowserSpec browser do
-            setViewportSize 320 480
-            visit loginUrl
-            _ <-
-              runPageScript
-                "const field = document.querySelector('#login-identifier'); field.value = 'not an identifier!'; field.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'not an identifier!' })); true"
-            paste passwordField "short"
-            paste authenticatorField "1"
-            press identifierField "Tab"
-            assertAllObserved do
-              isFocused passwordField `satisfies` id
-            press passwordField "Tab"
-            assertAllObserved do
-              isFocused proofField `satisfies` id
-            press proofField "Tab"
-            assertAllObserved do
-              isFocused authenticatorField `satisfies` id
-            click (byRole Button `named` "Sign in")
-            assertAllObserved do
-              isFocused (css "#login-error-summary") `satisfies` id
-              inputValue identifierField `shouldEqual` "not an identifier!"
-              inputValue passwordField `shouldEqual` ""
-              inputValue authenticatorField `shouldEqual` ""
-              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
-            _ <-
-              runPageScript
-                "const proof = document.querySelector('#login-proof'); proof.value = 'recovery'; proof.dispatchEvent(new Event('change', { bubbles: true })); const identifier = document.querySelector('#login-identifier'); identifier.value = 'person@example.test'; identifier.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'person@example.test' })); document.documentElement.style.zoom = '2'; true"
-            paste passwordField "correct horse battery staple"
-            paste recoveryField "pasted-recovery"
-            _ <-
-              runPageScript
-                "const field = document.querySelector('#login-recovery-code'); field.focus(); field.scrollIntoView({ block: 'nearest' }); const box = field.getBoundingClientRect(); field.dataset.testFocusVisible = String(field === document.activeElement && box.top >= 0 && box.bottom <= window.innerHeight); field.dataset.testFocusVisible"
-            assertAllObserved do
-              attributeValue recoveryField "data-test-focus-visible" `shouldEqual` Just "true"
-            click (byRole Button `named` "Sign in")
-            assertAllObserved do
-              inputValue identifierField `shouldEqual` "person@example.test"
-              inputValue passwordField `shouldEqual` ""
-              inputValue authenticatorField `shouldEqual` ""
-              inputValue recoveryField `shouldEqual` ""
+            it "keeps only the newest overlapping enhanced navigation lifecycle" $ \(browser, server) -> do
+              let baseUrl = HarchWeb.localServerBaseUrl server
+                  spacesUrl = baseUrl <> "/spaces"
+                  loginUrl = baseUrl <> "/login"
+                  routeStatus = css "[data-navigation-route-status]"
+              runBrowserSpec browser do
+                visit spacesUrl
+                blockRequestsMatching "**/second"
+                _ <-
+                  runPageScript
+                    "const status = document.querySelector('[data-navigation-route-status]'); let count = 0; status.dataset.testMutationCount = '0'; new MutationObserver((records) => { count += records.filter((record) => record.type === 'childList' || record.type === 'characterData').length; status.dataset.testMutationCount = String(count); }).observe(status, { childList: true, characterData: true, subtree: true }); true"
+                press (byRole Link `named` "Second") "Enter"
+                waitForBlockedRequestsMatching "**/second"
+                press (byRole Link `named` "Profile") "Enter"
+                releaseRequestsMatching "**/second"
+                assertAllObserved do
+                  currentUrl `shouldEqual` loginUrl
+                  textContent (byRole Heading) `shouldEqual` "Sign in"
+                  textContent routeStatus `shouldEqual` "web-api: Sign in"
+                  attributeValue routeStatus "data-test-mutation-count" `shouldEqual` Just "1"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 2, hardNavigationCount = 0}|])
+                  isFocused (css "#app-main") `satisfies` id
 
-    it "keeps client-only authentication forms semantically complete without scripts" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
-          let baseUrl = HarchWeb.localServerBaseUrl server
-          runBrowserSpec browser do
-            visitWithoutScripts (baseUrl <> "/register")
-            assertAllObserved do
-              attributeValue (css "#registration-region form") "method" `shouldEqual` Just "dialog"
-              inputValue (byLabel "Password") `shouldEqual` ""
-            press (byLabel "Username") "Tab"
-            assertAllObserved do
-              isFocused (byLabel "Email address") `satisfies` id
-            press (byLabel "Email address") "Tab"
-            assertAllObserved do
-              isFocused (byLabel "Display name (optional)") `satisfies` id
-            press (byLabel "Display name (optional)") "Tab"
-            assertAllObserved do
-              isFocused (byLabel "Password") `satisfies` id
-            visitWithoutScripts (baseUrl <> "/login")
-            assertAllObserved do
-              attributeValue (css "#login-region form") "method" `shouldEqual` Just "dialog"
-              textContent (byText "Choose Authenticator code above, then enter or paste its six-digit code.") `shouldEqual` "Choose Authenticator code above, then enter or paste its six-digit code."
-            visitWithoutScripts (baseUrl <> "/verify?token=delivered-token")
-            assertAllObserved do
-              attributeValue (css "#verification-region form") "method" `shouldEqual` Just "dialog"
-              inputValue (byLabel "Verification token") `shouldEqual` "delivered-token"
-            press (byLabel "Verification token") "Tab"
-            assertAllObserved do
-              isFocused (byRole Button `named` "Verify email") `satisfies` id
-            visitWithoutScripts (baseUrl <> "/mfa")
-            assertAllObserved do
-              attributeValue (css "#mfa-enrollment-region form") "method" `shouldEqual` Just "dialog"
-              textContent (byRole Button `named` "Start authenticator enrollment") `shouldEqual` "Start authenticator enrollment"
+      aroundAllWith (withBrowserServer (\config -> buildAppWithDatabaseAndAccountWorkflow config defaultPageRepository localizedRegistrationWorkflow)) $
+        parallel $
+          describe "localized registration" $ do
+            it "preserves Spanish registration input until the delayed runtime sends its localized patch" $ \(browser, server) -> do
+              let registrationUrl = HarchWeb.localServerBaseUrl server <> "/es/register"
+                  usernameField = byLabel "Nombre de usuario"
+                  emailField = byLabel "Direccion de correo"
+                  passwordField = byLabel "Contrasena"
+              runBrowserSpec browser do
+                blockRequestsMatching "**/assets/navigation.js"
+                visit registrationUrl
+                assertAllObserved do
+                  textContent (byRole Heading) `shouldEqual` "Crea tu cuenta"
+                fill usernameField "person_01"
+                _ <-
+                  runPageScript
+                    "const field = document.querySelector('#registration-email'); field.value = 'person@example.test'; field.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'person@example.test' })); true"
+                paste passwordField "correct horse battery staple"
+                click (byRole Button `named` "Crear cuenta")
+                assertAllObserved do
+                  currentUrl `shouldEqual` registrationUrl
+                  inputValue usernameField `shouldEqual` "person_01"
+                  inputValue emailField `shouldEqual` "person@example.test"
+                  inputValue passwordField `shouldEqual` "correct horse battery staple"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 0}|])
+                releaseRequestsMatching "**/assets/navigation.js"
+                assertAllObserved do
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {mutationRequestCount = 1}|])
+                  textContent (byText "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") `shouldEqual` "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion."
+                  inputValue passwordField `shouldEqual` ""
 
-    it "keeps MFA confirmation keyboard- and paste-usable after its server patch" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultPageRepository mfaEnrollmentBrowserWorkflow) $ \server -> do
-          let mfaUrl = HarchWeb.localServerBaseUrl server <> "/mfa"
-              codeField = byLabel "Authenticator code"
-          runBrowserSpec browser do
-            setCookie mfaUrl mfaEnrollmentCookieName sessionToken
-            visit mfaUrl
-            csrfToken <- documentCsrfToken
-            setCookie mfaUrl "__Host-harch-csrf" csrfToken
-            click (byRole Button `named` "Start authenticator enrollment")
-            assertAllObserved do
-              isFocused codeField `satisfies` id
-            press codeField "Tab"
-            assertAllObserved do
-              isFocused (byRole Button `named` "Confirm authenticator") `satisfies` id
-            paste codeField "123"
-            click (byRole Button `named` "Confirm authenticator")
-            assertAllObserved do
-              inputValue codeField `shouldEqual` ""
-              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
-              isFocused codeField `satisfies` id
+            it "focuses a multi-error registration summary and follows its field link by keyboard" $ \(browser, server) -> do
+              let registrationUrl = HarchWeb.localServerBaseUrl server <> "/register"
+                  oversizedEmail = Text.replicate 245 "a" <> "@example.test"
+                  usernameField = byLabel "Username"
+                  emailField = byLabel "Email address"
+                  passwordField = byLabel "Password"
+                  usernameErrorLink = byRole Link `named` "Use a username with 3 to 20 letters, numbers, underscores, or hyphens."
+              runBrowserSpec browser do
+                visit registrationUrl
+                fill usernameField "no!"
+                fill emailField oversizedEmail
+                fill passwordField "correct horse battery staple"
+                click (byRole Button `named` "Create account")
+                assertAllObserved do
+                  isFocused (css "#registration-error-summary") `satisfies` id
+                  textContent (byRole Heading `named` "Fix the following problems") `shouldEqual` "Fix the following problems"
+                  inputValue usernameField `shouldEqual` "no!"
+                  inputValue emailField `shouldEqual` oversizedEmail
+                  inputValue passwordField `shouldEqual` ""
+                  attributeValue passwordField "aria-describedby" `shouldEqual` Just "registration-password-hint"
+                press usernameErrorLink "Enter"
+                assertAllObserved do
+                  isFocused usernameField `satisfies` id
 
-    it "focuses a multi-error registration summary and follows its field link by keyboard" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultPageRepository localizedRegistrationWorkflow) $ \server -> do
-          let registrationUrl = HarchWeb.localServerBaseUrl server <> "/register"
-              oversizedEmail = Text.replicate 245 "a" <> "@example.test"
-              usernameField = byLabel "Username"
-              emailField = byLabel "Email address"
-              passwordField = byLabel "Password"
-              usernameErrorLink = byRole Link `named` "Use a username with 3 to 20 letters, numbers, underscores, or hyphens."
-          runBrowserSpec browser do
-            visit registrationUrl
-            fill usernameField "no!"
-            fill emailField oversizedEmail
-            fill passwordField "correct horse battery staple"
-            click (byRole Button `named` "Create account")
-            assertAllObserved do
-              isFocused (css "#registration-error-summary") `satisfies` id
-              textContent (byRole Heading `named` "Fix the following problems") `shouldEqual` "Fix the following problems"
-              inputValue usernameField `shouldEqual` "no!"
-              inputValue emailField `shouldEqual` oversizedEmail
-              inputValue passwordField `shouldEqual` ""
-              attributeValue passwordField "aria-describedby" `shouldEqual` Just "registration-password-hint"
-            press usernameErrorLink "Enter"
-            assertAllObserved do
-              isFocused usernameField `satisfies` id
-
-    it "resends a pending-profile verification email through the immediate capture path" $
-      withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository pendingProfileWorkflow pendingProfileE2eSecurity) $ \server -> do
-          let profileUrl = HarchWeb.localServerBaseUrl server <> "/profile"
-          runBrowserSpec browser do
-            setCookie profileUrl sessionCookieName sessionToken
-            visit profileUrl
-            csrfToken <- documentCsrfToken
-            setCookie profileUrl "__Host-harch-csrf" csrfToken
-            assertAllObserved do
-              textContent (byRole Heading) `shouldEqual` "Profile"
-              textContent (byText "person@example.test") `shouldEqual` "person@example.test"
-            click (byRole Button `named` "Resend verification email")
-            assertAllObserved do
-              textContent (byText "Check your inbox for a verification link.") `shouldEqual` "Check your inbox for a verification link."
-              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {mutationRequestCount = 1}|])
-
-    it "does not retain a CSRF-rejected action in the durable account fixture" $
-      withTestAccountJwtFixture $ \environmentConfig _ -> do
-        runtime <- requiredAccountJwtRuntime environmentConfig
-        initialNow <- Time.currentUnixTimeNanoseconds
-        initialSessionId <- Session.generateSessionId
-        let initialSession = Session.OpaqueSession initialSessionId pendingProfileAccountId initialNow (initialNow + 86400000000000)
-            issuer = accountJwtIssuerFromRuntime runtime
-        initialJwt <- issueInitialSessionJwt issuer initialSession
-        sessionsReference <- newIORef [initialSession]
-        profileLoadsReference <- newIORef (0 :: Int)
-        deliveryCountReference <- newIORef (0 :: Int)
-        workflow <- reauthenticationProfileWorkflow ReauthenticationKeepsSessions permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
-        let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
-        withBrowserApp $ \browser appConfig ->
-          HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
-            let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
-                reauthenticationDialog = css "#reauthentication-dialog"
+      aroundWith (withBrowserServer (\config -> buildAppWithDatabaseAndAccountWorkflow config defaultPageRepository mfaEnrollmentBrowserWorkflow)) $
+        describe "MFA enrollment" $ do
+          it "keeps MFA confirmation keyboard- and paste-usable after its server patch" $ \(browser, server) -> do
+            let mfaUrl = HarchWeb.localServerBaseUrl server <> "/mfa"
+                codeField = byLabel "Authenticator code"
             runBrowserSpec browser do
-              setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+              setCookie mfaUrl mfaEnrollmentCookieName sessionToken
+              visit mfaUrl
+              csrfToken <- documentCsrfToken
+              setCookie mfaUrl "__Host-harch-csrf" csrfToken
+              click (byRole Button `named` "Start authenticator enrollment")
+              assertAllObserved do
+                isFocused codeField `satisfies` id
+              press codeField "Tab"
+              assertAllObserved do
+                isFocused (byRole Button `named` "Confirm authenticator") `satisfies` id
+              paste codeField "123"
+              click (byRole Button `named` "Confirm authenticator")
+              assertAllObserved do
+                inputValue codeField `shouldEqual` ""
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+                isFocused codeField `satisfies` id
+
+      aroundWith (withBrowserServer (\config -> buildAppWithDatabaseAndAccountWorkflowAndSecurity config defaultPageRepository pendingProfileWorkflow pendingProfileE2eSecurity)) $
+        describe "pending profile" $ do
+          it "resends a pending-profile verification email through the immediate capture path" $ \(browser, server) -> do
+            let profileUrl = HarchWeb.localServerBaseUrl server <> "/profile"
+            runBrowserSpec browser do
+              setCookie profileUrl sessionCookieName sessionToken
               visit profileUrl
-              _ <- runPageScript "document.body.dataset.harchCsrfToken = 'not-the-rendered-page-token'"
+              csrfToken <- documentCsrfToken
+              setCookie profileUrl "__Host-harch-csrf" csrfToken
+              assertAllObserved do
+                textContent (byRole Heading) `shouldEqual` "Profile"
+                textContent (byText "person@example.test") `shouldEqual` "person@example.test"
               click (byRole Button `named` "Resend verification email")
               assertAllObserved do
-                attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
-                textContent (css "[data-profile-resend] [data-harch-action-status]") `shouldEqual` "This action needs your attention."
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
-        readIORef profileLoadsReference `shouldReturn` 1
-        readIORef deliveryCountReference `shouldReturn` 0
-
-    it "does not retain an expired-session logout action" $
-      withTestAccountJwtFixture $ \environmentConfig _ -> do
-        runtime <- requiredAccountJwtRuntime environmentConfig
-        initialNow <- Time.currentUnixTimeNanoseconds
-        initialSessionId <- Session.generateSessionId
-        let initialSession = Session.OpaqueSession initialSessionId pendingProfileAccountId initialNow (initialNow + 86400000000000)
-            issuer = accountJwtIssuerFromRuntime runtime
-        initialJwt <- issueInitialSessionJwt issuer initialSession
-        sessionsReference <- newIORef [initialSession]
-        profileLoadsReference <- newIORef (0 :: Int)
-        deliveryCountReference <- newIORef (0 :: Int)
-        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresAfterInitialSessionLookup permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
-        let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
-        withBrowserApp $ \browser appConfig ->
-          HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
-            let logoutUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/logout"
-                logoutSubmit = byRole Button `named` "Sign out"
-            runBrowserSpec browser do
-              setCookie logoutUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
-              visit logoutUrl
-              click logoutSubmit
-              assertAllObserved do
-                textContent (css "#logout-region [data-harch-action-status]") `shouldEqual` "This action needs your attention."
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
-        readIORef sessionsReference `shouldReturn` [initialSession {Session.sessionExpiresAtNanoseconds = initialNow}]
-
-    it "expires a retained profile action without leaving the reauthentication dialog open" $
-      withTestAccountJwtFixture $ \environmentConfig _ -> do
-        runtime <- requiredAccountJwtRuntime environmentConfig
-        initialNow <- Time.currentUnixTimeNanoseconds
-        initialSessionId <- Session.generateSessionId
-        let initialSession = Session.OpaqueSession initialSessionId pendingProfileAccountId initialNow (initialNow + 86400000000000)
-            issuer = accountJwtIssuerFromRuntime runtime
-        initialJwt <- issueInitialSessionJwt issuer initialSession
-        sessionsReference <- newIORef [initialSession]
-        profileLoadsReference <- newIORef (0 :: Int)
-        deliveryCountReference <- newIORef (0 :: Int)
-        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
-        let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
-        withBrowserApp $ \browser appConfig ->
-          HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
-            let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
-                profileSubmit = byRole Button `named` "Resend verification email"
-                reauthenticationDialog = css "#reauthentication-dialog"
-            runBrowserSpec browser do
-              setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
-              visit profileUrl
-              _ <- runPageScript "document.querySelector('[data-profile-resend] form').dataset.harchActionRetentionMs = '1000'"
-              click profileSubmit
-              assertAllObserved do
-                attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
-              _ <- runPageScript "new Promise((resolve) => window.setTimeout(resolve, 1100))"
-              assertAllObserved do
-                attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
-                textContent (css "[data-profile-resend] [data-harch-action-status]") `shouldEqual` "This action needs your attention."
-                isFocused profileSubmit `satisfies` id
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
-              click profileSubmit
-              assertAllObserved do
-                attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
-              press reauthenticationDialog "Escape"
-              assertAllObserved do
-                attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
-                isFocused profileSubmit `satisfies` id
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
-        readIORef deliveryCountReference `shouldReturn` 0
-
-    it "discards a retained profile action when enhanced navigation starts" $
-      withTestAccountJwtFixture $ \environmentConfig _ -> do
-        runtime <- requiredAccountJwtRuntime environmentConfig
-        initialNow <- Time.currentUnixTimeNanoseconds
-        initialSessionId <- Session.generateSessionId
-        let initialSession = Session.OpaqueSession initialSessionId pendingProfileAccountId initialNow (initialNow + 86400000000000)
-            issuer = accountJwtIssuerFromRuntime runtime
-        initialJwt <- issueInitialSessionJwt issuer initialSession
-        sessionsReference <- newIORef [initialSession]
-        profileLoadsReference <- newIORef (0 :: Int)
-        deliveryCountReference <- newIORef (0 :: Int)
-        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
-        let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
-        withBrowserApp $ \browser appConfig ->
-          HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
-            let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
-                spacesUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/spaces"
-                reauthenticationDialog = css "#reauthentication-dialog"
-            runBrowserSpec browser do
-              setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
-              visit profileUrl
-              click (byRole Button `named` "Resend verification email")
-              assertAllObserved do
-                attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
-              _ <- runPageScript "Array.from(document.querySelectorAll('nav a')).find((link) => link.textContent === 'Home')?.click(); true"
-              assertAllObserved do
-                currentUrl `shouldEqual` spacesUrl
-                textContent (byRole Heading) `shouldEqual` "Site under construction"
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 1}|])
-        readIORef deliveryCountReference `shouldReturn` 0
-
-    it "recovers one retained profile action after its signed durable session expires" $
-      withTestAccountJwtFixture $ \environmentConfig _ -> do
-        runtime <- requiredAccountJwtRuntime environmentConfig
-        initialNow <- Time.currentUnixTimeNanoseconds
-        initialSessionId <- Session.generateSessionId
-        let initialSession =
-              Session.OpaqueSession
-                { Session.sessionId = initialSessionId,
-                  Session.sessionPrincipal = pendingProfileAccountId,
-                  Session.sessionIssuedAtNanoseconds = initialNow,
-                  Session.sessionExpiresAtNanoseconds = initialNow + 86400000000000
-                }
-            expiredInitialSession = initialSession {Session.sessionExpiresAtNanoseconds = initialNow}
-            issuer = accountJwtIssuerFromRuntime runtime
-        initialJwt <- issueInitialSessionJwt issuer initialSession
-        sessionsReference <- newIORef [initialSession]
-        profileLoadsReference <- newIORef (0 :: Int)
-        deliveryCountReference <- newIORef (0 :: Int)
-        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
-        let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
-        withBrowserApp $ \browser appConfig ->
-          HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
-            let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
-                profileSubmit = byRole Button `named` "Resend verification email"
-                reauthenticationDialog = css "#reauthentication-dialog"
-                identifierField = byLabel "Email address or username"
-                passwordField = byLabel "Password"
-                authenticatorCodeField = byLabel "Authenticator code"
-                retryOriginalAction = byRole Button `named` "Retry original action"
-            runBrowserSpec browser do
-              setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
-              visit profileUrl
-              assertAllObserved do
-                textContent (byRole Heading `named` "Profile") `shouldEqual` "Profile"
-              click profileSubmit
-              assertAllObserved do
-                attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
-                inputValue identifierField `shouldEqual` ""
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
-              fill identifierField "person@example.test"
-              fill passwordField "incorrect password"
-              fill authenticatorCodeField reauthenticationTotpCode
-              click (byRole Button `named` "Sign in")
-              assertAllObserved do
-                attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
-                inputValue passwordField `shouldEqual` ""
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
-              press reauthenticationDialog "Escape"
-              assertAllObserved do
-                attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
-                isFocused profileSubmit `satisfies` id
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
-              click profileSubmit
-              assertAllObserved do
-                attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
-              fill identifierField "person@example.test"
-              fill passwordField "correct horse battery staple"
-              fill authenticatorCodeField reauthenticationTotpCode
-              click (byRole Button `named` "Sign in")
-              assertAllObserved do
-                textContent (css "[data-web-api-reauthentication-status]") `shouldEqual` "Signed in. Confirm to retry the original action."
-                attributeValue retryOriginalAction "hidden" `shouldEqual` Nothing
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
-              click retryOriginalAction
-              assertAllObserved do
                 textContent (byText "Check your inbox for a verification link.") `shouldEqual` "Check your inbox for a verification link."
-                attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 5}|])
-        deliveryCount <- readIORef deliveryCountReference
-        deliveryCount `shouldBe` 1
-        sessions <- readIORef sessionsReference
-        find ((== initialSessionId) . Session.sessionId) sessions `shouldBe` Just expiredInitialSession
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {mutationRequestCount = 1}|])
 
-    it "keeps one retained profile action available through corrected password and MFA failures" $
-      withTestAccountJwtFixture $ \environmentConfig _ -> do
-        runtime <- requiredAccountJwtRuntime environmentConfig
-        initialNow <- Time.currentUnixTimeNanoseconds
-        initialSessionId <- Session.generateSessionId
-        let initialSession =
-              Session.OpaqueSession
-                { Session.sessionId = initialSessionId,
-                  Session.sessionPrincipal = pendingProfileAccountId,
-                  Session.sessionIssuedAtNanoseconds = initialNow,
-                  Session.sessionExpiresAtNanoseconds = initialNow + 86400000000000
-                }
-            issuer = accountJwtIssuerFromRuntime runtime
-        initialJwt <- issueInitialSessionJwt issuer initialSession
-        sessionsReference <- newIORef [initialSession]
-        profileLoadsReference <- newIORef (0 :: Int)
-        deliveryCountReference <- newIORef (0 :: Int)
-        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
-        let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
-        withBrowserApp $ \browser appConfig ->
-          HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
-            let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
-                profileSubmit = byRole Button `named` "Resend verification email"
-                reauthenticationDialog = css "#reauthentication-dialog"
-                identifierField = byLabel "Email address or username"
-                passwordField = byLabel "Password"
-                authenticatorCodeField = byLabel "Authenticator code"
-                retryOriginalAction = css "[data-web-api-reauthentication-retry]"
-                loginForm = css "#login-region form"
-            runBrowserSpec browser do
-              setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
-              visit profileUrl
-              click profileSubmit
-              fill identifierField "person@example.test"
-              fill passwordField "incorrect password"
-              fill authenticatorCodeField reauthenticationTotpCode
-              click (byRole Button `named` "Sign in")
-              assertAllObserved do
-                attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
-                attributeValue loginForm "aria-busy" `shouldEqual` Nothing
-                attributeValue retryOriginalAction "hidden" `shouldEqual` Just ""
-                inputValue passwordField `shouldEqual` ""
-                inputValue authenticatorCodeField `shouldEqual` ""
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
-              fill identifierField "person@example.test"
-              fill passwordField "correct horse battery staple"
-              fill authenticatorCodeField "000000"
-              click (byRole Button `named` "Sign in")
-              assertAllObserved do
-                attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
-                attributeValue loginForm "aria-busy" `shouldEqual` Nothing
-                attributeValue retryOriginalAction "hidden" `shouldEqual` Just ""
-                inputValue passwordField `shouldEqual` ""
-                inputValue authenticatorCodeField `shouldEqual` ""
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
-              fill identifierField "person@example.test"
-              fill passwordField "correct horse battery staple"
-              fill authenticatorCodeField reauthenticationTotpCode
-              click (byRole Button `named` "Sign in")
-              assertAllObserved do
-                textContent (css "[data-web-api-reauthentication-status]") `shouldEqual` "Signed in. Confirm to retry the original action."
-                attributeValue retryOriginalAction "hidden" `shouldEqual` Nothing
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
-              click retryOriginalAction
-              assertAllObserved do
-                textContent (byText "Check your inbox for a verification link.") `shouldEqual` "Check your inbox for a verification link."
-                attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 5}|])
-        readIORef deliveryCountReference `shouldReturn` 1
+      describe "isolated reauthentication workflows" $ do
+        it "does not retain a CSRF-rejected action in the durable account fixture" $ \(browser, appConfig) ->
+          withTestAccountJwtFixture $ \environmentConfig _ -> do
+            runtime <- requiredAccountJwtRuntime environmentConfig
+            initialNow <- Time.currentUnixTimeNanoseconds
+            initialSessionId <- Session.generateSessionId
+            let initialSession = Session.OpaqueSession initialSessionId pendingProfileAccountId initialNow (initialNow + 86400000000000)
+                issuer = accountJwtIssuerFromRuntime runtime
+            initialJwt <- issueInitialSessionJwt issuer initialSession
+            sessionsReference <- newIORef [initialSession]
+            profileLoadsReference <- newIORef (0 :: Int)
+            deliveryCountReference <- newIORef (0 :: Int)
+            workflow <- reauthenticationProfileWorkflow ReauthenticationKeepsSessions permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
+            let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+            HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+              let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                  reauthenticationDialog = css "#reauthentication-dialog"
+              runBrowserSpec browser do
+                setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+                visit profileUrl
+                _ <- runPageScript "document.body.dataset.harchCsrfToken = 'not-the-rendered-page-token'"
+                click (byRole Button `named` "Resend verification email")
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
+                  textContent (css "[data-profile-resend] [data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+            readIORef profileLoadsReference `shouldReturn` 1
+            readIORef deliveryCountReference `shouldReturn` 0
 
-    it "keeps one retained profile action through a throttled login before one successful retry" $
-      withTestAccountJwtFixture $ \environmentConfig _ -> do
-        runtime <- requiredAccountJwtRuntime environmentConfig
-        initialNow <- Time.currentUnixTimeNanoseconds
-        initialSessionId <- Session.generateSessionId
-        let initialSession =
-              Session.OpaqueSession
-                { Session.sessionId = initialSessionId,
-                  Session.sessionPrincipal = pendingProfileAccountId,
-                  Session.sessionIssuedAtNanoseconds = initialNow,
-                  Session.sessionExpiresAtNanoseconds = initialNow + 86400000000000
-                }
-            issuer = accountJwtIssuerFromRuntime runtime
-            throttleFirstLoginAttemptStore attemptsReference =
-              LoginAttemptStore
-                { reserveLoginAttempt = \_ _ -> do
-                    throttled <- atomicModifyIORef' attemptsReference (\attempts -> (attempts + 1, attempts == 0))
-                    pure (Right (if throttled then LoginAttemptThrottled 123456 else LoginAttemptReserved (LoginAttemptReservation "reauthentication-login"))),
-                  settleLoginAttempt = \_ _ -> pure (Right ()),
-                  cancelLoginAttempt = \_ -> pure (Right ())
-                }
-        initialJwt <- issueInitialSessionJwt issuer initialSession
-        sessionsReference <- newIORef [initialSession]
-        profileLoadsReference <- newIORef (0 :: Int)
-        deliveryCountReference <- newIORef (0 :: Int)
-        attemptsReference <- newIORef (0 :: Int)
-        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession (throttleFirstLoginAttemptStore attemptsReference) environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
-        let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
-        withBrowserApp $ \browser appConfig ->
-          HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
-            let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
-                profileSubmit = byRole Button `named` "Resend verification email"
-                reauthenticationDialog = css "#reauthentication-dialog"
-                identifierField = byLabel "Email address or username"
-                passwordField = byLabel "Password"
-                authenticatorCodeField = byLabel "Authenticator code"
-                retryOriginalAction = css "[data-web-api-reauthentication-retry]"
-            runBrowserSpec browser do
-              setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
-              visit profileUrl
-              click profileSubmit
-              fill identifierField "person@example.test"
-              fill passwordField "correct horse battery staple"
-              fill authenticatorCodeField reauthenticationTotpCode
-              click (byRole Button `named` "Sign in")
-              assertAllObserved do
-                attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
-                attributeValue retryOriginalAction "hidden" `shouldEqual` Just ""
-                inputValue passwordField `shouldEqual` ""
-                inputValue authenticatorCodeField `shouldEqual` ""
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
-              fill identifierField "person@example.test"
-              fill passwordField "correct horse battery staple"
-              fill authenticatorCodeField reauthenticationTotpCode
-              click (byRole Button `named` "Sign in")
-              assertAllObserved do
-                textContent (css "[data-web-api-reauthentication-status]") `shouldEqual` "Signed in. Confirm to retry the original action."
-                attributeValue retryOriginalAction "hidden" `shouldEqual` Nothing
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
-              click retryOriginalAction
-              assertAllObserved do
-                textContent (byText "Check your inbox for a verification link.") `shouldEqual` "Check your inbox for a verification link."
-                attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
-        readIORef attemptsReference `shouldReturn` 3
-        readIORef deliveryCountReference `shouldReturn` 1
+        it "does not retain an expired-session logout action" $ \(browser, appConfig) ->
+          withTestAccountJwtFixture $ \environmentConfig _ -> do
+            runtime <- requiredAccountJwtRuntime environmentConfig
+            initialNow <- Time.currentUnixTimeNanoseconds
+            initialSessionId <- Session.generateSessionId
+            let initialSession = Session.OpaqueSession initialSessionId pendingProfileAccountId initialNow (initialNow + 86400000000000)
+                issuer = accountJwtIssuerFromRuntime runtime
+            initialJwt <- issueInitialSessionJwt issuer initialSession
+            sessionsReference <- newIORef [initialSession]
+            profileLoadsReference <- newIORef (0 :: Int)
+            deliveryCountReference <- newIORef (0 :: Int)
+            workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresAfterInitialSessionLookup permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
+            let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+            HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+              let logoutUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/logout"
+                  logoutSubmit = byRole Button `named` "Sign out"
+              runBrowserSpec browser do
+                setCookie logoutUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+                visit logoutUrl
+                click logoutSubmit
+                assertAllObserved do
+                  textContent (css "#logout-region [data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+            readIORef sessionsReference `shouldReturn` [initialSession {Session.sessionExpiresAtNanoseconds = initialNow}]
 
-    it "does not open a second reauthentication dialog when replay is rejected again" $
-      withTestAccountJwtFixture $ \environmentConfig _ -> do
-        runtime <- requiredAccountJwtRuntime environmentConfig
-        initialNow <- Time.currentUnixTimeNanoseconds
-        initialSessionId <- Session.generateSessionId
-        let initialSession = Session.OpaqueSession initialSessionId pendingProfileAccountId initialNow (initialNow + 86400000000000)
-            issuer = accountJwtIssuerFromRuntime runtime
-        initialJwt <- issueInitialSessionJwt issuer initialSession
-        sessionsReference <- newIORef [initialSession]
-        profileLoadsReference <- newIORef (0 :: Int)
-        deliveryCountReference <- newIORef (0 :: Int)
-        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresIssuedSessions permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
-        let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
-        withBrowserApp $ \browser appConfig ->
-          HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
-            let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
-                profileSubmit = byRole Button `named` "Resend verification email"
-                reauthenticationDialog = css "#reauthentication-dialog"
-                identifierField = byLabel "Email address or username"
-                passwordField = byLabel "Password"
-                authenticatorCodeField = byLabel "Authenticator code"
-                retryOriginalAction = byRole Button `named` "Retry original action"
-            runBrowserSpec browser do
-              setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
-              visit profileUrl
-              click profileSubmit
-              fill identifierField "person@example.test"
-              fill passwordField "correct horse battery staple"
-              fill authenticatorCodeField reauthenticationTotpCode
-              click (byRole Button `named` "Sign in")
-              assertAllObserved do
-                textContent (css "[data-web-api-reauthentication-status]") `shouldEqual` "Signed in. Confirm to retry the original action."
-              click retryOriginalAction
-              assertAllObserved do
-                attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
-                textContent (css "[data-profile-resend] [data-harch-action-status]") `shouldEqual` "This action needs your attention."
-                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
-        readIORef deliveryCountReference `shouldReturn` 0
+        it "expires a retained profile action without leaving the reauthentication dialog open" $ \(browser, appConfig) ->
+          withTestAccountJwtFixture $ \environmentConfig _ -> do
+            runtime <- requiredAccountJwtRuntime environmentConfig
+            initialNow <- Time.currentUnixTimeNanoseconds
+            initialSessionId <- Session.generateSessionId
+            let initialSession = Session.OpaqueSession initialSessionId pendingProfileAccountId initialNow (initialNow + 86400000000000)
+                issuer = accountJwtIssuerFromRuntime runtime
+            initialJwt <- issueInitialSessionJwt issuer initialSession
+            sessionsReference <- newIORef [initialSession]
+            profileLoadsReference <- newIORef (0 :: Int)
+            deliveryCountReference <- newIORef (0 :: Int)
+            workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
+            let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+            HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+              let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                  profileSubmit = byRole Button `named` "Resend verification email"
+                  reauthenticationDialog = css "#reauthentication-dialog"
+              runBrowserSpec browser do
+                setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+                visit profileUrl
+                _ <- runPageScript "document.querySelector('[data-profile-resend] form').dataset.harchActionRetentionMs = '1000'"
+                click profileSubmit
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                _ <- runPageScript "new Promise((resolve) => window.setTimeout(resolve, 1100))"
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
+                  textContent (css "[data-profile-resend] [data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  isFocused profileSubmit `satisfies` id
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                click profileSubmit
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+                press reauthenticationDialog "Escape"
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
+                  isFocused profileSubmit `satisfies` id
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+            readIORef deliveryCountReference `shouldReturn` 0
 
-withBrowserApp :: (BrowserConfig -> AppConfig -> IO a) -> IO a
-withBrowserApp action = do
-  loadedConfig <- loadPlaywrightBrowserConfig
-  browser <-
-    case loadedConfig of
-      Left loadError -> expectationFailure loadError >> fail "unreachable"
-      Right config -> pure config
-  withSystemTempDirectory "web-api-e2e-assets" $ \assetDirectory ->
-    do
-      let stylesDirectory = assetDirectory </> "styles"
-      createDirectory stylesDirectory
-      sourceStylesheet <- findSourceStylesheet
-      copyFile sourceStylesheet (stylesDirectory </> "app.css")
-      action
-        browser
-        defaultAppConfig
-          { staticAssets =
-              StaticAssetsConfig
-                { staticAssetRoots =
-                    [ StaticAssetRoot
-                        { staticUrlPrefix = "/assets",
-                          staticDirectory = assetDirectory
-                        }
-                    ],
-                  staticAssetContentTypes = defaultStaticAssetContentTypes,
-                  staticCacheControlSeconds = Nothing
-                }
-          }
+        it "discards a retained profile action when enhanced navigation starts" $ \(browser, appConfig) ->
+          withTestAccountJwtFixture $ \environmentConfig _ -> do
+            runtime <- requiredAccountJwtRuntime environmentConfig
+            initialNow <- Time.currentUnixTimeNanoseconds
+            initialSessionId <- Session.generateSessionId
+            let initialSession = Session.OpaqueSession initialSessionId pendingProfileAccountId initialNow (initialNow + 86400000000000)
+                issuer = accountJwtIssuerFromRuntime runtime
+            initialJwt <- issueInitialSessionJwt issuer initialSession
+            sessionsReference <- newIORef [initialSession]
+            profileLoadsReference <- newIORef (0 :: Int)
+            deliveryCountReference <- newIORef (0 :: Int)
+            workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
+            let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+            HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+              let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                  spacesUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/spaces"
+                  reauthenticationDialog = css "#reauthentication-dialog"
+              runBrowserSpec browser do
+                setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+                visit profileUrl
+                click (byRole Button `named` "Resend verification email")
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                _ <- runPageScript "Array.from(document.querySelectorAll('nav a')).find((link) => link.textContent === 'Home')?.click(); true"
+                assertAllObserved do
+                  currentUrl `shouldEqual` spacesUrl
+                  textContent (byRole Heading) `shouldEqual` "Site under construction"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 1}|])
+            readIORef deliveryCountReference `shouldReturn` 0
+
+        it "recovers one retained profile action after its signed durable session expires" $ \(browser, appConfig) ->
+          withTestAccountJwtFixture $ \environmentConfig _ -> do
+            runtime <- requiredAccountJwtRuntime environmentConfig
+            initialNow <- Time.currentUnixTimeNanoseconds
+            initialSessionId <- Session.generateSessionId
+            let initialSession =
+                  Session.OpaqueSession
+                    { Session.sessionId = initialSessionId,
+                      Session.sessionPrincipal = pendingProfileAccountId,
+                      Session.sessionIssuedAtNanoseconds = initialNow,
+                      Session.sessionExpiresAtNanoseconds = initialNow + 86400000000000
+                    }
+                expiredInitialSession = initialSession {Session.sessionExpiresAtNanoseconds = initialNow}
+                issuer = accountJwtIssuerFromRuntime runtime
+            initialJwt <- issueInitialSessionJwt issuer initialSession
+            sessionsReference <- newIORef [initialSession]
+            profileLoadsReference <- newIORef (0 :: Int)
+            deliveryCountReference <- newIORef (0 :: Int)
+            workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
+            let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+            HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+              let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                  profileSubmit = byRole Button `named` "Resend verification email"
+                  reauthenticationDialog = css "#reauthentication-dialog"
+                  identifierField = byLabel "Email address or username"
+                  passwordField = byLabel "Password"
+                  authenticatorCodeField = byLabel "Authenticator code"
+                  retryOriginalAction = byRole Button `named` "Retry original action"
+              runBrowserSpec browser do
+                setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+                visit profileUrl
+                assertAllObserved do
+                  textContent (byRole Heading `named` "Profile") `shouldEqual` "Profile"
+                click profileSubmit
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
+                  inputValue identifierField `shouldEqual` ""
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                fill identifierField "person@example.test"
+                fill passwordField "incorrect password"
+                fill authenticatorCodeField reauthenticationTotpCode
+                click (byRole Button `named` "Sign in")
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
+                  inputValue passwordField `shouldEqual` ""
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+                press reauthenticationDialog "Escape"
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
+                  isFocused profileSubmit `satisfies` id
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+                click profileSubmit
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
+                fill identifierField "person@example.test"
+                fill passwordField "correct horse battery staple"
+                fill authenticatorCodeField reauthenticationTotpCode
+                click (byRole Button `named` "Sign in")
+                assertAllObserved do
+                  textContent (css "[data-web-api-reauthentication-status]") `shouldEqual` "Signed in. Confirm to retry the original action."
+                  attributeValue retryOriginalAction "hidden" `shouldEqual` Nothing
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
+                click retryOriginalAction
+                assertAllObserved do
+                  textContent (byText "Check your inbox for a verification link.") `shouldEqual` "Check your inbox for a verification link."
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 5}|])
+            deliveryCount <- readIORef deliveryCountReference
+            deliveryCount `shouldBe` 1
+            sessions <- readIORef sessionsReference
+            find ((== initialSessionId) . Session.sessionId) sessions `shouldBe` Just expiredInitialSession
+
+        it "keeps one retained profile action available through corrected password and MFA failures" $ \(browser, appConfig) ->
+          withTestAccountJwtFixture $ \environmentConfig _ -> do
+            runtime <- requiredAccountJwtRuntime environmentConfig
+            initialNow <- Time.currentUnixTimeNanoseconds
+            initialSessionId <- Session.generateSessionId
+            let initialSession =
+                  Session.OpaqueSession
+                    { Session.sessionId = initialSessionId,
+                      Session.sessionPrincipal = pendingProfileAccountId,
+                      Session.sessionIssuedAtNanoseconds = initialNow,
+                      Session.sessionExpiresAtNanoseconds = initialNow + 86400000000000
+                    }
+                issuer = accountJwtIssuerFromRuntime runtime
+            initialJwt <- issueInitialSessionJwt issuer initialSession
+            sessionsReference <- newIORef [initialSession]
+            profileLoadsReference <- newIORef (0 :: Int)
+            deliveryCountReference <- newIORef (0 :: Int)
+            workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
+            let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+            HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+              let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                  profileSubmit = byRole Button `named` "Resend verification email"
+                  reauthenticationDialog = css "#reauthentication-dialog"
+                  identifierField = byLabel "Email address or username"
+                  passwordField = byLabel "Password"
+                  authenticatorCodeField = byLabel "Authenticator code"
+                  retryOriginalAction = css "[data-web-api-reauthentication-retry]"
+                  loginForm = css "#login-region form"
+              runBrowserSpec browser do
+                setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+                visit profileUrl
+                click profileSubmit
+                fill identifierField "person@example.test"
+                fill passwordField "incorrect password"
+                fill authenticatorCodeField reauthenticationTotpCode
+                click (byRole Button `named` "Sign in")
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
+                  attributeValue loginForm "aria-busy" `shouldEqual` Nothing
+                  attributeValue retryOriginalAction "hidden" `shouldEqual` Just ""
+                  inputValue passwordField `shouldEqual` ""
+                  inputValue authenticatorCodeField `shouldEqual` ""
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+                fill identifierField "person@example.test"
+                fill passwordField "correct horse battery staple"
+                fill authenticatorCodeField "000000"
+                click (byRole Button `named` "Sign in")
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
+                  attributeValue loginForm "aria-busy" `shouldEqual` Nothing
+                  attributeValue retryOriginalAction "hidden" `shouldEqual` Just ""
+                  inputValue passwordField `shouldEqual` ""
+                  inputValue authenticatorCodeField `shouldEqual` ""
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
+                fill identifierField "person@example.test"
+                fill passwordField "correct horse battery staple"
+                fill authenticatorCodeField reauthenticationTotpCode
+                click (byRole Button `named` "Sign in")
+                assertAllObserved do
+                  textContent (css "[data-web-api-reauthentication-status]") `shouldEqual` "Signed in. Confirm to retry the original action."
+                  attributeValue retryOriginalAction "hidden" `shouldEqual` Nothing
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
+                click retryOriginalAction
+                assertAllObserved do
+                  textContent (byText "Check your inbox for a verification link.") `shouldEqual` "Check your inbox for a verification link."
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 5}|])
+            readIORef deliveryCountReference `shouldReturn` 1
+
+        it "keeps one retained profile action through a throttled login before one successful retry" $ \(browser, appConfig) ->
+          withTestAccountJwtFixture $ \environmentConfig _ -> do
+            runtime <- requiredAccountJwtRuntime environmentConfig
+            initialNow <- Time.currentUnixTimeNanoseconds
+            initialSessionId <- Session.generateSessionId
+            let initialSession =
+                  Session.OpaqueSession
+                    { Session.sessionId = initialSessionId,
+                      Session.sessionPrincipal = pendingProfileAccountId,
+                      Session.sessionIssuedAtNanoseconds = initialNow,
+                      Session.sessionExpiresAtNanoseconds = initialNow + 86400000000000
+                    }
+                issuer = accountJwtIssuerFromRuntime runtime
+                throttleFirstLoginAttemptStore attemptsReference =
+                  LoginAttemptStore
+                    { reserveLoginAttempt = \_ _ -> do
+                        throttled <- atomicModifyIORef' attemptsReference (\attempts -> (attempts + 1, attempts == 0))
+                        pure (Right (if throttled then LoginAttemptThrottled 123456 else LoginAttemptReserved (LoginAttemptReservation "reauthentication-login"))),
+                      settleLoginAttempt = \_ _ -> pure (Right ()),
+                      cancelLoginAttempt = \_ -> pure (Right ())
+                    }
+            initialJwt <- issueInitialSessionJwt issuer initialSession
+            sessionsReference <- newIORef [initialSession]
+            profileLoadsReference <- newIORef (0 :: Int)
+            deliveryCountReference <- newIORef (0 :: Int)
+            attemptsReference <- newIORef (0 :: Int)
+            workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession (throttleFirstLoginAttemptStore attemptsReference) environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
+            let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+            HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+              let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                  profileSubmit = byRole Button `named` "Resend verification email"
+                  reauthenticationDialog = css "#reauthentication-dialog"
+                  identifierField = byLabel "Email address or username"
+                  passwordField = byLabel "Password"
+                  authenticatorCodeField = byLabel "Authenticator code"
+                  retryOriginalAction = css "[data-web-api-reauthentication-retry]"
+              runBrowserSpec browser do
+                setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+                visit profileUrl
+                click profileSubmit
+                fill identifierField "person@example.test"
+                fill passwordField "correct horse battery staple"
+                fill authenticatorCodeField reauthenticationTotpCode
+                click (byRole Button `named` "Sign in")
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
+                  attributeValue retryOriginalAction "hidden" `shouldEqual` Just ""
+                  inputValue passwordField `shouldEqual` ""
+                  inputValue authenticatorCodeField `shouldEqual` ""
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+                fill identifierField "person@example.test"
+                fill passwordField "correct horse battery staple"
+                fill authenticatorCodeField reauthenticationTotpCode
+                click (byRole Button `named` "Sign in")
+                assertAllObserved do
+                  textContent (css "[data-web-api-reauthentication-status]") `shouldEqual` "Signed in. Confirm to retry the original action."
+                  attributeValue retryOriginalAction "hidden" `shouldEqual` Nothing
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
+                click retryOriginalAction
+                assertAllObserved do
+                  textContent (byText "Check your inbox for a verification link.") `shouldEqual` "Check your inbox for a verification link."
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
+            readIORef attemptsReference `shouldReturn` 3
+            readIORef deliveryCountReference `shouldReturn` 1
+
+        it "does not open a second reauthentication dialog when replay is rejected again" $ \(browser, appConfig) ->
+          withTestAccountJwtFixture $ \environmentConfig _ -> do
+            runtime <- requiredAccountJwtRuntime environmentConfig
+            initialNow <- Time.currentUnixTimeNanoseconds
+            initialSessionId <- Session.generateSessionId
+            let initialSession = Session.OpaqueSession initialSessionId pendingProfileAccountId initialNow (initialNow + 86400000000000)
+                issuer = accountJwtIssuerFromRuntime runtime
+            initialJwt <- issueInitialSessionJwt issuer initialSession
+            sessionsReference <- newIORef [initialSession]
+            profileLoadsReference <- newIORef (0 :: Int)
+            deliveryCountReference <- newIORef (0 :: Int)
+            workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresIssuedSessions permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
+            let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+            HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+              let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                  profileSubmit = byRole Button `named` "Resend verification email"
+                  reauthenticationDialog = css "#reauthentication-dialog"
+                  identifierField = byLabel "Email address or username"
+                  passwordField = byLabel "Password"
+                  authenticatorCodeField = byLabel "Authenticator code"
+                  retryOriginalAction = byRole Button `named` "Retry original action"
+              runBrowserSpec browser do
+                setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+                visit profileUrl
+                click profileSubmit
+                fill identifierField "person@example.test"
+                fill passwordField "correct horse battery staple"
+                fill authenticatorCodeField reauthenticationTotpCode
+                click (byRole Button `named` "Sign in")
+                assertAllObserved do
+                  textContent (css "[data-web-api-reauthentication-status]") `shouldEqual` "Signed in. Confirm to retry the original action."
+                click retryOriginalAction
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
+                  textContent (css "[data-profile-resend] [data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
+            readIORef deliveryCountReference `shouldReturn` 0
 
 challengedBrowserApp :: AppConfig -> HarchWeb.Application AppRoute AccountAction WebApi.Route.AppRequestContext ()
 challengedBrowserApp appConfig =
@@ -1037,32 +982,6 @@ documentCsrfToken = do
 -- workspace root, or a build directory.  Locate the checked-in stylesheet
 -- relative to an ancestor rather than making the browser fixture depend on
 -- the runner's working directory.
-findSourceStylesheet :: IO FilePath
-findSourceStylesheet = getCurrentDirectory >>= searchFrom
-  where
-    searchFrom directory = do
-      let candidates =
-            [ directory </> "public/styles/app.css",
-              directory </> "packages/web-api/public/styles/app.css"
-            ]
-      existing <- firstExisting candidates
-      case existing of
-        Just stylesheet -> pure stylesheet
-        Nothing ->
-          let parent = takeDirectory directory
-           in if parent == directory
-                then ioError (userError "could not locate packages/web-api/public/styles/app.css")
-                else searchFrom parent
-
-    firstExisting paths =
-      case paths of
-        [] -> pure Nothing
-        path : remaining -> do
-          exists <- doesFileExist path
-          if exists
-            then pure (Just path)
-            else firstExisting remaining
-
 pendingProfileWorkflow :: AccountWorkflow
 pendingProfileWorkflow =
   unavailableAccountWorkflow
