@@ -620,7 +620,7 @@ spec =
         sessionsReference <- newIORef [initialSession]
         profileLoadsReference <- newIORef (0 :: Int)
         deliveryCountReference <- newIORef (0 :: Int)
-        workflow <- reauthenticationProfileWorkflow ReauthenticationKeepsSessions environmentConfig issuer sessionsReference profileLoadsReference deliveryCountReference
+        workflow <- reauthenticationProfileWorkflow ReauthenticationKeepsSessions permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
         let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
         withBrowserApp $ \browser appConfig ->
           HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
@@ -650,7 +650,7 @@ spec =
         sessionsReference <- newIORef [initialSession]
         profileLoadsReference <- newIORef (0 :: Int)
         deliveryCountReference <- newIORef (0 :: Int)
-        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession environmentConfig issuer sessionsReference profileLoadsReference deliveryCountReference
+        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
         let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
         withBrowserApp $ \browser appConfig ->
           HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
@@ -697,7 +697,7 @@ spec =
         sessionsReference <- newIORef [initialSession]
         profileLoadsReference <- newIORef (0 :: Int)
         deliveryCountReference <- newIORef (0 :: Int)
-        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession environmentConfig issuer sessionsReference profileLoadsReference deliveryCountReference
+        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
         let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
         withBrowserApp $ \browser appConfig ->
           HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
@@ -738,7 +738,7 @@ spec =
         sessionsReference <- newIORef [initialSession]
         profileLoadsReference <- newIORef (0 :: Int)
         deliveryCountReference <- newIORef (0 :: Int)
-        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession environmentConfig issuer sessionsReference profileLoadsReference deliveryCountReference
+        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
         let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
         withBrowserApp $ \browser appConfig ->
           HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
@@ -817,7 +817,7 @@ spec =
         sessionsReference <- newIORef [initialSession]
         profileLoadsReference <- newIORef (0 :: Int)
         deliveryCountReference <- newIORef (0 :: Int)
-        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession environmentConfig issuer sessionsReference profileLoadsReference deliveryCountReference
+        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
         let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
         withBrowserApp $ \browser appConfig ->
           HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
@@ -874,6 +874,76 @@ spec =
                   $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 5}|])
         readIORef deliveryCountReference `shouldReturn` 1
 
+    it "keeps one retained profile action through a throttled login before one successful retry" $
+      withTestAccountJwtFixture $ \environmentConfig _ -> do
+        runtime <- requiredAccountJwtRuntime environmentConfig
+        initialNow <- Time.currentUnixTimeNanoseconds
+        initialSessionId <- Session.generateSessionId
+        let initialSession =
+              Session.OpaqueSession
+                { Session.sessionId = initialSessionId,
+                  Session.sessionPrincipal = pendingProfileAccountId,
+                  Session.sessionIssuedAtNanoseconds = initialNow,
+                  Session.sessionExpiresAtNanoseconds = initialNow + 86400000000000
+                }
+            issuer = accountJwtIssuerFromRuntime runtime
+            throttleFirstLoginAttemptStore attemptsReference =
+              LoginAttemptStore
+                { reserveLoginAttempt = \_ _ -> do
+                    throttled <- atomicModifyIORef' attemptsReference (\attempts -> (attempts + 1, attempts == 0))
+                    pure (Right (if throttled then LoginAttemptThrottled 123456 else LoginAttemptReserved (LoginAttemptReservation "reauthentication-login"))),
+                  settleLoginAttempt = \_ _ -> pure (Right ()),
+                  cancelLoginAttempt = \_ -> pure (Right ())
+                }
+        initialJwt <- issueInitialSessionJwt issuer initialSession
+        sessionsReference <- newIORef [initialSession]
+        profileLoadsReference <- newIORef (0 :: Int)
+        deliveryCountReference <- newIORef (0 :: Int)
+        attemptsReference <- newIORef (0 :: Int)
+        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession (throttleFirstLoginAttemptStore attemptsReference) environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
+        let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+        withBrowserApp $ \browser appConfig ->
+          HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+            let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                profileSubmit = byRole Button `named` "Resend verification email"
+                reauthenticationDialog = css "#reauthentication-dialog"
+                identifierField = byLabel "Email address or username"
+                passwordField = byLabel "Password"
+                authenticatorCodeField = byLabel "Authenticator code"
+                retryOriginalAction = css "[data-web-api-reauthentication-retry]"
+            runBrowserSpec browser do
+              setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+              visit profileUrl
+              click profileSubmit
+              fill identifierField "person@example.test"
+              fill passwordField "correct horse battery staple"
+              fill authenticatorCodeField reauthenticationTotpCode
+              click (byRole Button `named` "Sign in")
+              assertAllObserved do
+                attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Just "")
+                attributeValue retryOriginalAction "hidden" `matches` (`shouldBe` Just "")
+                inputValue passwordField `matches` (`shouldBe` "")
+                inputValue authenticatorCodeField `matches` (`shouldBe` "")
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+              fill identifierField "person@example.test"
+              fill passwordField "correct horse battery staple"
+              fill authenticatorCodeField reauthenticationTotpCode
+              click (byRole Button `named` "Sign in")
+              assertAllObserved do
+                textContent (css "[data-web-api-reauthentication-status]") `matches` (`shouldBe` "Signed in. Confirm to retry the original action.")
+                attributeValue retryOriginalAction "hidden" `matches` (`shouldBe` Nothing)
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
+              click retryOriginalAction
+              assertAllObserved do
+                textContent (byText "Check your inbox for a verification link.") `matches` (`shouldBe` "Check your inbox for a verification link.")
+                attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Nothing)
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
+        readIORef attemptsReference `shouldReturn` 3
+        readIORef deliveryCountReference `shouldReturn` 1
+
     it "does not open a second reauthentication dialog when replay is rejected again" $
       withTestAccountJwtFixture $ \environmentConfig _ -> do
         runtime <- requiredAccountJwtRuntime environmentConfig
@@ -885,7 +955,7 @@ spec =
         sessionsReference <- newIORef [initialSession]
         profileLoadsReference <- newIORef (0 :: Int)
         deliveryCountReference <- newIORef (0 :: Int)
-        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresIssuedSessions environmentConfig issuer sessionsReference profileLoadsReference deliveryCountReference
+        workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresIssuedSessions permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
         let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
         withBrowserApp $ \browser appConfig ->
           HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
@@ -1073,8 +1143,26 @@ data ReauthenticationSessionExpiry
   | ReauthenticationExpiresInitialSession
   | ReauthenticationExpiresIssuedSessions
 
-reauthenticationProfileWorkflow :: ReauthenticationSessionExpiry -> AppEnvironmentConfig -> AccountJwt.AccountJwtIssuer -> IORef [Session.OpaqueSession Account.AccountId] -> IORef Int -> IORef Int -> IO AccountWorkflow
-reauthenticationProfileWorkflow sessionExpiry environmentConfig issuer sessionsReference profileLoadsReference deliveryCountReference = do
+data ReauthenticationProfileFixture = ReauthenticationProfileFixture
+  { reauthenticationProfileSessions :: IORef [Session.OpaqueSession Account.AccountId],
+    reauthenticationProfileLoads :: IORef Int,
+    reauthenticationProfileDeliveries :: IORef Int
+  }
+
+permissiveReauthenticationLoginAttemptStore :: LoginAttemptStore
+permissiveReauthenticationLoginAttemptStore =
+  LoginAttemptStore
+    { reserveLoginAttempt = \_ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation "reauthentication-login"))),
+      settleLoginAttempt = \_ _ -> pure (Right ()),
+      cancelLoginAttempt = \_ -> pure (Right ())
+    }
+
+reauthenticationProfileWorkflow :: ReauthenticationSessionExpiry -> LoginAttemptStore -> AppEnvironmentConfig -> AccountJwt.AccountJwtIssuer -> ReauthenticationProfileFixture -> IO AccountWorkflow
+reauthenticationProfileWorkflow sessionExpiry attemptStore environmentConfig issuer fixture = do
+  let sessionsReference = reauthenticationProfileSessions fixture
+      profileLoadsReference = reauthenticationProfileLoads fixture
+      deliveryCountReference = reauthenticationProfileDeliveries fixture
+
   let password = Password.mkPassword "correct horse battery staple"
       passwordHash = fromMaybe (error "expected deterministic test password hash") (Password.hashPasswordWithSalt Password.defaultPasswordHashingPolicy (ByteString.replicate 16 8) password)
       credential = AccountCredential pendingProfileAccountId passwordHash True
@@ -1114,12 +1202,6 @@ reauthenticationProfileWorkflow sessionExpiry environmentConfig issuer sessionsR
             findAccountCredentialByUsername = \_ -> pure (Right (Just credential)),
             replacePasswordHashIfCurrent = \_ _ _ -> pure (Right False)
           }
-      permissiveAttemptStore =
-        LoginAttemptStore
-          { reserveLoginAttempt = \_ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation "reauthentication-login"))),
-            settleLoginAttempt = \_ _ -> pure (Right ()),
-            cancelLoginAttempt = \_ -> pure (Right ())
-          }
       sessionForFixture session =
         case sessionExpiry of
           ReauthenticationKeepsSessions -> session
@@ -1132,7 +1214,7 @@ reauthenticationProfileWorkflow sessionExpiry environmentConfig issuer sessionsR
         accountWorkflowClock = Time.currentUnixTimeNanoseconds,
         accountWorkflowMfaStore = mfaStore,
         accountWorkflowCredentialStore = credentialStore,
-        accountWorkflowLoginAttemptStore = permissiveAttemptStore,
+        accountWorkflowLoginAttemptStore = attemptStore,
         accountWorkflowSessionStore = sessionStore,
         accountWorkflowSessionAuditStore = sessionAuditStore,
         accountWorkflowProfileStore = profileStore,
