@@ -663,11 +663,27 @@ spec =
               _ <- runPageScript "document.querySelector('[data-profile-resend] form').dataset.harchActionRetentionMs = '1000'"
               click profileSubmit
               assertAllObserved do
+                attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Just "")
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+              _ <- runPageScript "new Promise((resolve) => window.setTimeout(resolve, 1100))"
+              assertAllObserved do
                 attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Nothing)
                 textContent (css "[data-profile-resend] [data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
                 isFocused profileSubmit `satisfies` id
                 browserMetrics `matches` \metrics ->
                   $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+              click profileSubmit
+              assertAllObserved do
+                attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Just "")
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+              press reauthenticationDialog "Escape"
+              assertAllObserved do
+                attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Nothing)
+                isFocused profileSubmit `satisfies` id
+                browserMetrics `matches` \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
         readIORef deliveryCountReference `shouldReturn` 0
 
     it "discards a retained profile action when enhanced navigation starts" $
