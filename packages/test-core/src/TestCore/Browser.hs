@@ -3,6 +3,7 @@
 module TestCore.Browser
   ( module TestCore.Browser.Config,
     module TestCore.Browser.Model,
+    module TestCore.Browser.Pattern,
     module TestCore.Browser.Scenario,
     module TestCore.Browser.Types,
   )
@@ -10,5 +11,6 @@ where
 
 import TestCore.Browser.Config
 import TestCore.Browser.Model
+import TestCore.Browser.Pattern
 import TestCore.Browser.Scenario
 import TestCore.Browser.Types

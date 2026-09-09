@@ -97,8 +97,7 @@ spec =
             assertAllObserved do
               currentUrl `matches` (`shouldBe` spacesUrl)
               textContent (byRole Heading) `matches` (`shouldBe` "Site under construction")
-              browserMetrics `matches` \metrics ->
-                $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
             visitWithoutScripts spanishSpacesUrl
             assertAllObserved do
               textContent (byRole Heading) `matches` (`shouldBe` "Sitio en construcción")
@@ -122,8 +121,7 @@ spec =
             assertAllObserved do
               currentUrl `matches` (`shouldBe` loginUrl)
               textContent (byRole Heading) `matches` (`shouldBe` "Sign in")
-              browserMetrics `matches` \metrics ->
-                $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
             visitWithoutScripts profileUrl
             assertAllObserved do
               textContent (byRole Heading) `matches` (`shouldBe` "Sign in")
@@ -175,8 +173,7 @@ spec =
               currentUrl `matches` (`shouldBe` spanishLanguageUrl)
               textContent (byRole Heading `named` "Elige un idioma") `matches` (`shouldBe` "Elige un idioma")
               textContent (byRole Status) `matches` (`shouldBe` "web-api: Language")
-              browserMetrics `matches` \metrics ->
-                $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
+              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
               attributeValue (css "html") "lang" `matches` (`shouldBe` Just "es")
             assertAllObserved do
               attributeValue (css "#language-dialog") "open" `matches` (`shouldBe` Nothing)
@@ -201,8 +198,7 @@ spec =
             failBlockedRequestsMatching "**/assets/dialog.js"
             assertAllObserved do
               currentUrl `matches` (`shouldBe` languageUrl)
-              browserMetrics `matches` \metrics ->
-                $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 1}|])
+              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 1}|])
             visitWithoutScripts secondUrl
             press (byRole Link `named` "Language") "Enter"
             assertAllObserved do
@@ -232,8 +228,7 @@ spec =
             assertAllObserved do
               currentUrl `matches` (`shouldBe` helpUrl)
               textContent (byRole Heading `named` "Help and support") `matches` (`shouldBe` "Help and support")
-              browserMetrics `matches` \metrics ->
-                $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
             _ <- runPageScript "document.body.dataset.testNoHelpFab = String(!document.querySelector('[data-help-fab]')); true"
             assertAllObserved do
               attributeValue (css "body") "data-test-no-help-fab" `matches` (`shouldBe` Just "true")
@@ -326,8 +321,7 @@ spec =
               textContent (css "title") `matches` (`shouldBe` "web-api: Spaces")
               textContent routeStatus `matches` (`shouldBe` "web-api: Spaces")
               isFocused mainContent `satisfies` id
-              browserMetrics `matches` \metrics ->
-                $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
 
     it "keeps only the newest overlapping enhanced navigation lifecycle" $
       withBrowserApp $ \browser appConfig ->
@@ -351,8 +345,7 @@ spec =
               textContent (byRole Heading) `matches` (`shouldBe` "Sign in")
               textContent routeStatus `matches` (`shouldBe` "web-api: Sign in")
               attributeValue routeStatus "data-test-mutation-count" `matches` (`shouldBe` Just "1")
-              browserMetrics `matches` \metrics ->
-                $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 2, hardNavigationCount = 0}|])
+              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 2, hardNavigationCount = 0}|])
               isFocused (css "#app-main") `satisfies` id
 
     it "falls back natively for failed, incompatible, and unsafe final responses without announcing success" $
@@ -366,8 +359,7 @@ spec =
                 currentUrl `matches` (`shouldBe` secondUrl)
                 textContent (byRole Heading) `matches` (`shouldBe` "Second")
                 textContent routeStatus `matches` (`shouldBe` "")
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
           runBrowserSpec browser do
             visit spacesUrl
             blockRequestsMatching "**/second"
@@ -407,8 +399,7 @@ spec =
             assertAllObserved do
               currentUrl `matches` (`shouldBe` spacesUrl)
               textContent (byRole Status) `matches` (`shouldBe` "")
-              browserMetrics `matches` \metrics ->
-                $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
+              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
             releaseRequestsMatching "**/assets/navigation.js"
             visitWithoutScripts secondUrl
             press (css "body") "Tab"
@@ -421,8 +412,7 @@ spec =
             assertAllObserved do
               currentUrl `matches` (`shouldBe` spacesUrl)
               textContent (byRole Heading) `matches` (`shouldBe` "Site under construction")
-              browserMetrics `matches` \metrics ->
-                $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
+              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
 
     it "preserves Spanish registration input until the delayed runtime sends its localized patch" $
       withBrowserApp $ \browser appConfig ->
@@ -447,12 +437,10 @@ spec =
               inputValue usernameField `matches` (`shouldBe` "person_01")
               inputValue emailField `matches` (`shouldBe` "person@example.test")
               inputValue passwordField `matches` (`shouldBe` "correct horse battery staple")
-              browserMetrics `matches` \metrics ->
-                $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 0}|])
+              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 0}|])
             releaseRequestsMatching "**/assets/navigation.js"
             assertAllObserved do
-              browserMetrics `matches` \metrics ->
-                $([|metrics|] `shouldMatch` [p|BrowserMetrics {mutationRequestCount = 1}|])
+              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {mutationRequestCount = 1}|])
               textContent (byText "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") `matches` (`shouldBe` "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.")
               inputValue passwordField `matches` (`shouldBe` "")
 
@@ -488,8 +476,7 @@ spec =
               inputValue identifierField `matches` (`shouldBe` "not an identifier!")
               inputValue passwordField `matches` (`shouldBe` "")
               inputValue authenticatorField `matches` (`shouldBe` "")
-              browserMetrics `matches` \metrics ->
-                $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
             _ <-
               runPageScript
                 "const proof = document.querySelector('#login-proof'); proof.value = 'recovery'; proof.dispatchEvent(new Event('change', { bubbles: true })); const identifier = document.querySelector('#login-identifier'); identifier.value = 'person@example.test'; identifier.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: 'person@example.test' })); document.documentElement.style.zoom = '2'; true"
@@ -561,8 +548,7 @@ spec =
             click (byRole Button `named` "Confirm authenticator")
             assertAllObserved do
               inputValue codeField `matches` (`shouldBe` "")
-              browserMetrics `matches` \metrics ->
-                $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
               isFocused codeField `satisfies` id
 
     it "focuses a multi-error registration summary and follows its field link by keyboard" $
@@ -606,8 +592,7 @@ spec =
             click (byRole Button `named` "Resend verification email")
             assertAllObserved do
               textContent (byText "Check your inbox for a verification link.") `matches` (`shouldBe` "Check your inbox for a verification link.")
-              browserMetrics `matches` \metrics ->
-                $([|metrics|] `shouldMatch` [p|BrowserMetrics {mutationRequestCount = 1}|])
+              $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {mutationRequestCount = 1}|])
 
     it "does not retain a CSRF-rejected action in the durable account fixture" $
       withTestAccountJwtFixture $ \environmentConfig _ -> do
@@ -634,8 +619,7 @@ spec =
               assertAllObserved do
                 attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Nothing)
                 textContent (css "[data-profile-resend] [data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
         readIORef profileLoadsReference `shouldReturn` 1
         readIORef deliveryCountReference `shouldReturn` 0
 
@@ -662,8 +646,7 @@ spec =
               click logoutSubmit
               assertAllObserved do
                 textContent (css "#logout-region [data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
         readIORef sessionsReference `shouldReturn` [initialSession {Session.sessionExpiresAtNanoseconds = initialNow}]
 
     it "expires a retained profile action without leaving the reauthentication dialog open" $
@@ -691,26 +674,22 @@ spec =
               click profileSubmit
               assertAllObserved do
                 attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Just "")
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
               _ <- runPageScript "new Promise((resolve) => window.setTimeout(resolve, 1100))"
               assertAllObserved do
                 attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Nothing)
                 textContent (css "[data-profile-resend] [data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
                 isFocused profileSubmit `satisfies` id
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
               click profileSubmit
               assertAllObserved do
                 attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Just "")
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
               press reauthenticationDialog "Escape"
               assertAllObserved do
                 attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Nothing)
                 isFocused profileSubmit `satisfies` id
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
         readIORef deliveryCountReference `shouldReturn` 0
 
     it "discards a retained profile action when enhanced navigation starts" $
@@ -737,14 +716,12 @@ spec =
               click (byRole Button `named` "Resend verification email")
               assertAllObserved do
                 attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Just "")
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
               _ <- runPageScript "Array.from(document.querySelectorAll('nav a')).find((link) => link.textContent === 'Home')?.click(); true"
               assertAllObserved do
                 currentUrl `matches` (`shouldBe` spacesUrl)
                 textContent (byRole Heading) `matches` (`shouldBe` "Site under construction")
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 1}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 1}|])
         readIORef deliveryCountReference `shouldReturn` 0
 
     it "recovers one retained profile action after its signed durable session expires" $
@@ -785,8 +762,7 @@ spec =
               assertAllObserved do
                 attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Just "")
                 inputValue identifierField `matches` (`shouldBe` "")
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
               fill identifierField "person@example.test"
               fill passwordField "incorrect password"
               fill authenticatorCodeField reauthenticationTotpCode
@@ -794,19 +770,16 @@ spec =
               assertAllObserved do
                 attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Just "")
                 inputValue passwordField `matches` (`shouldBe` "")
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
               press reauthenticationDialog "Escape"
               assertAllObserved do
                 attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Nothing)
                 isFocused profileSubmit `satisfies` id
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
               click profileSubmit
               assertAllObserved do
                 attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Just "")
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
               fill identifierField "person@example.test"
               fill passwordField "correct horse battery staple"
               fill authenticatorCodeField reauthenticationTotpCode
@@ -814,14 +787,12 @@ spec =
               assertAllObserved do
                 textContent (css "[data-web-api-reauthentication-status]") `matches` (`shouldBe` "Signed in. Confirm to retry the original action.")
                 attributeValue retryOriginalAction "hidden" `matches` (`shouldBe` Nothing)
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
               click retryOriginalAction
               assertAllObserved do
                 textContent (byText "Check your inbox for a verification link.") `matches` (`shouldBe` "Check your inbox for a verification link.")
                 attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Nothing)
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 5}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 5}|])
         deliveryCount <- readIORef deliveryCountReference
         deliveryCount `shouldBe` 1
         sessions <- readIORef sessionsReference
@@ -870,8 +841,7 @@ spec =
                 attributeValue retryOriginalAction "hidden" `matches` (`shouldBe` Just "")
                 inputValue passwordField `matches` (`shouldBe` "")
                 inputValue authenticatorCodeField `matches` (`shouldBe` "")
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
               fill identifierField "person@example.test"
               fill passwordField "correct horse battery staple"
               fill authenticatorCodeField "000000"
@@ -882,8 +852,7 @@ spec =
                 attributeValue retryOriginalAction "hidden" `matches` (`shouldBe` Just "")
                 inputValue passwordField `matches` (`shouldBe` "")
                 inputValue authenticatorCodeField `matches` (`shouldBe` "")
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
               fill identifierField "person@example.test"
               fill passwordField "correct horse battery staple"
               fill authenticatorCodeField reauthenticationTotpCode
@@ -891,14 +860,12 @@ spec =
               assertAllObserved do
                 textContent (css "[data-web-api-reauthentication-status]") `matches` (`shouldBe` "Signed in. Confirm to retry the original action.")
                 attributeValue retryOriginalAction "hidden" `matches` (`shouldBe` Nothing)
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
               click retryOriginalAction
               assertAllObserved do
                 textContent (byText "Check your inbox for a verification link.") `matches` (`shouldBe` "Check your inbox for a verification link.")
                 attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Nothing)
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 5}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 5}|])
         readIORef deliveryCountReference `shouldReturn` 1
 
     it "keeps one retained profile action through a throttled login before one successful retry" $
@@ -951,8 +918,7 @@ spec =
                 attributeValue retryOriginalAction "hidden" `matches` (`shouldBe` Just "")
                 inputValue passwordField `matches` (`shouldBe` "")
                 inputValue authenticatorCodeField `matches` (`shouldBe` "")
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
               fill identifierField "person@example.test"
               fill passwordField "correct horse battery staple"
               fill authenticatorCodeField reauthenticationTotpCode
@@ -960,14 +926,12 @@ spec =
               assertAllObserved do
                 textContent (css "[data-web-api-reauthentication-status]") `matches` (`shouldBe` "Signed in. Confirm to retry the original action.")
                 attributeValue retryOriginalAction "hidden" `matches` (`shouldBe` Nothing)
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
               click retryOriginalAction
               assertAllObserved do
                 textContent (byText "Check your inbox for a verification link.") `matches` (`shouldBe` "Check your inbox for a verification link.")
                 attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Nothing)
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
         readIORef attemptsReference `shouldReturn` 3
         readIORef deliveryCountReference `shouldReturn` 1
 
@@ -1007,8 +971,7 @@ spec =
               assertAllObserved do
                 attributeValue reauthenticationDialog "open" `matches` (`shouldBe` Nothing)
                 textContent (css "[data-profile-resend] [data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
-                browserMetrics `matches` \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
+                $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
         readIORef deliveryCountReference `shouldReturn` 0
 
 withBrowserApp :: (BrowserConfig -> AppConfig -> IO a) -> IO a

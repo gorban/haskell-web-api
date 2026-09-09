@@ -1,6 +1,7 @@
 {-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 {-# SPEC #-}
 
@@ -112,8 +113,8 @@ spec = do
         runBrowserSpec config $ do
           assertAllObserved do
             currentUrl `satisfies` (== "http://localhost/")
-            textContent (byRole Heading) `matches` (`shouldBe` "Home")
-            browserMetrics `matches` (`shouldBe` BrowserMetrics 1 0 1)
+            $([|Just <$> textContent (byRole Heading)|] `matchesPattern` [p|Just heading@"Home"|])
+            $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
 
     it "rejects an empty observed assertion block" $
       withFakeRunner "normal" $ \config -> do
@@ -124,13 +125,15 @@ spec = do
       withFakeRunner "normal" $ \config -> do
         result <-
           runBrowserScenario config $ assertAllObserved do
-            currentUrl `matches` (`shouldBe` "https://wrong.example/")
+            $([|currentUrl|] `matchesPattern` [p|"https://wrong.example/"|])
             textContent (byRole Heading) `matches` (`shouldBe` "Wrong heading")
         result `shouldSatisfy` \case
           Left (BrowserAssertionFailed message _) ->
             let rendered = Text.pack message
                 (firstFailure, laterFailures) = Text.breakOn "Wrong heading" rendered
              in "https://wrong.example/" `Text.isInfixOf` firstFailure
+                  && "failed to match pattern" `Text.isInfixOf` firstFailure
+                  && "http://localhost/" `Text.isInfixOf` firstFailure
                   && not (Text.null laterFailures)
           _ -> False
 
@@ -139,7 +142,7 @@ spec = do
         runBrowserSpec config $ do
           assertAllObserved do
             textContent (byRole Heading) `matches` (`shouldBe` "Home")
-            inputValue (css "input[name=email]") `matches` (`shouldBe` "person@example.com")
+            $([|inputValue (css "input[name=email]")|] `matchesPattern` [p|"person@example.com"|])
 
     it "does not retry an unexpected aggregate matcher exception" $
       withFakeRunner "normal" $ \config -> do
