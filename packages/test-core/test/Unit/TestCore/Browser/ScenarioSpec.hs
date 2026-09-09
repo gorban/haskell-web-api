@@ -126,7 +126,7 @@ spec = do
         result <-
           runBrowserScenario config $ assertAllObserved do
             $([|currentUrl|] `matchesPattern` [p|"https://wrong.example/"|])
-            textContent (byRole Heading) `matches` (`shouldBe` "Wrong heading")
+            textContent (byRole Heading) `shouldEqual` "Wrong heading"
         result `shouldSatisfy` \case
           Left (BrowserAssertionFailed message _) ->
             let rendered = Text.pack message
@@ -141,7 +141,7 @@ spec = do
       withFakeRunner "retry" $ \config ->
         runBrowserSpec config $ do
           assertAllObserved do
-            textContent (byRole Heading) `matches` (`shouldBe` "Home")
+            textContent (byRole Heading) `shouldEqual` "Home"
             $([|inputValue (css "input[name=email]")|] `matchesPattern` [p|"person@example.com"|])
 
     it "does not retry an unexpected aggregate matcher exception" $

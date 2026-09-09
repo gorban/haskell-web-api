@@ -32,6 +32,7 @@ module TestCore.Browser.Scenario
     runBrowserScenario,
     runBrowserSpec,
     satisfies,
+    shouldEqual,
     matches,
     setCookie,
     setInputFiles,
@@ -57,7 +58,7 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import GHC.Clock (getMonotonicTimeNSec)
 import Test.HUnit.Lang (HUnitFailure)
-import Test.Hspec (Expectation, expectationFailure, shouldSatisfy)
+import Test.Hspec (Expectation, expectationFailure, shouldBe, shouldSatisfy)
 import TestCore.Browser.Model.Internal
   ( BrowserObservation,
     CompiledObservation (..),
@@ -293,6 +294,14 @@ infix 1 `satisfies`
 -- | Add one predicate assertion to an aggregate browser snapshot.
 satisfies :: (Show value) => BrowserObservation value -> (value -> Bool) -> BrowserAssertionBlock ()
 satisfies observation predicate = observation `matches` (`shouldSatisfy` predicate)
+
+infix 1 `shouldEqual`
+
+-- | Add an equality assertion using the existing observed assertion block.
+-- Delegating to 'matches' preserves snapshot batching, retries, and aggregated
+-- Hspec equality diagnostics without introducing a separate assertion path.
+shouldEqual :: (Eq value, Show value) => BrowserObservation value -> value -> BrowserAssertionBlock ()
+shouldEqual observation expected = observation `matches` (`shouldBe` expected)
 
 infix 1 `matches`
 
