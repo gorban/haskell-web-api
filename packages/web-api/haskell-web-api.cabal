@@ -115,6 +115,7 @@ library
     WebApi.SetupPlan
 
   other-modules:
+    WebApi.AccountPages.Actions.Login
     WebApi.AccountPages.Actions.Profile
     WebApi.AccountPages.Actions.Registration
     WebApi.AccountPages.FieldIds
