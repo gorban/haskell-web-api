@@ -700,7 +700,7 @@ actionResponseHasValidClientActionTransport actionResponse =
     && all wellFormedAttribute (HarchWeb.responseObservabilityAttributes transportResponse)
     && not (any Text.null (HarchWeb.responseLogEntries transportResponse))
   where
-    transportResponse = HarchWeb.clientActionResponseBody routeCodec actionResponse
+    transportResponse = HarchWeb.clientActionResponseBody testRequestId routeCodec actionResponse
 
     wellFormedHeader (_, value) = not (ByteString.null value)
 

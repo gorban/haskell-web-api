@@ -15,6 +15,7 @@ import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Csrf (CsrfProtection (verifyCsrfToken), CsrfVerification (..))
+import HarchWeb.RequestId (RequestId)
 import HarchWeb.Security (requestScheme)
 import HarchWeb.Server.Application
 import HarchWeb.Server.ClientAction
@@ -22,8 +23,8 @@ import HarchWeb.Server.RequestBody (RequestBodyReadFailure (..), readRequestBody
 import HarchWeb.Server.Response
 import Network.Wai qualified as Wai
 
-clientActionResponse :: Application route action context authorization -> Wai.Request -> Text -> Text -> context -> IO (Response route context)
-clientActionResponse webApplication request requestMethod requestPath routedRequestContext = do
+clientActionResponse :: Application route action context authorization -> RequestId -> Wai.Request -> Text -> Text -> context -> IO (Response route context)
+clientActionResponse webApplication requestId request requestMethod requestPath routedRequestContext = do
   result <- runExceptT $ do
     let requestPolicyConfig = applicationRequestPolicy webApplication
         expectedOrigin =
@@ -43,10 +44,10 @@ clientActionResponse webApplication request requestMethod requestPath routedRequ
               clientActionPayloadContext = routedRequestContext
             }
     case decodeClientAction webApplication actionPayload of
-      UnrecognizedClientAction -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound))
+      UnrecognizedClientAction -> pure (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionNotFound))
       MethodNotAllowedClientAction allowedMethods -> pure (ClientActionBodyResponse (clientActionMethodNotAllowedResponse allowedMethods))
-      MalformedClientAction _ -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionPayloadMalformed))
-      InvalidClientActionDecoder -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionDecoderInvalid))
+      MalformedClientAction _ -> pure (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionPayloadMalformed))
+      InvalidClientActionDecoder -> pure (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionDecoderInvalid))
       DecodedClientAction action -> do
         let actionRequest =
               ClientActionRequest
@@ -56,12 +57,12 @@ clientActionResponse webApplication request requestMethod requestPath routedRequ
                 }
         verification <- liftIO (verifyCsrfToken (csrfProtection webApplication) routedRequestContext csrfToken)
         case verification of
-          CsrfRejected -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionCsrfRejected))
-          CsrfVerificationUnavailable -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionCsrfUnavailable))
+          CsrfRejected -> pure (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionCsrfRejected))
+          CsrfVerificationUnavailable -> pure (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionCsrfUnavailable))
           CsrfVerified -> do
             maybeActionResponse <- liftIO (handleClientAction webApplication actionRequest)
-            pure (maybe (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound)) ClientActionBodyResponse maybeActionResponse)
-  pure (either (BodyResponse . clientActionProtocolErrorResponse) id result)
+            pure (maybe (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionNotFound)) ClientActionBodyResponse maybeActionResponse)
+  pure (either (BodyResponse . clientActionProtocolErrorResponse requestId) id result)
 
 liftClientActionEither :: Either ClientActionProtocolError value -> ExceptT ClientActionProtocolError IO value
 liftClientActionEither = either throwError pure

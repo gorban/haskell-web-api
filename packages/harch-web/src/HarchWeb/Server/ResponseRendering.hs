@@ -29,6 +29,7 @@ import HarchWeb.Document (Page)
 import HarchWeb.Document qualified as Document
 import HarchWeb.Markup (safeUrlText)
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.RequestId (RequestId, requestIdText)
 import HarchWeb.Routing (RouteCodec (..), RouteRequest (..), encodeRouteLocation)
 import HarchWeb.Security (RequestPolicyConfig, requestPolicyResponseHeadersWithNonce)
 import HarchWeb.Server.Application (Application (..))
@@ -154,12 +155,13 @@ responseKind response =
 
 toWaiResponse ::
   (Eq route) =>
+  RequestId ->
   Http.ResponseHeaders ->
   Maybe PageSecurity ->
   Application route action context authorization ->
   Response route context ->
   Wai.Response
-toWaiResponse additionalHeaders maybePageSecurity webApplication response =
+toWaiResponse requestId additionalHeaders maybePageSecurity webApplication response =
   case response of
     PageResponse pageSecurity page ->
       renderPageResponse
@@ -175,7 +177,7 @@ toWaiResponse additionalHeaders maybePageSecurity webApplication response =
       toWaiBodyResponse
         (additionalHeaders <> filter ((/= Http.hLocation) . fst) headers <> [(Http.hLocation, TextEncoding.encodeUtf8 (safeUrlText (encodeRouteLocation (renderRoute (routeCodec webApplication) routeRequest))))])
         responseBodyValue
-    ClientActionBodyResponse actionResponse -> toWaiBodyResponse (additionalHeaders <> clientActionHeaders actionResponse) (clientActionResponseBody (routeCodec webApplication) actionResponse)
+    ClientActionBodyResponse actionResponse -> toWaiBodyResponse (additionalHeaders <> clientActionHeaders actionResponse) (clientActionResponseBody requestId (routeCodec webApplication) actionResponse)
     EventStreamResponse responseBodyValue eventSource -> toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource
     ProtocolResponseResult protocolResponse -> toWaiProtocolResponse additionalHeaders protocolResponse
   where
@@ -199,12 +201,16 @@ toWaiResponse additionalHeaders maybePageSecurity webApplication response =
           Wai.responseLBS
             Http.internalServerError500
             [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)]
-            "A page response was missing its CSP nonce."
+            (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (frameworkErrorText "A page response was missing its CSP nonce." requestId)))
         Just _ ->
           Wai.responseLBS
             Http.internalServerError500
             [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)]
-            "A page response security value did not match its renderer input."
+            (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (frameworkErrorText "A page response security value did not match its renderer input." requestId)))
+
+frameworkErrorText :: Text -> RequestId -> Text
+frameworkErrorText summary requestId =
+  summary <> " Request ID: " <> requestIdText requestId <> "."
 
 pageResponseHeaders :: Http.ResponseHeaders -> PageCsrf -> Http.ResponseHeaders
 pageResponseHeaders additionalHeaders pageCsrf =

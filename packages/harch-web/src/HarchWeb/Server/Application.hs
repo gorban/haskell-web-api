@@ -11,6 +11,12 @@
 -- This keeps anonymous actions available without a session, binds privileged
 -- actions to their existing application-owned session store, and preserves
 -- one route/action interpreter.
+--
+-- Decision record (AHI-5-RID, 2026-09-09): extend this existing typed route
+-- rendering boundary with the opaque framework-minted 'RequestId'. A renderer
+-- can deliberately join a support-facing error presentation to the finalized
+-- response header without a process-global request value or a response-body
+-- rewriter. Protocol, stream, and raw WAI bodies remain application-owned.
 module HarchWeb.Server.Application
   ( Application (..),
     RouteExecutionIdentity,
@@ -30,7 +36,7 @@ import HarchWeb.Csrf (CsrfProtection)
 import HarchWeb.Document (Document, NavigationRuntime, Page, RuntimeAsset)
 import HarchWeb.EndpointSecurity (ApplicationSecurity, EndpointMetadata (endpointName), EndpointName)
 import HarchWeb.Observability qualified as Observability
-import HarchWeb.RequestId (RequestId, RequestIdIngress)
+import HarchWeb.RequestId (RequestId, RequestIdIngress, newRequestId)
 import HarchWeb.Routing (RouteCodec, RouteRequest)
 import HarchWeb.Security (RequestConcurrencyLimit, RequestPolicyConfig)
 import HarchWeb.SecurityEvent (ModuleName, SecurityEventRoot)
@@ -128,7 +134,11 @@ data Application route action context authorization = Application
     -- | Construction-owned identity for route-local execution admission. The
     -- dispatcher selects the declaration before this is consulted.
     routeExecutionIdentity :: route -> RouteExecutionIdentity,
-    renderRequestResponse :: Wai.Request -> RouteRequest route context -> IO (Response route context),
+    -- | Render an ordinary routed response with the framework-minted request
+    -- ID. Application-owned presentations may use the typed value in a
+    -- support-facing error body; arbitrary protocol representations remain
+    -- application-owned and are never globally rewritten by Harch.
+    renderRequestResponse :: RequestId -> Wai.Request -> RouteRequest route context -> IO (Response route context),
     decodeClientAction :: ClientActionPayload context -> ClientActionDecodeResult action,
     -- | The one CSRF authority used for pre-render page issuance and decoded
     -- client-action verification. Harch owns strict cookie/form transport;
@@ -148,7 +158,9 @@ application = id
 -- 'renderRequestResponse' so an endpoint route can own the real request's
 -- decoding and body consumption without a second WAI dispatcher.
 renderResponse :: Application route action context authorization -> RouteRequest route context -> IO (Response route context)
-renderResponse webApplication = renderRequestResponse webApplication Wai.defaultRequest
+renderResponse webApplication routeRequest = do
+  requestId <- newRequestId
+  renderRequestResponse webApplication requestId Wai.defaultRequest routeRequest
 
 middlewareResultContext :: MiddlewareResult context -> context
 middlewareResultContext middlewareResult =

@@ -320,7 +320,7 @@ spec = do
           limitedApplication =
             (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {requestHeadLimits = limits}))
               { applicationRequestMiddleware = [RequestMiddleware (\_ _ -> expectationFailure "request-head gate should run first" >> pure (ContinueMiddleware defaultContext))],
-                renderRequestResponse = \_ _ -> expectationFailure "request-head gate should run first" >> pure (renderSampleResponse (RouteRequest DataRoute defaultContext))
+                renderRequestResponse = \_ _ _ -> expectationFailure "request-head gate should run first" >> pure (renderSampleResponse (RouteRequest DataRoute defaultContext))
               }
       response <- performWaiRequest (toWaiApplication limitedApplication) (Wai.defaultRequest {Wai.rawPathInfo = "/long"})
       Wai.responseStatus response `shouldBe` Http.status414

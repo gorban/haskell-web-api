@@ -58,7 +58,7 @@ spec = do
       observedRequest <- newIORef Nothing
       let applicationWithRequestProbe =
             sampleApplication
-              { renderRequestResponse = \request _ -> do
+              { renderRequestResponse = \_ request _ -> do
                   writeIORef observedRequest (Just request)
                   pure (BodyResponse (ResponseBody Http.status200 "text/plain" "probe" [] [] []))
               }

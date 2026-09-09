@@ -296,12 +296,15 @@ spec = do
     it "returns a safe 503 instead of rendering a page when page CSRF issuance is unavailable" $ do
       let unavailableSite = sampleSite {siteCsrfProtection = HarchWeb.csrfProtectionUnavailable}
       response <- performWaiRequest (toWaiApplication (buildSiteApplication unavailableSite)) (waiRequest [])
-      expectAll
-        ( (Wai.responseStatus response `shouldBe` Http.status503)
-            :| [ lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/plain; charset=utf-8",
-                 readResponseBody response `shouldReturn` "CSRF protection is unavailable."
-               ]
-        )
+      Wai.responseStatus response `shouldBe` Http.status503
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/plain; charset=utf-8"
+      case lookup "X-Request-ID" (Wai.responseHeaders response) of
+        Nothing -> expectationFailure "CSRF-unavailable response lacked X-Request-ID"
+        Just requestId ->
+          readResponseBody response
+            `shouldReturn` "CSRF protection is unavailable. Request ID: "
+            <> TextEncoding.decodeUtf8 requestId
+            <> "."
 
     it "passes page security and response metadata through the typed page route boundary" $ do
       let metadataResponse =

@@ -61,6 +61,7 @@ import HarchWeb
     freshRequestIdIngress,
     literalElementId,
     navigationRuntimeScriptSource,
+    requestIdText,
     unboundedRequestHeadLimits,
     unboundedRouteExecutionPolicy,
     warpDefaultRequestTransportLimits,
@@ -275,13 +276,13 @@ buildSiteApplication site =
         reportApplicationLog = siteReportApplicationLog site
       }
 
-renderSiteResponse :: Site route action context authorization -> Wai.Request -> RouteRequest route context -> IO (Response route context)
-renderSiteResponse site request routeRequest =
+renderSiteResponse :: Site route action context authorization -> RequestId -> Wai.Request -> RouteRequest route context -> IO (Response route context)
+renderSiteResponse site requestId request routeRequest =
   case routeHandler (siteRouteDefinition site (HarchWeb.requestRoute routeRequest)) of
     PageRouteHandler renderPage -> do
       preparedPageSecurity <- preparePageSecurity (siteCsrfProtection site) (csrfCookieFromRequest request) (HarchWeb.requestContext routeRequest)
       case preparedPageSecurity of
-        Left CsrfPageProtectionUnavailable -> pure csrfUnavailableResponse
+        Left CsrfPageProtectionUnavailable -> pure (csrfUnavailableResponse requestId)
         Right pageSecurity -> do
           pageResult <- renderPage pageSecurity routeRequest
           pure $
@@ -290,13 +291,13 @@ renderSiteResponse site request routeRequest =
               RenderedPageWithMetadata responseBodyValue page -> PageResponseWithMetadata pageSecurity responseBodyValue page
     ProtocolRouteHandler renderProtocol -> HarchWeb.nonPageResponse <$> renderProtocol request routeRequest
 
-csrfUnavailableResponse :: Response route context
-csrfUnavailableResponse =
+csrfUnavailableResponse :: RequestId -> Response route context
+csrfUnavailableResponse requestId =
   BodyResponse
     HarchWeb.ResponseBody
       { HarchWeb.responseStatus = Http.status503,
         HarchWeb.responseContentType = "text/plain; charset=utf-8",
-        HarchWeb.responseBody = "CSRF protection is unavailable.",
+        HarchWeb.responseBody = "CSRF protection is unavailable. Request ID: " <> requestIdText requestId <> ".",
         HarchWeb.responseObservabilityAttributes = [],
         HarchWeb.responseLogEntries = [],
         HarchWeb.responseDatabaseOperations = []

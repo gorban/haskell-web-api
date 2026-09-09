@@ -229,7 +229,7 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
   case routeDispatchResult of
     Left _ -> respondRouteLocationDecodeFailure routedRequestExecution
     Right routeDispatch -> do
-      guardResult <- runPostMatchGuards webApplication request (routedRequestPath routedRequestExecution) routeDispatch middlewareResult
+      guardResult <- runPostMatchGuards webApplication (routedRequestId routedRequestExecution) request (routedRequestPath routedRequestExecution) routeDispatch middlewareResult
       case guardResult of
         HaltPostMatch guardedResponse ->
           continueRoutedResponse routedRequestExecution timingState routeDispatch (nonPageResponse guardedResponse)
@@ -363,11 +363,11 @@ dispatchRoutedRequest
         RouteRequest {requestContext = routedRequestContext} = routeDispatchRequest routeDispatch
      in case routeRenderDispatch routeDispatch of
           Left declaredMethods -> routeOptionsResponse declaredMethods
-          Right renderDispatch@RenderMatchedHead {} -> renderRouteDispatch webApplication request renderDispatch
+          Right renderDispatch@RenderMatchedHead {} -> renderRouteDispatch webApplication (routedRequestId routedRequestExecution) request renderDispatch
           Right renderDispatch
             | isClientActionRequest request ->
-                clientActionResponse webApplication request decodedRequestMethod (routedRequestPath routedRequestExecution) routedRequestContext
-            | otherwise -> renderRouteDispatch webApplication request renderDispatch
+                clientActionResponse webApplication (routedRequestId routedRequestExecution) request decodedRequestMethod (routedRequestPath routedRequestExecution) routedRequestContext
+            | otherwise -> renderRouteDispatch webApplication (routedRequestId routedRequestExecution) request renderDispatch
 
 data RouteRenderDispatch route context
   = RenderNotFound (RouteRequest route context)
@@ -384,10 +384,10 @@ routeRenderDispatch routeDispatch =
     RouteMatchedHead routeRequest -> Right (RenderMatchedHead routeRequest)
     RouteOptions _ declaredMethods -> Left declaredMethods
 
-renderRouteDispatch :: Application route action context authorization -> Wai.Request -> RouteRenderDispatch route context -> IO (Response route context)
-renderRouteDispatch webApplication request renderDispatch =
+renderRouteDispatch :: Application route action context authorization -> RequestId -> Wai.Request -> RouteRenderDispatch route context -> IO (Response route context)
+renderRouteDispatch webApplication requestId request renderDispatch =
   case renderDispatch of
-    RenderNotFound routeRequest -> renderRequestResponse webApplication request routeRequest
+    RenderNotFound routeRequest -> renderRequestResponse webApplication requestId request routeRequest
     RenderMethodNotAllowed declaredMethods ->
       pure
         ( ProtocolResponseResult
@@ -400,8 +400,8 @@ renderRouteDispatch webApplication request renderDispatch =
                 protocolResponseDatabaseOperations = []
               }
         )
-    RenderMatched routeRequest -> renderRequestResponse webApplication request routeRequest
-    RenderMatchedHead routeRequest -> renderRequestResponse webApplication request routeRequest
+    RenderMatched routeRequest -> renderRequestResponse webApplication requestId request routeRequest
+    RenderMatchedHead routeRequest -> renderRequestResponse webApplication requestId request routeRequest
 
 routeOptionsResponse :: NonEmpty RouteMethod -> IO (Response route context)
 routeOptionsResponse declaredMethods =
@@ -453,7 +453,7 @@ finalizeRoutedResponse routedRequestExecution executionTimings routeDispatch pag
     respond
       ( omitResponseBodyWhen
           (isHeadDispatch routeDispatch)
-          (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request (pageSecurityRuntimeNonce <$> pageSecurity)) (toWaiResponse [] pageSecurity webApplication response))
+          (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request (pageSecurityRuntimeNonce <$> pageSecurity)) (toWaiResponse (routedRequestId routedRequestExecution) [] pageSecurity webApplication response))
       )
   reportRoutedResponseObservability
     (routedRequestObservabilityContext routedRequestExecution)

@@ -160,13 +160,13 @@ spec = do
       let baseApplication = sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {requestConcurrencyLimit = mkRequestConcurrencyLimit 1})
           slowApplication =
             baseApplication
-              { renderRequestResponse = \request routeRequest ->
+              { renderRequestResponse = \requestId request routeRequest ->
                   case requestRoute routeRequest of
                     KnownRoute -> do
                       atomicModifyIORef' admittedCount (\count -> (count + 1, ()))
                       readMVar releaseSignal
-                      renderRequestResponse baseApplication request routeRequest
-                    _ -> renderRequestResponse baseApplication request routeRequest
+                      renderRequestResponse baseApplication requestId request routeRequest
+                    _ -> renderRequestResponse baseApplication requestId request routeRequest
               }
       withLocalTestServer slowApplication $ \localTestServer -> do
         firstResponseSignal <- newEmptyMVar
@@ -197,13 +197,13 @@ spec = do
                     KnownRoute -> RouteExecutionPolicy (mkRequestConcurrencyLimit 1)
                     DataRoute -> RouteExecutionPolicy (mkRequestConcurrencyLimit 1)
                     _ -> unboundedRouteExecutionPolicy,
-                renderRequestResponse = \request routeRequest ->
+                renderRequestResponse = \requestId request routeRequest ->
                   case requestRoute routeRequest of
                     KnownRoute -> do
                       atomicModifyIORef' admittedCount (\count -> (count + 1, ()))
                       readMVar releaseSignal
-                      renderRequestResponse baseApplication request routeRequest
-                    _ -> renderRequestResponse baseApplication request routeRequest
+                      renderRequestResponse baseApplication requestId request routeRequest
+                    _ -> renderRequestResponse baseApplication requestId request routeRequest
               }
       withLocalTestServer limitedApplication $ \localTestServer -> do
         firstResponseSignal <- newEmptyMVar
@@ -240,10 +240,10 @@ spec = do
                   \case
                     EventStreamRoute -> RouteExecutionPolicy (mkRequestConcurrencyLimit 1)
                     _ -> unboundedRouteExecutionPolicy,
-                renderRequestResponse = \request routeRequest ->
+                renderRequestResponse = \requestId request routeRequest ->
                   case requestRoute routeRequest of
                     EventStreamRoute -> pure (nonPageResponse (eventStreamResponse eventSource))
-                    _ -> renderRequestResponse baseApplication request routeRequest
+                    _ -> renderRequestResponse baseApplication requestId request routeRequest
               }
       withLocalTestServer limitedApplication $ \localTestServer -> do
         firstResponseSignal <- newEmptyMVar
@@ -265,7 +265,7 @@ spec = do
       let baseApplication = sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {requestConcurrencyLimit = mkRequestConcurrencyLimit 1})
           interruptedApplication =
             baseApplication
-              { renderRequestResponse = \request routeRequest ->
+              { renderRequestResponse = \requestId request routeRequest ->
                   case requestRoute routeRequest of
                     KnownRoute -> do
                       requestNumber <- atomicModifyIORef' admittedCount (\count -> let next = count + 1 in (next, next))
@@ -274,9 +274,9 @@ spec = do
                           requestThread <- myThreadId
                           _ <- forkIO (throwTo requestThread ThreadKilled)
                           threadDelay 1000000
-                          renderRequestResponse baseApplication request routeRequest
-                        else renderRequestResponse baseApplication request routeRequest
-                    _ -> renderRequestResponse baseApplication request routeRequest
+                          renderRequestResponse baseApplication requestId request routeRequest
+                        else renderRequestResponse baseApplication requestId request routeRequest
+                    _ -> renderRequestResponse baseApplication requestId request routeRequest
               }
       withLocalTestServer interruptedApplication $ \localTestServer -> do
         firstResponseSignal <- newEmptyMVar

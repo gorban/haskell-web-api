@@ -103,7 +103,7 @@ spec = do
                     pure (HarchWeb.ContinueMiddleware requestContext)
                 ],
               HarchWeb.renderRequestResponse =
-                \_ _ ->
+                \_ _ _ ->
                   pure
                     ( HarchWeb.ProtocolResponseResult
                         HarchWeb.ProtocolResponse
@@ -214,7 +214,16 @@ spec = do
               )
       response <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) actionRequest
       Wai.responseStatus response `shouldBe` Http.status400
-      readResponseBody response `shouldReturn` "{\"patches\":[],\"focusId\":null,\"navigation\":null}"
+      case lookup "X-Request-ID" (Wai.responseHeaders response) of
+        Nothing -> expectationFailure "duplicate-field response lacked X-Request-ID"
+        Just requestId -> do
+          responseBody <- readResponseBody response
+          expectAll
+            ( (responseBody `shouldSatisfy` Text.isPrefixOf "{\"patches\":[],\"focusId\":null,\"navigation\":null,")
+                :| [ responseBody
+                       `shouldSatisfy` Text.isInfixOf ("\"requestId\":\"" <> TextEncoding.decodeUtf8 requestId <> "\"")
+                   ]
+            )
 
     it "stores the default request context used by the WAI adapter" $
       HarchWeb.defaultRequestContext pureApplication `shouldBe` defaultRequestContext

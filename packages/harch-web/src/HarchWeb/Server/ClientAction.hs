@@ -29,8 +29,9 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Action (ActionMethod, actionMethodText)
 import HarchWeb.Csrf (CsrfToken, mkCsrfToken, validateCsrfToken)
-import HarchWeb.Markup (elementIdText, regionPatchHtml, regionPatchId, safeUrlText)
+import HarchWeb.Markup (ElementId, elementIdText, regionPatchHtml, regionPatchId, safeUrlText)
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.RequestId (RequestId, requestIdText)
 import HarchWeb.Routing (RouteCodec (..), encodeRouteLocation)
 import HarchWeb.Server.Response
 import Network.HTTP.Types qualified as Http
@@ -140,13 +141,13 @@ urlEncodedFieldCount requestBody
 decodeActionField :: ByteString.ByteString -> Either ClientActionProtocolError Text
 decodeActionField = either (const (Left InvalidClientActionEncoding)) Right . TextEncoding.decodeUtf8'
 
-clientActionProtocolErrorResponse :: ClientActionProtocolError -> ResponseBody
-clientActionProtocolErrorResponse protocolError =
+clientActionProtocolErrorResponse :: RequestId -> ClientActionProtocolError -> ResponseBody
+clientActionProtocolErrorResponse requestId protocolError =
   let details = clientActionProtocolErrorDetails protocolError
    in ResponseBody
         { responseStatus = clientActionErrorStatus details,
           responseContentType = "application/json; charset=utf-8",
-          responseBody = "{\"patches\":[],\"focusId\":null,\"navigation\":null}",
+          responseBody = clientActionErrorResponseJson requestId,
           responseObservabilityAttributes = clientActionErrorObservabilityAttributes details,
           responseLogEntries = clientActionErrorLogEntries details,
           responseDatabaseOperations = []
@@ -230,24 +231,29 @@ clientActionReauthenticationRequiredResponse =
       clientActionLogEntries = []
     }
 
-clientActionResponseBody :: RouteCodec route context -> ClientActionResponse route context -> ResponseBody
-clientActionResponseBody routeCodec actionResponse =
+clientActionResponseBody :: RequestId -> RouteCodec route context -> ClientActionResponse route context -> ResponseBody
+clientActionResponseBody requestId routeCodec actionResponse =
   ResponseBody
     { responseStatus = clientActionStatus actionResponse,
       responseContentType = "application/json; charset=utf-8",
-      responseBody = renderClientActionResponse routeCodec actionResponse,
+      responseBody = renderClientActionResponse requestId routeCodec actionResponse,
       responseObservabilityAttributes = clientActionObservabilityAttributes actionResponse,
       responseLogEntries = clientActionLogEntries actionResponse,
       responseDatabaseOperations = []
     }
 
-renderClientActionResponse :: RouteCodec route context -> ClientActionResponse route context -> Text
-renderClientActionResponse routeCodec actionResponse =
+renderClientActionResponse :: RequestId -> RouteCodec route context -> ClientActionResponse route context -> Text
+renderClientActionResponse requestId routeCodec actionResponse =
+  clientActionResponseJson requestId routeCodec (clientActionPatches actionResponse) (clientActionFocusId actionResponse) (clientActionNavigation actionResponse)
+
+clientActionResponseJson :: RequestId -> RouteCodec route context -> [RegionPatch] -> Maybe ElementId -> ActionNavigation route context -> Text
+clientActionResponseJson requestId routeCodec patches maybeFocusId navigation =
   jsonText
     ( JsonEncoding.pairs
-        ( JsonEncoding.pair "patches" (JsonEncoding.list renderPatch (clientActionPatches actionResponse))
-            <> JsonEncoding.pair "focusId" (Aeson.toEncoding (elementIdText <$> clientActionFocusId actionResponse))
-            <> JsonEncoding.pair "navigation" (renderNavigation (clientActionNavigation actionResponse))
+        ( JsonEncoding.pair "patches" (JsonEncoding.list renderPatch patches)
+            <> JsonEncoding.pair "focusId" (Aeson.toEncoding (elementIdText <$> maybeFocusId))
+            <> JsonEncoding.pair "navigation" (renderNavigation navigation)
+            <> JsonEncoding.pair "requestId" (Aeson.toEncoding (requestIdText requestId))
         )
     )
   where
@@ -256,14 +262,25 @@ renderClientActionResponse routeCodec actionResponse =
         ( JsonEncoding.pair "id" (Aeson.toEncoding (regionPatchId patch))
             <> JsonEncoding.pair "html" (Aeson.toEncoding (regionPatchHtml patch))
         )
-    renderNavigation navigation =
-      case navigation of
+    renderNavigation navigationValue =
+      case navigationValue of
         StayOnCurrentRoute -> JsonEncoding.null_
         NavigateInternal historyMode routeRequest ->
           JsonEncoding.pairs
             ( JsonEncoding.pair "historyMode" (Aeson.toEncoding (historyModeText historyMode))
                 <> JsonEncoding.pair "href" (Aeson.toEncoding (safeUrlText (encodeRouteLocation (renderRoute routeCodec routeRequest))))
             )
+
+clientActionErrorResponseJson :: RequestId -> Text
+clientActionErrorResponseJson requestId =
+  jsonText
+    ( JsonEncoding.pairs
+        ( JsonEncoding.pair "patches" (Aeson.toEncoding ([] :: [Text]))
+            <> JsonEncoding.pair "focusId" JsonEncoding.null_
+            <> JsonEncoding.pair "navigation" JsonEncoding.null_
+            <> JsonEncoding.pair "requestId" (Aeson.toEncoding (requestIdText requestId))
+        )
+    )
 
 historyModeText :: HistoryMode -> Text
 historyModeText historyMode =

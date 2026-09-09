@@ -1018,7 +1018,7 @@ spec = do
       -- status, headers, and encoded client-action bytes remain identical.
       fmap HarchWeb.clientActionStatus alreadyRegistered `shouldBe` fmap HarchWeb.clientActionStatus createdEnglish
       fmap HarchWeb.clientActionHeaders alreadyRegistered `shouldBe` fmap HarchWeb.clientActionHeaders createdEnglish
-      fmap (HarchWeb.responseBody . HarchWeb.clientActionResponseBody routeCodec) alreadyRegistered `shouldBe` fmap (HarchWeb.responseBody . HarchWeb.clientActionResponseBody routeCodec) createdEnglish
+      fmap (HarchWeb.responseBody . HarchWeb.clientActionResponseBody testRequestId routeCodec) alreadyRegistered `shouldBe` fmap (HarchWeb.responseBody . HarchWeb.clientActionResponseBody testRequestId routeCodec) createdEnglish
       usernameTaken <- handleAccountAction (workflowFor (store (Right PendingAccountUsernameTaken) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
       usernameTaken `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-username") "That username is already taken"
       spanishUsernameTaken <- handleAccountAction (workflowFor (store (Right PendingAccountUsernameTaken) (Right Nothing) (Right Nothing)) 100 delivery) (spanishAction "/register" validRegistration)

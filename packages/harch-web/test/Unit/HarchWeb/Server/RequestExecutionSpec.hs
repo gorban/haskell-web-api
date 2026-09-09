@@ -18,7 +18,7 @@ import Data.List (isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
-import Data.Text qualified as Text (breakOn, drop, isInfixOf, pack, replace, stripPrefix)
+import Data.Text qualified as Text (breakOn, drop, isInfixOf, isPrefixOf, pack, replace, stripPrefix)
 import Data.Text.Encoding qualified as TextEncoding (decodeUtf8, encodeUtf8)
 import HarchWeb (ActionNavigation (NavigateInternal, StayOnCurrentRoute), Application (applicationNavigationRuntime, applicationRequestMiddleware, applicationRequestPolicy, csrfProtection, decodeClientAction, handleClientAction, pageShell, renderRequestResponse, reportApplicationLog, reportRequestObservability, requestContextFromRequest, routeCodec, routeExecutionPolicy), ClientActionDecodeResult (DecodedClientAction, UnrecognizedClientAction), ClientActionPayload (clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod), ClientActionRequest (ClientActionRequest, clientAction, clientActionContext, clientActionRequestIdempotencyKey), ClientActionResponse (ClientActionResponse, clientActionFocusId, clientActionHeaders, clientActionLogEntries, clientActionNavigation, clientActionObservabilityAttributes, clientActionPatches, clientActionStatus), CorsPolicyConfig (CorsPolicyConfig, corsAllowedHeaders, corsAllowedMethods, corsAllowedOrigins, corsMaxAgeSeconds), Document (documentRuntimeDescriptors), ForwardedHeaderTrust (NeverTrustForwarded), HistoryMode (ReplaceHistory), MiddlewareResult (ContinueMiddleware, HaltMiddleware), Page (pageRoute), ProtocolResponse (ProtocolResponse, protocolResponseBody, protocolResponseDatabaseOperations, protocolResponseHeaders, protocolResponseLogEntries, protocolResponseObservabilityAttributes, protocolResponseStatus), ProtocolResponseBody (ProtocolResponseBytes, ProtocolResponseStream, ProtocolResponseWai), RequestMiddleware (RequestMiddleware), RequestPolicyConfig (RequestPolicyConfig, corsPolicy, forwardedHeaderTrust, httpsRedirectAuthority, httpsRedirectPort, redirectHttpToHttps, requestConcurrencyLimit, requestHeadLimits, requestTransportLimits, responseSecurityHeaders, strictTransportSecurity), Response (BodyResponse, ClientActionBodyResponse, EventStreamResponse, PageResponse, PageResponseWithMetadata, ProtocolResponseResult), ResponseBody (ResponseBody, responseBody, responseContentType, responseDatabaseOperations, responseLogEntries, responseObservabilityAttributes, responseStatus), ResponseDiagnostics (diagnosticLogEntries, diagnosticObservabilityAttributes), ResponseSecurityHeadersConfig (ResponseSecurityHeadersConfig, contentSecurityPolicy, contentTypeOptionsNoSniff, frameOptions, permissionsPolicy, referrerPolicy, xssProtection), RouteExecutionPolicy (RouteExecutionPolicy), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (InlineBootstrap), ServerSentEvent (ServerSentEvent), StaticAssetRoot (StaticAssetRoot, staticDirectory, staticUrlPrefix), StaticAssetsConfig (StaticAssetsConfig, staticAssetContentTypes, staticAssetRoots, staticCacheControlSeconds), StrictTransportSecurityConfig (StrictTransportSecurityConfig, strictTransportSecurityIncludeSubDomains, strictTransportSecurityMaxAgeSeconds, strictTransportSecurityPreload), clientActionResponseBody, defaultContentSecurityPolicy, defaultCorsPolicyConfig, defaultNavigationRuntime, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, eventStreamResponse, internalRedirectResponse, isClientActionRequest, literalElementId, mkRequestConcurrencyLimit, parseClientActionFields, redirectResponse, responseDiagnostics, responseKind, responseStatusCode, serverSentEventSourceFromList, toWaiApplication, toWaiResponse, unboundedRequestHeadLimits, unboundedRouteExecutionPolicy, warpDefaultRequestTransportLimits)
 import HarchWeb qualified
@@ -54,14 +54,26 @@ assertFrameworkRequestIdBody rejectionSummary response =
     Nothing -> expectationFailure "framework rejection lacked X-Request-ID"
     Just requestId -> readResponseBody response `shouldReturn` rejectionSummary <> " Request ID: " <> TextEncoding.decodeUtf8 requestId <> "."
 
+assertClientActionRequestIdBody :: Wai.Response -> Expectation
+assertClientActionRequestIdBody response =
+  case lookup "X-Request-ID" (Wai.responseHeaders response) of
+    Nothing -> expectationFailure "client-action response lacked X-Request-ID"
+    Just requestId ->
+      readResponseBody response
+        >>= (`shouldSatisfy` Text.isInfixOf ("\"requestId\":\"" <> TextEncoding.decodeUtf8 requestId <> "\""))
+
+testResponseRequestId :: HarchWeb.RequestId
+testResponseRequestId =
+  fromMaybe (error "invalid fixed response request ID") (HarchWeb.mkRequestId "550e8400-e29b-41d4-a716-446655440000")
+
 spec = do
   describe "toWaiApplication" $ do
     it "fails closed if a page response reaches rendering without its CSP nonce" $ do
       let pageResponse = PageResponse testPageSecurity (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
-          response = toWaiResponse [] Nothing sampleApplication pageResponse
+          response = toWaiResponse testResponseRequestId [] Nothing sampleApplication pageResponse
       Wai.responseStatus response `shouldBe` Http.status500
       Wai.responseHeaders response `shouldBe` [(Http.hContentType, "text/html; charset=utf-8")]
-      readResponseBody response `shouldReturn` "A page response was missing its CSP nonce."
+      readResponseBody response `shouldReturn` "A page response was missing its CSP nonce. Request ID: 550e8400-e29b-41d4-a716-446655440000."
 
     it "propagates correlation between trusted synchronous services without retaining bad input" $ do
       diagnosticLogs <- newIORef []
@@ -246,7 +258,7 @@ spec = do
                         pure (HarchWeb.ContinueEndpoint defaultContext)
                     ],
                 HarchWeb.routeEndpointMetadata = const protectedEndpointMetadata,
-                renderRequestResponse = \_ routeRequest -> do
+                renderRequestResponse = \_ _ routeRequest -> do
                   modifyIORef' handlerRuns (+ 1)
                   pure (renderSampleResponse routeRequest),
                 HarchWeb.reportApplicationLog = \entry -> modifyIORef' reportedLogs (<> [entry])
@@ -266,7 +278,7 @@ spec = do
                  readIORef handlerRuns `shouldReturn` 0,
                  lookup Http.hContentType (Wai.responseHeaders normalResponse) `shouldBe` Just "text/plain; charset=utf-8",
                  (map (Text.isInfixOf "endpoint security configuration rejected a protected endpoint") <$> readIORef reportedLogs) `shouldReturn` replicate 4 True,
-                 readResponseBody normalResponse `shouldReturn` "Authentication is unavailable."
+                 assertFrameworkRequestIdBody "Authentication is unavailable." normalResponse
                ]
         )
 
@@ -368,13 +380,13 @@ spec = do
                   \case
                     KnownRoute -> RouteExecutionPolicy (mkRequestConcurrencyLimit 1)
                     _ -> unboundedRouteExecutionPolicy,
-                renderRequestResponse = \request routeRequest ->
+                renderRequestResponse = \requestId request routeRequest ->
                   case requestRoute routeRequest of
                     KnownRoute -> do
                       atomicModifyIORef' admittedCount (\count -> (count + 1, ()))
                       readMVar releaseSignal
-                      renderRequestResponse baseApplication request routeRequest
-                    _ -> renderRequestResponse baseApplication request routeRequest
+                      renderRequestResponse baseApplication requestId request routeRequest
+                    _ -> renderRequestResponse baseApplication requestId request routeRequest
               }
       waiApplication <- toWaiApplication limitedApplication
       firstResponseSignal <- newEmptyMVar
@@ -403,13 +415,13 @@ spec = do
                   \case
                     QueryRoute _ -> RouteExecutionPolicy (mkRequestConcurrencyLimit 1)
                     _ -> unboundedRouteExecutionPolicy,
-                renderRequestResponse = \request routeRequest ->
+                renderRequestResponse = \requestId request routeRequest ->
                   case requestRoute routeRequest of
                     QueryRoute _ -> do
                       atomicModifyIORef' admittedCount (\count -> (count + 1, ()))
                       readMVar releaseSignal
-                      renderRequestResponse baseApplication request routeRequest
-                    _ -> renderRequestResponse baseApplication request routeRequest
+                      renderRequestResponse baseApplication requestId request routeRequest
+                    _ -> renderRequestResponse baseApplication requestId request routeRequest
               }
           queryRequest queryValue =
             (waiRequest ["query"]) {Wai.rawQueryString = queryValue}
@@ -502,13 +514,13 @@ spec = do
                   \case
                     KnownRoute -> RouteExecutionPolicy (mkRequestConcurrencyLimit 1)
                     _ -> unboundedRouteExecutionPolicy,
-                renderRequestResponse = \request routeRequest ->
+                renderRequestResponse = \requestId request routeRequest ->
                   case requestRoute routeRequest of
                     KnownRoute -> do
                       atomicModifyIORef' admittedCount (\count -> (count + 1, ()))
                       readMVar releaseSignal
-                      renderRequestResponse baseApplication request routeRequest
-                    _ -> renderRequestResponse baseApplication request routeRequest
+                      renderRequestResponse baseApplication requestId request routeRequest
+                    _ -> renderRequestResponse baseApplication requestId request routeRequest
               }
       waiApplication <- toWaiApplication limitedApplication
       firstResponseSignal <- newEmptyMVar
@@ -560,7 +572,7 @@ spec = do
           ]
       let eventApplication =
             sampleApplication
-              { renderRequestResponse = \_ request ->
+              { renderRequestResponse = \_ _ request ->
                   case requestRoute request of
                     EventStreamRoute -> pure (HarchWeb.nonPageResponse (eventStreamResponse eventSource))
                     _ -> pure (renderSampleResponse request)
@@ -576,7 +588,7 @@ spec = do
         `shouldReturn` "event: page-update\nid: 1\ndata: first\n\nid: 2\ndata: second\n\n"
 
       emptyEventSource <- serverSentEventSourceFromList []
-      let emptyEventApplication = eventApplication {renderRequestResponse = \_ _ -> pure (HarchWeb.nonPageResponse (eventStreamResponse emptyEventSource))}
+      let emptyEventApplication = eventApplication {renderRequestResponse = \_ _ _ -> pure (HarchWeb.nonPageResponse (eventStreamResponse emptyEventSource))}
       emptyResponse <- performWaiRequest (toWaiApplication emptyEventApplication) (waiRequest ["events"])
       readResponseBody emptyResponse `shouldReturn` ""
 
@@ -623,7 +635,7 @@ spec = do
     it "renders the preconstructed host-scoped CSRF token into action metadata independently from the page CSP nonce" $ do
       let csrfApplication =
             sampleApplication
-              { renderRequestResponse = \_ request -> do
+              { renderRequestResponse = \_ _ request -> do
                   pageRoute (samplePage request) `shouldBe` KnownRoute
                   pure (PageResponse testPageSecurity (samplePage request))
               }
@@ -707,8 +719,9 @@ spec = do
       Http.statusCode (Wai.responseStatus response) `shouldBe` 422
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/json; charset=utf-8"
       lookup "Set-Cookie" (Wai.responseHeaders response) `shouldBe` Just "session=opaque"
+      assertClientActionRequestIdBody response
       readResponseBody response
-        `shouldReturn` "{\"patches\":[{\"id\":\"status-region\",\"html\":\"<p id=\\\"status-region\\\" data-harch-region=\\\"true\\\">Enter a valid email address.</p>\"}],\"focusId\":\"email\",\"navigation\":null}"
+        >>= (`shouldSatisfy` Text.isPrefixOf "{\"patches\":[{\"id\":\"status-region\",\"html\":\"<p id=\\\"status-region\\\" data-harch-region=\\\"true\\\">Enter a valid email address.</p>\"}],\"focusId\":\"email\",\"navigation\":null,")
       maybeRequestObservability <- readIORef requestObservabilityReference
       fmap (Observability.requestSpanAttributes . Observability.observabilityRequestSpan) maybeRequestObservability
         `shouldSatisfy` maybe False (hasTextAttribute "error.type" "RegistrationStoreUnavailable")
@@ -728,7 +741,9 @@ spec = do
       response <- performWaiRequest (toWaiApplication sampleApplication) actionRequest
       Wai.responseStatus response `shouldBe` Http.status400
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/json; charset=utf-8"
-      readResponseBody response `shouldReturn` "{\"patches\":[],\"focusId\":null,\"navigation\":null}"
+      assertClientActionRequestIdBody response
+      readResponseBody response
+        >>= (`shouldSatisfy` Text.isPrefixOf "{\"patches\":[],\"focusId\":null,\"navigation\":null,")
 
     it "bounds client-action form fields before decoding" $ do
       let fields fieldCount = LazyByteString.fromStrict (ByteString.intercalate "&" (replicate fieldCount "field=value"))
@@ -794,21 +809,6 @@ spec = do
       missingCookieResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith missingCookieChunks validHeaders)
       parameterizedContentTypeResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith parameterizedContentTypeChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded; charset=utf-8"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")])
       missingOriginAndHostResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith missingOriginAndHostChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded")])
-      rejectedBodies <-
-        traverse
-          readResponseBody
-          [ oversizedResponse,
-            tooManyFieldsResponse,
-            crossOriginResponse,
-            invalidContentTypeResponse,
-            missingCsrfResponse,
-            mismatchedCsrfResponse,
-            invalidHostResponse,
-            invalidOriginResponse,
-            invalidCookieResponse,
-            missingCookieResponse,
-            missingOriginAndHostResponse
-          ]
       Wai.responseStatus oversizedResponse `shouldBe` Http.status413
       Wai.responseStatus tooManyFieldsResponse `shouldBe` Http.status413
       Wai.responseStatus crossOriginResponse `shouldBe` Http.status403
@@ -822,7 +822,21 @@ spec = do
       Wai.responseStatus missingCookieResponse `shouldBe` Http.status403
       Wai.responseStatus parameterizedContentTypeResponse `shouldBe` Http.status404
       Wai.responseStatus missingOriginAndHostResponse `shouldBe` Http.status403
-      rejectedBodies `shouldBe` replicate 11 "{\"patches\":[],\"focusId\":null,\"navigation\":null}"
+      mapM_
+        assertClientActionRequestIdBody
+        [ oversizedResponse,
+          tooManyFieldsResponse,
+          crossOriginResponse,
+          invalidContentTypeResponse,
+          missingContentTypeResponse,
+          missingCsrfResponse,
+          mismatchedCsrfResponse,
+          invalidHostResponse,
+          invalidOriginResponse,
+          invalidCookieResponse,
+          missingCookieResponse,
+          missingOriginAndHostResponse
+        ]
 
     it "rejects malformed or duplicated strict CSRF transport before an action handler" $ do
       handlerCalled <- newIORef False
@@ -990,7 +1004,7 @@ spec = do
       routedRequests <- newIORef []
       let recordingApplication =
             sampleApplication
-              { renderRequestResponse = \request routeRequest -> do
+              { renderRequestResponse = \_ request routeRequest -> do
                   atomicModifyIORef' routedRequests (\requests -> (requests <> [(Wai.requestMethod request, requestRoute routeRequest)], ()))
                   pure (BodyResponse (ResponseBody Http.status200 "text/plain" "recorded" [] [] []))
               }
@@ -1007,7 +1021,7 @@ spec = do
 
     it "renders a typed internal redirect through the root route codec" $ do
       let redirect = internalRedirectResponse Http.status303 (RouteRequest KnownRoute defaultContext)
-          rendered = toWaiResponse [] Nothing sampleApplication redirect
+          rendered = toWaiResponse testResponseRequestId [] Nothing sampleApplication redirect
       expectAll
         ( (Wai.responseStatus rendered `shouldBe` Http.status303)
             :| [lookup Http.hLocation (Wai.responseHeaders rendered) `shouldBe` Just "/known"]
@@ -1021,7 +1035,7 @@ spec = do
                   [("Set-Cookie", "__Host-session=opaque"), (Http.hLocation, "https://attacker.invalid")]
                   (RouteRequest KnownRoute defaultContext)
               )
-          rendered = toWaiResponse [] Nothing sampleApplication redirect
+          rendered = toWaiResponse testResponseRequestId [] Nothing sampleApplication redirect
       expectAll
         ( (Wai.responseStatus rendered `shouldBe` Http.status303)
             :| [ lookup "Set-Cookie" (Wai.responseHeaders rendered) `shouldBe` Just "__Host-session=opaque",
@@ -1034,6 +1048,7 @@ spec = do
           observabilityAttribute = Observability.ObservabilityAttribute "action.outcome" (Observability.TextAttribute "rejected")
           responseBodyValue =
             clientActionResponseBody
+              testResponseRequestId
               (routeCodec sampleApplication)
               ClientActionResponse
                 { clientActionStatus = Http.status422,
@@ -1056,6 +1071,7 @@ spec = do
                  encodedResponse `shouldSatisfy` Text.isInfixOf "\\\\",
                  encodedResponse `shouldSatisfy` Text.isInfixOf "\\u0008",
                  encodedResponse `shouldSatisfy` Text.isInfixOf "\\u000c",
+                 encodedResponse `shouldSatisfy` Text.isInfixOf "\"requestId\":\"550e8400-e29b-41d4-a716-446655440000\"",
                  encodedResponse `shouldSatisfy` Text.isInfixOf "\\n",
                  encodedResponse `shouldSatisfy` Text.isInfixOf "\\r",
                  encodedResponse `shouldSatisfy` Text.isInfixOf "\\t",
@@ -1077,6 +1093,7 @@ spec = do
       response <- performWaiRequest (toWaiApplication sampleApplication) actionRequest
       Wai.responseStatus response `shouldBe` Http.status404
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "application/json; charset=utf-8")
+      assertClientActionRequestIdBody response
 
     it "maps codec unknown, method, malformed, invalid-decoder, and domain action outcomes to safe protocol responses" $ do
       loggedActionFailures <- newIORef []
@@ -1134,18 +1151,19 @@ spec = do
       Wai.responseStatus unknownResponse `shouldBe` Http.status404
       Wai.responseStatus wrongMethodResponse `shouldBe` Http.status405
       lookup "Allow" (Wai.responseHeaders wrongMethodResponse) `shouldBe` Just "POST, GET"
-      readResponseBody wrongMethodResponse `shouldReturn` "{\"patches\":[],\"focusId\":null,\"navigation\":null}"
+      assertClientActionRequestIdBody wrongMethodResponse
       Wai.responseStatus malformedResponse `shouldBe` Http.status400
-      readResponseBody malformedResponse `shouldReturn` "{\"patches\":[],\"focusId\":null,\"navigation\":null}"
+      assertClientActionRequestIdBody malformedResponse
       Wai.responseStatus invalidDecoderResponse `shouldBe` Http.status500
-      readResponseBody invalidDecoderResponse `shouldReturn` "{\"patches\":[],\"focusId\":null,\"navigation\":null}"
+      assertClientActionRequestIdBody invalidDecoderResponse
       fmap (any (Text.isInfixOf "client action decode failure: malformed")) (readIORef loggedActionFailures) `shouldReturn` True
       fmap (any (Text.isInfixOf "client action decode failure: invalid decoder")) (readIORef loggedActionFailures) `shouldReturn` True
       Wai.responseStatus domainResponse `shouldBe` Http.status422
+      mapM_ assertClientActionRequestIdBody [unknownResponse, wrongMethodResponse, malformedResponse, invalidDecoderResponse, domainResponse]
 
     it "renders typed redirects with the location header and standard response metadata" $ do
       let typedRedirect = redirectResponse Http.status302 "/spaces" :: Response TestRoute TestContext
-          redirectApplication = sampleApplication {renderRequestResponse = \_ _ -> pure typedRedirect}
+          redirectApplication = sampleApplication {renderRequestResponse = \_ _ _ -> pure typedRedirect}
           diagnostics = responseDiagnostics typedRedirect
       diagnosticObservabilityAttributes diagnostics `shouldBe` []
       diagnosticLogEntries diagnostics `shouldBe` []
@@ -1168,7 +1186,7 @@ spec = do
                 protocolResponseDatabaseOperations = []
               }
           renderedResponse = ProtocolResponseResult protocolResponse :: Response TestRoute TestContext
-          protocolApplication = sampleApplication {renderRequestResponse = \_ _ -> pure renderedResponse}
+          protocolApplication = sampleApplication {renderRequestResponse = \_ _ _ -> pure renderedResponse}
           diagnostics = responseDiagnostics renderedResponse
           changedProtocolResponse =
             ProtocolResponse
@@ -1218,7 +1236,7 @@ spec = do
                   protocolResponseDatabaseOperations = []
                 } ::
               Response TestRoute TestContext
-          protocolApplication = sampleApplication {renderRequestResponse = \_ _ -> pure renderedResponse}
+          protocolApplication = sampleApplication {renderRequestResponse = \_ _ _ -> pure renderedResponse}
           strictResponse =
             ProtocolResponseResult
               ProtocolResponse
@@ -1264,7 +1282,7 @@ spec = do
                 protocolResponseDatabaseOperations = []
               }
           sameResponse = protocolResponse {protocolResponseBody = ProtocolResponseWai (Wai.responseLBS Http.status200 [] "different")}
-          rendered = toWaiResponse [("X-Policy", "present")] Nothing sampleApplication (ProtocolResponseResult protocolResponse)
+          rendered = toWaiResponse testResponseRequestId [("X-Policy", "present")] Nothing sampleApplication (ProtocolResponseResult protocolResponse)
       expectAll
         ( (protocolResponse `shouldBe` sameResponse)
             :| [ show protocolResponse `shouldSatisfy` isInfixOf "ProtocolResponseWai <framework-response>",
@@ -1321,7 +1339,9 @@ spec = do
               )
       response <- performWaiRequest (toWaiApplication actionApplication) actionRequest
       Wai.responseStatus response `shouldBe` Http.status204
-      readResponseBody response `shouldReturn` "{\"patches\":[],\"focusId\":null,\"navigation\":null}"
+      assertClientActionRequestIdBody response
+      readResponseBody response
+        >>= (`shouldSatisfy` Text.isPrefixOf "{\"patches\":[],\"focusId\":null,\"navigation\":null,")
 
     it "adds the page nonce to custom CSP script sources, including policies without script-src" $ do
       let applicationWithPolicy policy =
@@ -1348,7 +1368,7 @@ spec = do
               }
           metadataApplication =
             sampleApplication
-              { renderRequestResponse = \_ request -> pure (PageResponseWithMetadata testPageSecurity metadata (samplePage request)),
+              { renderRequestResponse = \_ _ request -> pure (PageResponseWithMetadata testPageSecurity metadata (samplePage request)),
                 pageShell =
                   \page ->
                     (pageShell sampleApplication page)
@@ -1490,7 +1510,7 @@ spec = do
     it "redirects insecure requests to HTTPS before rendering the application response" $ do
       let redirectingApplication =
             (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True}))
-              { renderRequestResponse = \_ _ -> expectationFailure "expected HTTPS redirect before application rendering" >> pure (renderSampleResponse (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}))
+              { renderRequestResponse = \_ _ _ -> expectationFailure "expected HTTPS redirect before application rendering" >> pure (renderSampleResponse (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}))
               }
           redirectRequest =
             (waiRequest ["data"])
@@ -1727,7 +1747,7 @@ spec = do
               }
           redirectingApplication =
             (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True, forwardedHeaderTrust = testTrustedForwardedProxy}))
-              { renderRequestResponse = \_ _ -> expectationFailure "expected HTTPS redirect before application rendering" >> pure (renderSampleResponse (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})),
+              { renderRequestResponse = \_ _ _ -> expectationFailure "expected HTTPS redirect before application rendering" >> pure (renderSampleResponse (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})),
                 reportRequestObservability = \requestObservabilityValue ->
                   modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
               }
@@ -1777,7 +1797,7 @@ spec = do
               }
           redirectingApplication =
             (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True}))
-              { renderRequestResponse = \_ _ -> expectationFailure "expected HTTPS redirect before application rendering" >> pure (renderSampleResponse (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})),
+              { renderRequestResponse = \_ _ _ -> expectationFailure "expected HTTPS redirect before application rendering" >> pure (renderSampleResponse (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})),
                 reportRequestObservability = \requestObservabilityValue ->
                   modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
               }
@@ -2156,7 +2176,7 @@ spec = do
           diagnosticApplication =
             trustedForwardedApplication
               { renderRequestResponse =
-                  \_ _ ->
+                  \_ _ _ ->
                     pure $
                       BodyResponse
                         ResponseBody
@@ -2255,7 +2275,7 @@ spec = do
           diagnosticApplication =
             trustedForwardedApplication
               { renderRequestResponse =
-                  \_ _ ->
+                  \_ _ _ ->
                     pure $
                       BodyResponse
                         ResponseBody
@@ -2470,7 +2490,7 @@ spec = do
           diagnosticApplication =
             trustedForwardedApplication
               { renderRequestResponse =
-                  \_ _ ->
+                  \_ _ _ ->
                     pure $
                       BodyResponse
                         ResponseBody
@@ -2528,7 +2548,7 @@ spec = do
           diagnosticApplication =
             sampleApplication
               { renderRequestResponse =
-                  \_ ->
+                  \_ _ ->
                     pure
                       . PageResponseWithMetadata
                         testPageSecurity
@@ -2604,7 +2624,7 @@ spec = do
               { applicationRequestPolicy = defaultRequestPolicy {forwardedHeaderTrust = testTrustedForwardedProxy},
                 requestContextFromRequest = sampleRequestContextFromRequest (defaultRequestPolicy {forwardedHeaderTrust = testTrustedForwardedProxy}),
                 renderRequestResponse =
-                  \_ request ->
+                  \_ _ request ->
                     pure $
                       case (requestRoute request, requestLanguage (requestContext request), testContextPathPrefix (requestContext request)) of
                         (KnownRoute, "es", _) ->

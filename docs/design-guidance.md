@@ -3444,6 +3444,29 @@ raw WAI bodies retain their representation ownership; authenticated/domain
 error presentations, exported observability/audit joins, and the runnable audit
 workflow remain AHI-5-RID follow-up work.
 
+**Follow-up slice: correlate the framework-owned disabled-security response
+(AHI-5-RID, 2026-09-09).** The private post-match guard collaborator already
+receives every selected protected endpoint after request execution has minted
+the ID. Pass that opaque value into only its disabled-security text renderer,
+so the 503 body and finalized header have one copyable identifier. This extends
+the existing post-match response boundary rather than adding a second context or
+rewriting arbitrary application, protocol, streaming, or raw WAI bodies. Other
+framework and application error presentations, plus exported observability and
+audit joins, remain explicit AHI-5-RID follow-up work.
+
+**Follow-up slice: make response presentation correlation explicit
+(AHI-5-RID, 2026-09-09).** Extend `Application`'s existing route-rendering
+callback with the opaque `RequestId`, and pass the same value to the final WAI
+renderer. This gives an application renderer and framework-owned Site/JSON/HTML
+failure presenters a typed way to put the support ID in their own documented
+representation, while response finalization keeps replacing the header. A
+generic body transformation would corrupt application protocols, streams, and
+raw WAI responses, so those still receive only the header unless their owner
+uses this explicit input. The current slice covers Site CSRF, client-action,
+post-match, pre-routing, and page-rendering framework failures; durable audit
+joins, application-specific fallback bodies, and the delivery-failure matrix
+remain AHI-5-RID work.
+
 **Follow-up slice: attach web-api audit attribution at the existing post-match
 boundary (AHI-5, 2026-09-08).** `Site.siteAttachRouteObservation` already runs
 only after the root has selected the typed route and endpoint metadata and

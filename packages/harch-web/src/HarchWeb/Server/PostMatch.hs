@@ -13,6 +13,12 @@
 -- Route matching, body admission, timing, finalization, and handler invocation
 -- retain their established single owners; this module owns only the cohesive
 -- post-match selection/observation/guard responsibility.
+--
+-- Decision (AHI-5-RID, 2026-09-09): the framework-owned disabled-security
+-- response receives the request ID explicitly from request execution. This
+-- makes this one framework diagnostic copyable without a global response-body
+-- rewrite: application protocol, stream, and raw WAI representations continue
+-- to own their own bodies while response finalization owns the header.
 module HarchWeb.Server.PostMatch
   ( PostMatchGuardResult (..),
     runPostMatchGuards,
@@ -33,6 +39,7 @@ import HarchWeb.EndpointSecurity
     EndpointRequest (..),
     runEndpointGuardPipeline,
   )
+import HarchWeb.RequestId (RequestId, requestIdText)
 import HarchWeb.Routing (RouteDispatch (..), RouteRequest (..))
 import HarchWeb.SecurityEvent (rootSecurityEventSink, rootSecurityEventSinkWithMountChain)
 import HarchWeb.Server.Application
@@ -53,8 +60,8 @@ data PostMatchGuardResult route context
 -- | Apply the explicit post-match security selection to every declared route
 -- outcome. A 404 has no endpoint declaration; a pre-route halt retains its
 -- older response-body contract and is not reinterpreted as endpoint policy.
-runPostMatchGuards :: Application route action context authorization -> Wai.Request -> Text -> RouteDispatch route context -> MiddlewareResult context -> IO (PostMatchGuardResult route context)
-runPostMatchGuards webApplication request requestPath routeDispatch middlewareResult =
+runPostMatchGuards :: Application route action context authorization -> RequestId -> Wai.Request -> Text -> RouteDispatch route context -> MiddlewareResult context -> IO (PostMatchGuardResult route context)
+runPostMatchGuards webApplication requestId request requestPath routeDispatch middlewareResult =
   case middlewareResult of
     HaltMiddleware _ responseBodyValue -> pure (HaltPostMatch (NonPageBodyResponse responseBodyValue))
     ContinueMiddleware middlewareContext ->
@@ -106,7 +113,7 @@ runPostMatchGuards webApplication request requestPath routeDispatch middlewareRe
                 AuthenticationDisabled _ ->
                   case endpointAccess (endpointMetadata endpointRequest) of
                     AllowUnauthenticated -> runGuards endpointRequest
-                    _ -> pure (HaltPostMatch (NonPageBodyResponse disabledSecurityResponse))
+                    _ -> pure (HaltPostMatch (NonPageBodyResponse (disabledSecurityResponse requestId)))
                 _ -> runGuards endpointRequest
     runGuards endpointRequest =
       toPostMatchGuardResult selectedAdmissionRoute
@@ -129,12 +136,12 @@ routeDispatchRequest = \case
   RouteMatchedHead routeRequest -> routeRequest
   RouteOptions routeRequest _ -> routeRequest
 
-disabledSecurityResponse :: ResponseBody
-disabledSecurityResponse =
+disabledSecurityResponse :: RequestId -> ResponseBody
+disabledSecurityResponse requestId =
   ResponseBody
     { responseStatus = Http.status503,
       responseContentType = "text/plain; charset=utf-8",
-      responseBody = "Authentication is unavailable.",
+      responseBody = "Authentication is unavailable. Request ID: " <> requestIdText requestId <> ".",
       responseObservabilityAttributes = [],
       responseLogEntries = ["endpoint security configuration rejected a protected endpoint"],
       responseDatabaseOperations = []
