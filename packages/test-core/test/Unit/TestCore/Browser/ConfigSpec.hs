@@ -3,13 +3,14 @@
 
 {-# SPEC #-}
 
-import Control.Exception (finally)
+import Control.Exception (finally, try)
 import Data.Foldable (traverse_)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import System.Directory (withCurrentDirectory)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.IO.Temp (withSystemTempDirectory)
+import Test.HUnit.Lang (FailureReason (Reason), HUnitFailure (HUnitFailure))
 import TestCore.Browser
 
 spec = do
@@ -71,11 +72,7 @@ spec = do
           ("TEST_CORE_BROWSER_PROTOCOL_TIMEOUT_MILLISECONDS", Just "6543")
         ]
       $ do
-        loaded <- loadPlaywrightBrowserConfig
-        config <-
-          case loaded of
-            Left loadError -> expectationFailure loadError >> fail "unreachable"
-            Right loadedConfig -> pure loadedConfig
+        config <- requirePlaywrightBrowserConfig
         expectAll
           ( (browserRunnerCommand config `shouldBe` "node")
               :| [ browserRunnerArguments config `shouldSatisfy` \case
@@ -91,9 +88,16 @@ spec = do
       withSystemTempDirectory "browser-config" $ \tempDirectory ->
         withCurrentDirectory tempDirectory $ do
           result <- loadPlaywrightBrowserConfig
-          result `shouldSatisfy` \case
-            Left message -> "Could not find bundled Playwright runner" `Text.isInfixOf` Text.pack message
-            Right _ -> False
+          required <- try requirePlaywrightBrowserConfig :: IO (Either HUnitFailure BrowserConfig)
+          expectAll $
+            ( result `shouldSatisfy` \case
+                Left message -> "Could not find bundled Playwright runner" `Text.isInfixOf` Text.pack message
+                Right _ -> False
+            )
+              :| [ required `shouldSatisfy` \case
+                     Left (HUnitFailure _ (Reason message)) -> "Could not find bundled Playwright runner" `Text.isInfixOf` Text.pack message
+                     _ -> False
+                 ]
   where
     withEnvironment overrides action = do
       originalValues <- traverse capture overrides

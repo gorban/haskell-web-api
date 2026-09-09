@@ -3,16 +3,19 @@
 module TestCore.Browser.Config
   ( defaultPlaywrightBrowserConfig,
     loadPlaywrightBrowserConfig,
+    requirePlaywrightBrowserConfig,
     parseBrowserConfig,
   )
 where
 
+import Control.Exception (throwIO)
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
 import System.Directory (doesFileExist, getCurrentDirectory)
 import System.Environment (getEnvironment)
 import System.FilePath (takeDirectory, (</>))
+import Test.HUnit.Lang (FailureReason (Reason), HUnitFailure (HUnitFailure))
 import TestCore.Browser.Types (BrowserConfig (..))
 import Text.Read (readMaybe)
 
@@ -52,6 +55,13 @@ loadPlaywrightBrowserConfig = do
           if parent == directory
             then pure (Left ("Could not find bundled Playwright runner: " <> playwrightRunnerRelativePath))
             else findRunner parent
+
+-- | Resolve the existing configuration once at a test-fixture boundary, reporting
+-- configuration failure as an Hspec assertion. Use with beforeAll to share the
+-- immutable configuration; browser sessions still belong to runBrowserSpec.
+requirePlaywrightBrowserConfig :: IO BrowserConfig
+requirePlaywrightBrowserConfig =
+  loadPlaywrightBrowserConfig >>= either (throwIO . HUnitFailure Nothing . Reason) pure
 
 parseBrowserConfig :: [(String, String)] -> Either String BrowserConfig
 parseBrowserConfig = parseBrowserConfigWithDefault defaultPlaywrightBrowserConfig

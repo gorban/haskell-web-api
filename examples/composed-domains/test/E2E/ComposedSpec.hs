@@ -26,286 +26,276 @@ import HarchWeb.Time (unixTimeNanoseconds, unixTimeSeconds)
 import HarchWeb.Totp (mkTotpSecret, renderTotpSecret, totpCode, totpCodeText)
 import Orders.Domain
 
+-- | Immutable public routing shares a server. Admission examples consume TOTP
+-- counters and mutate session stores, so aroundWith gives each its own state.
+-- Configuration is shared; every scenario retains a fresh browser session.
 spec =
-  describe "composed-domains real-browser behavior" $ do
-    it "keeps localized public and mounted-domain navigation SSR-complete and enhanced" $
-      withBrowserAndServer $ \browser server -> do
-        let loginUrl = localServerBaseUrl server <> "/es/public/login"
-            catalogUrl = localServerBaseUrl server <> "/es/catalog"
-            ordersUrl = localServerBaseUrl server <> "/es/orders"
-        runBrowserSpec browser do
-          visit loginUrl
-          assertAllObserved do
-            textContent (byRole Link `named` "Catalog") `matches` (`shouldBe` "Catalog")
-            textContent (byRole Link `named` "Orders") `matches` (`shouldBe` "Orders")
-          click (byRole Link `named` "Catalog")
-          assertAllObserved do
-            currentUrl `matches` (`shouldBe` catalogUrl)
-            textContent (byRole Heading `named` "es catalog") `matches` (`shouldBe` "es catalog")
-            browserMetrics `matches` \metrics ->
-              $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
-          reload
-          assertAllObserved do
-            currentUrl `matches` (`shouldBe` catalogUrl)
-            textContent (byRole Heading `named` "es catalog") `matches` (`shouldBe` "es catalog")
-          click (byRole Link `named` "Orders")
-          assertAllObserved do
-            currentUrl `matches` (`shouldBe` ordersUrl)
-            textContent (byRole Heading `named` "es orders") `matches` (`shouldBe` "es orders")
+  beforeAll requirePlaywrightBrowserConfig $
+    describe "composed-domains real-browser behavior" $ do
+      aroundAllWith withBrowserAndServer $
+        parallel $
+          describe "public navigation" $ do
+            it "keeps localized public and mounted-domain navigation SSR-complete and enhanced" $ \(browser, server) -> do
+              let loginUrl = localServerBaseUrl server <> "/es/public/login"
+                  catalogUrl = localServerBaseUrl server <> "/es/catalog"
+                  ordersUrl = localServerBaseUrl server <> "/es/orders"
+              runBrowserSpec browser do
+                visit loginUrl
+                assertAllObserved do
+                  textContent (byRole Link `named` "Catalog") `shouldEqual` "Catalog"
+                  textContent (byRole Link `named` "Orders") `shouldEqual` "Orders"
+                click (byRole Link `named` "Catalog")
+                assertAllObserved do
+                  currentUrl `shouldEqual` catalogUrl
+                  textContent (byRole Heading `named` "es catalog") `shouldEqual` "es catalog"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                reload
+                assertAllObserved do
+                  currentUrl `shouldEqual` catalogUrl
+                  textContent (byRole Heading `named` "es catalog") `shouldEqual` "es catalog"
+                click (byRole Link `named` "Orders")
+                assertAllObserved do
+                  currentUrl `shouldEqual` ordersUrl
+                  textContent (byRole Heading `named` "es orders") `shouldEqual` "es orders"
 
-    it "keeps default-locale mounted navigation SSR-complete across reload and enhancement" $
-      withBrowserAndServer $ \browser server -> do
-        let catalogUrl = localServerBaseUrl server <> "/catalog"
-            ordersUrl = localServerBaseUrl server <> "/en/orders"
-        runBrowserSpec browser do
-          visit catalogUrl
-          assertAllObserved do
-            currentUrl `matches` (`shouldBe` catalogUrl)
-            textContent (byRole Heading `named` "en catalog") `matches` (`shouldBe` "en catalog")
-          reload
-          assertAllObserved do
-            textContent (byRole Heading `named` "en catalog") `matches` (`shouldBe` "en catalog")
-          click (byRole Link `named` "Orders")
-          assertAllObserved do
-            currentUrl `matches` (`shouldBe` ordersUrl)
-            textContent (byRole Heading `named` "en orders") `matches` (`shouldBe` "en orders")
-            browserMetrics `matches` \metrics ->
-              $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
+            it "keeps default-locale mounted navigation SSR-complete across reload and enhancement" $ \(browser, server) -> do
+              let catalogUrl = localServerBaseUrl server <> "/catalog"
+                  ordersUrl = localServerBaseUrl server <> "/en/orders"
+              runBrowserSpec browser do
+                visit catalogUrl
+                assertAllObserved do
+                  currentUrl `shouldEqual` catalogUrl
+                  textContent (byRole Heading `named` "en catalog") `shouldEqual` "en catalog"
+                reload
+                assertAllObserved do
+                  textContent (byRole Heading `named` "en catalog") `shouldEqual` "en catalog"
+                click (byRole Link `named` "Orders")
+                assertAllObserved do
+                  currentUrl `shouldEqual` ordersUrl
+                  textContent (byRole Heading `named` "en orders") `shouldEqual` "en orders"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
 
-    it "keeps public and mounted-domain navigation usable when scripts are disabled" $
-      withBrowserAndServer $ \browser server -> do
-        let loginUrl = localServerBaseUrl server <> "/public/login"
-            spanishLoginUrl = localServerBaseUrl server <> "/es/public/login"
-        runBrowserSpec browser do
-          visitWithoutScripts loginUrl
-          assertAllObserved do
-            textContent (byRole Heading `named` "Login") `matches` (`shouldBe` "Login")
-            textContent (byRole Link `named` "Catalog") `matches` (`shouldBe` "Catalog")
-          click (byRole Link `named` "Catalog")
-          assertAllObserved do
-            textContent (byRole Heading `named` "en catalog") `matches` (`shouldBe` "en catalog")
-          click (byRole Link `named` "Orders")
-          assertAllObserved do
-            textContent (byRole Heading `named` "en orders") `matches` (`shouldBe` "en orders")
-          visitWithoutScripts spanishLoginUrl
-          click (byRole Link `named` "Catalog")
-          assertAllObserved do
-            textContent (byRole Heading `named` "es catalog") `matches` (`shouldBe` "es catalog")
-          click (byRole Link `named` "Orders")
-          assertAllObserved do
-            textContent (byRole Heading `named` "es orders") `matches` (`shouldBe` "es orders")
+            it "keeps public and mounted-domain navigation usable when scripts are disabled" $ \(browser, server) -> do
+              let loginUrl = localServerBaseUrl server <> "/public/login"
+                  spanishLoginUrl = localServerBaseUrl server <> "/es/public/login"
+              runBrowserSpec browser do
+                visitWithoutScripts loginUrl
+                assertAllObserved do
+                  textContent (byRole Heading `named` "Login") `shouldEqual` "Login"
+                  textContent (byRole Link `named` "Catalog") `shouldEqual` "Catalog"
+                click (byRole Link `named` "Catalog")
+                assertAllObserved do
+                  textContent (byRole Heading `named` "en catalog") `shouldEqual` "en catalog"
+                click (byRole Link `named` "Orders")
+                assertAllObserved do
+                  textContent (byRole Heading `named` "en orders") `shouldEqual` "en orders"
+                visitWithoutScripts spanishLoginUrl
+                click (byRole Link `named` "Catalog")
+                assertAllObserved do
+                  textContent (byRole Heading `named` "es catalog") `shouldEqual` "es catalog"
+                click (byRole Link `named` "Orders")
+                assertAllObserved do
+                  textContent (byRole Heading `named` "es orders") `shouldEqual` "es orders"
 
-    it "submits admission through the enhanced action and replaces credential history" $
-      withAdmissionBrowserAndServer $ \browser server -> do
-        let admissionUrl = localServerBaseUrl server <> "/public/admission"
-            loginUrl = localServerBaseUrl server <> "/en/public/login"
-        runBrowserSpec browser do
-          visit admissionUrl
-          fill (byLabel "Admission name") "support_operator"
-          fill (byLabel "One-time code") browserAdmissionCode
-          submit (byRole Form `named` "Admission")
-          assertAllObserved do
-            currentUrl `matches` (`shouldBe` loginUrl)
-            textContent (byRole Heading `named` "Login") `matches` (`shouldBe` "Login")
-            browserMetrics `matches` \metrics ->
-              $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+      aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture) $
+        parallel $
+          describe "admission sessions and replay" $ do
+            it "submits admission through the enhanced action and replaces credential history" $ \(browser, server) -> do
+              let admissionUrl = localServerBaseUrl server <> "/public/admission"
+                  loginUrl = localServerBaseUrl server <> "/en/public/login"
+              runBrowserSpec browser do
+                visit admissionUrl
+                fill (byLabel "Admission name") "support_operator"
+                fill (byLabel "One-time code") browserAdmissionCode
+                submit (byRole Form `named` "Admission")
+                assertAllObserved do
+                  currentUrl `shouldEqual` loginUrl
+                  textContent (byRole Heading `named` "Login") `shouldEqual` "Login"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
 
-    it "rejects a mismatched admission CSRF submission without issuing admission or navigating" $
-      withAdmissionBrowserAndServer $ \browser server -> do
-        let admissionUrl = localServerBaseUrl server <> "/public/admission"
-        runBrowserSpec browser do
-          visit admissionUrl
-          fill (byLabel "Admission name") "support_operator"
-          fill (byLabel "One-time code") browserAdmissionCode
-          _ <- runPageScript "document.body.dataset.harchCsrfToken = 'not-the-rendered-admission-token'; true"
-          submit (byRole Form `named` "Admission")
-          assertAllObserved do
-            currentUrl `matches` (`shouldBe` admissionUrl)
-            textContent (css "[data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
-            browserMetrics `matches` \metrics ->
-              $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+            it "rejects a mismatched admission CSRF submission without issuing admission or navigating" $ \(browser, server) -> do
+              let admissionUrl = localServerBaseUrl server <> "/public/admission"
+              runBrowserSpec browser do
+                visit admissionUrl
+                fill (byLabel "Admission name") "support_operator"
+                fill (byLabel "One-time code") browserAdmissionCode
+                _ <- runPageScript "document.body.dataset.harchCsrfToken = 'not-the-rendered-admission-token'; true"
+                submit (byRole Form `named` "Admission")
+                assertAllObserved do
+                  currentUrl `shouldEqual` admissionUrl
+                  textContent (css "[data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
 
-    it "keeps an invalid admission TOTP draft editable until its corrected submission succeeds" $
-      withAdmissionBrowserAndServer $ \browser server -> do
-        let admissionUrl = localServerBaseUrl server <> "/public/admission"
-            loginUrl = localServerBaseUrl server <> "/en/public/login"
-            loginField = byLabel "Admission name"
-            codeField = byLabel "One-time code"
-        runBrowserSpec browser do
-          visit admissionUrl
-          fill loginField "support_operator"
-          fill codeField "000000"
-          submit (byRole Form `named` "Admission")
-          assertAllObserved do
-            currentUrl `matches` (`shouldBe` admissionUrl)
-            textContent (css "[data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
-            inputValue loginField `matches` (`shouldBe` "support_operator")
-            inputValue codeField `matches` (`shouldBe` "000000")
-            browserMetrics `matches` \metrics ->
-              $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
-          fill codeField browserAdmissionCode
-          submit (byRole Form `named` "Admission")
-          assertAllObserved do
-            currentUrl `matches` (`shouldBe` loginUrl)
-            textContent (byRole Heading `named` "Login") `matches` (`shouldBe` "Login")
-            browserMetrics `matches` \metrics ->
-              $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+            it "keeps an invalid admission TOTP draft editable until its corrected submission succeeds" $ \(browser, server) -> do
+              let admissionUrl = localServerBaseUrl server <> "/public/admission"
+                  loginUrl = localServerBaseUrl server <> "/en/public/login"
+                  loginField = byLabel "Admission name"
+                  codeField = byLabel "One-time code"
+              runBrowserSpec browser do
+                visit admissionUrl
+                fill loginField "support_operator"
+                fill codeField "000000"
+                submit (byRole Form `named` "Admission")
+                assertAllObserved do
+                  currentUrl `shouldEqual` admissionUrl
+                  textContent (css "[data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  inputValue loginField `shouldEqual` "support_operator"
+                  inputValue codeField `shouldEqual` "000000"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                fill codeField browserAdmissionCode
+                submit (byRole Form `named` "Admission")
+                assertAllObserved do
+                  currentUrl `shouldEqual` loginUrl
+                  textContent (byRole Heading `named` "Login") `shouldEqual` "Login"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
 
-    it "rejects a replayed admission TOTP without navigating or clearing the new draft" $
-      withAdmissionBrowserAndServer $ \browser server -> do
-        let admissionUrl = localServerBaseUrl server <> "/public/admission"
-            loginUrl = localServerBaseUrl server <> "/en/public/login"
-            loginField = byLabel "Admission name"
-            codeField = byLabel "One-time code"
-        runBrowserSpec browser do
-          visit admissionUrl
-          fill loginField "support_operator"
-          fill codeField browserAdmissionCode
-          submit (byRole Form `named` "Admission")
-          assertAllObserved do
-            currentUrl `matches` (`shouldBe` loginUrl)
-          visit admissionUrl
-          fill loginField "support_operator"
-          fill codeField browserAdmissionCode
-          submit (byRole Form `named` "Admission")
-          assertAllObserved do
-            currentUrl `matches` (`shouldBe` admissionUrl)
-            textContent (css "[data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
-            inputValue loginField `matches` (`shouldBe` "support_operator")
-            inputValue codeField `matches` (`shouldBe` browserAdmissionCode)
+            it "rejects a replayed admission TOTP without navigating or clearing the new draft" $ \(browser, server) -> do
+              let admissionUrl = localServerBaseUrl server <> "/public/admission"
+                  loginUrl = localServerBaseUrl server <> "/en/public/login"
+                  loginField = byLabel "Admission name"
+                  codeField = byLabel "One-time code"
+              runBrowserSpec browser do
+                visit admissionUrl
+                fill loginField "support_operator"
+                fill codeField browserAdmissionCode
+                submit (byRole Form `named` "Admission")
+                assertAllObserved do
+                  currentUrl `shouldEqual` loginUrl
+                visit admissionUrl
+                fill loginField "support_operator"
+                fill codeField browserAdmissionCode
+                submit (byRole Form `named` "Admission")
+                assertAllObserved do
+                  currentUrl `shouldEqual` admissionUrl
+                  textContent (css "[data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  inputValue loginField `shouldEqual` "support_operator"
+                  inputValue codeField `shouldEqual` browserAdmissionCode
 
-    it "keeps an unknown admission principal indistinguishable while preserving its draft" $
-      withAdmissionBrowserAndServer $ \browser server -> do
-        let admissionUrl = localServerBaseUrl server <> "/public/admission"
-            loginField = byLabel "Admission name"
-            codeField = byLabel "One-time code"
-        runBrowserSpec browser do
-          visit admissionUrl
-          fill loginField "unknown_operator"
-          fill codeField browserAdmissionCode
-          submit (byRole Form `named` "Admission")
-          assertAllObserved do
-            currentUrl `matches` (`shouldBe` admissionUrl)
-            textContent (css "[data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
-            inputValue loginField `matches` (`shouldBe` "unknown_operator")
-            inputValue codeField `matches` (`shouldBe` browserAdmissionCode)
-            browserMetrics `matches` \metrics ->
-              $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+            it "keeps an unknown admission principal indistinguishable while preserving its draft" $ \(browser, server) -> do
+              let admissionUrl = localServerBaseUrl server <> "/public/admission"
+                  loginField = byLabel "Admission name"
+                  codeField = byLabel "One-time code"
+              runBrowserSpec browser do
+                visit admissionUrl
+                fill loginField "unknown_operator"
+                fill codeField browserAdmissionCode
+                submit (byRole Form `named` "Admission")
+                assertAllObserved do
+                  currentUrl `shouldEqual` admissionUrl
+                  textContent (css "[data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  inputValue loginField `shouldEqual` "unknown_operator"
+                  inputValue codeField `shouldEqual` browserAdmissionCode
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
 
-    it "keeps a throttled admission attempt recoverable without navigating or clearing its draft" $
-      withAdmissionBrowserAndServerWith throttledAdmissionAttemptStore $ \browser server -> do
-        let admissionUrl = localServerBaseUrl server <> "/public/admission"
-            loginField = byLabel "Admission name"
-            codeField = byLabel "One-time code"
-        runBrowserSpec browser do
-          visit admissionUrl
-          fill loginField "support_operator"
-          fill codeField browserAdmissionCode
-          submit (byRole Form `named` "Admission")
-          assertAllObserved do
-            currentUrl `matches` (`shouldBe` admissionUrl)
-            textContent (css "[data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
-            inputValue loginField `matches` (`shouldBe` "support_operator")
-            inputValue codeField `matches` (`shouldBe` browserAdmissionCode)
-            browserMetrics `matches` \metrics ->
-              $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+            it "redirects a browser-deliverable revoked admission cookie to a fresh challenge" $ \(browser, server) -> do
+              let admissionUrl = localServerBaseUrl server <> "/en/public/admission"
+                  loginUrl = localServerBaseUrl server <> "/en/public/login"
+              runBrowserSpec browser do
+                setCookie loginUrl "__Host-composed-admission" expiredAdmissionBrowserSessionValue
+                visit loginUrl
+                assertAllObserved do
+                  currentUrl `shouldEqual` admissionUrl
 
-    it "redirects a browser-deliverable expired admission cookie to a fresh challenge" $
-      withAdmissionBrowserAndServerWithStoredSessions permissiveAdmissionAttemptStore [expiredAdmissionBrowserSession] $ \browser server -> do
-        let admissionUrl = localServerBaseUrl server <> "/en/public/admission"
-            loginUrl = localServerBaseUrl server <> "/en/public/login"
-        runBrowserSpec browser do
-          setCookie loginUrl "__Host-composed-admission" expiredAdmissionBrowserSessionValue
-          visit loginUrl
-          assertAllObserved do
-            currentUrl `matches` (`shouldBe` admissionUrl)
+            it "submits the same admission workflow through its CSRF-protected native fallback" $ \(browser, server) -> do
+              let admissionUrl = localServerBaseUrl server <> "/public/admission"
+                  loginUrl = localServerBaseUrl server <> "/en/public/login"
+              runBrowserSpec browser do
+                visitWithoutScripts admissionUrl
+                fill (byLabel "Admission name") "support_operator"
+                fill (byLabel "One-time code") browserAdmissionCode
+                submit (byRole Form `named` "Admission")
+                assertAllObserved do
+                  currentUrl `shouldEqual` loginUrl
+                  textContent (byRole Heading `named` "Login") `shouldEqual` "Login"
 
-    it "redirects a browser-deliverable revoked admission cookie to a fresh challenge" $
-      withAdmissionBrowserAndServerWithStoredSessions permissiveAdmissionAttemptStore [] $ \browser server -> do
-        let admissionUrl = localServerBaseUrl server <> "/en/public/admission"
-            loginUrl = localServerBaseUrl server <> "/en/public/login"
-        runBrowserSpec browser do
-          setCookie loginUrl "__Host-composed-admission" expiredAdmissionBrowserSessionValue
-          visit loginUrl
-          assertAllObserved do
-            currentUrl `matches` (`shouldBe` admissionUrl)
+      aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture {admissionFixtureAttempts = throttledAdmissionAttemptStore}) $
+        parallel $
+          describe "throttled admission" $ do
+            it "keeps a throttled admission attempt recoverable without navigating or clearing its draft" $ \(browser, server) -> do
+              let admissionUrl = localServerBaseUrl server <> "/public/admission"
+                  loginField = byLabel "Admission name"
+                  codeField = byLabel "One-time code"
+              runBrowserSpec browser do
+                visit admissionUrl
+                fill loginField "support_operator"
+                fill codeField browserAdmissionCode
+                submit (byRole Form `named` "Admission")
+                assertAllObserved do
+                  currentUrl `shouldEqual` admissionUrl
+                  textContent (css "[data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  inputValue loginField `shouldEqual` "support_operator"
+                  inputValue codeField `shouldEqual` browserAdmissionCode
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
 
-    it "keeps an unavailable admission credential store recoverable without navigating or clearing its draft" $
-      withAdmissionBrowserAndServerWithCredentialState permissiveAdmissionAttemptStore [] BrowserAdmissionCredentialStoreUnavailable $ \browser server -> do
-        let admissionUrl = localServerBaseUrl server <> "/public/admission"
-            loginField = byLabel "Admission name"
-            codeField = byLabel "One-time code"
-        runBrowserSpec browser do
-          visit admissionUrl
-          fill loginField "support_operator"
-          fill codeField browserAdmissionCode
-          submit (byRole Form `named` "Admission")
-          assertAllObserved do
-            currentUrl `matches` (`shouldBe` admissionUrl)
-            textContent (css "[data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
-            inputValue loginField `matches` (`shouldBe` "support_operator")
-            inputValue codeField `matches` (`shouldBe` browserAdmissionCode)
-            browserMetrics `matches` \metrics ->
-              $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+      aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture {admissionFixtureSessions = [expiredAdmissionBrowserSession]}) $
+        parallel $
+          describe "expired admission sessions" $ do
+            it "redirects a browser-deliverable expired admission cookie to a fresh challenge" $ \(browser, server) -> do
+              let admissionUrl = localServerBaseUrl server <> "/en/public/admission"
+                  loginUrl = localServerBaseUrl server <> "/en/public/login"
+              runBrowserSpec browser do
+                setCookie loginUrl "__Host-composed-admission" expiredAdmissionBrowserSessionValue
+                visit loginUrl
+                assertAllObserved do
+                  currentUrl `shouldEqual` admissionUrl
 
-    it "keeps corrupt encrypted admission credentials recoverable without navigating or clearing its draft" $
-      withAdmissionBrowserAndServerWithCredentialState permissiveAdmissionAttemptStore [] BrowserAdmissionCredentialStoreCorrupt $ \browser server -> do
-        let admissionUrl = localServerBaseUrl server <> "/public/admission"
-            loginField = byLabel "Admission name"
-            codeField = byLabel "One-time code"
-        runBrowserSpec browser do
-          visit admissionUrl
-          fill loginField "support_operator"
-          fill codeField browserAdmissionCode
-          submit (byRole Form `named` "Admission")
-          assertAllObserved do
-            currentUrl `matches` (`shouldBe` admissionUrl)
-            textContent (css "[data-harch-action-status]") `matches` (`shouldBe` "This action needs your attention.")
-            inputValue loginField `matches` (`shouldBe` "support_operator")
-            inputValue codeField `matches` (`shouldBe` browserAdmissionCode)
-            browserMetrics `matches` \metrics ->
-              $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+      aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture {admissionFixtureCredentials = BrowserAdmissionCredentialStoreUnavailable}) $
+        parallel $
+          describe "unavailable admission credentials" $ do
+            it "keeps an unavailable admission credential store recoverable without navigating or clearing its draft" $ \(browser, server) -> do
+              let admissionUrl = localServerBaseUrl server <> "/public/admission"
+                  loginField = byLabel "Admission name"
+                  codeField = byLabel "One-time code"
+              runBrowserSpec browser do
+                visit admissionUrl
+                fill loginField "support_operator"
+                fill codeField browserAdmissionCode
+                submit (byRole Form `named` "Admission")
+                assertAllObserved do
+                  currentUrl `shouldEqual` admissionUrl
+                  textContent (css "[data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  inputValue loginField `shouldEqual` "support_operator"
+                  inputValue codeField `shouldEqual` browserAdmissionCode
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
 
-    it "submits the same admission workflow through its CSRF-protected native fallback" $
-      withAdmissionBrowserAndServer $ \browser server -> do
-        let admissionUrl = localServerBaseUrl server <> "/public/admission"
-            loginUrl = localServerBaseUrl server <> "/en/public/login"
-        runBrowserSpec browser do
-          visitWithoutScripts admissionUrl
-          fill (byLabel "Admission name") "support_operator"
-          fill (byLabel "One-time code") browserAdmissionCode
-          submit (byRole Form `named` "Admission")
-          assertAllObserved do
-            currentUrl `matches` (`shouldBe` loginUrl)
-            textContent (byRole Heading `named` "Login") `matches` (`shouldBe` "Login")
+      aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture {admissionFixtureCredentials = BrowserAdmissionCredentialStoreCorrupt}) $
+        parallel $
+          describe "corrupt admission credentials" $ do
+            it "keeps corrupt encrypted admission credentials recoverable without navigating or clearing its draft" $ \(browser, server) -> do
+              let admissionUrl = localServerBaseUrl server <> "/public/admission"
+                  loginField = byLabel "Admission name"
+                  codeField = byLabel "One-time code"
+              runBrowserSpec browser do
+                visit admissionUrl
+                fill loginField "support_operator"
+                fill codeField browserAdmissionCode
+                submit (byRole Form `named` "Admission")
+                assertAllObserved do
+                  currentUrl `shouldEqual` admissionUrl
+                  textContent (css "[data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  inputValue loginField `shouldEqual` "support_operator"
+                  inputValue codeField `shouldEqual` browserAdmissionCode
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
 
-withBrowserAndServer :: (BrowserConfig -> LocalTestServer -> IO a) -> IO a
-withBrowserAndServer action = do
-  loadedConfig <- loadPlaywrightBrowserConfig
-  browser <-
-    case loadedConfig of
-      Left loadError -> expectationFailure loadError >> fail "unreachable"
-      Right config -> pure config
-  withLocalTestServer composedBrowserApplication (action browser)
+withBrowserAndServer :: ((BrowserConfig, LocalTestServer) -> IO a) -> BrowserConfig -> IO a
+withBrowserAndServer action browser =
+  withLocalTestServer composedBrowserApplication (\server -> action (browser, server))
 
-withAdmissionBrowserAndServer :: (BrowserConfig -> LocalTestServer -> IO a) -> IO a
-withAdmissionBrowserAndServer = withAdmissionBrowserAndServerWith permissiveAdmissionAttemptStore
+-- | One owned input record replaces the cascading fixture wrappers. Each call
+-- constructs fresh session and replay stores even when the inputs are shared.
+data AdmissionBrowserFixture = AdmissionBrowserFixture
+  { admissionFixtureAttempts :: AdmissionAttemptStore,
+    admissionFixtureSessions :: [OpaqueSession AdmissionPrincipalId],
+    admissionFixtureCredentials :: AdmissionCredentialStoreState
+  }
 
-withAdmissionBrowserAndServerWith :: AdmissionAttemptStore -> (BrowserConfig -> LocalTestServer -> IO a) -> IO a
-withAdmissionBrowserAndServerWith attemptStore = withAdmissionBrowserAndServerWithStoredSessions attemptStore []
+defaultAdmissionBrowserFixture :: AdmissionBrowserFixture
+defaultAdmissionBrowserFixture = AdmissionBrowserFixture permissiveAdmissionAttemptStore [] AdmissionCredentialStoreAvailable
 
-withAdmissionBrowserAndServerWithStoredSessions :: AdmissionAttemptStore -> [OpaqueSession AdmissionPrincipalId] -> (BrowserConfig -> LocalTestServer -> IO a) -> IO a
-withAdmissionBrowserAndServerWithStoredSessions attemptStore storedSessions = withAdmissionBrowserAndServerWithCredentialState attemptStore storedSessions AdmissionCredentialStoreAvailable
-
-withAdmissionBrowserAndServerWithCredentialState :: AdmissionAttemptStore -> [OpaqueSession AdmissionPrincipalId] -> AdmissionCredentialStoreState -> (BrowserConfig -> LocalTestServer -> IO a) -> IO a
-withAdmissionBrowserAndServerWithCredentialState attemptStore storedSessions credentialState action = do
-  loadedConfig <- loadPlaywrightBrowserConfig
-  browser <-
-    case loadedConfig of
-      Left loadError -> expectationFailure loadError >> fail "unreachable"
-      Right config -> pure config
-  admissionApplication <- admissionBrowserApplication attemptStore storedSessions credentialState
-  withLocalTestServer admissionApplication (action browser)
+withAdmissionBrowserAndServer :: AdmissionBrowserFixture -> ((BrowserConfig, LocalTestServer) -> IO a) -> BrowserConfig -> IO a
+withAdmissionBrowserAndServer fixture action browser = do
+  admissionApplication <- admissionBrowserApplication fixture
+  withLocalTestServer admissionApplication (\server -> action (browser, server))
 
 composedBrowserApplication :: Application RootRoute RootAction ComposedContext RootAuthorization
 composedBrowserApplication =
@@ -316,8 +306,8 @@ data AdmissionCredentialStoreState
   | BrowserAdmissionCredentialStoreUnavailable
   | BrowserAdmissionCredentialStoreCorrupt
 
-admissionBrowserApplication :: AdmissionAttemptStore -> [OpaqueSession AdmissionPrincipalId] -> AdmissionCredentialStoreState -> IO (Application RootRoute RootAction ComposedContext RootAuthorization)
-admissionBrowserApplication attemptStore storedSessions credentialState = do
+admissionBrowserApplication :: AdmissionBrowserFixture -> IO (Application RootRoute RootAction ComposedContext RootAuthorization)
+admissionBrowserApplication AdmissionBrowserFixture {admissionFixtureAttempts = attemptStore, admissionFixtureSessions = storedSessions, admissionFixtureCredentials = credentialState} = do
   sessions <- newIORef storedSessions
   usedCounters <- newIORef ([] :: [Word64])
   let loginName = requiredBrowser "admission login" (mkAdmissionLoginName "support_operator")

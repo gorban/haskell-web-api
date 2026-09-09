@@ -14,7 +14,7 @@ import HarchWeb qualified
 import System.Directory (copyFile, createDirectory, doesFileExist, getCurrentDirectory)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
-import TestCore.E2EPrelude (BrowserConfig, expectationFailure, loadPlaywrightBrowserConfig)
+import TestCore.E2EPrelude (BrowserConfig, requirePlaywrightBrowserConfig)
 import WebApi.AccountPages (AccountAction)
 import WebApi.Config (AppConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
 import WebApi.Route (AppRoute)
@@ -31,11 +31,7 @@ withBrowserServer makeApplication action (browser, appConfig) =
 
 withBrowserApp :: ((BrowserConfig, AppConfig) -> IO a) -> IO a
 withBrowserApp action = do
-  loadedConfig <- loadPlaywrightBrowserConfig
-  browser <-
-    case loadedConfig of
-      Left loadError -> expectationFailure loadError >> fail "unreachable"
-      Right config -> pure config
+  browser <- requirePlaywrightBrowserConfig
   withSystemTempDirectory "web-api-e2e-assets" $ \assetDirectory ->
     do
       let stylesDirectory = assetDirectory </> "styles"

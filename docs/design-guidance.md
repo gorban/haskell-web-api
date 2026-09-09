@@ -3792,3 +3792,19 @@ server and assets are released after the group, and application-construction fai
 outer assets without running an example. Server-startup/shutdown or deliberately
 broken-application tests must retain dedicated scopes when introduced here, so a
 listener failure is not silently reclassified as unrelated browser failures.
+
+The other runnable browser examples use the same ownership rule. Two-pages and
+public composed-domain navigation share servers; admission scenarios create
+fresh session/replay stores through `aroundWith`, and upload scenarios create
+fresh upload state through `aroundWith` while retaining per-example temporary
+files. `requirePlaywrightBrowserConfig` extends the existing TestCore config
+boundary with one Hspec failure interpretation for fixture setup; it removes the
+copied load/error/unreachable branches without adding another browser runner.
+
+The multipart example's current application state stores just one outstanding
+CSRF token, so one client's GET replaces another client's token. Its per-example
+fixture remains necessary for exact discard-count assertions, but does not prove
+concurrent-client correctness. The local follow-up "multipart concurrent-client
+CSRF ownership" must replace this application limitation using the existing CSRF
+capability and prove overlapping clients, rejection cleanup, and both native
+script modes before that server is shared across independent upload scenarios.
