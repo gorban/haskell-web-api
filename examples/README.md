@@ -4,14 +4,18 @@ Start with a runnable application, then add one concern at a time. The labels de
 this repository today; snippets that show future API direction are kept in the explicitly labeled
 design guide.
 
-## Runnable examples
+## Executable and testable examples
 
-These are Cabal packages with executable source and tests.
+These are Cabal packages with source and tests. The command column says whether
+the package starts an executable or verifies a focused test suite; a test-only
+package is not presented as a runnable server.
 
-| Example | What it demonstrates | Run from the repository root |
+| Example | What it demonstrates | Run or verify from the repository root |
 | --- | --- | --- |
 | [two-pages](two-pages/README.md) | Complete SSR pages, generated page routes, typed components, an `ActionCodec` shared by typed forms and dispatch, immediate form capture, enhanced navigation, patches, and SSE. | `cabal run two-pages-example` |
 | [multipart-upload](multipart-upload/README.md) | A CSRF-protected native multipart form with bounded in-memory storage, explicit upload ownership, and scripts-enabled/scripts-disabled browser proof. | `cabal run multipart-upload-example` |
+| [composed-domains](composed-domains/README.md) | Composed typed modules, localized navigation, an accessible language-picker fallback, and a Help/support link with real-browser proof. | `cabal run composed-domains` |
+| [localization](localization/README.md) | Application-owned ICU messages layered on framework localization primitives. | `cabal test localization-example-tests` |
 | [custom-db-adapter](custom-db-adapter/README.md) | A typed, non-PostgreSQL effect interpreter with focused tests. | `cabal test custom-db-adapter-tests` |
 | [custom-api](custom-api/README.md) | A method-aware `HarchWeb.Api` endpoint table (negotiated JSON/custom-media-type response, a JSON request body, a multipart upload) composed into a `Wai.Application` through the closed route-family registry. | `cabal test custom-api-tests` |
 
@@ -32,6 +36,16 @@ or tracked runtime configuration.
 | [Authentication and sessions](middleware-auth-jwt/README.md) | Opaque sessions, CSRF, credentials, MFA, and protected routes. |
 | [Localization](multilanguage-routing/README.md) | Locale-aware page routing and localized responses. |
 | [Reverse proxy awareness](reverse-proxy-awareness/README.md) | Trusted forwarding, TLS offload, and path-prefix mounting. |
+
+## Full-stack reference application
+
+`packages/web-api` is the integrated reference application for account
+workflows, PostgreSQL effects, telemetry, TLS configuration, localization, and
+the application-owned account-activity audit. It is not a framework service or
+a copy-and-run production policy. Follow [SETUP.md](../SETUP.md) for its
+database, `pg_cron`, and credentials prerequisites, then use
+`cabal run haskell-web-api` with the required runtime configuration. Its
+integration and browser evidence is in `haskell-web-api-tests`.
 
 ## Workflow guide
 

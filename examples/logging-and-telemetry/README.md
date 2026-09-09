@@ -47,3 +47,25 @@ Use this example to explain:
 3. why the repo intentionally keeps its custom OTLP export layer instead of generic WAI tracing
    middleware,
 4. where request logs should be observed once the logging surface is formalized further.
+
+## Request correlation is not an audit ledger
+
+Harch creates an opaque `RequestId` at request ingress and makes it available
+to trusted application context and telemetry-safe route observation. `web-api`
+uses that ID to correlate selected account-security audit rows with the request
+that produced them, but the framework does not persist audit history or expose
+an audit reader. The remaining response/log/span/audit presentation sweep is
+tracked separately; do not promise a universal public error-body join from this
+guide.
+
+| Signal | Owner and delivery policy | Data/retention boundary |
+| --- | --- | --- |
+| Request logs and OTLP traces/metrics | Application observability configuration; diagnostics are best effort and must not change an otherwise valid authorization decision. | Low-cardinality route/status attributes and private diagnostics according to the deployment's telemetry policy. |
+| `web-api` account activity | Application PostgreSQL transaction policy; selected state changes require the audit append to commit atomically, while a known-account denial stays denied if its optional audit write is unavailable. | Closed event vocabulary with opaque account/request IDs and bounded trusted route metadata; operator/reporting access only. |
+
+Never substitute a successful telemetry export for a required audit commit, or
+an audit row for an OTLP span. Neither system should receive raw credentials,
+submitted identifiers, token material, request paths/queries, raw IP addresses,
+or user-agent values as audit payloads or metric labels. For the reference
+schema, RLS roles, retention, capacity inspection, and scheduler procedure, see
+the [PostgreSQL effects guide](../postgres-effects/README.md#account-activity-audit-application-operations-not-a-framework-service).

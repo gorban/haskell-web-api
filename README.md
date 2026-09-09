@@ -37,21 +37,27 @@ often improves First Contentful Paint by avoiding client-side data and templatin
 dynamic server work can increase Time to First Byte. Measure the application and deployment that you
 actually ship.
 
-## What is included
+## Capability and ownership
 
-- Generated page-route algebras, exhaustive dispatch, explicit dynamic/API routes, and typed URL
-  rendering.
-- XML-like, escaping-by-default markup whose components are ordinary typed Haskell functions.
-- A nonce-protected immediate capture kernel, deferred navigation, declarative client-action codecs,
-  region patches, and Server-Sent Events (SSE).
-- Typed PostgreSQL effects and migrations, with an app-owned adapter seam for other databases or data
-  sources.
-- OTLP traces and metrics, low-cardinality route naming, and stable expected-error classification.
-- Opaque sessions, CSRF protection, Argon2id credentials, TOTP/MFA, email seams, and typed middleware.
-- Manual or shared certificates, ACME/Let's Encrypt through certbot, HSTS, CSP, CORS, redirects, and
-  constrained static-asset serving.
-- Localization, reverse-proxy and path-prefix handling, semantic accessibility conventions,
-  warning-free optimized builds, 100% per-package coverage, and real-browser tests.
+Harch is the reusable authoring and request/response runtime. Applications choose
+their domain model, identity provider, storage, retention, deployment topology,
+and operations policy. The full-stack `web-api` package is deliberately a
+reference application, not a list of services that Harch runs for every user.
+
+| Area | Reusable Harch capability | Application or deployment owner |
+| --- | --- | --- |
+| Pages and actions | Complete SSR documents, generated/typed routes, escaping markup, typed action codecs, immediate capture, navigation, patches, and SSE. | Page data, action semantics, native-fallback choice, idempotency, and durable mutation handling. |
+| Security and identity | Request limits, CSRF transport lifecycle and pluggable protection, cookie/JWT primitives, typed guards, TLS/CSP/HSTS/CORS helpers. | Credential/key loading, account/session storage, authorization policy, MFA, email delivery, and revocation rules. |
+| Observability | Request policy, opaque `RequestId` ingress, telemetry-safe route observation, and OTLP/logging seams. | Collector credentials, retention, dashboards, alerting, and any durable business/security history. |
+| Storage | Result-indexed database effects and PostgreSQL migration/runtime adapters. | Schema, transactions, roles, RLS, backups, capacity, retention, and the choice of PostgreSQL or another interpreter. |
+| Authoring quality | Localization primitives, semantic markup, declared enhancement lifecycle, and browser-test support. | Product copy, locale catalog, visual design, accessibility review, and app-specific behavior modules. |
+
+In particular, `web-api`'s account-activity audit is application-owned: its
+`account_audit` schema, RLS roles, partition retention, capacity policy, and
+`pg_cron` bootstrap are a reference deployment procedure. They are not Harch
+telemetry, a generic audit API, automatic compliance, or protection from a
+database owner/superuser. See the [PostgreSQL effects guide][postgres-guide]
+for the concrete operational boundary.
 
 ## How Harch differs from common rendering architectures
 
@@ -349,6 +355,29 @@ The main packages are:
 
 The project targets Linux and macOS directly. On Windows, use WSL2 or Docker with Linux containers.
 
+## Find a real example
+
+The map below distinguishes a reusable capability from the application or
+deployment decisions that surround it. “Reference” means source and tests are
+present in this repository; it is not a promise that the framework supplies
+the surrounding product policy.
+
+| Need | Owner and evidence | Start here | Important limitation or prerequisite |
+| --- | --- | --- | --- |
+| SSR, captured actions, patches, enhanced navigation, and SSE | Harch runtime; runnable `two-pages` source and browser suite. | [two-pages guide](examples/two-pages/README.md), [browser proof][capture-e2e] | Native fallback is explicit per action; capture is bounded in-document ownership, not durable delivery. |
+| Typed routes, route families, and composed modules | Harch routing/module APIs; `two-pages`, `custom-api`, and `composed-domains` reference tests. | [routing overview](#typed-architecture), [custom API guide](examples/custom-api/README.md) | Dynamic route-template syntax remains [design direction](examples/route-templates/README.md), not an executable DSL. |
+| Page-scoped browser behavior | Harch runtime assets and declared enhancements; `two-pages` source/test. | [custom JavaScript guide](examples/custom-js/README.md) | Application code owns its behavior module and must retain complete SSR fallback. |
+| Accessibility, language selection, and localization | Semantic markup/localization APIs; localized reference pages and browser proof. | [accessibility](docs/accessibility.md), [localization guide](examples/multilanguage-routing/README.md) | The language picker and Help FAB are reference-app controls, not a general Harch widget library. |
+| Sessions, CSRF, authentication adapters, and protected routes | Harch transport/guard primitives; `web-api` and admission examples wire application stores. | [authentication guide](examples/middleware-auth-jwt/README.md) | Credential persistence, MFA policy, authorization, and screen locking are application-owned; screen locking is documented, not implemented. |
+| Request correlation and telemetry | Harch `RequestId`, trusted route observation, and OTLP seams; `web-api` integration coverage. | [request-id source](packages/harch-web/src/HarchWeb/RequestId.hs), [telemetry guide](examples/logging-and-telemetry/README.md) | The framework correlation foundation is landed; the remaining response/log/span/audit join sweep is tracked in AHI-5-RID. |
+| Database effects and migrations | Harch database effect contract; `web-api` PostgreSQL adapter and a non-PostgreSQL test adapter. | [PostgreSQL effects guide][postgres-guide], [custom adapter guide](examples/custom-db-adapter/README.md) | Schema, roles, retention, transaction policy, and connection credentials belong to the application/deployment. |
+| Account-activity audit operations | `web-api` reference schema, atomic session/audit operation, RLS, partition maintenance, and scheduler bootstrap. | [PostgreSQL effects guide][postgres-guide], [audit migration source](packages/web-api/src/WebApi/Postgres/ActivityAuditMigration.hs) | Operator/reporting only; no customer-facing audit API, no automatic SOC compliance, and no superuser-tamper resistance. |
+| TLS, proxy, and deployment hardening | Harch listener/security configuration; executable setup and integration tests. | [setup](SETUP.md), [HTTPS security guide](examples/https-security/README.md), [proxy guide](examples/reverse-proxy-awareness/README.md) | Certificates, DNS, external reachability, secrets, and production policy remain deployment responsibilities. |
+
+The [examples index](examples/README.md) labels each guide as executable,
+implemented/tested, workflow-only, or proposed design so a snippet is never
+mistaken for a shipped API.
+
 [ci-badge]: https://github.com/gorban/haskell-web-api/actions/workflows/ci.yml/badge.svg
 [ci]: https://github.com/gorban/haskell-web-api/actions/workflows/ci.yml
 [coverage-badge]: https://img.shields.io/badge/package_coverage-100%25-brightgreen
@@ -372,3 +401,4 @@ The project targets Linux and macOS directly. On Windows, use WSL2 or Docker wit
 [npm-report]: https://github.blog/security/supply-chain-security/our-plan-for-a-more-secure-npm-supply-chain/
 [pypi-report]: https://blog.pypi.org/posts/2026-04-02-incident-report-litellm-telnyx-supply-chain-attack/
 [hackage-security]: https://hackage.haskell.org/package/hackage-security
+[postgres-guide]: examples/postgres-effects/README.md
