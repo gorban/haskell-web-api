@@ -575,6 +575,16 @@ claim that any example logout clears Web Storage. AHI-4C's remaining client
 failure-route, terminal-document, and real-browser proof slice must connect
 this declaration before an application can opt in.
 
+**Follow-on value-layer decision (AHI-4C, 2026-09-10): keep browser failure
+classification and the original-action reference inside Harch's existing
+request-ID boundary.** `HarchClientFailure` is a closed, low-cardinality sum
+with stable route tags, and `FailureReference` wraps only an already validated
+UUIDv4 `RequestId`. This avoids a parallel application query-string convention
+or second UUID parser, while preventing arbitrary browser exception details
+from becoming page input. It remains intentionally unconnected until the
+typed public failure route, action-response document, and browser replacement
+interpreter land together; no application can opt into it yet.
+
 ### Decision record — PostgreSQL database-change ledger (AHI-4C, 2026-09-03)
 
 **Decision: extract the existing connection-scoped migration transaction into

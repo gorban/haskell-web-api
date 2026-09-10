@@ -71,6 +71,7 @@ library
     HarchWeb.Authentication
     HarchWeb.Authentication.Attempt
     HarchWeb.Authentication.Jwt
+    HarchWeb.ClientActionFailure
     HarchWeb.ClientStorage
     HarchWeb.Controls
     HarchWeb.Csrf
@@ -251,6 +252,7 @@ test-suite harch-web-tests
     Unit.HarchWeb.Authentication.AttemptSpec
     Unit.HarchWeb.Authentication.JwtSpec
     Unit.HarchWeb.AuthenticationSpec
+    Unit.HarchWeb.ClientActionFailureSpec
     Unit.HarchWeb.ClientStorageSpec
     Unit.HarchWeb.DatabaseSpec
     Unit.HarchWeb.DevSmtpSpec

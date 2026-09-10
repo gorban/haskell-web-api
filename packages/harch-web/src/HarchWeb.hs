@@ -3,6 +3,7 @@ module HarchWeb
     module HarchWeb.Authentication,
     module HarchWeb.Authentication.Attempt,
     module HarchWeb.Authentication.Jwt,
+    module HarchWeb.ClientActionFailure,
     module HarchWeb.ClientStorage,
     module HarchWeb.Controls,
     module HarchWeb.Csrf,
@@ -24,6 +25,7 @@ import HarchWeb.Acme
 import HarchWeb.Authentication
 import HarchWeb.Authentication.Attempt
 import HarchWeb.Authentication.Jwt
+import HarchWeb.ClientActionFailure
 import HarchWeb.ClientStorage
 import HarchWeb.Controls
 import HarchWeb.Csrf
