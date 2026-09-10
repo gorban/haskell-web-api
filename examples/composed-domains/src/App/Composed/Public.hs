@@ -21,6 +21,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Action (ActionCodec, ActionCompletionPolicy (ApplyActionResponse), ActionReauthenticationPolicy (DoNotRetain), ClientActionDecodeResult (DecodedClientAction), ClientActionPayload (..), actionCodec, decodeAction, formField, parseField, post, prefixActionCodecByContext, publicAction, required)
 import HarchWeb.ApplicationModule (ApplicationModule (..))
+import HarchWeb.ClientStorage (noClientStorageCleanup)
 import HarchWeb.Controls qualified as Controls
 import HarchWeb.Csrf
   ( CsrfProtection,
@@ -132,6 +133,7 @@ buildPublicModuleWithAdmissionWorkflow staticAssetsConfig csrfProtection _admiss
           clientActionPatches = [],
           clientActionFocusId = Nothing,
           clientActionNavigation = admissionSubmissionNavigation actionRequest returnTarget submissionResult,
+          clientActionStorageCleanup = noClientStorageCleanup,
           clientActionHeaders = admissionSubmissionHeaders sessionConfig submissionResult,
           clientActionObservabilityAttributes = [],
           clientActionLogEntries = []

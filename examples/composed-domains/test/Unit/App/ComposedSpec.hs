@@ -19,6 +19,7 @@ import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
 import HarchWeb.Action qualified as Action
 import HarchWeb.ApplicationModule (ApplicationModule (..), mountApplicationModule)
+import HarchWeb.ClientStorage (noClientStorageCleanup)
 import HarchWeb.Csrf (PageSecurity, mkCsrfToken, mkPageCsrf, mkPageSecurity)
 import HarchWeb.Csrf qualified as Csrf
 import HarchWeb.Document (NavigationItem (..), Page (..), PageShell (..), testRuntimeNonce)
@@ -1791,6 +1792,7 @@ clientActionResponse status =
       clientActionPatches = [],
       clientActionFocusId = Nothing,
       clientActionNavigation = StayOnCurrentRoute,
+      clientActionStorageCleanup = noClientStorageCleanup,
       clientActionHeaders = [],
       clientActionObservabilityAttributes = [],
       clientActionLogEntries = []

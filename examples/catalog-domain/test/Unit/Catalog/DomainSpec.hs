@@ -6,6 +6,7 @@ import Catalog.Domain
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import HarchWeb.Action qualified as Action
 import HarchWeb.ApplicationModule (ApplicationModule (..))
+import HarchWeb.ClientStorage (noClientStorageCleanup)
 import HarchWeb.Csrf (PageSecurity, mkCsrfToken, mkPageCsrf, mkPageSecurity)
 import HarchWeb.Document (Page (..), testRuntimeNonce)
 import HarchWeb.EndpointMetadata (AccessRequirement (RequireAuthorized), EndpointProtocol (ActionEndpoint, HtmlEndpoint), endpointAccess, endpointName, endpointNameText, endpointProtocol, endpointRouteTemplate, routeTemplateText)
@@ -101,6 +102,7 @@ spec = describe "Unit.Catalog.Domain" $ do
         clientActionStatus actionResponse `shouldBe` Http.status200
         clientActionPatches actionResponse `shouldBe` []
         clientActionFocusId actionResponse `shouldBe` Nothing
+        clientActionStorageCleanup actionResponse `shouldBe` noClientStorageCleanup
         clientActionNavigation actionResponse `shouldBe` StayOnCurrentRoute
         clientActionHeaders actionResponse `shouldBe` []
         clientActionObservabilityAttributes actionResponse `shouldBe` []

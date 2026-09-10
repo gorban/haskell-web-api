@@ -20,6 +20,7 @@ import Data.List.NonEmpty qualified as NonEmpty
 import Data.Text (Text)
 import HarchWeb.Action (ActionCodec, ActionCompletionPolicy (ApplyActionResponse), ActionReauthenticationPolicy (DoNotRetain), post, singleActionCodecWithMetadata)
 import HarchWeb.ApplicationModule (ApplicationModule (..))
+import HarchWeb.ClientStorage (noClientStorageCleanup)
 import HarchWeb.Document (Page (..))
 import HarchWeb.EndpointMetadata
   ( AccessRequirement (RequireAuthorized),
@@ -157,6 +158,7 @@ catalogActionHandler commands actionRequest =
                 clientActionPatches = [],
                 clientActionFocusId = Nothing,
                 clientActionNavigation = StayOnCurrentRoute,
+                clientActionStorageCleanup = noClientStorageCleanup,
                 clientActionHeaders = [],
                 clientActionObservabilityAttributes = [],
                 clientActionLogEntries = []

@@ -131,7 +131,7 @@ movedSpec = do
               }
           regionPatch = testRegionPatch "status-region" "Ready"
           clientActionResponse :: ClientActionResponse TestRoute TestContext
-          clientActionResponse = ClientActionResponse {clientActionStatus = Http.status200, clientActionPatches = [regionPatch], clientActionFocusId = Nothing, clientActionNavigation = StayOnCurrentRoute, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
+          clientActionResponse = ClientActionResponse {clientActionStatus = Http.status200, clientActionPatches = [regionPatch], clientActionFocusId = Nothing, clientActionNavigation = StayOnCurrentRoute, clientActionStorageCleanup = noClientStorageCleanup, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
           NavigationItem {navigationLabel = navigationItemLabel, navigationRoute = navigationItemRoute} = navigationItem
           ResolvedNavigationItem {navigationLabel = resolvedNavigationItemLabel, navigationRoute = resolvedNavigationItemRoute, navigationHref = resolvedNavigationItemHref, navigationIsActive = resolvedNavigationItemIsActive} = resolvedNavigationItem
 
@@ -365,9 +365,9 @@ movedSpec = do
           regionPatch = testRegionPatch "status-region" "Ready"
           otherRegionPatch = testRegionPatch "other-region" "Other"
           clientActionResponse :: ClientActionResponse TestRoute TestContext
-          clientActionResponse = ClientActionResponse {clientActionStatus = Http.status200, clientActionPatches = [regionPatch], clientActionFocusId = Just (literalElementId "email"), clientActionNavigation = StayOnCurrentRoute, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
+          clientActionResponse = ClientActionResponse {clientActionStatus = Http.status200, clientActionPatches = [regionPatch], clientActionFocusId = Just (literalElementId "email"), clientActionNavigation = StayOnCurrentRoute, clientActionStorageCleanup = noClientStorageCleanup, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
           otherClientActionResponse :: ClientActionResponse TestRoute TestContext
-          otherClientActionResponse = ClientActionResponse {clientActionStatus = Http.status422, clientActionPatches = [otherRegionPatch], clientActionFocusId = Nothing, clientActionNavigation = StayOnCurrentRoute, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
+          otherClientActionResponse = ClientActionResponse {clientActionStatus = Http.status422, clientActionPatches = [otherRegionPatch], clientActionFocusId = Nothing, clientActionNavigation = StayOnCurrentRoute, clientActionStorageCleanup = noClientStorageCleanup, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
       runtimeNonce <- generateRuntimeNonce
       otherRuntimeNonce <- generateRuntimeNonce
 

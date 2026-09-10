@@ -12,9 +12,9 @@
 -- Applications own the keys they created and select a later action effect;
 -- Harch checks only universal safety properties (an explicit class, a
 -- non-empty key, and bounded declaration size).  The initial primitive is not
--- yet attached to any response, so existing examples make no claim that
--- browser storage is erased on logout.  A following AHI-4C slice owns action
--- transport, failure navigation, and browser proof.
+-- response's existing action transport. Existing examples still make no claim
+-- that browser storage is erased on logout: a following AHI-4C slice owns
+-- browser execution, failure navigation, and browser proof.
 module HarchWeb.ClientStorage
   ( BrowserStorageClass (..),
     BrowserStorageKey,

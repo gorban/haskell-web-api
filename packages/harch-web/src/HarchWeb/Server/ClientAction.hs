@@ -28,6 +28,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Action (ActionMethod, actionMethodText)
+import HarchWeb.ClientStorage (BrowserStorageClass (..), ClientStorageCleanup, browserStorageKeyClass, browserStorageKeyText, clientStorageCleanupEntries, noClientStorageCleanup)
 import HarchWeb.Csrf (CsrfToken, mkCsrfToken, validateCsrfToken)
 import HarchWeb.Markup (ElementId, elementIdText, regionPatchHtml, regionPatchId, safeUrlText)
 import HarchWeb.Observability qualified as Observability
@@ -208,6 +209,7 @@ clientActionMethodNotAllowedResponse allowedMethods =
       clientActionPatches = [],
       clientActionFocusId = Nothing,
       clientActionNavigation = StayOnCurrentRoute,
+      clientActionStorageCleanup = noClientStorageCleanup,
       clientActionHeaders =
         [ ("Allow", TextEncoding.encodeUtf8 (Text.intercalate ", " (map actionMethodText (NonEmpty.toList allowedMethods))))
         ],
@@ -226,6 +228,7 @@ clientActionReauthenticationRequiredResponse =
       clientActionPatches = [],
       clientActionFocusId = Nothing,
       clientActionNavigation = StayOnCurrentRoute,
+      clientActionStorageCleanup = noClientStorageCleanup,
       clientActionHeaders = [("X-Harch-Action-Reauthenticate", "required")],
       clientActionObservabilityAttributes = [],
       clientActionLogEntries = []
@@ -244,19 +247,30 @@ clientActionResponseBody requestId routeCodec actionResponse =
 
 renderClientActionResponse :: RequestId -> RouteCodec route context -> ClientActionResponse route context -> Text
 renderClientActionResponse requestId routeCodec actionResponse =
-  clientActionResponseJson requestId routeCodec (clientActionPatches actionResponse) (clientActionFocusId actionResponse) (clientActionNavigation actionResponse)
+  clientActionResponseJson requestId routeCodec (clientActionPatches actionResponse) (clientActionFocusId actionResponse) (clientActionNavigation actionResponse) (clientActionStorageCleanup actionResponse)
 
-clientActionResponseJson :: RequestId -> RouteCodec route context -> [RegionPatch] -> Maybe ElementId -> ActionNavigation route context -> Text
-clientActionResponseJson requestId routeCodec patches maybeFocusId navigation =
+clientActionResponseJson :: RequestId -> RouteCodec route context -> [RegionPatch] -> Maybe ElementId -> ActionNavigation route context -> ClientStorageCleanup -> Text
+clientActionResponseJson requestId routeCodec patches maybeFocusId navigation storageCleanup =
   jsonText
     ( JsonEncoding.pairs
         ( JsonEncoding.pair "patches" (JsonEncoding.list renderPatch patches)
             <> JsonEncoding.pair "focusId" (Aeson.toEncoding (elementIdText <$> maybeFocusId))
             <> JsonEncoding.pair "navigation" (renderNavigation navigation)
+            <> JsonEncoding.pair "storageCleanup" (JsonEncoding.list renderStorageEntry (clientStorageCleanupEntries storageCleanup))
             <> JsonEncoding.pair "requestId" (Aeson.toEncoding (requestIdText requestId))
         )
     )
   where
+    renderStorageEntry storageKey =
+      JsonEncoding.pairs
+        ( JsonEncoding.pair "storage" (Aeson.toEncoding (storageClassText (browserStorageKeyClass storageKey)))
+            <> JsonEncoding.pair "key" (Aeson.toEncoding (browserStorageKeyText storageKey))
+        )
+    storageClassText :: BrowserStorageClass -> Text
+    storageClassText storageClass =
+      case storageClass of
+        LocalStorage -> "local"
+        SessionStorage -> "session"
     renderPatch patch =
       JsonEncoding.pairs
         ( JsonEncoding.pair "id" (Aeson.toEncoding (regionPatchId patch))

@@ -573,7 +573,9 @@ not the key value. This is deliberately a partial foundational slice: it does
 not yet attach cleanup to an action response, execute browser mutation, or
 claim that any example logout clears Web Storage. AHI-4C's remaining client
 failure-route, terminal-document, and real-browser proof slice must connect
-this declaration before an application can opt in.
+this declaration before an application can opt in. The following transport
+slice now carries that declaration on a typed action response; execution and
+failure replacement remain deliberately unfinished.
 
 **Follow-on value-layer decision (AHI-4C, 2026-09-10): keep browser failure
 classification and the original-action reference inside Harch's existing
@@ -584,6 +586,17 @@ or second UUID parser, while preventing arbitrary browser exception details
 from becoming page input. It remains intentionally unconnected until the
 typed public failure route, action-response document, and browser replacement
 interpreter land together; no application can opt into it yet.
+
+**Follow-on transport decision (AHI-4C, 2026-09-10): extend the existing
+`ClientActionResponse` algebra with the validated cleanup declaration and
+encode it through its established JSON response interpreter.** The action
+response already owns typed patches, focus, and navigation, so a sibling
+logout-only response or application JavaScript configuration would split the
+ordering contract. Every existing response now names `noClientStorageCleanup`
+explicitly; a response which does opt in carries only its bounded, typed local
+or session entries as `storageCleanup` JSON. This slice deliberately does not
+yet execute the browser mutation or provide fatal replacement navigation:
+AHI-4C's following Document-runtime and failure-route work owns those effects.
 
 ### Decision record — PostgreSQL database-change ledger (AHI-4C, 2026-09-03)
 

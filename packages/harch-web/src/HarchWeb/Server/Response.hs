@@ -36,6 +36,7 @@ import HarchWeb.Action
     ClientActionIdempotencyKey,
     ClientActionPayload (..),
   )
+import HarchWeb.ClientStorage (ClientStorageCleanup)
 import HarchWeb.Csrf (PageSecurity, samePageSecurity)
 import HarchWeb.Database (DatabaseOperation)
 import HarchWeb.Document (Page)
@@ -216,6 +217,11 @@ data ClientActionResponse route context = ClientActionResponse
     clientActionPatches :: [RegionPatch],
     clientActionFocusId :: Maybe ElementId,
     clientActionNavigation :: ActionNavigation route context,
+    -- | Application-selected, validated browser-storage entries to remove
+    -- before this successful response's patches or navigation are applied.
+    -- The response algebra owns the declaration; the browser interpreter owns
+    -- execution and fatal failure presentation.
+    clientActionStorageCleanup :: ClientStorageCleanup,
     clientActionHeaders :: Http.ResponseHeaders,
     clientActionObservabilityAttributes :: [Observability.ObservabilityAttribute],
     clientActionLogEntries :: [Text]

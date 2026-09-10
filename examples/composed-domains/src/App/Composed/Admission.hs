@@ -88,6 +88,7 @@ import App.Composed.Admission.Session
 import App.Composed.Admission.Types
 import App.Composed.Model
 import Control.Monad.Except (runExceptT)
+import HarchWeb.ClientStorage (noClientStorageCleanup)
 import HarchWeb.EndpointSecurity
   ( ApplicationSecurity (..),
     EndpointDispatchKind (EndpointClientAction),
@@ -207,6 +208,7 @@ admissionChallenge endpointRequest =
             clientActionPatches = [],
             clientActionFocusId = Nothing,
             clientActionNavigation = NavigateInternal ReplaceHistory admissionRoute,
+            clientActionStorageCleanup = noClientStorageCleanup,
             clientActionHeaders = [],
             clientActionObservabilityAttributes = [],
             clientActionLogEntries = []

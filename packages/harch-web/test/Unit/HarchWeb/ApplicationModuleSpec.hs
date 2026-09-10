@@ -13,6 +13,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Action qualified as Action
 import HarchWeb.ApplicationModule
+import HarchWeb.ClientStorage (noClientStorageCleanup)
 import HarchWeb.Csrf (PageSecurity, mkCsrfToken, mkPageCsrf, mkPageSecurity)
 import HarchWeb.Document (Page (..))
 import HarchWeb.Document qualified as Document
@@ -932,6 +933,7 @@ testClientActionResponse =
       clientActionPatches = [],
       clientActionFocusId = Nothing,
       clientActionNavigation = StayOnCurrentRoute,
+      clientActionStorageCleanup = noClientStorageCleanup,
       clientActionHeaders = [],
       clientActionObservabilityAttributes = [],
       clientActionLogEntries = []
@@ -944,6 +946,7 @@ parentTestClientActionResponse =
       clientActionPatches = [],
       clientActionFocusId = Nothing,
       clientActionNavigation = StayOnCurrentRoute,
+      clientActionStorageCleanup = noClientStorageCleanup,
       clientActionHeaders = [],
       clientActionObservabilityAttributes = [],
       clientActionLogEntries = []

@@ -56,6 +56,7 @@ import HarchWeb
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
     eventStreamResponse,
+    noClientStorageCleanup,
     nonPageInternalRedirectResponse,
     parseClientActionFields,
     readRequestBodyUpTo,
@@ -148,6 +149,7 @@ twoPageClientAction actionRequest =
                         clientActionPatches = subscriptionPatch "status" "Thanks. Your subscription request is ready.",
                         clientActionFocusId = Nothing,
                         clientActionNavigation = NavigateInternal PushHistory (RouteRequest (Custom NativeSubscriptionResult) ()),
+                        clientActionStorageCleanup = noClientStorageCleanup,
                         clientActionHeaders = [],
                         clientActionObservabilityAttributes = [],
                         clientActionLogEntries = []
@@ -158,6 +160,7 @@ twoPageClientAction actionRequest =
                     clientActionPatches = subscriptionPatch "alert" "Enter a valid email address.",
                     clientActionFocusId = Just subscriptionEmailId,
                     clientActionNavigation = StayOnCurrentRoute,
+                    clientActionStorageCleanup = noClientStorageCleanup,
                     clientActionHeaders = [],
                     clientActionObservabilityAttributes = [],
                     clientActionLogEntries = []
