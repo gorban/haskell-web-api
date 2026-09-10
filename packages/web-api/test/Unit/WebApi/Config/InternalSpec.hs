@@ -1750,7 +1750,7 @@ spec = do
         actionResult <-
           HarchWeb.handleClientAction
             runtimeApplication
-            (typedAccountActionRequest "POST" "/register" [("username", registrationUsername), ("email", registrationEmail), ("password", "correct horse battery staple")] defaultRequestContext)
+            (typedAccountActionRequest "POST" "/register" [("username", registrationUsername), ("email", registrationEmail), ("password", "correct horse battery staple")] (defaultRequestContext {requestCorrelationId = Just testRequestId}))
         (actionResult >>= HarchWeb.clientActionResultResponse) `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "check its inbox"
         awaitDevSmtpEmail server registrationEmail
           >>= \case

@@ -3595,6 +3595,29 @@ transaction state. The remaining AHI-5 work is the other selected
 audit-producing mutations; this slice alone does not claim the whole audit
 catalog is atomic.
 
+**Follow-up slice: atomically settle a pending registration delivery and its
+required audit activity (AHI-5, 2026-09-10).** The generic `AccountStore`
+continues to own pending-registration lifecycle semantics, including released
+claims after a failed SMTP send. At the web-api registration action boundary,
+only its post-SMTP successful-delivery settlement is replaced with the narrow
+application-owned `PendingRegistrationAuditStore`. Its PostgreSQL adapter calls
+one security-definer function that updates the matching `claimed` verification
+row to `delivered` and calls `account_audit.append_activity` in the same
+transaction. Audit failure therefore rolls the update back, leaving the claim
+retryable rather than asserting delivery without its required operator event.
+The function owner has only the required verification-column privileges, while
+the runtime has execute-only access to the controlled operation. The action
+constructs the closed `PendingRegistrationDelivered` event from its claim and
+the existing trusted request context; it does not receive an arbitrary audit
+payload, route, or ambient transaction.
+
+This deliberately extends the existing application composition and generic
+registration callback instead of putting durable policy in Harch, adding a
+generic post-commit logger, or making all account storage depend on PostgreSQL.
+The covered event is only pending-registration delivery. Verification resend,
+email verification, known-account rejection, and MFA enrollment remain
+explicit AHI-5 atomic-workflow follow-ups; this slice does not claim them.
+
 **Follow-up slice: explicit logout revokes first and accepts a bounded audit
 gap (AHI-5, 2026-09-09).** `AccountSessionAuditStore` remains deliberately
 specific to login issuance's atomic contract. Explicit logout instead uses the

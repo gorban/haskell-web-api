@@ -20,6 +20,7 @@ module WebApi.Postgres.ActivityAuditMigration
     accountAuditSessionIssueStatements,
     accountAuditSessionIssueConflictFixStatements,
     accountAuditSessionIssueInsertPrivilegeFixStatements,
+    accountAuditRegistrationDeliveryStatements,
     accountAuditRuntimeReconciliationStatements,
   )
 where
@@ -98,6 +99,7 @@ accountAuditRuntimeReconciliationStatements databaseName runtimeRoleName =
     "GRANT USAGE ON SCHEMA account_audit TO " <> quotedIdentifier runtimeRoleName <> ";",
     "GRANT EXECUTE ON FUNCTION account_audit.append_activity(TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) TO " <> quotedIdentifier runtimeRoleName <> ";",
     "GRANT EXECUTE ON FUNCTION account_audit.issue_account_session_with_activity(TEXT, TEXT, BIGINT, BIGINT, TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) TO " <> quotedIdentifier runtimeRoleName <> ";",
+    "GRANT EXECUTE ON FUNCTION account_audit.complete_pending_registration_delivery_with_activity(TEXT, TEXT, TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) TO " <> quotedIdentifier runtimeRoleName <> ";",
     "INSERT INTO account_audit.runtime_scope (runtime_role_name, audit_scope_id) VALUES (" <> quotedLiteral runtimeRoleName <> ", 'default') ON CONFLICT (runtime_role_name) DO NOTHING;"
   ]
 
@@ -184,6 +186,42 @@ accountAuditSessionIssueInsertPrivilegeFixStatements =
       "  BEGIN\n    INSERT INTO web_api.account_sessions (session_id, account_id, issued_at_nanoseconds, expires_at_nanoseconds)\n    VALUES (p_session_id, p_account_id, p_issued_at_nanoseconds, p_expires_at_nanoseconds);\n  EXCEPTION WHEN unique_violation THEN\n    RETURN;\n  END;"
       issueAccountSessionWithActivityFunction
   ]
+
+-- | The registration email has already crossed the SMTP boundary before this
+-- operation runs.  Settling its durable delivery claim and recording the
+-- corresponding operator event therefore share this one transaction: an
+-- audit-capacity or append failure leaves the claim retryable rather than
+-- asserting delivery without evidence.
+accountAuditRegistrationDeliveryStatements :: [Text]
+accountAuditRegistrationDeliveryStatements =
+  [ "GRANT USAGE ON SCHEMA web_api TO account_audit_owner;",
+    "GRANT SELECT (account_id, token_digest, delivery_state), UPDATE (delivery_state, delivery_claimed_at_nanoseconds) ON TABLE web_api.email_verifications TO account_audit_owner;",
+    completePendingRegistrationDeliveryWithActivityFunction,
+    "ALTER FUNCTION account_audit.complete_pending_registration_delivery_with_activity(TEXT, TEXT, TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) OWNER TO account_audit_owner;",
+    "REVOKE ALL ON FUNCTION account_audit.complete_pending_registration_delivery_with_activity(TEXT, TEXT, TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) FROM PUBLIC;"
+  ]
+
+completePendingRegistrationDeliveryWithActivityFunction :: Text
+completePendingRegistrationDeliveryWithActivityFunction =
+  Text.unlines
+    [ "CREATE OR REPLACE FUNCTION account_audit.complete_pending_registration_delivery_with_activity(",
+      "  p_account_id TEXT, p_token_digest TEXT, p_audit_account_id TEXT, p_request_id TEXT, p_event_code TEXT, p_payload_version SMALLINT, p_payload_detail TEXT,",
+      "  p_route_endpoint_name TEXT, p_route_mount_chain TEXT, p_route_template TEXT, p_route_locale TEXT",
+      ") RETURNS TABLE(account_id TEXT)",
+      "LANGUAGE plpgsql",
+      "SECURITY DEFINER",
+      "SET search_path = pg_catalog, account_audit, web_api",
+      "AS $$",
+      "BEGIN",
+      "  IF p_account_id <> p_audit_account_id THEN RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'registration audit subject does not match delivery account'; END IF;",
+      "  UPDATE web_api.email_verifications AS verification SET delivery_state = 'delivered', delivery_claimed_at_nanoseconds = NULL",
+      "  WHERE verification.account_id = p_account_id AND verification.token_digest = p_token_digest AND verification.delivery_state = 'claimed';",
+      "  IF NOT FOUND THEN RETURN; END IF;",
+      "  PERFORM activity_id FROM account_audit.append_activity(p_audit_account_id, p_request_id, p_event_code, p_payload_version, p_payload_detail, p_route_endpoint_name, p_route_mount_chain, p_route_template, p_route_locale);",
+      "  account_id := p_account_id; RETURN NEXT;",
+      "END;",
+      "$$;"
+    ]
 
 issueAccountSessionWithActivityFunction :: Text
 issueAccountSessionWithActivityFunction =

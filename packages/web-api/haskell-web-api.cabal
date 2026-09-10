@@ -104,6 +104,7 @@ library
     WebApi.MfaEnrollment
     WebApi.Page
     WebApi.PageShell
+    WebApi.PendingRegistrationAudit
     WebApi.Postgres
     WebApi.Postgres.Testing
     WebApi.Profile
@@ -144,6 +145,7 @@ library
     WebApi.Postgres.MfaRepository
     WebApi.Postgres.Migration
     WebApi.Postgres.PageRepository
+    WebApi.Postgres.PendingRegistrationAuditRepository
     WebApi.Postgres.Pool
     WebApi.Postgres.QueryRunner
     WebApi.Postgres.Runtime
@@ -245,6 +247,7 @@ test-suite haskell-web-api-tests
     Unit.WebApi.Postgres.LoginAttemptRepositorySpec
     Unit.WebApi.Postgres.MfaEnrollmentSessionRepositorySpec
     Unit.WebApi.Postgres.MfaRepositorySpec
+    Unit.WebApi.Postgres.PendingRegistrationAuditRepositorySpec
     Unit.WebApi.Postgres.PoolSpec
     Unit.WebApi.Postgres.SessionRepositorySpec
     Unit.WebApi.PostgresSpec

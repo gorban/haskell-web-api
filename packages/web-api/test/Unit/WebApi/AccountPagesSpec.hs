@@ -47,7 +47,7 @@ import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buil
 import WebApi.AccountPages.Validation (Validation, invalid, valid, validate3, validate4, validationResult)
 import WebApi.AccountPrincipal (mkAccountPrincipal)
 import WebApi.AccountSessionAudit (AccountSessionAuditStore (..), AccountSessionAuditStoreError (..))
-import WebApi.ActivityAudit (AccountActivity (..), AccountAuditEvent (AccountSessionEnded, AccountSessionIssued), ActivityAuditStore (..), ActivityAuditStoreError (..), AuditAuthenticationMethod (..), AuditSessionEndReason (ExplicitLogout), activityIdFromDatabase)
+import WebApi.ActivityAudit (AccountActivity (..), AccountAuditEvent (AccountSessionEnded, AccountSessionIssued, PendingRegistrationDelivered), ActivityAuditStore (..), ActivityAuditStoreError (..), AuditAuthenticationMethod (..), AuditRegistrationDeliveryStage (RegistrationCreated, RegistrationRetried), AuditSessionEndReason (ExplicitLogout), activityIdFromDatabase)
 import WebApi.App (buildRuntimeAppWithDatabaseBuilder, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.AppEffect qualified as AppEffect
@@ -57,6 +57,7 @@ import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), Accoun
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), ProfilePageModel (..), SignedOutProfilePageDetails (..), buildPageModelFromRouteData, renderPageFromRouteData)
+import WebApi.PendingRegistrationAudit (PendingRegistrationAuditStore (..), PendingRegistrationAuditStoreError (PendingRegistrationAuditCapacityExceeded))
 import WebApi.Postgres.Testing (buildRuntimePostgresAccountCredentialStoreWithRunner, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStoreWithRunner)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), defaultRequestContext, renderRoutePath, routeCodec)
 import WebApi.RouteData (RouteDataResult (..), RouteDataSelection (..), selectRouteData, selectRouteDataSelectionWithDatabase)
@@ -643,6 +644,7 @@ spec = do
 
     it "captures registration actions before deferred behavior and patches the localized region" $ do
       deliveredMessagesReference <- newIORef []
+      auditedDeliveryActivitiesReference <- newIORef []
       let accountId = requiredAccountId "account_01"
           emailAddress = requiredEmailAddress "person@example.test"
           token = requiredVerificationToken (Text.replicate 43 "a")
@@ -677,6 +679,10 @@ spec = do
                 accountWorkflowLoginAttemptStore = accountWorkflowLoginAttemptStore unavailableAccountWorkflow,
                 accountWorkflowSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow,
                 accountWorkflowSessionAuditStore = accountWorkflowSessionAuditStore unavailableAccountWorkflow,
+                accountWorkflowPendingRegistrationAuditStore =
+                  PendingRegistrationAuditStore $ \claim activity -> do
+                    modifyIORef' auditedDeliveryActivitiesReference (<> [(claim, activity)])
+                    pure (Right True),
                 accountWorkflowActivityAuditStore = accountWorkflowActivityAuditStore unavailableAccountWorkflow,
                 accountWorkflowMfaEnrollmentSessionStore = accountWorkflowMfaEnrollmentSessionStore unavailableAccountWorkflow,
                 accountWorkflowProfileStore = accountWorkflowProfileStore unavailableAccountWorkflow,
@@ -694,7 +700,7 @@ spec = do
                     <> "?token="
                     <> Account.emailVerificationTokenText verificationToken
               }
-          request method path fields locale = typedAccountActionRequest method path fields (defaultRequestContext {requestLocale = locale})
+          request method path fields locale = typedAccountActionRequest method path fields (defaultRequestContext {requestLocale = locale, requestCorrelationId = Just testRequestId})
           rawAction method path fields =
             HarchWeb.ClientActionPayload
               { HarchWeb.clientActionMethod = method,
@@ -802,6 +808,28 @@ spec = do
       deliveredMessages `shouldSatisfy` \case
         [_, message] -> "https://account.example.test/es/verify?token=" `Text.isInfixOf` Email.emailMessageBody message
         _ -> False
+      let noRoute activity =
+            case activityRoute activity of
+              Nothing -> True
+              Just _ -> False
+          createdDeliveryEvent activity =
+            case activityEvent activity of
+              PendingRegistrationDelivered RegistrationCreated -> True
+              _ -> False
+      auditedDeliveryActivities <- readIORef auditedDeliveryActivitiesReference
+      case auditedDeliveryActivities of
+        [ (firstClaim, firstActivity),
+          (secondClaim, secondActivity)
+          ] -> do
+            activitySubject firstActivity `shouldBe` pendingRegistrationClaimAccountId firstClaim
+            activitySubject secondActivity `shouldBe` pendingRegistrationClaimAccountId secondClaim
+            activityRequestId firstActivity `shouldBe` testRequestId
+            activityRequestId secondActivity `shouldBe` testRequestId
+            noRoute firstActivity `shouldBe` True
+            noRoute secondActivity `shouldBe` True
+            createdDeliveryEvent firstActivity `shouldBe` True
+            createdDeliveryEvent secondActivity `shouldBe` True
+        _ -> expectationFailure "expected two audited pending-registration delivery settlements"
       unconfiguredAction <-
         HarchWeb.handleClientAction
           pureApplication
@@ -973,7 +1001,7 @@ spec = do
           emailAddress = requiredEmailAddress "person@example.test"
           token = requiredVerificationToken (Text.replicate 43 "a")
           storedVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token
-          request path fields = typedAccountActionRequest "POST" path fields defaultRequestContext
+          request path fields = typedAccountActionRequest "POST" path fields (defaultRequestContext {requestCorrelationId = Just testRequestId})
           workflowFor accountStore now emailDelivery =
             AccountWorkflow
               { accountWorkflowStore = accountStore,
@@ -987,6 +1015,7 @@ spec = do
                 accountWorkflowLoginAttemptStore = accountWorkflowLoginAttemptStore unavailableAccountWorkflow,
                 accountWorkflowSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow,
                 accountWorkflowSessionAuditStore = accountWorkflowSessionAuditStore unavailableAccountWorkflow,
+                accountWorkflowPendingRegistrationAuditStore = PendingRegistrationAuditStore (\_ _ -> pure (Right True)),
                 accountWorkflowActivityAuditStore = accountWorkflowActivityAuditStore unavailableAccountWorkflow,
                 accountWorkflowMfaEnrollmentSessionStore = accountWorkflowMfaEnrollmentSessionStore unavailableAccountWorkflow,
                 accountWorkflowProfileStore = accountWorkflowProfileStore unavailableAccountWorkflow,
@@ -1014,22 +1043,32 @@ spec = do
           validRegistration = [("username", "person_01"), ("email", "person@example.test"), ("password", "correct horse battery staple")]
           validToken = [("token", Account.emailVerificationTokenText token)]
           delivery = Email.EmailDelivery (\message -> Email.emailMessageSubject message `shouldBe` "Verify your email address")
-          spanishAction path fields = typedAccountActionRequest "POST" ("/es" <> path) fields (defaultRequestContext {requestLocale = Spanish})
+          spanishAction path fields = typedAccountActionRequest "POST" ("/es" <> path) fields (defaultRequestContext {requestLocale = Spanish, requestCorrelationId = Just testRequestId})
       alreadyRegistered <- handleAccountAction (workflowFor (store (Right PendingAccountEmailTaken) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
       alreadyRegistered `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "If that address can register"
       spanishAlreadyRegistered <- handleAccountAction (workflowFor (store (Right PendingAccountEmailTaken) (Right Nothing) (Right Nothing)) 100 delivery) (spanishAction "/register" validRegistration)
       spanishAlreadyRegistered `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "Si esa direccion"
       createdEnglish <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
       createdEnglish `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "If that address can register"
+      retriedActivityReference <- newIORef Nothing
       retriedRegistration <-
         handleAccountAction
-          ( workflowFor
-              (store (Right (PendingAccountDeliveryClaimed (PendingRegistrationClaim accountId (storedVerificationTokenDigest storedVerification) PendingRegistrationRetried))) (Right Nothing) (Right Nothing))
-              100
-              delivery
+          ( ( workflowFor
+                (store (Right (PendingAccountDeliveryClaimed (PendingRegistrationClaim accountId (storedVerificationTokenDigest storedVerification) PendingRegistrationRetried))) (Right Nothing) (Right Nothing))
+                100
+                delivery
+            )
+              { accountWorkflowPendingRegistrationAuditStore = PendingRegistrationAuditStore (\_ activity -> writeIORef retriedActivityReference (Just activity) >> pure (Right True))
+              }
           )
           (request "/register" validRegistration)
       retriedRegistration `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "If that address can register"
+      readIORef retriedActivityReference >>= \case
+        Just activity ->
+          case activityEvent activity of
+            PendingRegistrationDelivered RegistrationRetried -> pure ()
+            _ -> expectationFailure "expected a retried pending-registration delivery audit event"
+        Nothing -> expectationFailure "expected a retried pending-registration delivery audit activity"
       -- Byte-identical wire responses for the already-registered and
       -- newly-created outcomes: private telemetry may distinguish lifecycle
       -- stages, but the hedged wording only protects against enumeration if
@@ -1116,10 +1155,7 @@ spec = do
       claimLost <-
         handleAccountAction
           ( (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 delivery)
-              { accountWorkflowStore =
-                  (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing))
-                    { completePendingRegistrationDelivery = \_ -> pure (Right False)
-                    }
+              { accountWorkflowPendingRegistrationAuditStore = PendingRegistrationAuditStore (\_ _ -> pure (Right False))
               }
           )
           (request "/register" validRegistration)
@@ -1129,6 +1165,20 @@ spec = do
           ( \response ->
               actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable" (Just response)
                 && any (\attribute -> Observability.attributeName attribute == "app.failure.code" && Observability.attributeValue attribute == Observability.TextAttribute "account.registration.delivery-claim") (HarchWeb.clientActionObservabilityAttributes response)
+          )
+      auditCapacityFailure <-
+        handleAccountAction
+          ( (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 delivery)
+              { accountWorkflowPendingRegistrationAuditStore = PendingRegistrationAuditStore (\_ _ -> pure (Left PendingRegistrationAuditCapacityExceeded))
+              }
+          )
+          (request "/register" validRegistration)
+      auditCapacityFailure
+        `shouldSatisfy` maybe
+          False
+          ( \response ->
+              actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable" (Just response)
+                && any (\attribute -> Observability.attributeName attribute == "app.failure.code" && Observability.attributeValue attribute == Observability.TextAttribute "account.registration.store") (HarchWeb.clientActionObservabilityAttributes response)
           )
       passwordHashingFailure <-
         handleAccountAction

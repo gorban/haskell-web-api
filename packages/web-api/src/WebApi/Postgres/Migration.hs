@@ -36,6 +36,7 @@ import WebApi.Postgres.ActivityAuditMigration
     accountAuditInitialMaintenanceStatements,
     accountAuditInsertPolicyFixStatements,
     accountAuditMigrationStatements,
+    accountAuditRegistrationDeliveryStatements,
     accountAuditRuntimeReconciliationStatements,
     accountAuditSessionIssueConflictFixStatements,
     accountAuditSessionIssueInsertPrivilegeFixStatements,
@@ -107,7 +108,8 @@ webApiDatabaseChanges =
     change "account-audit-initial-maintenance-v1" accountAuditInitialMaintenanceStatements,
     change "account-audit-session-issue-v1" accountAuditSessionIssueStatements,
     change "account-audit-session-issue-conflict-fix-v1" accountAuditSessionIssueConflictFixStatements,
-    change "account-audit-session-issue-insert-privilege-fix-v1" accountAuditSessionIssueInsertPrivilegeFixStatements
+    change "account-audit-session-issue-insert-privilege-fix-v1" accountAuditSessionIssueInsertPrivilegeFixStatements,
+    change "account-audit-registration-delivery-v1" accountAuditRegistrationDeliveryStatements
   ]
   where
     change changeId statements =

@@ -20,7 +20,7 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import Unit.WebApi.TestSupport (migrationPostgresTestConfig, postgresTestConfig)
 import WebApi.ActivityAudit
 import WebApi.Config (DatabaseConfig (..))
-import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), accountAuditAppendResultFixStatements, accountAuditControlledAppendPolicyStatements, accountAuditInitialMaintenanceStatements, accountAuditInsertPolicyFixStatements, accountAuditMaintenanceJobName, accountAuditMaintenanceSchedule, accountAuditMigrationStatements, accountAuditRuntimeReconciliationStatements, bootstrapAccountAuditSchedulerWithRunner, cronRunDetailsRetentionJobName, cronRunDetailsRetentionSchedule, installAccountAuditSchedulerStatements)
+import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), accountAuditAppendResultFixStatements, accountAuditControlledAppendPolicyStatements, accountAuditInitialMaintenanceStatements, accountAuditInsertPolicyFixStatements, accountAuditMaintenanceJobName, accountAuditMaintenanceSchedule, accountAuditMigrationStatements, accountAuditRegistrationDeliveryStatements, accountAuditRuntimeReconciliationStatements, bootstrapAccountAuditSchedulerWithRunner, cronRunDetailsRetentionJobName, cronRunDetailsRetentionSchedule, installAccountAuditSchedulerStatements)
 
 spec = describe "WebApi.ActivityAudit" $ do
   it "encodes every closed audit event with a stable code, version, and bounded detail" $ do
@@ -75,6 +75,7 @@ spec = describe "WebApi.ActivityAudit" $ do
     let schemaSql = Text.unlines accountAuditMigrationStatements
         policySql = Text.unlines (accountAuditInsertPolicyFixStatements <> accountAuditControlledAppendPolicyStatements)
         appendResultSql = Text.unlines accountAuditAppendResultFixStatements
+        registrationDeliverySql = Text.unlines accountAuditRegistrationDeliveryStatements
         setupSql = Text.unlines accountAuditInitialMaintenanceStatements
         reconciliationSql = Text.unlines (accountAuditRuntimeReconciliationStatements "web_api_dev" "runtime\"role")
     expectAll
@@ -86,6 +87,8 @@ spec = describe "WebApi.ActivityAudit" $ do
                auditMigrationExpectation "controlled append policy" ("FOR INSERT TO PUBLIC WITH CHECK (true)" `Text.isInfixOf` policySql),
                auditMigrationExpectation "append identity result" ("currval(pg_get_serial_sequence('account_audit.activity', 'activity_id'))" `Text.isInfixOf` appendResultSql),
                auditMigrationExpectation "initial partition maintenance" ("PERFORM account_audit.maintain_activity_partitions()" `Text.isInfixOf` setupSql),
+               auditMigrationExpectation "atomic registration-delivery operation" ("complete_pending_registration_delivery_with_activity" `Text.isInfixOf` registrationDeliverySql),
+               auditMigrationExpectation "registration-delivery least privilege" ("GRANT SELECT (account_id, token_digest, delivery_state), UPDATE (delivery_state, delivery_claimed_at_nanoseconds) ON TABLE web_api.email_verifications TO account_audit_owner" `Text.isInfixOf` registrationDeliverySql),
                auditMigrationExpectation "reader and scheduler connection grants" ("GRANT CONNECT ON DATABASE \"web_api_dev\" TO web_api_audit_reader, web_api_audit_scheduler" `Text.isInfixOf` reconciliationSql),
                auditMigrationExpectation "quoted runtime role identifier" ("\"runtime\"\"role\"" `Text.isInfixOf` reconciliationSql),
                auditMigrationExpectation "runtime scope literal" ("VALUES ('runtime\"role', 'default')" `Text.isInfixOf` reconciliationSql)

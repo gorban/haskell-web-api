@@ -29,6 +29,7 @@ import WebApi.AccountSessionAudit (AccountSessionAuditStore)
 import WebApi.ActivityAudit (ActivityAuditStore)
 import WebApi.Login (AccountCredentialStore, LoginAttemptStore)
 import WebApi.Mfa (MfaStore)
+import WebApi.PendingRegistrationAudit (PendingRegistrationAuditStore)
 import WebApi.Route (AppRequestContext)
 import WebApi.Session (AccountSessionStore, MfaEnrollmentSessionStore)
 
@@ -48,6 +49,11 @@ data AccountWorkflow = AccountWorkflow
     accountWorkflowLoginAttemptStore :: LoginAttemptStore,
     accountWorkflowSessionStore :: AccountSessionStore,
     accountWorkflowSessionAuditStore :: AccountSessionAuditStore,
+    -- | Registration delivery settles through this separate atomic operation:
+    -- SMTP has already accepted the message, so the durable claim transition
+    -- and its required operator event either commit together or remain
+    -- retryable together.
+    accountWorkflowPendingRegistrationAuditStore :: PendingRegistrationAuditStore,
     -- | The independently invoked append port for domain mutations whose
     -- audit policy intentionally differs from login's atomic session-and-
     -- audit commit. In particular, explicit logout first revokes its durable

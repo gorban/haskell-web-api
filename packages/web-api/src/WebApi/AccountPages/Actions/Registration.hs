@@ -35,8 +35,11 @@ import HarchWeb.Time (UnixTimeNanoseconds)
 import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
 import WebApi.Account
-  ( AccountStoreError,
+  ( AccountStore (..),
+    AccountStoreError (..),
     EmailVerificationEnvironment (..),
+    PendingRegistrationClaim (..),
+    PendingRegistrationDeliveryStage (..),
     RegistrationEnvironment (..),
     RegistrationError (..),
     RegistrationRequest (..),
@@ -61,12 +64,22 @@ import WebApi.AccountPages.FieldIds
   )
 import WebApi.AccountPages.Forms
 import WebApi.AccountPages.Validation (Validation, invalid, valid, validate4, validationResult)
+import WebApi.ActivityAudit
+  ( AccountActivity (..),
+    AccountAuditEvent (PendingRegistrationDelivered),
+    auditRouteObservationFromTrusted,
+  )
+import WebApi.ActivityAudit qualified as ActivityAudit
 import WebApi.AppEffect
   ( AccountWorkflow (..),
     AppM,
     FailureCode (..),
   )
 import WebApi.Localization (AppMessage (..))
+import WebApi.PendingRegistrationAudit
+  ( PendingRegistrationAuditStore (..),
+    PendingRegistrationAuditStoreError (..),
+  )
 import WebApi.Route (AppRequestContext (..))
 import WebApi.Session (mfaEnrollmentSessionCookiePolicy)
 
@@ -118,7 +131,7 @@ registerAccountNow actionRequest (_, _, displayNameValue, passwordValue, usernam
           registrationStoragePolicy = defaultPendingRegistrationStoragePolicy,
           registrationVerificationEnvironment =
             EmailVerificationEnvironment
-              { verificationStore = accountWorkflowStore workflow,
+              { verificationStore = registrationAuditStore actionRequest workflow,
                 verificationDeliveryEnvironment =
                   VerificationDeliveryEnvironment
                     { verificationDeliveryTimeout = accountWorkflowRegistrationDeliveryTimeout workflow,
@@ -136,6 +149,52 @@ registerAccountNow actionRequest (_, _, displayNameValue, passwordValue, usernam
           registrationUsername = Just username,
           registrationDisplayName = nonEmptyText displayNameValue
         }
+
+-- | The generic registration workflow retains its existing storage-neutral
+-- lifecycle API.  At this application action boundary, its only successful
+-- delivery settlement is replaced with the audited atomic operation.  SMTP
+-- has returned before this callback runs, so an audit failure keeps the claim
+-- in @claimed@ for a later retry rather than recording a delivery without the
+-- required operator event.
+registrationAuditStore :: AccountActionRequest -> AccountWorkflow -> AccountStore
+registrationAuditStore actionRequest workflow =
+  (accountWorkflowStore workflow)
+    { completePendingRegistrationDelivery = completeWithAudit
+    }
+  where
+    completeWithAudit claim =
+      case pendingRegistrationDeliveryActivity actionRequest claim of
+        Left activityError -> pure (Left (pendingRegistrationAuditAsAccountStoreError activityError))
+        Right activity -> do
+          completed <- completePendingRegistrationDeliveryWithAudit (accountWorkflowPendingRegistrationAuditStore workflow) claim activity
+          pure (either (Left . pendingRegistrationAuditAsAccountStoreError) Right completed)
+
+pendingRegistrationDeliveryActivity :: AccountActionRequest -> PendingRegistrationClaim -> Either PendingRegistrationAuditStoreError AccountActivity
+pendingRegistrationDeliveryActivity actionRequest claim = do
+  requestId <- maybe (Left PendingRegistrationAuditStoreCorruptData) Right (requestCorrelationId context)
+  route <- traverse (either (const (Left PendingRegistrationAuditStoreCorruptData)) Right . auditRouteObservationFromTrusted) (requestRouteObservation context)
+  pure
+    AccountActivity
+      { activitySubject = pendingRegistrationClaimAccountId claim,
+        activityRequestId = requestId,
+        activityEvent = PendingRegistrationDelivered (auditDeliveryStage (pendingRegistrationClaimStage claim)),
+        activityRoute = route
+      }
+  where
+    context = HarchWeb.clientActionContext actionRequest
+
+auditDeliveryStage :: PendingRegistrationDeliveryStage -> ActivityAudit.AuditRegistrationDeliveryStage
+auditDeliveryStage deliveryStage =
+  case deliveryStage of
+    PendingRegistrationCreated -> ActivityAudit.RegistrationCreated
+    PendingRegistrationRetried -> ActivityAudit.RegistrationRetried
+
+pendingRegistrationAuditAsAccountStoreError :: PendingRegistrationAuditStoreError -> AccountStoreError
+pendingRegistrationAuditAsAccountStoreError auditError =
+  case auditError of
+    PendingRegistrationAuditStoreUnavailable -> AccountStoreUnavailable "pending registration audit store unavailable"
+    PendingRegistrationAuditCapacityExceeded -> AccountStoreUnavailable "account audit partition capacity is exhausted"
+    PendingRegistrationAuditStoreCorruptData -> AccountStoreCorruptData "pending registration audit store returned corrupt data"
 
 parseRegistrationForm ::
   AccountActionRequest ->

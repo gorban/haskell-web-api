@@ -27,6 +27,7 @@ import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppEnvironmentConfig (..), AppMode (..), SmtpDeliveryConfig (..), defaultAppEnvironmentConfig)
 import WebApi.Login (AccountCredentialStore (..), AccountCredentialStoreError (..), LoginAttemptStore (..), LoginAttemptStoreError (..))
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..))
+import WebApi.PendingRegistrationAudit (PendingRegistrationAuditStore (..), PendingRegistrationAuditStoreError (..))
 import WebApi.Postgres.AccountRepository
   ( buildRuntimePostgresAccountCredentialStore,
     buildRuntimePostgresAccountProfileStore,
@@ -37,6 +38,7 @@ import WebApi.Postgres.ActivityAuditRepository (buildRuntimePostgresActivityAudi
 import WebApi.Postgres.LoginAttemptRepository (buildRuntimePostgresLoginAttemptStore)
 import WebApi.Postgres.MfaEnrollmentSessionRepository (buildRuntimePostgresMfaEnrollmentSessionStore)
 import WebApi.Postgres.MfaRepository (buildRuntimePostgresMfaStore)
+import WebApi.Postgres.PendingRegistrationAuditRepository (buildRuntimePostgresPendingRegistrationAuditStore)
 import WebApi.Postgres.Pool (PostgresPool)
 import WebApi.Postgres.SessionRepository (buildRuntimePostgresAccountSessionStore)
 import WebApi.Route (AppRequestContext, AppRoute (EmailVerificationRoute), renderRoutePath)
@@ -64,6 +66,7 @@ buildRuntimeAccountWorkflowWithJwt pool !environmentConfig jwtIssuer =
       accountWorkflowLoginAttemptStore = buildRuntimePostgresLoginAttemptStore pool,
       accountWorkflowSessionStore = buildRuntimePostgresAccountSessionStore pool,
       accountWorkflowSessionAuditStore = buildRuntimePostgresAccountSessionAuditStore pool,
+      accountWorkflowPendingRegistrationAuditStore = buildRuntimePostgresPendingRegistrationAuditStore pool,
       accountWorkflowActivityAuditStore = buildRuntimePostgresActivityAuditStore pool,
       accountWorkflowMfaEnrollmentSessionStore = buildRuntimePostgresMfaEnrollmentSessionStore pool,
       accountWorkflowProfileStore = buildRuntimePostgresAccountProfileStore pool,
@@ -136,6 +139,7 @@ unavailableAccountWorkflow =
       accountWorkflowLoginAttemptStore = unavailableLoginAttemptStore,
       accountWorkflowSessionStore = unavailableAccountSessionStore,
       accountWorkflowSessionAuditStore = unavailableAccountSessionAuditStore,
+      accountWorkflowPendingRegistrationAuditStore = unavailablePendingRegistrationAuditStore,
       accountWorkflowActivityAuditStore = unavailableActivityAuditStore,
       accountWorkflowMfaEnrollmentSessionStore = unavailableMfaEnrollmentSessionStore,
       accountWorkflowProfileStore = unavailableAccountProfileStore,
@@ -198,6 +202,10 @@ unavailableAccountSessionStore =
 unavailableAccountSessionAuditStore :: AccountSessionAuditStore
 unavailableAccountSessionAuditStore =
   AccountSessionAuditStore (\_ _ -> unavailableResult AccountSessionAuditStoreUnavailable)
+
+unavailablePendingRegistrationAuditStore :: PendingRegistrationAuditStore
+unavailablePendingRegistrationAuditStore =
+  PendingRegistrationAuditStore (\_ _ -> unavailableResult PendingRegistrationAuditStoreUnavailable)
 
 unavailableActivityAuditStore :: ActivityAuditStore
 unavailableActivityAuditStore =

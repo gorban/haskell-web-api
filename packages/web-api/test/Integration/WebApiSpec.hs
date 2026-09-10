@@ -440,6 +440,53 @@ spec = do
               "SELECT count(*)::TEXT FROM web_api.account_sessions WHERE session_id = 'account-audit-rejected-session';"
           rolledBackAtomicSession `shouldBe` (ExitSuccess, "0\n", "")
 
+          -- A registration email was already accepted by SMTP before this
+          -- controlled operation.  Its durable delivery settlement is still
+          -- AuditRequired: the state change and closed event commit together,
+          -- and an invalid event leaves the claim available for a later
+          -- registration retry rather than asserting delivery without proof.
+          runPsql
+            inheritedEnvironment
+            "web_api_owner"
+            "web_api_owner"
+            "DELETE FROM web_api.accounts WHERE account_id = 'account_audit_delivery_test'; INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds) VALUES ('account_audit_delivery_test', 'account-audit-delivery@example.test', 'test-hash', 1); INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds, delivery_state, delivery_claimed_at_nanoseconds) VALUES ('account-audit-delivery-digest', 'account_audit_delivery_test', 'account-audit-delivery@example.test', 200, 'claimed', 1);"
+            `shouldReturn` (ExitSuccess, "", "")
+          atomicDeliverySettlement <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "SELECT account_id FROM account_audit.complete_pending_registration_delivery_with_activity('account_audit_delivery_test', 'account-audit-delivery-digest', 'account_audit_delivery_test', '550e8400-e29b-41d4-a716-446655440003', 'pending-registration-delivered', 1::SMALLINT, 'created', NULL, NULL, NULL, NULL);"
+          atomicDeliverySettlement `shouldBe` (ExitSuccess, "account_audit_delivery_test\n", "")
+          committedAtomicDelivery <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT (SELECT delivery_state FROM web_api.email_verifications WHERE account_id = 'account_audit_delivery_test') || '|' || (SELECT count(*)::TEXT FROM account_audit.activity WHERE account_id = 'account_audit_delivery_test' AND event_code = 'pending-registration-delivered');"
+          committedAtomicDelivery `shouldBe` (ExitSuccess, "delivered|1\n", "")
+          runPsql
+            inheritedEnvironment
+            "web_api_owner"
+            "web_api_owner"
+            "UPDATE web_api.email_verifications SET delivery_state = 'claimed', delivery_claimed_at_nanoseconds = 1 WHERE account_id = 'account_audit_delivery_test';"
+            `shouldReturn` (ExitSuccess, "", "")
+          rejectedAtomicDelivery <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "SELECT account_id FROM account_audit.complete_pending_registration_delivery_with_activity('account_audit_delivery_test', 'account-audit-delivery-digest', 'account_audit_delivery_test', '550e8400-e29b-41d4-a716-446655440004', 'not-an-account-audit-event', 1::SMALLINT, 'created', NULL, NULL, NULL, NULL);"
+          fst3 rejectedAtomicDelivery `shouldNotBe` ExitSuccess
+          thd3 rejectedAtomicDelivery `shouldContain` "account audit append received invalid typed fields"
+          rolledBackAtomicDelivery <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT (SELECT delivery_state FROM web_api.email_verifications WHERE account_id = 'account_audit_delivery_test') || '|' || (SELECT count(*)::TEXT FROM account_audit.activity WHERE account_id = 'account_audit_delivery_test' AND request_id = '550e8400-e29b-41d4-a716-446655440004');"
+          rolledBackAtomicDelivery `shouldBe` (ExitSuccess, "claimed|0\n", "")
+
           directRuntimeRead <-
             runPsql
               inheritedEnvironment
