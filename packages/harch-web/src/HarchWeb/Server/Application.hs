@@ -45,7 +45,7 @@ import HarchWeb.Server.Response
   ( ClientActionDecodeResult,
     ClientActionPayload,
     ClientActionRequest,
-    ClientActionResponse,
+    ClientActionResult,
     MiddlewareResult (..),
     RequestMiddleware (..),
     Response,
@@ -151,7 +151,10 @@ data Application route action context authorization = Application
     -- client-action verification. Harch owns strict cookie/form transport;
     -- the application-selected capability binds tokens to current state.
     csrfProtection :: CsrfProtection context,
-    handleClientAction :: ClientActionRequest action context -> IO (Maybe (ClientActionResponse route context)),
+    -- | Interpret a decoded action on the normal response rail or explicitly
+    -- select a safe terminal presentation.  The shared dispatcher remains the
+    -- sole owner of representation negotiation and page-security preparation.
+    handleClientAction :: ClientActionRequest route action context -> IO (Maybe (ClientActionResult route context)),
     pageShell :: Page route context -> Document route,
     reportRequestObservability :: Observability.RequestObservability -> IO (),
     reportConnectionObservability :: Observability.ConnectionObservability -> IO (),

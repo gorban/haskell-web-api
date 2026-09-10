@@ -2,6 +2,7 @@ module WebApi.AccountPages
   ( AccountAction,
     AccountActionTarget (..),
     accountActionEndpointMetadata,
+    accountActionRoute,
     AccountWorkflow (..),
     FormFeedback (..),
     FormStatus (..),

@@ -42,7 +42,7 @@ import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress, 
 import Unit.WebApi.TestSupport qualified as TestSupport (databaseConfig)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), VerificationResendAdmission (..), VerificationResendClaim (..), VerificationResendClaimSettlement (..), VerificationResendSuppression (..), defaultPendingRegistrationStoragePolicy, defaultVerificationResendPolicy, mkRegistrationDeliveryTimeout, pendingRegistrationClaimLeaseNanoseconds, pendingRegistrationMaximumAccounts)
 import WebApi.AccountJwt (AccountJwtIssueError (AccountJwtIssueFailed), AccountJwtIssuer (..))
-import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), FormFeedback (..), FormStatus (..), FormStatusKind (..), LoginForm (..), LoginProofChoice (..), LoginValidationError (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), RegistrationValidationError (..), VerificationForm (..), accountActionEndpointMetadata, accountActions, accountCsrfProtection, emptyLoginForm, emptyRegistrationForm, handleAccountAction, initialPendingProfileForm, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderPendingProfileRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
+import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), FormFeedback (..), FormStatus (..), FormStatusKind (..), LoginForm (..), LoginProofChoice (..), LoginValidationError (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), RegistrationValidationError (..), VerificationForm (..), accountActionEndpointMetadata, accountActionRoute, accountActions, accountCsrfProtection, emptyLoginForm, emptyRegistrationForm, handleAccountAction, initialPendingProfileForm, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderPendingProfileRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buildActionCodecOrDie)
 import WebApi.AccountPages.Validation (Validation, invalid, valid, validate3, validate4, validationResult)
 import WebApi.AccountPrincipal (mkAccountPrincipal)
@@ -195,7 +195,8 @@ existingSpec = do
                       _ -> Nothing
                   pure
                     HarchWeb.ClientActionRequest
-                      { HarchWeb.clientAction = action,
+                      { HarchWeb.clientActionRouteRequest = HarchWeb.RouteRequest WebApi.Route.ProfileRoute requestContext,
+                        HarchWeb.clientAction = action,
                         HarchWeb.clientActionRequestIdempotencyKey = Nothing,
                         HarchWeb.clientActionContext = requestContext
                       }
@@ -486,7 +487,7 @@ spec = do
       HarchWeb.handleClientAction
         runtimeApplication
         (typedAccountActionRequest "POST" "/register" [("username", "person_01"), ("email", "person@example.test"), ("password", "correct horse battery staple")] defaultRequestContext)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable")
+        >>= (\result -> (result >>= HarchWeb.clientActionResultResponse) `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable")
 
     it "renders complete SSR registration and verification forms with escaped values" $ do
       if emptyRegistrationForm == RegistrationForm Text.empty Text.empty Text.empty FormReady then pure () else expectationFailure "expected empty registration form"
@@ -805,7 +806,7 @@ spec = do
         HarchWeb.handleClientAction
           pureApplication
           (typedAccountActionRequest "POST" "/register" [("username", "person_01"), ("email", "person@example.test"), ("password", "correct horse battery staple")] defaultRequestContext)
-      unconfiguredAction `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable"
+      (unconfiguredAction >>= HarchWeb.clientActionResultResponse) `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable"
       let unconfiguredStore = accountWorkflowStore unavailableAccountWorkflow
       assertAccountStoreError
         (createPendingAccount unconfiguredStore defaultPendingRegistrationStoragePolicy (error "the unavailable store must ignore pending-account input"))
@@ -935,6 +936,17 @@ spec = do
         fmap endpointDeclarationFields (accountActionEndpointMetadata "POST" path defaultRequestContext)
           `shouldBe` Just (expectedName, template, HarchWeb.ActionEndpoint, expectedAccess path)
       accountActionEndpointMetadata "GET" "/register" defaultRequestContext `shouldBe` Nothing
+      expectAll
+        ( (accountActionRoute "POST" "/register" defaultRequestContext `shouldBe` Just WebApi.Route.RegistrationRoute)
+            :| [ accountActionRoute "POST" "/verify" defaultRequestContext `shouldBe` Just WebApi.Route.EmailVerificationRoute,
+                 accountActionRoute "POST" "/mfa" defaultRequestContext `shouldBe` Just WebApi.Route.MfaEnrollmentRoute,
+                 accountActionRoute "POST" "/login" defaultRequestContext `shouldBe` Just WebApi.Route.LoginRoute,
+                 accountActionRoute "POST" "/profile" defaultRequestContext `shouldBe` Just WebApi.Route.ProfileRoute,
+                 accountActionRoute "POST" "/logout" defaultRequestContext `shouldBe` Just WebApi.Route.LogoutRoute,
+                 accountActionRoute "GET" "/login" defaultRequestContext `shouldBe` Nothing,
+                 accountActionRoute "POST" "/unknown" defaultRequestContext `shouldBe` Nothing
+               ]
+        )
       Action.actionReauthenticationPolicy accountActions UpdateProfileTarget `shouldBe` Just Action.RetainForExplicitRetry
       Action.actionReauthenticationPolicy accountActions LoginAccountTarget `shouldBe` Just Action.DoNotRetain
       Action.actionCompletionPolicy accountActions LoginAccountTarget `shouldBe` Just Action.ReauthenticationContinuation

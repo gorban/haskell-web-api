@@ -243,7 +243,7 @@ opaqueSession =
 pureApplication :: HarchWeb.Application AppRoute AccountAction AppRequestContext ()
 pureApplication = buildApp defaultAppConfig
 
-type AccountActionRequest = HarchWeb.ClientActionRequest AccountAction AppRequestContext
+type AccountActionRequest = HarchWeb.ClientActionRequest AppRoute AccountAction AppRequestContext
 
 typedAccountActionRequest ::
   Text ->
@@ -255,6 +255,10 @@ typedAccountActionRequest method path fields requestContext =
   fromMaybe
     (error "expected a recognized account action test fixture")
     ( do
+        actionRoute <-
+          case WebApi.Route.matchRoute requestContext (testRouteLocation path) of
+            HarchWeb.RouteParsed routeRequest -> Just routeRequest
+            _ -> Nothing
         action <-
           case Action.decodeAction
             accountActions
@@ -270,7 +274,8 @@ typedAccountActionRequest method path fields requestContext =
             _ -> Nothing
         pure
           HarchWeb.ClientActionRequest
-            { HarchWeb.clientAction = action,
+            { HarchWeb.clientActionRouteRequest = actionRoute,
+              HarchWeb.clientAction = action,
               HarchWeb.clientActionRequestIdempotencyKey = Nothing,
               HarchWeb.clientActionContext = requestContext
             }

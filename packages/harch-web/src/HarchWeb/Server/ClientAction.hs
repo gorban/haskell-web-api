@@ -51,6 +51,7 @@ data ClientActionProtocolError
   | ClientActionCsrfUnavailable
   | ClientActionPayloadMalformed
   | ClientActionDecoderInvalid
+  | ClientActionHandlerTerminalFailure
   | ClientActionNotFound
 
 maxClientActionBodyBytes :: Int
@@ -193,6 +194,17 @@ clientActionProtocolErrorDetails protocolError =
                 }
             ],
           clientActionErrorLogEntries = ["client action decode failure: invalid decoder"]
+        }
+    ClientActionHandlerTerminalFailure ->
+      ClientActionProtocolErrorDetails
+        { clientActionErrorStatus = Http.status500,
+          clientActionErrorObservabilityAttributes =
+            [ Observability.ObservabilityAttribute
+                { Observability.attributeName = "harch.client_action.terminal_failure",
+                  Observability.attributeValue = Observability.TextAttribute "application"
+                }
+            ],
+          clientActionErrorLogEntries = ["client action terminal failure"]
         }
     ClientActionNotFound -> ordinaryClientActionError Http.status404
 

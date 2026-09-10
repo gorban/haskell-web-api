@@ -22,6 +22,7 @@ import App.Routes
     TwoPageRoute (..),
     routeCodec,
     twoPageActionEndpointMetadata,
+    twoPageActionPath,
     twoPageActions,
     twoPageEndpointMetadata,
   )
@@ -34,6 +35,7 @@ import HarchWeb
     ApplicationSecurity (AuthenticationDisabled),
     ClientActionRequest (..),
     ClientActionResponse (..),
+    ClientActionResult (..),
     CsrfProtection,
     CsrfVerification (..),
     EndpointProtocol (ApiEndpoint, HtmlEndpoint),
@@ -108,8 +110,12 @@ twoPageSite csrfProtection =
       siteRequestPolicy = twoPageRequestPolicy,
       siteDecodeClientAction = decodeAction twoPageActions,
       siteClientActionEndpointMetadata = twoPageActionEndpointMetadata,
+      siteClientActionRoute = \methodValue pathValue _ ->
+        if methodValue == "POST" && Just pathValue == twoPageActionPath ()
+          then Just (Page HomePage)
+          else Nothing,
       siteClientActionFailureRoute = Just (\clientFailure failureReference -> Custom (ClientActionFailurePage clientFailure failureReference)),
-      siteHandleClientAction = twoPageClientAction
+      siteHandleClientAction = fmap (fmap ClientActionSucceeded) . twoPageClientAction
     }
 
 routeDefinition :: CsrfProtection () -> TwoPageRoute -> RouteDefinition TwoPageRoute () ()
@@ -140,7 +146,7 @@ liveDataEventsRouteDefinition =
         pure (eventStreamResponse eventSource)
     }
 
-twoPageClientAction :: ClientActionRequest TwoPageAction () -> IO (Maybe (ClientActionResponse TwoPageRoute ()))
+twoPageClientAction :: ClientActionRequest TwoPageRoute TwoPageAction () -> IO (Maybe (ClientActionResponse TwoPageRoute ()))
 twoPageClientAction actionRequest =
   pure $
     case clientAction actionRequest of

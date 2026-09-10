@@ -83,7 +83,7 @@ import WebApi.Session
     issueMfaEnrollmentSession,
   )
 
-type AccountActionRequest = HarchWeb.ClientActionRequest AccountAction AppRequestContext
+type AccountActionRequest = HarchWeb.ClientActionRequest AppRoute AccountAction AppRequestContext
 
 type AccountActionResponse = HarchWeb.ClientActionResponse AppRoute AppRequestContext
 

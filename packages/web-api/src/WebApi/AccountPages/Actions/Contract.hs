@@ -3,6 +3,7 @@
 module WebApi.AccountPages.Actions.Contract
   ( AccountAction (..),
     AccountActionTarget (..),
+    accountActionRoute,
     accountActions,
     accountActionEndpointMetadata,
     buildActionCodecOrDie,
@@ -27,6 +28,7 @@ import HarchWeb.Action
     FieldValue,
     actionCodec,
     actionEndpointMetadata,
+    actionEndpointTarget,
     actionWithMetadata,
     formField,
     parseField,
@@ -84,6 +86,25 @@ accountActions = buildActionCodecOrDie accountActionEndpoints
 accountActionEndpointMetadata :: Text -> Text -> AppRequestContext -> Maybe (HarchWeb.EndpointMetadata ())
 accountActionEndpointMetadata methodValue pathValue requestContext =
   actionEndpointMetadata accountActions requestContext methodValue pathValue
+
+-- | Resolve the page that owns a declared account action.  The lookup comes
+-- from the validated action codec, rather than parsing the request path a
+-- second time, so only a recognized method/path declaration can select a
+-- route for pre-decode guards and terminal-failure rendering.
+accountActionRoute :: Text -> Text -> AppRequestContext -> Maybe AppRoute
+accountActionRoute methodValue pathValue requestContext =
+  accountActionTargetRoute
+    <$> actionEndpointTarget accountActions requestContext methodValue pathValue
+
+accountActionTargetRoute :: AccountActionTarget -> AppRoute
+accountActionTargetRoute target =
+  case target of
+    RegisterAccountTarget -> RegistrationRoute
+    VerifyEmailTarget -> EmailVerificationRoute
+    EnrollMfaTarget -> MfaEnrollmentRoute
+    LoginAccountTarget -> LoginRoute
+    UpdateProfileTarget -> ProfileRoute
+    LogoutAccountTarget -> LogoutRoute
 
 -- | Build a codec from a statically-known-duplicate-free endpoint list, or
 -- crash naming the offending declaration. @accountActionEndpoints@ is

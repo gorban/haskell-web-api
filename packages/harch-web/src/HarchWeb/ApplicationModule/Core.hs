@@ -25,7 +25,7 @@ import HarchWeb.EndpointSecurity
   )
 import HarchWeb.Routing (RouteCodec)
 import HarchWeb.SecurityEvent (ModuleName)
-import HarchWeb.Server.Response (ClientActionRequest (..), ClientActionResponse)
+import HarchWeb.Server.Response (ClientActionRequest (..), ClientActionResult)
 import HarchWeb.Site (RouteDefinition, Site (..))
 import HarchWeb.Site qualified as Site
 
@@ -57,7 +57,7 @@ data ApplicationModule route actionTarget action context authorization = Applica
     -- it decodes an untrusted action body, so guards and observation use the
     -- action's declared route family rather than an incidental 404.
     moduleActionRoute :: context -> actionTarget -> Maybe route,
-    moduleHandleAction :: ClientActionRequest action context -> IO (Maybe (ClientActionResponse route context)),
+    moduleHandleAction :: ClientActionRequest route action context -> IO (Maybe (ClientActionResult route context)),
     moduleGuards :: [EndpointGuard route context authorization]
   }
 

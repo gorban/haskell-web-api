@@ -5,11 +5,15 @@
 module HarchWeb.Server.Response
   ( ActionNavigation (..),
     ClientActionFailureDestinations (..),
+    ClientActionFailurePresentation (..),
     ClientActionDecodeResult (..),
     ClientActionIdempotencyKey,
     ClientActionPayload (..),
     ClientActionRequest (..),
     ClientActionResponse (..),
+    ClientActionResult (..),
+    ClientActionTerminalFailure (..),
+    clientActionResultResponse,
     HistoryMode (..),
     MiddlewareResult (..),
     RegionPatch,
@@ -48,6 +52,7 @@ import HarchWeb.Database (DatabaseOperation)
 import HarchWeb.Document (Page)
 import HarchWeb.Markup (ElementId, RegionPatch)
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.RequestId (RequestId)
 import HarchWeb.Routing (RouteRequest)
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
@@ -182,12 +187,74 @@ data MiddlewareResult context
 -- their request context. A non-'Nothing' identity is supplied only by an
 -- explicitly idempotent control; the handler is its durable deduplication
 -- boundary and must not log the key.
-data ClientActionRequest action context = ClientActionRequest
-  { clientAction :: action,
+data ClientActionRequest route action context = ClientActionRequest
+  { -- | The declared owner selected before the action body is decoded.  It
+    -- gives a terminal presentation its trusted route/context without asking
+    -- a handler to reparse a path or reconstruct routing state.
+    clientActionRouteRequest :: RouteRequest route context,
+    clientAction :: action,
     clientActionRequestIdempotencyKey :: Maybe ClientActionIdempotencyKey,
     clientActionContext :: context
   }
   deriving (Eq, Show)
+
+-- | The trusted, deliberately small presentation input for a terminal action
+-- failure.  The request ID is minted before application code runs and the
+-- route/context come from the action declaration already selected by the one
+-- dispatcher.  It intentionally contains neither raw WAI input, principal
+-- data, exception detail, nor decoded form fields.
+data ClientActionFailurePresentation route context = ClientActionFailurePresentation
+  { clientActionFailureRequestId :: RequestId,
+    clientActionFailureRoute :: RouteRequest route context
+  }
+  deriving (Eq, Show)
+
+-- | An application-selected terminal action result.  Its page renderer may
+-- close over the application's own exhaustive failure ADT, which consequently
+-- never becomes a framework type parameter, JSON value, route input, or
+-- browser callback.  The renderer receives only
+-- 'ClientActionFailurePresentation'; its result is paired with freshly
+-- prepared 'PageSecurity' by the existing action dispatcher.
+--
+-- Diagnostic values stay on the existing private response rail.  They are
+-- deliberately absent from the renderer input, so a branded page cannot
+-- accidentally reflect a provider exception or another unsafe detail.
+--
+-- Decision (AHI-4C, 2026-09-10): server-detected terminal failures extend
+-- the existing action-result and response-rendering algebra instead of adding
+-- an application exception protocol or a second action dispatcher.  See the
+-- matching decision in @docs/design-guidance.md@.
+data ClientActionTerminalFailure route context = ClientActionTerminalFailure
+  { clientActionTerminalFailurePage :: ClientActionFailurePresentation route context -> Page route context,
+    clientActionTerminalFailureObservabilityAttributes :: [Observability.ObservabilityAttribute],
+    clientActionTerminalFailureLogEntries :: [Text]
+  }
+
+-- | A decoded action either produces its ordinary typed JSON response or a
+-- terminal page presentation.  Normal validation, authorization, and other
+-- expected alternatives remain ordinary 'ClientActionResponse' values.  The
+-- terminal branch is reserved for a workflow that has deliberately chosen a
+-- safe HTTP 500 presentation.
+data ClientActionResult route context
+  = ClientActionSucceeded (ClientActionResponse route context)
+  | ClientActionFailedTerminally (ClientActionTerminalFailure route context)
+
+instance (Show route, Show context) => Show (ClientActionResult route context) where
+  showsPrec precedence result =
+    case result of
+      ClientActionSucceeded response ->
+        showParen (precedence > 10) (showString "ClientActionSucceeded " . showsPrec 11 response)
+      ClientActionFailedTerminally _ ->
+        showString "ClientActionFailedTerminally <application-renderer>"
+
+-- | Recover an ordinary response when inspecting an action result that cannot
+-- have selected the terminal page rail.  This keeps tests and composition
+-- adapters from pretending a terminal renderer is comparable or serializable.
+clientActionResultResponse :: ClientActionResult route context -> Maybe (ClientActionResponse route context)
+clientActionResultResponse result =
+  case result of
+    ClientActionSucceeded response -> Just response
+    ClientActionFailedTerminally _ -> Nothing
 
 -- | History behavior for an action's typed internal destination. Rendering
 -- through the application's one root route codec is the only conversion to a

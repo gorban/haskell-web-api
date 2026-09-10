@@ -8,6 +8,7 @@ import Control.Monad (forM_)
 import Data.ByteString.Char8 qualified as ByteString
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Maybe (isNothing)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -23,7 +24,7 @@ import HarchWeb.Markup (safeUrlText, text)
 import HarchWeb.Routing
 import HarchWeb.Routing qualified as Routing
 import HarchWeb.SecurityEvent (ModuleName, mkModuleName)
-import HarchWeb.Server (ActionNavigation (StayOnCurrentRoute), ClientActionRequest (..), ClientActionResponse (..), NonPageResponse (..), PageResult (..), ProtocolResponse (..), ProtocolResponseBody (..), Response (..), ResponseBody (..), ServerSentEventSource (..), noClientActionFailureDestinations, nonPageResponse, unboundedRouteExecutionPolicy)
+import HarchWeb.Server (ActionNavigation (StayOnCurrentRoute), ClientActionRequest (..), ClientActionResponse (..), ClientActionResult (..), NonPageResponse (..), PageResult (..), ProtocolResponse (..), ProtocolResponseBody (..), Response (..), ResponseBody (..), ServerSentEventSource (..), clientActionResultResponse, noClientActionFailureDestinations, nonPageResponse, unboundedRouteExecutionPolicy)
 import HarchWeb.Site (RouteDefinition (..), RouteHandler (..))
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
@@ -142,20 +143,25 @@ spec =
         moduleHandleAction
           mountedModule
           ClientActionRequest
-            { clientAction = CatalogAction SaveChildItem,
+            { clientActionRouteRequest = RouteRequest (CatalogRoute ChildItemRoute) 42,
+              clientAction = CatalogAction SaveChildItem,
               clientActionRequestIdempotencyKey = Nothing,
               clientActionContext = 42
             }
-      actionResult `shouldBe` Nothing
+      actionResult `shouldSatisfy` isNothing
       readIORef actionContext `shouldReturn` Just "tenant-42"
-      moduleHandleAction
-        mountedModule
-        ClientActionRequest
-          { clientAction = CatalogAction SaveChildItem,
-            clientActionRequestIdempotencyKey = Just "retry-1",
-            clientActionContext = 42
-          }
-        `shouldReturn` Nothing
+      fmap
+        isNothing
+        ( moduleHandleAction
+            mountedModule
+            ClientActionRequest
+              { clientActionRouteRequest = RouteRequest (CatalogRoute ChildItemRoute) 42,
+                clientAction = CatalogAction SaveChildItem,
+                clientActionRequestIdempotencyKey = Just "retry-1",
+                clientActionContext = 42
+              }
+        )
+        `shouldReturn` True
       readIORef actionContext `shouldReturn` Just "tenant-42-retry-1"
       let endpointRequest =
             EndpointRequest
@@ -547,28 +553,33 @@ spec =
         moduleHandleAction
           rootModule
           ClientActionRequest
-            { clientAction = CatalogAction SaveChildItem,
+            { clientActionRouteRequest = RouteRequest (CatalogRoute ChildItemRoute) 42,
+              clientAction = CatalogAction SaveChildItem,
               clientActionRequestIdempotencyKey = Nothing,
               clientActionContext = 42
             }
-      actionResult `shouldBe` Just parentTestClientActionResponse
+      (actionResult >>= clientActionResultResponse) `shouldBe` Just parentTestClientActionResponse
       readIORef actionContext `shouldReturn` Just "tenant-42"
-      Site.siteHandleClientAction
-        installedSite
-        ClientActionRequest
-          { clientAction = CatalogAction SaveChildItem,
-            clientActionRequestIdempotencyKey = Nothing,
-            clientActionContext = 42
-          }
-        `shouldReturn` Just parentTestClientActionResponse
-      Site.siteHandleClientAction
-        directModuleSite
-        ClientActionRequest
-          { clientAction = CatalogAction SaveChildItem,
-            clientActionRequestIdempotencyKey = Nothing,
-            clientActionContext = 42
-          }
-        `shouldReturn` Just parentTestClientActionResponse
+      (>>= clientActionResultResponse)
+        <$> Site.siteHandleClientAction
+          installedSite
+          ClientActionRequest
+            { clientActionRouteRequest = RouteRequest (CatalogRoute ChildItemRoute) 42,
+              clientAction = CatalogAction SaveChildItem,
+              clientActionRequestIdempotencyKey = Nothing,
+              clientActionContext = 42
+            }
+          `shouldReturn` Just parentTestClientActionResponse
+      (>>= clientActionResultResponse)
+        <$> Site.siteHandleClientAction
+          directModuleSite
+          ClientActionRequest
+            { clientActionRouteRequest = RouteRequest (CatalogRoute ChildItemRoute) 42,
+              clientAction = CatalogAction SaveChildItem,
+              clientActionRequestIdempotencyKey = Nothing,
+              clientActionContext = 42
+            }
+          `shouldReturn` Just parentTestClientActionResponse
       Action.decodeAction
         (moduleActionCodec rootModule)
         Action.ClientActionPayload
@@ -609,20 +620,23 @@ spec =
         moduleHandleAction
           catalogModule
           ClientActionRequest
-            { clientAction = ParentOtherAction,
+            { clientActionRouteRequest = RouteRequest ParentOtherRoute 42,
+              clientAction = ParentOtherAction,
               clientActionRequestIdempotencyKey = Nothing,
               clientActionContext = 42
             }
-      mountedOtherAction `shouldBe` Nothing
+      mountedOtherAction `shouldSatisfy` isNothing
 
-      moduleHandleAction
-        rootModule
-        ClientActionRequest
-          { clientAction = ParentOtherAction,
-            clientActionRequestIdempotencyKey = Nothing,
-            clientActionContext = 42
-          }
-        `shouldReturn` Just parentTestClientActionResponse
+      (>>= clientActionResultResponse)
+        <$> moduleHandleAction
+          rootModule
+          ClientActionRequest
+            { clientActionRouteRequest = RouteRequest ParentOtherRoute 42,
+              clientAction = ParentOtherAction,
+              clientActionRequestIdempotencyKey = Nothing,
+              clientActionContext = 42
+            }
+          `shouldReturn` Just parentTestClientActionResponse
 
       let noHandlerCatalogModule = catalogModule {moduleHandleAction = const (pure Nothing)}
           noHandlerOtherModule = otherModule {moduleHandleAction = const (pure Nothing)}
@@ -630,14 +644,18 @@ spec =
         case combineApplicationModules (noHandlerCatalogModule :| [noHandlerOtherModule]) of
           Left compositionError -> expectationFailure (show compositionError) >> fail "could not compose terminal handler-miss test"
           Right combinedModule -> pure combinedModule
-      moduleHandleAction
-        noHandlerRoot
-        ClientActionRequest
-          { clientAction = ParentOtherAction,
-            clientActionRequestIdempotencyKey = Nothing,
-            clientActionContext = 42
-          }
-        `shouldReturn` Nothing
+      fmap
+        isNothing
+        ( moduleHandleAction
+            noHandlerRoot
+            ClientActionRequest
+              { clientActionRouteRequest = RouteRequest ParentOtherRoute 42,
+                clientAction = ParentOtherAction,
+                clientActionRequestIdempotencyKey = Nothing,
+                clientActionContext = 42
+              }
+        )
+        `shouldReturn` True
 
       let duplicateEndpointModule =
             otherModule
@@ -702,7 +720,7 @@ otherModule =
         routeValue -> error ("root.other does not own " <> show routeValue),
       moduleActionCodec = Action.emptyActionCodec,
       moduleActionRoute = \_ _ -> Nothing,
-      moduleHandleAction = const (pure (Just parentTestClientActionResponse)),
+      moduleHandleAction = const (pure (Just (ClientActionSucceeded parentTestClientActionResponse))),
       moduleGuards = []
     }
 

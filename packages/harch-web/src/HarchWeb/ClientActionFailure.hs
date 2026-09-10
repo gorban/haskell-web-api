@@ -10,16 +10,18 @@
 -- Decision record (AHI-4C, 2026-09-10): this extends the existing
 -- 'RequestId' boundary with an opaque display/correlation reference rather
 -- than introducing another UUID parser or an application-defined query-string
--- convention.  The closed failure sum is deliberately separate from a future
--- application failure ADT: browser-discovered failures cannot safely carry
--- application values back to the server.  The AHI-4C transport maps this
--- value to an application-declared route and the navigation runtime either
--- visits that route or clears the document with this safe fallback's message.
--- Application-defined failures remain a deliberately separate follow-up.
+-- convention. The closed failure sum is deliberately separate from the
+-- server-detected application terminal failure: browser-discovered failures
+-- cannot safely carry application values back to the server. The terminal
+-- result keeps an application value only inside its server-side renderer
+-- closure. The AHI-4C transport maps this value to an application-declared
+-- route and the navigation runtime either visits that route or clears the
+-- document with this safe fallback's message.
 module HarchWeb.ClientActionFailure
   ( FailureReference,
     HarchClientFailure (..),
     defaultClientActionFailurePage,
+    defaultClientActionTerminalFailure,
     failureReference,
     failureReferenceRequestId,
     failureReferenceText,
@@ -34,6 +36,10 @@ import HarchWeb.Document (Page (..))
 import HarchWeb.Markup (element, headingOneTag, paragraphTag, sectionTag, text)
 import HarchWeb.RequestId (RequestId, mkRequestId, requestIdText)
 import HarchWeb.Routing (RouteRequest (..))
+import HarchWeb.Server.Response
+  ( ClientActionFailurePresentation (..),
+    ClientActionTerminalFailure (..),
+  )
 
 -- | Browser failures which the framework can classify without exposing an
 -- exception, a storage key, a route, or session-related data.  The rendered
@@ -110,3 +116,33 @@ defaultClientActionFailurePage reference routeRequest =
           ],
       pageBootstrapHooks = []
     }
+
+-- | Harch's self-contained terminal presentation for a server-detected action
+-- failure.  It receives only the framework-minted request ID and the declared
+-- action owner; application-specific terminal values can instead close over
+-- their own safe renderer in 'ClientActionTerminalFailure'.
+defaultClientActionTerminalFailure :: ClientActionTerminalFailure route context
+defaultClientActionTerminalFailure =
+  ClientActionTerminalFailure
+    { clientActionTerminalFailurePage = defaultTerminalPage,
+      clientActionTerminalFailureObservabilityAttributes = [],
+      clientActionTerminalFailureLogEntries = []
+    }
+
+defaultTerminalPage :: ClientActionFailurePresentation route context -> Page route context
+defaultTerminalPage presentation =
+  let routeRequest = clientActionFailureRoute presentation
+   in Page
+        { pageTitle = "Request could not be completed",
+          pageRoute = requestRoute routeRequest,
+          pageContext = requestContext routeRequest,
+          pageBody =
+            element
+              sectionTag
+              []
+              [ element headingOneTag [] [text "Request could not be completed"],
+                element paragraphTag [] [text "The request could not be completed safely. Please contact support and provide this request ID."],
+                element paragraphTag [] [text (requestIdText (clientActionFailureRequestId presentation))]
+              ],
+          pageBootstrapHooks = []
+        }

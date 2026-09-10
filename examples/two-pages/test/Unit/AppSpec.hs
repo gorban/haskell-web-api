@@ -211,6 +211,9 @@ spec =
               )
           Nothing -> expectationFailure "expected the declared subscription action metadata"
         Site.siteClientActionEndpointMetadata twoPageSite "POST" "/actions/subscribe" () `shouldSatisfy` (/= Nothing)
+        Site.siteClientActionRoute twoPageSite "POST" "/actions/subscribe" () `shouldBe` Just (Page HomePage)
+        Site.siteClientActionRoute twoPageSite "GET" "/actions/subscribe" () `shouldBe` Nothing
+        Site.siteClientActionRoute twoPageSite "POST" "/actions/other" () `shouldBe` Nothing
         twoPageActionEndpointMetadata "GET" "/actions/subscribe" () `shouldBe` Nothing
         endpointNameFailure <- try (evaluate (requiredEndpointName "invalid/name")) :: IO (Either ErrorCall HarchWeb.EndpointName)
         routeTemplateFailure <- try (evaluate (requiredRouteTemplate "not-a-route")) :: IO (Either ErrorCall HarchWeb.RouteTemplate)
@@ -583,7 +586,8 @@ spec =
           HarchWeb.handleClientAction
             buildApplication
             ClientActionRequest
-              { clientAction = SubscribeAction "ada@example",
+              { clientActionRouteRequest = RouteRequest (Page HomePage) (),
+                clientAction = SubscribeAction "ada@example",
                 clientActionRequestIdempotencyKey = Nothing,
                 clientActionContext = ()
               }
@@ -591,10 +595,10 @@ spec =
           ( (Wai.responseStatus response `shouldBe` Http.status422)
               :| [ Text.isInfixOf "Enter a valid email address." responseBody `shouldBe` True,
                    Text.isInfixOf "\"focusId\":\"subscription-email\"" responseBody `shouldBe` True,
-                   fmap HarchWeb.clientActionHeaders directResponse `shouldBe` Just [],
-                   fmap HarchWeb.clientActionFailureDestinations directResponse `shouldBe` Just HarchWeb.noClientActionFailureDestinations,
-                   fmap HarchWeb.clientActionObservabilityAttributes directResponse `shouldBe` Just [],
-                   fmap HarchWeb.clientActionLogEntries directResponse `shouldBe` Just []
+                   fmap HarchWeb.clientActionHeaders (directResponse >>= HarchWeb.clientActionResultResponse) `shouldBe` Just [],
+                   fmap HarchWeb.clientActionFailureDestinations (directResponse >>= HarchWeb.clientActionResultResponse) `shouldBe` Just HarchWeb.noClientActionFailureDestinations,
+                   fmap HarchWeb.clientActionObservabilityAttributes (directResponse >>= HarchWeb.clientActionResultResponse) `shouldBe` Just [],
+                   fmap HarchWeb.clientActionLogEntries (directResponse >>= HarchWeb.clientActionResultResponse) `shouldBe` Just []
                  ]
           )
 
@@ -614,17 +618,18 @@ spec =
           HarchWeb.handleClientAction
             buildApplication
             ClientActionRequest
-              { clientAction = SubscribeAction "ada@example.com",
+              { clientActionRouteRequest = RouteRequest (Page HomePage) (),
+                clientAction = SubscribeAction "ada@example.com",
                 clientActionRequestIdempotencyKey = Nothing,
                 clientActionContext = ()
               }
         directNavigationTarget <-
           case directResponse of
-            Just actionResponse ->
+            Just (HarchWeb.ClientActionSucceeded actionResponse) ->
               case HarchWeb.clientActionNavigation actionResponse of
                 HarchWeb.NavigateInternal _ target -> pure target
                 _ -> expectationFailure "expected the valid subscription action to navigate internally" >> fail "unreachable"
-            Nothing -> expectationFailure "expected the valid subscription action to return a response" >> fail "unreachable"
+            _ -> expectationFailure "expected the valid subscription action to return a successful response" >> fail "unreachable"
         expectAll
           ( (Wai.responseStatus response `shouldBe` Http.status200)
               :| [ Text.isInfixOf "Thanks. Your subscription request is ready." responseBody `shouldBe` True,
@@ -635,10 +640,10 @@ spec =
                    Text.isInfixOf "\"response-application-failed\":\"/client-action-failure/response-application-failed/" responseBody `shouldBe` True,
                    requestRoute directNavigationTarget `shouldBe` Custom NativeSubscriptionResult,
                    requestContext directNavigationTarget `shouldBe` (),
-                   fmap HarchWeb.clientActionHeaders directResponse `shouldBe` Just [],
-                   fmap HarchWeb.clientActionFailureDestinations directResponse `shouldBe` Just HarchWeb.noClientActionFailureDestinations,
-                   fmap HarchWeb.clientActionObservabilityAttributes directResponse `shouldBe` Just [],
-                   fmap HarchWeb.clientActionLogEntries directResponse `shouldBe` Just []
+                   fmap HarchWeb.clientActionHeaders (directResponse >>= HarchWeb.clientActionResultResponse) `shouldBe` Just [],
+                   fmap HarchWeb.clientActionFailureDestinations (directResponse >>= HarchWeb.clientActionResultResponse) `shouldBe` Just HarchWeb.noClientActionFailureDestinations,
+                   fmap HarchWeb.clientActionObservabilityAttributes (directResponse >>= HarchWeb.clientActionResultResponse) `shouldBe` Just [],
+                   fmap HarchWeb.clientActionLogEntries (directResponse >>= HarchWeb.clientActionResultResponse) `shouldBe` Just []
                  ]
           )
 
@@ -734,11 +739,12 @@ spec =
           HarchWeb.handleClientAction
             buildApplication
             ClientActionRequest
-              { clientAction = SubscribeAction "invalid",
+              { clientActionRouteRequest = RouteRequest (Page HomePage) (),
+                clientAction = SubscribeAction "invalid",
                 clientActionRequestIdempotencyKey = Nothing,
                 clientActionContext = ()
               }
-        fmap HarchWeb.clientActionStatus invalidAction `shouldBe` Just Http.status422
+        fmap HarchWeb.clientActionStatus (invalidAction >>= HarchWeb.clientActionResultResponse) `shouldBe` Just Http.status422
 
 testPageSecurity :: IO HarchWeb.PageSecurity
 testPageSecurity = do

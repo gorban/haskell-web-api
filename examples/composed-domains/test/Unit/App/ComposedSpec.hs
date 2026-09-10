@@ -12,7 +12,7 @@ import Data.ByteString qualified as ByteString
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NonEmpty
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -69,6 +69,7 @@ import HarchWeb.Server
   ( ActionNavigation (NavigateInternal, StayOnCurrentRoute),
     ClientActionRequest (..),
     ClientActionResponse (..),
+    ClientActionResult,
     HistoryMode (ReplaceHistory),
     NonPageResponse (NonPageBodyResponse),
     PageResult (RenderedPage, RenderedPageWithHeaders, RenderedPageWithMetadata),
@@ -76,6 +77,7 @@ import HarchWeb.Server
     ProtocolResponseBody (..),
     Response (..),
     ResponseBody (..),
+    clientActionResultResponse,
     noClientActionFailureDestinations,
     nonPageResponse,
     toWaiApplication,
@@ -237,8 +239,8 @@ spec = describe "Unit.App.Composed" $ do
       case mountApplicationModule ordersModuleMount (buildOrdersModule ordersQueries ordersCommands) of
         Left mountError -> expectationFailure (show mountError) >> fail "could not mount the Orders module"
         Right mountedModule -> pure mountedModule
-    moduleHandleAction ordersOnlyModule (ClientActionRequest (CatalogAction RefreshCatalog) Nothing rootContext)
-      `shouldReturn` Nothing
+    fmap isNothing (moduleHandleAction ordersOnlyModule (ClientActionRequest (RouteRequest (Catalog CatalogIndex) rootContext) (CatalogAction RefreshCatalog) Nothing rootContext))
+      `shouldReturn` True
     case parseRoute (moduleRouteCodec rootModule) rootContext spanishCatalog of
       RouteParsed request -> do
         requestRoute request `shouldBe` Localized (locale "es") (Catalog CatalogIndex)
@@ -497,15 +499,15 @@ spec = describe "Unit.App.Composed" $ do
       Nothing -> expectationFailure "expected a root module chain"
       Just routeChain -> routeChain rootRoute `shouldBe` requiredModuleName "root" :| [requiredModuleName "root.public", requiredModuleName "public"]
     Site.siteNavigationRoutes composedSite `shouldBe` []
-    Site.siteHandleClientAction composedSite (ClientActionRequest (CatalogAction RefreshCatalog) Nothing defaultComposedContext)
+    successfulActionResponse (Site.siteHandleClientAction composedSite (rootActionRequest defaultComposedContext (CatalogAction RefreshCatalog)))
       `shouldReturn` Just (clientActionResponse Http.status200)
     disabledAdmissionSite <-
       requiredAdmission
         "disabled admission retains configured root security"
         (buildComposedSiteWithAdmissionSecurityDependencies defaultComposedSiteDependencies AdmissionDisabled suppliedSecurity)
-    Site.siteHandleClientAction disabledAdmissionSite (ClientActionRequest (OrdersAction SubmitOrder) Nothing defaultComposedContext)
+    successfulActionResponse (Site.siteHandleClientAction disabledAdmissionSite (rootActionRequest defaultComposedContext (OrdersAction SubmitOrder)))
       `shouldReturn` Just (clientActionResponse Http.status202)
-    Site.siteHandleClientAction disabledAdmissionSite (ClientActionRequest (CatalogAction RefreshCatalog) Nothing defaultComposedContext)
+    successfulActionResponse (Site.siteHandleClientAction disabledAdmissionSite (rootActionRequest defaultComposedContext (CatalogAction RefreshCatalog)))
       `shouldReturn` Just (clientActionResponse Http.status200)
     case Site.siteSecurity composedSite of
       AuthenticationDisabled [] -> pure ()
@@ -1046,9 +1048,9 @@ spec = describe "Unit.App.Composed" $ do
           Action.clientActionPayloadContext = defaultComposedContext
         }
       `shouldBe` Action.DecodedClientAction (CatalogAction RefreshCatalog)
-    Site.siteHandleClientAction defaultSite (ClientActionRequest (CatalogAction RefreshCatalog) Nothing defaultComposedContext)
+    successfulActionResponse (Site.siteHandleClientAction defaultSite (rootActionRequest defaultComposedContext (CatalogAction RefreshCatalog)))
       `shouldReturn` Just (clientActionResponse Http.status200)
-    Site.siteHandleClientAction defaultSite (ClientActionRequest (OrdersAction SubmitOrder) Nothing defaultComposedContext)
+    successfulActionResponse (Site.siteHandleClientAction defaultSite (rootActionRequest defaultComposedContext (OrdersAction SubmitOrder)))
       `shouldReturn` Just (clientActionResponse Http.status202)
 
   it "projects authenticated and anonymous root facts into each domain's query and action adapters" $ do
@@ -1083,9 +1085,9 @@ spec = describe "Unit.App.Composed" $ do
     assertPageResponse "Orders" ordersRoute authenticatedContext ordersResponse
     readIORef catalogQueryContext `shouldReturn` Just (CatalogContext "es" (Just "catalog.read"))
     readIORef ordersQueryContext `shouldReturn` Just (OrdersContext "es" (Just "catalog.read"))
-    moduleHandleAction rootModule (ClientActionRequest (CatalogAction RefreshCatalog) Nothing authenticatedContext)
+    successfulActionResponse (moduleHandleAction rootModule (rootActionRequest authenticatedContext (CatalogAction RefreshCatalog)))
       `shouldReturn` Just (clientActionResponse Http.status200)
-    moduleHandleAction rootModule (ClientActionRequest (OrdersAction SubmitOrder) Nothing authenticatedContext)
+    successfulActionResponse (moduleHandleAction rootModule (rootActionRequest authenticatedContext (OrdersAction SubmitOrder)))
       `shouldReturn` Just (clientActionResponse Http.status202)
     readIORef catalogActionContext `shouldReturn` Just (CatalogContext "es" (Just "catalog.read"))
     readIORef ordersActionContext `shouldReturn` Just (OrdersContext "es" (Just "catalog.read"))
@@ -1134,7 +1136,7 @@ spec = describe "Unit.App.Composed" $ do
     Routing.routeMethods (moduleRouteCodec publicModule) (Catalog CatalogIndex) `shouldBe` Routing.RouteHidden
     notFoundRequest (moduleRouteCodec publicModule) publicContext `shouldBe` RouteRequest (Public PublicNotFound) publicContext
     moduleActionRoute publicModule publicContext AdmissionActionTarget `shouldBe` Nothing
-    moduleHandleAction publicModule (ClientActionRequest (CatalogAction RefreshCatalog) Nothing publicContext) `shouldReturn` Nothing
+    fmap isNothing (moduleHandleAction publicModule (ClientActionRequest (RouteRequest (Public PublicAdmission) publicContext) (CatalogAction RefreshCatalog) Nothing publicContext)) `shouldReturn` True
     let admissionDefinition = moduleEndpoints publicModule (Public PublicAdmission)
         loginDefinition = moduleEndpoints publicModule (Public PublicLogin)
         assetDefinition = moduleEndpoints publicModule (Public (PublicAsset (StaticAssetRoute (routePathSegments assetLocation))))
@@ -1240,7 +1242,7 @@ spec = describe "Unit.App.Composed" $ do
                  ]
           )
       _ -> expectationFailure "expected an admission page"
-    Site.siteHandleClientAction enabledSite (ClientActionRequest (SubmitAdmission (requiredCsrf "admission login" (mkAdmissionLoginName "operator")) (requiredCsrf "admission code" (mkTotpCode "123456")) ReturnToAccountLogin) Nothing publicContext)
+    successfulActionResponse (Site.siteHandleClientAction enabledSite (rootActionRequest publicContext (SubmitAdmission (requiredCsrf "admission login" (mkAdmissionLoginName "operator")) (requiredCsrf "admission code" (mkTotpCode "123456")) ReturnToAccountLogin)))
       `shouldReturn` Just (clientActionResponse Http.status503)
 
   it "uses the same admission proof rail for a CSRF-verified native fallback and typed cookie redirect" $ do
@@ -1381,9 +1383,9 @@ spec = describe "Unit.App.Composed" $ do
     tooLargeResponse <- performWaiRequest (pure nativeApplication) tooLargeRequest
     emptyBodyRequest <- nativeRequestWith "" []
     emptyBodyResponse <- performWaiRequest (pure nativeApplication) emptyBodyRequest
-    acceptedAction <- Site.siteHandleClientAction enabledSite (ClientActionRequest (SubmitAdmission loginName code ReturnToAccountLogin) Nothing publicContext)
-    rejectedAction <- Site.siteHandleClientAction rejectedSite (ClientActionRequest (SubmitAdmission loginName code ReturnToAccountLogin) Nothing publicContext)
-    unavailableAction <- Site.siteHandleClientAction unavailableSite (ClientActionRequest (SubmitAdmission loginName code ReturnToAccountLogin) Nothing publicContext)
+    acceptedAction <- successfulActionResponse (Site.siteHandleClientAction enabledSite (rootActionRequest publicContext (SubmitAdmission loginName code ReturnToAccountLogin)))
+    rejectedAction <- successfulActionResponse (Site.siteHandleClientAction rejectedSite (rootActionRequest publicContext (SubmitAdmission loginName code ReturnToAccountLogin)))
+    unavailableAction <- successfulActionResponse (Site.siteHandleClientAction unavailableSite (rootActionRequest publicContext (SubmitAdmission loginName code ReturnToAccountLogin)))
     expectAll
       ( (Wai.responseStatus rejectedResponse `shouldBe` Http.status422)
           :| [ Wai.responseStatus unavailableResponse `shouldBe` Http.status503,
@@ -1800,6 +1802,23 @@ clientActionResponse status =
       clientActionObservabilityAttributes = [],
       clientActionLogEntries = []
     }
+
+rootActionRequest :: ComposedContext -> RootAction -> ClientActionRequest RootRoute RootAction ComposedContext
+rootActionRequest rootContext action =
+  ClientActionRequest
+    (RouteRequest (Localized (requestLocale (requestCore rootContext)) (actionRoute action)) rootContext)
+    action
+    Nothing
+    rootContext
+  where
+    actionRoute rootAction =
+      case rootAction of
+        SubmitAdmission {} -> Public PublicAdmission
+        CatalogAction {} -> Catalog CatalogIndex
+        OrdersAction {} -> Orders OrdersIndex
+
+successfulActionResponse :: IO (Maybe (ClientActionResult RootRoute ComposedContext)) -> IO (Maybe (ClientActionResponse RootRoute ComposedContext))
+successfulActionResponse = fmap (>>= clientActionResultResponse)
 
 guardResponseBody :: ResponseBody
 guardResponseBody =

@@ -12,7 +12,7 @@ import HarchWeb.Document (Page (..), testRuntimeNonce)
 import HarchWeb.EndpointMetadata (AccessRequirement (RequireAuthorized), EndpointProtocol (ActionEndpoint, HtmlEndpoint), endpointAccess, endpointName, endpointNameText, endpointProtocol, endpointRouteTemplate, routeTemplateText)
 import HarchWeb.Routing (RouteCodec (..), RouteLocation (..), RouteMethod (RouteGet), RouteParseResult (..), RouteRequest (..), requiredPathSegment, routeMethodPolicy)
 import HarchWeb.Routing qualified as Routing
-import HarchWeb.Server (ActionNavigation (StayOnCurrentRoute), ClientActionRequest (..), ClientActionResponse (..), PageResult (..), noClientActionFailureDestinations, unboundedRouteExecutionPolicy)
+import HarchWeb.Server (ActionNavigation (StayOnCurrentRoute), ClientActionRequest (..), ClientActionResponse (..), ClientActionResult (..), PageResult (..), noClientActionFailureDestinations, unboundedRouteExecutionPolicy)
 import HarchWeb.Site (RouteDefinition (..), RouteHandler (..))
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
@@ -95,10 +95,10 @@ spec = describe "Unit.Catalog.Domain" $ do
             show (pageBody page) `shouldBe` "\"<h1>es summary</h1>\""
           _ -> expectationFailure "expected catalog page"
       _ -> expectationFailure "expected a page route handler"
-    actionResult <- moduleHandleAction moduleValue (ClientActionRequest RefreshCatalog Nothing catalogContext)
+    actionResult <- moduleHandleAction moduleValue (ClientActionRequest (RouteRequest CatalogIndex catalogContext) RefreshCatalog Nothing catalogContext)
     case actionResult of
       Nothing -> expectationFailure "catalog action must produce a response"
-      Just actionResponse -> do
+      Just (ClientActionSucceeded actionResponse) -> do
         clientActionStatus actionResponse `shouldBe` Http.status200
         clientActionPatches actionResponse `shouldBe` []
         clientActionFocusId actionResponse `shouldBe` Nothing
@@ -108,6 +108,7 @@ spec = describe "Unit.Catalog.Domain" $ do
         clientActionHeaders actionResponse `shouldBe` []
         clientActionObservabilityAttributes actionResponse `shouldBe` []
         clientActionLogEntries actionResponse `shouldBe` []
+      Just ClientActionFailedTerminally {} -> expectationFailure "catalog action must not fail terminally"
     case Action.declaredActionEndpointMetadata (moduleActionCodec moduleValue) of
       [actionMetadata] -> do
         endpointNameText (endpointName actionMetadata) `shouldBe` "catalog.refresh"

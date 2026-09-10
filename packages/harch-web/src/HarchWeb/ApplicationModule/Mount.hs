@@ -50,7 +50,16 @@ import HarchWeb.Routing
   )
 import HarchWeb.Routing qualified as Routing
 import HarchWeb.SecurityEvent (ModuleName, moduleNameText)
-import HarchWeb.Server.Response (ClientActionRequest (..), ClientActionResponse, NonPageResponse, mapClientActionResponse, mapNonPageResponse, mapPageResult)
+import HarchWeb.Server.Response
+  ( ClientActionFailurePresentation (..),
+    ClientActionRequest (..),
+    ClientActionResult (..),
+    ClientActionTerminalFailure (..),
+    NonPageResponse,
+    mapClientActionResponse,
+    mapNonPageResponse,
+    mapPageResult,
+  )
 import HarchWeb.Site (RouteDefinition (..), RouteHandler (..))
 import HarchWeb.Site qualified as Site
 
@@ -269,26 +278,50 @@ mountActionHandler ::
   RouteMount parentRoute childRoute ->
   ActionMount parentTarget parentAction childTarget childAction ->
   ContextProjection parentContext childContext ->
-  (ClientActionRequest childAction childContext -> IO (Maybe (ClientActionResponse childRoute childContext))) ->
-  ClientActionRequest parentAction parentContext ->
-  IO (Maybe (ClientActionResponse parentRoute parentContext))
+  (ClientActionRequest childRoute childAction childContext -> IO (Maybe (ClientActionResult childRoute childContext))) ->
+  ClientActionRequest parentRoute parentAction parentContext ->
+  IO (Maybe (ClientActionResult parentRoute parentContext))
 mountActionHandler routeMount actionMount contextProjection childHandler parentRequest =
-  case projectChildAction actionMount (clientAction parentRequest) of
-    Nothing -> pure Nothing
-    Just childAction ->
-      fmap (mapClientActionResponse mapChildDestination) <$> childHandler childRequest
+  case (projectChildAction actionMount (clientAction parentRequest), projectChildRoute routeMount (requestRoute (clientActionRouteRequest parentRequest))) of
+    (Just childAction, Just childRoute) ->
+      fmap (mapChildActionResult childRoute childContext parentContext) <$> childHandler childRequest
       where
+        parentRouteRequest = clientActionRouteRequest parentRequest
+        parentContext = requestContext parentRouteRequest
+        childContext = projectRequestContext contextProjection parentContext
         childRequest =
           ClientActionRequest
-            { clientAction = childAction,
+            { clientActionRouteRequest = RouteRequest childRoute childContext,
+              clientAction = childAction,
               clientActionRequestIdempotencyKey = clientActionRequestIdempotencyKey parentRequest,
-              clientActionContext = projectRequestContext contextProjection (clientActionContext parentRequest)
+              clientActionContext = childContext
             }
         mapChildDestination childDestination =
           RouteRequest
             { requestRoute = embedChildRoute routeMount (requestRoute childDestination),
-              requestContext = clientActionContext parentRequest
+              requestContext = parentContext
             }
+        mapChildActionResult childRouteValue childContextValue parentContextValue actionResult =
+          case actionResult of
+            ClientActionSucceeded response -> ClientActionSucceeded (mapClientActionResponse mapChildDestination response)
+            ClientActionFailedTerminally terminalFailure ->
+              ClientActionFailedTerminally
+                ClientActionTerminalFailure
+                  { clientActionTerminalFailurePage = \parentPresentation ->
+                      mapChildPage
+                        routeMount
+                        parentContextValue
+                        ( clientActionTerminalFailurePage
+                            terminalFailure
+                            ClientActionFailurePresentation
+                              { clientActionFailureRequestId = clientActionFailureRequestId parentPresentation,
+                                clientActionFailureRoute = RouteRequest childRouteValue childContextValue
+                              }
+                        ),
+                    clientActionTerminalFailureObservabilityAttributes = clientActionTerminalFailureObservabilityAttributes terminalFailure,
+                    clientActionTerminalFailureLogEntries = clientActionTerminalFailureLogEntries terminalFailure
+                  }
+    _ -> pure Nothing
 
 mountEndpointGuard ::
   RouteMount parentRoute childRoute ->

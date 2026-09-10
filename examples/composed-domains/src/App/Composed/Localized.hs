@@ -27,7 +27,16 @@ import HarchWeb.Routing (RouteCodec (..), RouteLocation (..), RouteParseResult (
 import HarchWeb.Routing qualified as Routing
 import HarchWeb.Security (RequestPolicyConfig, requestClientAddress)
 import HarchWeb.SecurityEvent (requiredModuleNameOrDie)
-import HarchWeb.Server (ClientActionRequest (..), NonPageResponse, mapClientActionResponse, mapNonPageResponse, mapPageResult)
+import HarchWeb.Server
+  ( ClientActionFailurePresentation (..),
+    ClientActionRequest (..),
+    ClientActionResult (..),
+    ClientActionTerminalFailure (..),
+    NonPageResponse,
+    mapClientActionResponse,
+    mapNonPageResponse,
+    mapPageResult,
+  )
 import HarchWeb.Site (RouteDefinition (..), RouteHandler (..))
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
@@ -50,9 +59,16 @@ localizeApplicationModule localePolicy localizedModule = do
           localRoute <- moduleActionRoute localizedModule (setRequestLocale (defaultLocale localePolicy) (requestLocale (requestCore rootContext)) rootContext) actionTarget
           pure (Localized (requestLocale (requestCore rootContext)) localRoute),
         moduleHandleAction = \rootActionRequest ->
-          let selectedLocale = requestLocale (requestCore (clientActionContext rootActionRequest))
-           in fmap (mapClientActionResponse (mapLocalizedActionDestination selectedLocale rootActionRequest))
-                <$> moduleHandleAction localizedModule rootActionRequest,
+          ( case requestRoute (clientActionRouteRequest rootActionRequest) of
+              Localized selectedLocale localRoute ->
+                let rootRouteRequest = clientActionRouteRequest rootActionRequest
+                    localActionRequest =
+                      rootActionRequest
+                        { clientActionRouteRequest = RouteRequest localRoute (requestContext rootRouteRequest)
+                        }
+                 in fmap (mapLocalizedActionResult selectedLocale localRoute rootRouteRequest)
+                      <$> moduleHandleAction localizedModule localActionRequest
+          ),
         moduleGuards = map (localizedRootGuard localePolicy localizedModule) (moduleGuards localizedModule)
       }
 
@@ -130,9 +146,32 @@ mapLocalizedNonPageResponse :: Locale -> ComposedContext -> NonPageResponse Loca
 mapLocalizedNonPageResponse selectedLocale parentContext =
   mapNonPageResponse (mapLocalizedDestination selectedLocale parentContext)
 
-mapLocalizedActionDestination :: Locale -> ClientActionRequest RootAction ComposedContext -> RouteRequest LocalizedRoute ComposedContext -> RouteRequest RootRoute ComposedContext
-mapLocalizedActionDestination selectedLocale rootActionRequest =
-  mapLocalizedDestination selectedLocale (clientActionContext rootActionRequest)
+mapLocalizedActionResult :: Locale -> LocalizedRoute -> RouteRequest RootRoute ComposedContext -> ClientActionResult LocalizedRoute ComposedContext -> ClientActionResult RootRoute ComposedContext
+mapLocalizedActionResult selectedLocale localRoute rootRouteRequest actionResult =
+  case actionResult of
+    ClientActionSucceeded response ->
+      ClientActionSucceeded
+        ( mapClientActionResponse
+            (mapLocalizedDestination selectedLocale (requestContext rootRouteRequest))
+            response
+        )
+    ClientActionFailedTerminally terminalFailure ->
+      ClientActionFailedTerminally
+        ClientActionTerminalFailure
+          { clientActionTerminalFailurePage = \rootPresentation ->
+              mapLocalizedPage
+                selectedLocale
+                (requestContext rootRouteRequest)
+                ( clientActionTerminalFailurePage
+                    terminalFailure
+                    ClientActionFailurePresentation
+                      { clientActionFailureRequestId = clientActionFailureRequestId rootPresentation,
+                        clientActionFailureRoute = RouteRequest localRoute (requestContext rootRouteRequest)
+                      }
+                ),
+            clientActionTerminalFailureObservabilityAttributes = clientActionTerminalFailureObservabilityAttributes terminalFailure,
+            clientActionTerminalFailureLogEntries = clientActionTerminalFailureLogEntries terminalFailure
+          }
 
 mapLocalizedDestination :: Locale -> ComposedContext -> RouteRequest LocalizedRoute ComposedContext -> RouteRequest RootRoute ComposedContext
 mapLocalizedDestination selectedLocale parentContext localRequest =

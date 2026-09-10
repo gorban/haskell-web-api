@@ -758,18 +758,19 @@ spec = do
                           } of
                         HarchWeb.DecodedClientAction action ->
                           HarchWeb.ClientActionRequest
-                            { HarchWeb.clientAction = action,
+                            { HarchWeb.clientActionRouteRequest = HarchWeb.RouteRequest LogoutRoute defaultRequestContext,
+                              HarchWeb.clientAction = action,
                               HarchWeb.clientActionRequestIdempotencyKey = Nothing,
                               HarchWeb.clientActionContext = defaultRequestContext
                             }
                         _ -> error "expected runtime logout action to decode"
                 signedOutLogoutResponse <- HarchWeb.handleClientAction runtimeApplication signedOutLogoutRequest
                 case signedOutLogoutResponse of
-                  Just response -> do
+                  Just (HarchWeb.ClientActionSucceeded response) -> do
                     HarchWeb.clientActionStatus response `shouldBe` Http.status200
                     HarchWeb.clientActionHeaders response
                       `shouldContain` [("Set-Cookie", "__Host-harch-session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict")]
-                  Nothing -> expectationFailure "expected a signed-out logout response"
+                  _ -> expectationFailure "expected a successful signed-out logout response"
                 issuedToken <- issueAccountSessionJwt issuer issuedSession
                 cookie <-
                   case issuedToken of

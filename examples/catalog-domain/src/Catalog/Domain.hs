@@ -43,6 +43,7 @@ import HarchWeb.Server
   ( ActionNavigation (StayOnCurrentRoute),
     ClientActionRequest (..),
     ClientActionResponse (..),
+    ClientActionResult (..),
     PageResult (RenderedPage),
     noClientActionFailureDestinations,
     unboundedRouteExecutionPolicy,
@@ -147,22 +148,24 @@ catalogActionCodec =
     )
     (pure RefreshCatalog)
 
-catalogActionHandler :: CatalogCommands -> ClientActionRequest CatalogAction CatalogContext -> IO (Maybe (ClientActionResponse CatalogRoute CatalogContext))
+catalogActionHandler :: CatalogCommands -> ClientActionRequest CatalogRoute CatalogAction CatalogContext -> IO (Maybe (ClientActionResult CatalogRoute CatalogContext))
 catalogActionHandler commands actionRequest =
   case clientAction actionRequest of
     RefreshCatalog -> do
       _ <- refreshCatalog commands (clientActionContext actionRequest)
       pure
         ( Just
-            ClientActionResponse
-              { clientActionStatus = Http.status200,
-                clientActionPatches = [],
-                clientActionFocusId = Nothing,
-                clientActionNavigation = StayOnCurrentRoute,
-                clientActionStorageCleanup = noClientStorageCleanup,
-                clientActionFailureDestinations = noClientActionFailureDestinations,
-                clientActionHeaders = [],
-                clientActionObservabilityAttributes = [],
-                clientActionLogEntries = []
-              }
+            ( ClientActionSucceeded
+                ClientActionResponse
+                  { clientActionStatus = Http.status200,
+                    clientActionPatches = [],
+                    clientActionFocusId = Nothing,
+                    clientActionNavigation = StayOnCurrentRoute,
+                    clientActionStorageCleanup = noClientStorageCleanup,
+                    clientActionFailureDestinations = noClientActionFailureDestinations,
+                    clientActionHeaders = [],
+                    clientActionObservabilityAttributes = [],
+                    clientActionLogEntries = []
+                  }
+            )
         )

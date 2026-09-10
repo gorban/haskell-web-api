@@ -13,6 +13,7 @@
 module WebApi.AccountPages.Actions
   ( AccountAction,
     AccountActionTarget (..),
+    accountActionRoute,
     accountCsrfProtection,
     accountActionEndpointMetadata,
     accountActions,
@@ -56,12 +57,12 @@ import WebApi.AppEffect
     AppServices (..),
     runAppM,
   )
-import WebApi.Route (AppRequestContext (..))
+import WebApi.Route (AppRequestContext (..), AppRoute)
 import WebApi.Session
   ( MfaEnrollmentSessionStore (..),
   )
 
-type AccountActionRequest = HarchWeb.ClientActionRequest AccountAction AppRequestContext
+type AccountActionRequest = HarchWeb.ClientActionRequest AppRoute AccountAction AppRequestContext
 
 type AccountActionWorkflow = AppM AccountActionResponse AccountActionResponse
 

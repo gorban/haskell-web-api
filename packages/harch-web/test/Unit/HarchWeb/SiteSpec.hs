@@ -8,7 +8,7 @@ import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -118,14 +118,18 @@ spec = do
                ]
         )
       siteRequestContextFromRequest sampleSite (waiRequest ["second"]) siteRequestId (SampleContext "/app") `shouldBe` SampleContext "/app"
-      siteHandleClientAction
-        sampleSite
-        ClientActionRequest
-          { clientAction = (),
-            clientActionRequestIdempotencyKey = Nothing,
-            clientActionContext = SampleContext ""
-          }
-        `shouldReturn` Nothing
+      fmap
+        isNothing
+        ( siteHandleClientAction
+            sampleSite
+            ClientActionRequest
+              { clientActionRouteRequest = RouteRequest HomeRoute (SampleContext ""),
+                clientAction = (),
+                clientActionRequestIdempotencyKey = Nothing,
+                clientActionContext = SampleContext ""
+              }
+        )
+        `shouldReturn` True
       let actionPayload =
             ClientActionPayload
               { clientActionMethod = "POST",
@@ -158,14 +162,18 @@ spec = do
       siteClientActionEndpointMetadata sampleSite "POST" "/actions/sample" (SampleContext "") `shouldBe` Nothing
       HarchWeb.clientActionEndpointMetadata siteApplication "POST" "/actions/sample" (SampleContext "") `shouldBe` Nothing
       HarchWeb.clientActionRoute siteApplication "POST" "/actions/sample" (SampleContext "") `shouldBe` Nothing
-      HarchWeb.handleClientAction
-        siteApplication
-        ClientActionRequest
-          { clientAction = (),
-            clientActionRequestIdempotencyKey = Nothing,
-            clientActionContext = SampleContext ""
-          }
-        `shouldReturn` Nothing
+      fmap
+        isNothing
+        ( HarchWeb.handleClientAction
+            siteApplication
+            ClientActionRequest
+              { clientActionRouteRequest = RouteRequest HomeRoute (SampleContext ""),
+                clientAction = (),
+                clientActionRequestIdempotencyKey = Nothing,
+                clientActionContext = SampleContext ""
+              }
+        )
+        `shouldReturn` True
       HarchWeb.verifyCsrfToken (siteCsrfProtection sampleSite) (SampleContext "") siteTestCsrfToken `shouldReturn` HarchWeb.CsrfVerified
       HarchWeb.verifyCsrfToken (HarchWeb.csrfProtection siteApplication) (SampleContext "") siteTestCsrfToken `shouldReturn` HarchWeb.CsrfVerified
       length (HarchWeb.applicationRequestMiddleware siteApplication) `shouldBe` 0

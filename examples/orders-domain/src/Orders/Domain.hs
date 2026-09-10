@@ -43,6 +43,7 @@ import HarchWeb.Server
   ( ActionNavigation (StayOnCurrentRoute),
     ClientActionRequest (..),
     ClientActionResponse (..),
+    ClientActionResult (..),
     PageResult (RenderedPage),
     noClientActionFailureDestinations,
     unboundedRouteExecutionPolicy,
@@ -149,22 +150,24 @@ ordersActionCodec =
     )
     (pure SubmitOrder)
 
-ordersActionHandler :: OrdersCommands -> ClientActionRequest OrdersAction OrdersContext -> IO (Maybe (ClientActionResponse OrdersRoute OrdersContext))
+ordersActionHandler :: OrdersCommands -> ClientActionRequest OrdersRoute OrdersAction OrdersContext -> IO (Maybe (ClientActionResult OrdersRoute OrdersContext))
 ordersActionHandler commands actionRequest =
   case clientAction actionRequest of
     SubmitOrder -> do
       _ <- submitOrder commands (clientActionContext actionRequest)
       pure
         ( Just
-            ClientActionResponse
-              { clientActionStatus = Http.status202,
-                clientActionPatches = [],
-                clientActionFocusId = Nothing,
-                clientActionNavigation = StayOnCurrentRoute,
-                clientActionStorageCleanup = noClientStorageCleanup,
-                clientActionFailureDestinations = noClientActionFailureDestinations,
-                clientActionHeaders = [],
-                clientActionObservabilityAttributes = [],
-                clientActionLogEntries = []
-              }
+            ( ClientActionSucceeded
+                ClientActionResponse
+                  { clientActionStatus = Http.status202,
+                    clientActionPatches = [],
+                    clientActionFocusId = Nothing,
+                    clientActionNavigation = StayOnCurrentRoute,
+                    clientActionStorageCleanup = noClientStorageCleanup,
+                    clientActionFailureDestinations = noClientActionFailureDestinations,
+                    clientActionHeaders = [],
+                    clientActionObservabilityAttributes = [],
+                    clientActionLogEntries = []
+                  }
+            )
         )

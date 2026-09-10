@@ -52,7 +52,7 @@ import Network.HTTP.Types qualified as Http
 import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush)
 import WebApi.AccountJwt (AccountJwtLoadError, AccountJwtRuntime, accountJwtAuthenticationPipeline, accountJwtIssuerFromRuntime, loadAccountJwtRuntime)
-import WebApi.AccountPages (AccountAction, accountActionEndpointMetadata, accountActions, accountCsrfProtection, handleAccountAction)
+import WebApi.AccountPages (AccountAction, accountActionEndpointMetadata, accountActionRoute, accountActions, accountCsrfProtection, handleAccountAction)
 import WebApi.Api.Endpoints (secondApiRouteDefinition, statusApiRouteDefinition)
 import WebApi.App.AccountWorkflow (buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwt, unavailableAccountWorkflow)
 import WebApi.App.Observability
@@ -219,7 +219,8 @@ buildAppWithDatabaseAndOptionalReportersAndSecurity config pageRepository !accou
               Site.siteRequestPolicy = requestPolicy config,
               Site.siteDecodeClientAction = decodeAction accountActions,
               Site.siteClientActionEndpointMetadata = accountActionEndpointMetadata,
-              Site.siteHandleClientAction = handleAccountAction accountWorkflow
+              Site.siteClientActionRoute = accountActionRoute,
+              Site.siteHandleClientAction = fmap (fmap HarchWeb.ClientActionSucceeded) . handleAccountAction accountWorkflow
             }
         )
     )

@@ -122,10 +122,11 @@ movedSpec = do
                 clientActionIdempotencyKey = Nothing,
                 clientActionPayloadContext = defaultContext
               }
-          clientActionRequest :: ClientActionRequest Text TestContext
+          clientActionRequest :: ClientActionRequest TestRoute Text TestContext
           clientActionRequest =
             ClientActionRequest
-              { clientAction = "/actions/subscribe",
+              { clientActionRouteRequest = RouteRequest KnownRoute defaultContext,
+                clientAction = "/actions/subscribe",
                 clientActionRequestIdempotencyKey = Nothing,
                 clientActionContext = defaultContext
               }
@@ -191,6 +192,10 @@ movedSpec = do
                  Text.isInfixOf "if (!settlement.completed())" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "async function navigateActionResponse(navigation)" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "try { cleanClientStorage(outcome.actionResponse); } catch (_error)" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "'Accept': 'text/html, application/json;q=0.9'" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "return { terminalDocument: await response.text(), response };" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "function replaceWithTerminalActionDocument(documentText)" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "document.open();\n    document.write(documentText);\n    document.close();" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "let navigation;\n        try { navigation = applyActionResponse(outcome.actionResponse); }" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "if (!outcome.responseSucceeded) {\n          if (!settlement.recoverable()) { return; }" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "harch:navigation-start" defaultNavigationRuntimeScript `shouldBe` True,
@@ -353,17 +358,19 @@ movedSpec = do
           redirectResponseValue = RedirectResponse body "/spaces"
           otherRedirectResponseValue :: Response TestRoute TestContext
           otherRedirectResponseValue = RedirectResponse otherBody "/other"
-          clientActionRequest :: ClientActionRequest Text TestContext
+          clientActionRequest :: ClientActionRequest TestRoute Text TestContext
           clientActionRequest =
             ClientActionRequest
-              { clientAction = "/actions/subscribe",
+              { clientActionRouteRequest = RouteRequest KnownRoute defaultContext,
+                clientAction = "/actions/subscribe",
                 clientActionRequestIdempotencyKey = Nothing,
                 clientActionContext = defaultContext
               }
-          otherClientActionRequest :: ClientActionRequest Text TestContext
+          otherClientActionRequest :: ClientActionRequest TestRoute Text TestContext
           otherClientActionRequest =
             ClientActionRequest
-              { clientAction = "/actions/other",
+              { clientActionRouteRequest = RouteRequest DataRoute spanishContext,
+                clientAction = "/actions/other",
                 clientActionRequestIdempotencyKey = Nothing,
                 clientActionContext = spanishContext
               }
@@ -467,8 +474,8 @@ movedSpec = do
       show redirectResponseValue `shouldBe` "RedirectResponse (ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}) \"/spaces\""
       show [pageResponse, pageResponseWithMetadata, bodyResponseValue] `shouldBe` "[PageResponse PageSecurity <redacted> (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),PageResponseWithMetadata PageSecurity <redacted> (ResponseBody {responseStatus = Status {statusCode = 500, statusMessage = \"Internal Server Error\"}, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"], responseDatabaseOperations = []}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []})]"
       (clientActionRequest /= otherClientActionRequest) `shouldBe` True
-      show clientActionRequest `shouldBe` "ClientActionRequest {clientAction = \"/actions/subscribe\", clientActionRequestIdempotencyKey = Nothing, clientActionContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}}"
-      show [clientActionRequest] `shouldContain` "ClientActionRequest {clientAction = \"/actions/subscribe\""
+      show clientActionRequest `shouldBe` "ClientActionRequest {clientActionRouteRequest = RouteRequest {requestRoute = KnownRoute, requestContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}}, clientAction = \"/actions/subscribe\", clientActionRequestIdempotencyKey = Nothing, clientActionContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}}"
+      show [clientActionRequest] `shouldContain` "ClientActionRequest {clientActionRouteRequest = RouteRequest {requestRoute = KnownRoute"
       (regionPatch /= otherRegionPatch) `shouldBe` True
       show regionPatch `shouldContain` "ReplaceRegion"
       show [regionPatch] `shouldContain` "ReplaceRegion"
@@ -495,14 +502,18 @@ movedSpec = do
             clientActionPayloadContext = defaultContext
           }
         `shouldBe` DecodedClientAction "/actions/subscribe"
-      handleClientAction
-        sampleApplication
-        ClientActionRequest
-          { clientAction = "/actions/subscribe",
-            clientActionRequestIdempotencyKey = Nothing,
-            clientActionContext = defaultContext
-          }
-        `shouldReturn` Nothing
+      fmap
+        isNothing
+        ( handleClientAction
+            sampleApplication
+            ClientActionRequest
+              { clientActionRouteRequest = RouteRequest KnownRoute defaultContext,
+                clientAction = "/actions/subscribe",
+                clientActionRequestIdempotencyKey = Nothing,
+                clientActionContext = defaultContext
+              }
+        )
+        `shouldReturn` True
       parseRoute codec defaultContext (testRouteLocation "/known") `shouldBe` RouteParsed request
       parseRoute codec defaultContext (testRouteLocation "/data") `shouldBe` RouteParsed RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}
       routeLocationText (renderRoute codec request) `shouldBe` "/known"

@@ -1747,10 +1747,11 @@ spec = do
         accountWorkflowClock workflow >>= (`shouldSatisfy` (> 0))
         accountWorkflowTotpClock workflow 100000000000 `shouldSatisfy` (> 0)
         let runtimeApplication = buildAppWithDatabaseAndAccountWorkflow defaultAppConfig defaultPageRepository workflow
-        HarchWeb.handleClientAction
-          runtimeApplication
-          (typedAccountActionRequest "POST" "/register" [("username", registrationUsername), ("email", registrationEmail), ("password", "correct horse battery staple")] defaultRequestContext)
-          >>= (`shouldSatisfy` actionHasStatusAndFocus 202 Nothing "check its inbox")
+        actionResult <-
+          HarchWeb.handleClientAction
+            runtimeApplication
+            (typedAccountActionRequest "POST" "/register" [("username", registrationUsername), ("email", registrationEmail), ("password", "correct horse battery staple")] defaultRequestContext)
+        (actionResult >>= HarchWeb.clientActionResultResponse) `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "check its inbox"
         awaitDevSmtpEmail server registrationEmail
           >>= \case
             Just received ->

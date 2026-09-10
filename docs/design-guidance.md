@@ -628,6 +628,31 @@ browser storage-removal failure that lands on the new document with no stale
 home content. Server-detected Accept-negotiated terminal failures and
 application-defined extended failure values remain AHI-4C follow-up work.
 
+**Terminal action-result decision (AHI-4C, 2026-09-10): extend the existing
+typed action-handler result and its one response interpreter with a closed
+success-or-terminal result; do not add an error route, a second fetch protocol,
+or an application-wide error type parameter.** A server-side action workflow
+can know that it must halt safely, but its application-owned failure ADT must
+not become JSON, route input, or a framework-wide type argument propagated
+through every `Site` and module. `ClientActionTerminalFailure` therefore holds
+an application-supplied page renderer closure and only trusted presentation
+inputs: the framework-minted request ID and the selected typed action route
+and context. The closure may exhaustively interpret its captured application
+ADT, while Harch supplies a self-contained default and sees neither a raw
+exception nor product error data.
+
+The existing action dispatcher prepares the ordinary page-security value and
+returns that renderer's complete SSR HTTP 500 document only when the caller's
+declared `Accept` representation allows HTML. The enhanced runtime explicitly
+declares HTML as its terminal fallback representation and replaces the current
+document with that same response. A caller requesting JSON instead receives
+the established safe JSON error body and never an HTML document merely because
+it happens to be a browser. Handler-provided diagnostics stay on the existing
+private response-observability/log rail; rendered pages receive only the safe
+trusted presentation context. This is an extension of `ActionCodec` execution
+and `Response` rendering, not a parallel exception, callback, or routing
+authority.
+
 ### Decision record — PostgreSQL database-change ledger (AHI-4C, 2026-09-03)
 
 **Decision: extract the existing connection-scoped migration transaction into

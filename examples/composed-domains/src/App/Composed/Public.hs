@@ -60,6 +60,7 @@ import HarchWeb.Server
   ( ActionNavigation (NavigateInternal, StayOnCurrentRoute),
     ClientActionRequest (..),
     ClientActionResponse (..),
+    ClientActionResult (..),
     HistoryMode (ReplaceHistory),
     NonPageResponse (NonPageBodyResponse, NonPageProtocolResponse),
     PageResult (RenderedPage),
@@ -126,7 +127,7 @@ buildPublicModuleWithAdmissionWorkflow staticAssetsConfig csrfProtection _admiss
       case (_admissionWorkflow, clientAction actionRequest) of
         (Just (sessionConfig, proofConfig), SubmitAdmission loginName code returnTarget) -> do
           result <- submitAdmission sessionConfig proofConfig (rootClientAddress (requestClient (clientActionContext actionRequest))) loginName code
-          pure (Just (admissionResponse sessionConfig actionRequest returnTarget result))
+          pure (Just (ClientActionSucceeded (admissionResponse sessionConfig actionRequest returnTarget result)))
         _ -> pure Nothing
     admissionResponse sessionConfig actionRequest returnTarget submissionResult =
       ClientActionResponse
@@ -148,7 +149,7 @@ admissionSubmissionStatus submissionResult =
     AdmissionSubmissionRejected -> Http.status422
     AdmissionSubmissionUnavailable -> Http.status503
 
-admissionSubmissionNavigation :: ClientActionRequest RootAction ComposedContext -> AdmissionReturnTarget -> AdmissionSubmissionResult -> ActionNavigation LocalizedRoute ComposedContext
+admissionSubmissionNavigation :: ClientActionRequest LocalizedRoute RootAction ComposedContext -> AdmissionReturnTarget -> AdmissionSubmissionResult -> ActionNavigation LocalizedRoute ComposedContext
 admissionSubmissionNavigation actionRequest returnTarget submissionResult =
   case submissionResult of
     AdmissionSubmissionAccepted _ -> NavigateInternal ReplaceHistory (RouteRequest (admissionReturnTargetRoute returnTarget) (clientActionContext actionRequest))
