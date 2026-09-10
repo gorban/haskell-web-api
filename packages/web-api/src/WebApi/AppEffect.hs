@@ -26,6 +26,7 @@ import HarchWeb.Time (UnixTimeNanoseconds, UnixTimeSeconds)
 import WebApi.Account (AccountProfileStore, AccountStore, RegistrationDeliveryTimeout)
 import WebApi.AccountJwt (AccountJwtIssuer)
 import WebApi.AccountSessionAudit (AccountSessionAuditStore)
+import WebApi.ActivityAudit (ActivityAuditStore)
 import WebApi.Login (AccountCredentialStore, LoginAttemptStore)
 import WebApi.Mfa (MfaStore)
 import WebApi.Route (AppRequestContext)
@@ -47,6 +48,12 @@ data AccountWorkflow = AccountWorkflow
     accountWorkflowLoginAttemptStore :: LoginAttemptStore,
     accountWorkflowSessionStore :: AccountSessionStore,
     accountWorkflowSessionAuditStore :: AccountSessionAuditStore,
+    -- | The independently invoked append port for domain mutations whose
+    -- audit policy intentionally differs from login's atomic session-and-
+    -- audit commit. In particular, explicit logout first revokes its durable
+    -- session and then records the end event best-effort; it must still clear
+    -- browser credentials when this append fails.
+    accountWorkflowActivityAuditStore :: ActivityAuditStore,
     accountWorkflowMfaEnrollmentSessionStore :: MfaEnrollmentSessionStore,
     accountWorkflowProfileStore :: AccountProfileStore,
     accountWorkflowTotpEncryptionKey :: SecretEncryptionKey,

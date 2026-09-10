@@ -22,6 +22,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import WebApi.Account (AccountProfileStore (..), AccountStore (..), AccountStoreError (..), defaultRegistrationDeliveryTimeout)
 import WebApi.AccountJwt (AccountJwtIssuer, unavailableAccountJwtIssuer)
 import WebApi.AccountSessionAudit (AccountSessionAuditStore (..), AccountSessionAuditStoreError (..))
+import WebApi.ActivityAudit (ActivityAuditStore (..), ActivityAuditStoreError (..))
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppEnvironmentConfig (..), AppMode (..), SmtpDeliveryConfig (..), defaultAppEnvironmentConfig)
 import WebApi.Login (AccountCredentialStore (..), AccountCredentialStoreError (..), LoginAttemptStore (..), LoginAttemptStoreError (..))
@@ -32,6 +33,7 @@ import WebApi.Postgres.AccountRepository
     buildRuntimePostgresAccountStore,
   )
 import WebApi.Postgres.AccountSessionAuditRepository (buildRuntimePostgresAccountSessionAuditStore)
+import WebApi.Postgres.ActivityAuditRepository (buildRuntimePostgresActivityAuditStore)
 import WebApi.Postgres.LoginAttemptRepository (buildRuntimePostgresLoginAttemptStore)
 import WebApi.Postgres.MfaEnrollmentSessionRepository (buildRuntimePostgresMfaEnrollmentSessionStore)
 import WebApi.Postgres.MfaRepository (buildRuntimePostgresMfaStore)
@@ -62,6 +64,7 @@ buildRuntimeAccountWorkflowWithJwt pool !environmentConfig jwtIssuer =
       accountWorkflowLoginAttemptStore = buildRuntimePostgresLoginAttemptStore pool,
       accountWorkflowSessionStore = buildRuntimePostgresAccountSessionStore pool,
       accountWorkflowSessionAuditStore = buildRuntimePostgresAccountSessionAuditStore pool,
+      accountWorkflowActivityAuditStore = buildRuntimePostgresActivityAuditStore pool,
       accountWorkflowMfaEnrollmentSessionStore = buildRuntimePostgresMfaEnrollmentSessionStore pool,
       accountWorkflowProfileStore = buildRuntimePostgresAccountProfileStore pool,
       accountWorkflowTotpEncryptionKey = totpEncryptionKey environmentConfig,
@@ -133,6 +136,7 @@ unavailableAccountWorkflow =
       accountWorkflowLoginAttemptStore = unavailableLoginAttemptStore,
       accountWorkflowSessionStore = unavailableAccountSessionStore,
       accountWorkflowSessionAuditStore = unavailableAccountSessionAuditStore,
+      accountWorkflowActivityAuditStore = unavailableActivityAuditStore,
       accountWorkflowMfaEnrollmentSessionStore = unavailableMfaEnrollmentSessionStore,
       accountWorkflowProfileStore = unavailableAccountProfileStore,
       accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
@@ -194,6 +198,10 @@ unavailableAccountSessionStore =
 unavailableAccountSessionAuditStore :: AccountSessionAuditStore
 unavailableAccountSessionAuditStore =
   AccountSessionAuditStore (\_ _ -> unavailableResult AccountSessionAuditStoreUnavailable)
+
+unavailableActivityAuditStore :: ActivityAuditStore
+unavailableActivityAuditStore =
+  ActivityAuditStore (const (unavailableResult ActivityAuditUnavailable))
 
 unavailableMfaEnrollmentSessionStore :: MfaEnrollmentSessionStore
 unavailableMfaEnrollmentSessionStore =

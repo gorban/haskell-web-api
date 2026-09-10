@@ -1189,6 +1189,7 @@ reauthenticationProfileWorkflow sessionExpiry attemptStore environmentConfig iss
         accountWorkflowLoginAttemptStore = attemptStore,
         accountWorkflowSessionStore = sessionStore,
         accountWorkflowSessionAuditStore = sessionAuditStore,
+        accountWorkflowActivityAuditStore = accountWorkflowActivityAuditStore unavailableAccountWorkflow,
         accountWorkflowProfileStore = profileStore,
         accountWorkflowTotpEncryptionKey = totpEncryptionKey environmentConfig,
         accountWorkflowJwtIssuer = issuer,

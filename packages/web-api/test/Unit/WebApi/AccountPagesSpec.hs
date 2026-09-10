@@ -47,7 +47,7 @@ import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buil
 import WebApi.AccountPages.Validation (Validation, invalid, valid, validate3, validate4, validationResult)
 import WebApi.AccountPrincipal (mkAccountPrincipal)
 import WebApi.AccountSessionAudit (AccountSessionAuditStore (..), AccountSessionAuditStoreError (..))
-import WebApi.ActivityAudit (AccountActivity (..), AccountAuditEvent (AccountSessionIssued), AuditAuthenticationMethod (..))
+import WebApi.ActivityAudit (AccountActivity (..), AccountAuditEvent (AccountSessionEnded, AccountSessionIssued), ActivityAuditStore (..), ActivityAuditStoreError (..), AuditAuthenticationMethod (..), AuditSessionEndReason (ExplicitLogout), activityIdFromDatabase)
 import WebApi.App (buildRuntimeAppWithDatabaseBuilder, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.AppEffect qualified as AppEffect
@@ -676,6 +676,7 @@ spec = do
                 accountWorkflowLoginAttemptStore = accountWorkflowLoginAttemptStore unavailableAccountWorkflow,
                 accountWorkflowSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow,
                 accountWorkflowSessionAuditStore = accountWorkflowSessionAuditStore unavailableAccountWorkflow,
+                accountWorkflowActivityAuditStore = accountWorkflowActivityAuditStore unavailableAccountWorkflow,
                 accountWorkflowMfaEnrollmentSessionStore = accountWorkflowMfaEnrollmentSessionStore unavailableAccountWorkflow,
                 accountWorkflowProfileStore = accountWorkflowProfileStore unavailableAccountWorkflow,
                 accountWorkflowTotpEncryptionKey = accountWorkflowTotpEncryptionKey unavailableAccountWorkflow,
@@ -867,6 +868,10 @@ spec = do
       assertLoginAttemptsUnavailable (reserveLoginAttempt unconfiguredLoginAttemptStore (peerAttemptBudgets LoginProtection.defaultLoginProtectionPolicy) 0)
       assertLoginAttemptsUnavailable (settleLoginAttempt unconfiguredLoginAttemptStore (LoginAttemptReservation "reservation") True)
       assertLoginAttemptsUnavailable (cancelLoginAttempt unconfiguredLoginAttemptStore (LoginAttemptReservation "reservation"))
+      appendAccountActivity (accountWorkflowActivityAuditStore unavailableAccountWorkflow) (error "unavailable activity-audit store must ignore activities")
+        >>= \case
+          Left ActivityAuditUnavailable -> pure ()
+          _ -> expectationFailure "expected unavailable activity-audit storage"
       let unconfiguredSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow
           assertSessionUnavailable :: IO (Either AccountSessionStoreError value) -> Expectation
           assertSessionUnavailable action =
@@ -970,6 +975,7 @@ spec = do
                 accountWorkflowLoginAttemptStore = accountWorkflowLoginAttemptStore unavailableAccountWorkflow,
                 accountWorkflowSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow,
                 accountWorkflowSessionAuditStore = accountWorkflowSessionAuditStore unavailableAccountWorkflow,
+                accountWorkflowActivityAuditStore = accountWorkflowActivityAuditStore unavailableAccountWorkflow,
                 accountWorkflowMfaEnrollmentSessionStore = accountWorkflowMfaEnrollmentSessionStore unavailableAccountWorkflow,
                 accountWorkflowProfileStore = accountWorkflowProfileStore unavailableAccountWorkflow,
                 accountWorkflowTotpEncryptionKey = accountWorkflowTotpEncryptionKey unavailableAccountWorkflow,
@@ -1249,6 +1255,7 @@ spec = do
                 accountWorkflowMfaStore = mfaStore,
                 accountWorkflowSessionStore = sessionStore,
                 accountWorkflowSessionAuditStore = sessionAuditStore,
+                accountWorkflowActivityAuditStore = accountWorkflowActivityAuditStore unavailableAccountWorkflow,
                 accountWorkflowLoginAttemptStore = permissiveLoginAttemptStore,
                 accountWorkflowJwtIssuer =
                   testAccountJwtIssuer
@@ -1694,6 +1701,94 @@ spec = do
           HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
           HarchWeb.clientActionHeaders response `shouldContain` [HarchWeb.csrfClearCookieHeader]
         Nothing -> expectationFailure "expected a logout action response"
+      capturedLogoutActivities <- newIORef []
+      let recordingActivityAuditStore =
+            ActivityAuditStore $ \activity -> do
+              modifyIORef' capturedLogoutActivities (activity :)
+              pure (Right (activityIdFromDatabase 1))
+          auditedSessionContext =
+            sessionContext
+              { requestCorrelationId = Just auditRequestId,
+                requestRouteObservation = Just validAuditRoute
+              }
+          auditedLogoutWorkflow =
+            validWorkflow
+              { accountWorkflowActivityAuditStore = recordingActivityAuditStore
+              }
+          noAppendActivityAuditStore = ActivityAuditStore (\_ -> error "an already-ended or failed revocation must not append an audit activity")
+      revocationFailureLogout <-
+        handleAccountAction
+          (workflowFor (Right Nothing) (Right Nothing) (Right True) (Left AccountSessionStoreUnavailable)) {accountWorkflowActivityAuditStore = noAppendActivityAuditStore}
+          (logoutRequest auditedSessionContext)
+      case revocationFailureLogout of
+        Just response -> do
+          Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` 503
+          HarchWeb.clientActionHeaders response `shouldBe` []
+        Nothing -> expectationFailure "expected a retryable logout-revocation failure"
+      auditedLogout <- handleAccountAction auditedLogoutWorkflow (logoutRequest auditedSessionContext)
+      case auditedLogout of
+        Just response -> do
+          Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` 200
+          HarchWeb.clientActionHeaders response `shouldContain` [HarchWeb.csrfClearCookieHeader]
+          HarchWeb.clientActionObservabilityAttributes response `shouldBe` []
+          HarchWeb.clientActionLogEntries response `shouldBe` []
+        Nothing -> expectationFailure "expected an audited logout action response"
+      readIORef capturedLogoutActivities >>= \case
+        [AccountActivity receivedAccountId receivedRequestId (AccountSessionEnded ExplicitLogout) (Just _)] -> do
+          receivedAccountId `shouldBe` existingAccountId
+          receivedRequestId `shouldBe` auditRequestId
+        _ -> expectationFailure "expected one trusted explicit-logout audit activity"
+      alreadyEndedLogout <- handleAccountAction (workflowFor (Right Nothing) (Right Nothing) (Right True) (Right False)) {accountWorkflowActivityAuditStore = noAppendActivityAuditStore} (logoutRequest auditedSessionContext)
+      alreadyEndedLogout `shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed out"
+      auditCapacityLogout <-
+        handleAccountAction
+          ( auditedLogoutWorkflow
+              { accountWorkflowActivityAuditStore = ActivityAuditStore (const (pure (Left ActivityAuditCapacityExceeded)))
+              }
+          )
+          (logoutRequest auditedSessionContext)
+      case auditCapacityLogout of
+        Just response -> do
+          Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` 200
+          HarchWeb.clientActionHeaders response `shouldContain` [HarchWeb.csrfClearCookieHeader]
+          HarchWeb.clientActionObservabilityAttributes response
+            `shouldContain` [ Observability.ObservabilityAttribute "app.operational.signal.account.logout.audit-append-failed" (Observability.TextAttribute "true"),
+                              Observability.ObservabilityAttribute "account.audit.operation" (Observability.TextAttribute "append"),
+                              Observability.ObservabilityAttribute "account.audit.failure-kind" (Observability.TextAttribute "capacity-exhausted"),
+                              Observability.ObservabilityAttribute "app.operational.signal.audit_capacity_exceeded" (Observability.TextAttribute "true")
+                            ]
+          HarchWeb.clientActionLogEntries response
+            `shouldBe` [ "[account.logout.audit-append-failed] audit.operation=append audit.failure-kind=capacity-exhausted",
+                         "[audit_capacity_exceeded] audit.operation=append"
+                       ]
+        Nothing -> expectationFailure "expected a capacity-exhausted logout action response"
+      forM_ [(ActivityAuditUnavailable, "unavailable"), (ActivityAuditCorruptResult, "corrupt-result")] $ \(auditStoreError, expectedFailureKind) -> do
+        auditFailureLogout <-
+          handleAccountAction
+            ( auditedLogoutWorkflow
+                { accountWorkflowActivityAuditStore = ActivityAuditStore (const (pure (Left auditStoreError)))
+                }
+            )
+            (logoutRequest auditedSessionContext)
+        case auditFailureLogout of
+          Just response -> do
+            Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` 200
+            HarchWeb.clientActionHeaders response `shouldContain` [HarchWeb.csrfClearCookieHeader]
+            HarchWeb.clientActionObservabilityAttributes response
+              `shouldContain` [ Observability.ObservabilityAttribute "app.operational.signal.account.logout.audit-append-failed" (Observability.TextAttribute "true"),
+                                Observability.ObservabilityAttribute "account.audit.operation" (Observability.TextAttribute "append"),
+                                Observability.ObservabilityAttribute "account.audit.failure-kind" (Observability.TextAttribute expectedFailureKind)
+                              ]
+            HarchWeb.clientActionObservabilityAttributes response
+              `shouldNotContain` [Observability.ObservabilityAttribute "app.operational.signal.audit_capacity_exceeded" (Observability.TextAttribute "true")]
+            HarchWeb.clientActionLogEntries response
+              `shouldBe` ["[account.logout.audit-append-failed] audit.operation=append audit.failure-kind=" <> expectedFailureKind]
+          Nothing -> expectationFailure "expected an audit-unavailable logout action response"
+      malformedAuditContextLogout <-
+        handleAccountAction
+          (validWorkflow {accountWorkflowActivityAuditStore = noAppendActivityAuditStore})
+          (logoutRequest (auditedSessionContext {requestRouteObservation = Just overlongAuditMountRoute}))
+      malformedAuditContextLogout `shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed out"
       spanishLogoutSuccess <- handleAccountAction validWorkflow (typedAccountActionRequest "POST" "/es/logout" [] (spanishRequestContext {requestAccountPrincipal = Just (mkAccountPrincipal existingAccountId sessionId 200)}))
       spanishLogoutSuccess `shouldSatisfy` actionHasStatusAndFocus 200 Nothing "Has cerrado sesion"
 

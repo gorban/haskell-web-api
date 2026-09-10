@@ -23,6 +23,7 @@ import HarchWeb qualified
 import HarchWeb.Account qualified as Account
 import HarchWeb.Email qualified as Email
 import HarchWeb.LoginProtection qualified as LoginProtection
+import HarchWeb.Observability qualified as Observability
 import HarchWeb.Password qualified as Password
 import HarchWeb.RecoveryCode qualified as RecoveryCode
 import HarchWeb.Secret (encryptSecret)
@@ -53,7 +54,15 @@ import WebApi.AccountPages.FieldIds
   )
 import WebApi.AccountPages.Forms
 import WebApi.AccountPages.Validation (Validation, invalid, valid, validate3, validationResult)
-import WebApi.AccountPrincipal (accountPrincipalSessionId)
+import WebApi.AccountPrincipal (accountPrincipalAccountId, accountPrincipalSessionId)
+import WebApi.ActivityAudit
+  ( AccountActivity (..),
+    AccountAuditEvent (AccountSessionEnded),
+    ActivityAuditStore (..),
+    ActivityAuditStoreError (..),
+    AuditSessionEndReason (ExplicitLogout),
+    auditRouteObservationFromTrusted,
+  )
 import WebApi.AppEffect
   ( AccountWorkflow (..),
     AppFailure (..),
@@ -399,9 +408,90 @@ handleLogout actionRequest =
       invalidated <- invalidateAccountSessionNow sessionToken
       case invalidated of
         Left storeError -> throwClientActionFailure (logoutResponse (accountActionResponseContext actionRequest Http.status503 Nothing []) (Just (localized actionRequest SignOutUnavailable, True))) LogoutSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
-        Right _ -> do
-          cookiePolicy <- accountJwtCookiePolicyNow
-          pure (logoutResponse (accountActionResponseContext actionRequest Http.status200 Nothing [HarchWeb.csrfClearCookieHeader, setCookieHeader (HarchWeb.clearAuthenticationCookie cookiePolicy)]) (Just (localized actionRequest SignedOut, False)))
+        Right sessionEnded -> do
+          auditFailure <-
+            if sessionEnded
+              then appendExplicitLogoutAudit actionRequest (accountPrincipalAccountId principal)
+              else pure Nothing
+          logoutSuccessResponse actionRequest auditFailure
+
+-- | AHI-5 deliberately gives explicit logout a different durability contract
+-- from login. Login's session and audit event commit together because no new
+-- credential may be issued without its required audit evidence. Logout first
+-- revokes the existing durable session; after that committed security change,
+-- an unavailable/capacity/corrupt audit append becomes a low-cardinality
+-- operational signal, never a reason to leave browser credentials in place.
+-- A @False@ invalidation is an already-ended or raced session, not a second
+-- logout event. This small action-specific rail is clearer than a misleading
+-- "atomic logout" store or an unbounded retry/outbox mechanism.
+appendExplicitLogoutAudit :: AccountActionRequest -> Account.AccountId -> AppM publicFailure (Maybe ActivityAuditStoreError)
+appendExplicitLogoutAudit actionRequest accountId =
+  case explicitLogoutActivity actionRequest accountId of
+    Left activityError -> pure (Just activityError)
+    Right activity -> do
+      workflow <- accountWorkflow
+      appendResult <- liftIO (appendAccountActivity (accountWorkflowActivityAuditStore workflow) activity)
+      pure (either Just (const Nothing) appendResult)
+
+explicitLogoutActivity :: AccountActionRequest -> Account.AccountId -> Either ActivityAuditStoreError AccountActivity
+explicitLogoutActivity actionRequest accountId = do
+  requestId <- maybe (Left ActivityAuditCorruptResult) Right (requestCorrelationId context)
+  route <- traverse (either (const (Left ActivityAuditCorruptResult)) Right . auditRouteObservationFromTrusted) (requestRouteObservation context)
+  pure
+    AccountActivity
+      { activitySubject = accountId,
+        activityRequestId = requestId,
+        activityEvent = AccountSessionEnded ExplicitLogout,
+        activityRoute = route
+      }
+  where
+    context = HarchWeb.clientActionContext actionRequest
+
+logoutSuccessResponse :: AccountActionRequest -> Maybe ActivityAuditStoreError -> AccountActionWorkflow
+logoutSuccessResponse actionRequest auditFailure = do
+  cookiePolicy <- accountJwtCookiePolicyNow
+  let response =
+        logoutResponse
+          (accountActionResponseContext actionRequest Http.status200 Nothing [HarchWeb.csrfClearCookieHeader, setCookieHeader (HarchWeb.clearAuthenticationCookie cookiePolicy)])
+          (Just (localized actionRequest SignedOut, False))
+  pure (maybe response (`attachLogoutAuditFailure` response) auditFailure)
+
+attachLogoutAuditFailure :: ActivityAuditStoreError -> AccountActionResponse -> AccountActionResponse
+attachLogoutAuditFailure storeError response =
+  response
+    { HarchWeb.clientActionObservabilityAttributes =
+        HarchWeb.clientActionObservabilityAttributes response
+          <> [ Observability.ObservabilityAttribute "app.operational.signal.account.logout.audit-append-failed" (Observability.TextAttribute "true"),
+               Observability.ObservabilityAttribute "account.audit.operation" (Observability.TextAttribute "append"),
+               Observability.ObservabilityAttribute "account.audit.failure-kind" (Observability.TextAttribute (auditFailureKind storeError))
+             ]
+          <> capacityExceededSignal storeError,
+      HarchWeb.clientActionLogEntries =
+        HarchWeb.clientActionLogEntries response
+          <> ["[account.logout.audit-append-failed] audit.operation=append audit.failure-kind=" <> auditFailureKind storeError]
+          <> capacityExceededLog storeError
+    }
+
+auditFailureKind :: ActivityAuditStoreError -> Text
+auditFailureKind storeError =
+  case storeError of
+    ActivityAuditUnavailable -> "unavailable"
+    ActivityAuditCapacityExceeded -> "capacity-exhausted"
+    ActivityAuditCorruptResult -> "corrupt-result"
+
+capacityExceededSignal :: ActivityAuditStoreError -> [Observability.ObservabilityAttribute]
+capacityExceededSignal storeError =
+  case storeError of
+    ActivityAuditCapacityExceeded -> [Observability.ObservabilityAttribute "app.operational.signal.audit_capacity_exceeded" (Observability.TextAttribute "true")]
+    ActivityAuditUnavailable -> []
+    ActivityAuditCorruptResult -> []
+
+capacityExceededLog :: ActivityAuditStoreError -> [Text]
+capacityExceededLog storeError =
+  case storeError of
+    ActivityAuditCapacityExceeded -> ["[audit_capacity_exceeded] audit.operation=append"]
+    ActivityAuditUnavailable -> []
+    ActivityAuditCorruptResult -> []
 
 setCookieHeader :: Text -> Http.Header
 setCookieHeader cookie = ("Set-Cookie", TextEncoding.encodeUtf8 cookie)

@@ -178,6 +178,28 @@ repair the underlying deployment condition, and use the owner-controlled
 maintenance/recovery procedure; do not grant the runtime role a bypass or
 delete individual audit rows to make a request succeed.
 
+### Runtime monitoring and alerting inventory
+
+Signals are identifiers, not severity levels. Alert policy belongs to the
+deployment, and every request-bound investigation starts from the private
+request log/span's `RequestId`, never from a metric label or an audit subject.
+The table deliberately calls out query-based checks as well as emitted
+signals: a missing signal is not evidence that the underlying control is
+healthy.
+
+| Condition to monitor | Signal or owner query | Immediate operator response | Evidence |
+| --- | --- | --- | --- |
+| Explicit logout revocation succeeded but its optional audit append failed | `account.logout.audit-append-failed`, with only `operation=append` and failure kind `unavailable`, `capacity-exhausted`, or `corrupt-result`. The browser logout still succeeds; the event is intentionally absent. | Investigate database availability/capacity or the controlled append result with the private request ID. Do not restore the browser credential or fabricate an audit row. | [logout workflow](../../packages/web-api/src/WebApi/AccountPages/Actions/Workflows.hs), [workflow test](../../packages/web-api/test/Unit/WebApi/AccountPagesSpec.hs) |
+| A controlled append reaches the partition hard cap | `audit_capacity_exceeded`; the same owner capacity query above shows the affected partition and its configured limit. | Treat required audit mutations as unavailable until capacity, disk, or retention maintenance is repaired. Raising the owner-controlled limit is an explicit policy decision; do not delete retained rows or grant a runtime bypass. | [logout signal path](../../packages/web-api/src/WebApi/AccountPages/Actions/Workflows.hs), [capacity/role integration proof](../../packages/web-api/test/Integration/WebApiSpec.hs) |
+| Capacity approaches its configured high-water mark | The owner capacity query above, compared with `utilization_high_water_percent`. This is currently a query-based warning boundary, not a delivery-guaranteed application signal. | Forecast growth and storage headroom, verify the next partition, and schedule a reviewed capacity/retention change before the hard cap is reached. | [audit policy and partition registry](../../packages/web-api/src/WebApi/Postgres/ActivityAuditMigration.hs), [partition proof](../../packages/web-api/test/Integration/WebApiSpec.hs) |
+| Maintenance is missing, late, or failing; current/next writable partitions are absent | Inspect the named `cron.job` rows and their bounded `cron.job_run_details`, then compare `partition_registry` bounds with the current UTC month. | Repair the scheduler connection/role, job command, or maintenance failure; call the owned maintenance function directly for recovery. Do not wait for `pg_cron` to run during diagnosis. | [scheduler setup](../../packages/web-api/src/WebApi/DatabaseSetup.hs), [exact-job and direct-maintenance test](../../packages/web-api/test/Integration/WebApiSpec.hs) |
+| Retention drift, disk pressure, or partition-maintenance lock pressure | Monitor the oldest/newest `partition_registry` bounds alongside PostgreSQL disk and lock telemetry. This is deployment monitoring, not a runtime metric emitted by Harch. | Resolve storage or blocking maintenance work before the writable partition is exhausted; keep the documented twelve-complete-month policy unless an owner-approved retention change is made. | [maintenance contract](../../packages/web-api/src/WebApi/Postgres/ActivityAuditMigration.hs), [retention-boundary test](../../packages/web-api/test/Integration/WebApiSpec.hs) |
+
+The first two signals carry no account, session, route, page, raw exception, or
+request-ID attribute. The framework adds request correlation only to private
+diagnostics and spans. Other audit-producing workflows must adopt this same
+inventory and control policy before they are described as audit-capable.
+
 ### Retention and scheduler setup
 
 `migrate` and `migrate-and-seed` reconcile the scheduler login and install the

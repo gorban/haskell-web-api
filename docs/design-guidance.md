@@ -3497,6 +3497,30 @@ transaction state. The remaining AHI-5 work is the other selected
 audit-producing mutations; this slice alone does not claim the whole audit
 catalog is atomic.
 
+**Follow-up slice: explicit logout revokes first and accepts a bounded audit
+gap (AHI-5, 2026-09-09).** `AccountSessionAuditStore` remains deliberately
+specific to login issuance's atomic contract. Explicit logout instead uses the
+existing `AccountSessionStore` followed synchronously by `ActivityAuditStore`:
+a durable-revocation error returns the existing retryable 503 without clearing
+the authenticated browser state; a successful `True` revocation attempts one
+`AccountSessionEnded ExplicitLogout` append; a `False` result means the
+session had already ended and appends nothing. Once the durable revocation
+commits, unavailable, capacity-exhausted, corrupt, or locally invalid audit
+attribution cannot leave a browser credential usable, so logout clears the
+CSRF and authentication cookies and returns success while recording only the
+bounded operational signal `account.logout.audit-append-failed`. Capacity also
+records the independent `audit_capacity_exceeded` signal.
+
+This does not add an outbox, retry loop, generic post-commit logger, or a
+misleading atomic-logout adapter: each would obscure the intentionally
+different login/logout control policy. Signal attributes contain only the
+closed operation and failure-kind values and are excluded from metric labels;
+the framework-owned request ID remains in private request logs and spans, not
+the signal payload. Focused workflow tests exercise the independent revocation
+and append rails; the existing PostgreSQL repository tests remain responsible
+for the controlled function invocation and its failure mapping. Other selected
+audit-producing mutations remain AHI-5 work.
+
 ### Decision record — AHI-4C: one ASCII cookie-token grammar (2026-09-05)
 
 **Decision: extract the existing cookie-name token predicate into a small

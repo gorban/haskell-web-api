@@ -46,8 +46,22 @@ refresh its protected data. Harch's bounded retained-action reauthentication
 mechanism is not a screen lock and does not automatically clear rendered
 content.
 
+That policy should also explicitly cover protected-page history restoration.
+Browser Back/Forward navigation can restore a previously rendered protected
+page from the back-forward cache (BFCache) without making a new server request;
+the same can happen when a tab becomes visible again. Applications whose data
+must not reappear after a logout, expiry, revocation, or inactivity boundary
+should lock the restored page immediately and revalidate the session before
+revealing or refreshing protected regions. Preserve ordinary history rather
+than trying to prune it; mark confidential responses non-cacheable where the
+product calls for it, then revalidate through the ordinary guarded GET and
+show the public sign-in result if the durable session ended. The lock needs to
+preserve an accessible path to sign in again, and must not merely be a
+removable visual overlay over confidential DOM.
+
 This is documented guidance, **not an implemented screen-lock feature in any
-example**. It does not protect against a person with access to the browser or
-device, cached/copied content, screenshots, browser extensions, or an already
-compromised client. Treat it as a product-level confidentiality measure layered
-on top of server-side authentication, not a replacement for it.
+example, including this JWT guide**. It does not protect against a person with
+access to the browser or device, cached/copied content, screenshots, browser
+extensions, or an already compromised client. Treat it as a product-level
+confidentiality measure layered on top of server-side authentication, not a
+replacement for it.
