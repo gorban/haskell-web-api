@@ -44,6 +44,7 @@ import HarchWeb.Server
     ClientActionRequest (..),
     ClientActionResponse (..),
     PageResult (RenderedPage),
+    noClientActionFailureDestinations,
     unboundedRouteExecutionPolicy,
   )
 import HarchWeb.Site (RouteDefinition (..), RouteHandler (PageRouteHandler))
@@ -161,6 +162,7 @@ ordersActionHandler commands actionRequest =
                 clientActionFocusId = Nothing,
                 clientActionNavigation = StayOnCurrentRoute,
                 clientActionStorageCleanup = noClientStorageCleanup,
+                clientActionFailureDestinations = noClientActionFailureDestinations,
                 clientActionHeaders = [],
                 clientActionObservabilityAttributes = [],
                 clientActionLogEntries = []

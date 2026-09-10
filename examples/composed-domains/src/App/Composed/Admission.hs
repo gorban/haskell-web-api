@@ -105,6 +105,7 @@ import HarchWeb.Server
     HistoryMode (ReplaceHistory),
     NonPageResponse (..),
     ResponseBody (..),
+    noClientActionFailureDestinations,
     nonPageInternalRedirectResponse,
   )
 import HarchWeb.Session (OpaqueSession)
@@ -209,6 +210,7 @@ admissionChallenge endpointRequest =
             clientActionFocusId = Nothing,
             clientActionNavigation = NavigateInternal ReplaceHistory admissionRoute,
             clientActionStorageCleanup = noClientStorageCleanup,
+            clientActionFailureDestinations = noClientActionFailureDestinations,
             clientActionHeaders = [],
             clientActionObservabilityAttributes = [],
             clientActionLogEntries = []

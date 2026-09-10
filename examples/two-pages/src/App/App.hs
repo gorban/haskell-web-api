@@ -10,6 +10,7 @@ where
 
 import App.Components.Layout (twoPageShell)
 import App.Components.SubscriptionEmailField (subscriptionEmailId)
+import App.CustomPages.ClientActionFailure qualified as ClientActionFailure
 import App.CustomPages.Preview (previewPageDefinition)
 import App.Pages.Generated (pageRouteDefinition)
 import App.Pages.Home (nativeSubscriptionResultPage, subscriptionResultRegion)
@@ -56,6 +57,7 @@ import HarchWeb
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
     eventStreamResponse,
+    noClientActionFailureDestinations,
     noClientStorageCleanup,
     nonPageInternalRedirectResponse,
     parseClientActionFields,
@@ -106,6 +108,7 @@ twoPageSite csrfProtection =
       siteRequestPolicy = twoPageRequestPolicy,
       siteDecodeClientAction = decodeAction twoPageActions,
       siteClientActionEndpointMetadata = twoPageActionEndpointMetadata,
+      siteClientActionFailureRoute = Just (\clientFailure failureReference -> Custom (ClientActionFailurePage clientFailure failureReference)),
       siteHandleClientAction = twoPageClientAction
     }
 
@@ -120,6 +123,8 @@ routeDefinition csrfProtection route =
       nativeSubscriptionFallbackRouteDefinition csrfProtection
     Custom NativeSubscriptionResult ->
       Site.pageRoute (twoPageEndpointMetadata HtmlEndpoint (Custom NativeSubscriptionResult)) Nothing nativeSubscriptionResultPage
+    Custom (ClientActionFailurePage _ failureReference) ->
+      ClientActionFailure.routeDefinition failureReference
 
 liveDataEventsRouteDefinition :: RouteDefinition TwoPageRoute () ()
 liveDataEventsRouteDefinition =
@@ -150,6 +155,7 @@ twoPageClientAction actionRequest =
                         clientActionFocusId = Nothing,
                         clientActionNavigation = NavigateInternal PushHistory (RouteRequest (Custom NativeSubscriptionResult) ()),
                         clientActionStorageCleanup = noClientStorageCleanup,
+                        clientActionFailureDestinations = noClientActionFailureDestinations,
                         clientActionHeaders = [],
                         clientActionObservabilityAttributes = [],
                         clientActionLogEntries = []
@@ -161,6 +167,7 @@ twoPageClientAction actionRequest =
                     clientActionFocusId = Just subscriptionEmailId,
                     clientActionNavigation = StayOnCurrentRoute,
                     clientActionStorageCleanup = noClientStorageCleanup,
+                    clientActionFailureDestinations = noClientActionFailureDestinations,
                     clientActionHeaders = [],
                     clientActionObservabilityAttributes = [],
                     clientActionLogEntries = []

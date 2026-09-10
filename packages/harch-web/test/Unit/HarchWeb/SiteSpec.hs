@@ -149,6 +149,12 @@ spec = do
       case HarchWeb.applicationRouteModuleChain siteApplication of
         Nothing -> pure ()
         Just _ -> expectationFailure "expected built simpleSite application to have no route-module chain by default"
+      case siteClientActionFailureRoute sampleSite of
+        Nothing -> pure ()
+        Just _ -> expectationFailure "expected simpleSite to have no client-action failure route by default"
+      case HarchWeb.applicationClientActionFailureRoute siteApplication of
+        Nothing -> pure ()
+        Just _ -> expectationFailure "expected built simpleSite application to have no client-action failure route by default"
       siteClientActionEndpointMetadata sampleSite "POST" "/actions/sample" (SampleContext "") `shouldBe` Nothing
       HarchWeb.clientActionEndpointMetadata siteApplication "POST" "/actions/sample" (SampleContext "") `shouldBe` Nothing
       HarchWeb.clientActionRoute siteApplication "POST" "/actions/sample" (SampleContext "") `shouldBe` Nothing
@@ -254,6 +260,8 @@ spec = do
             `shouldBe` True
         PageResponseWithMetadata {} ->
           expectationFailure "expected pageRoute to render a plain page response"
+        PageResponseWithHeaders {} ->
+          expectationFailure "expected pageRoute to render a plain page response"
         BodyResponse _ ->
           expectationFailure "expected a page response for the home route"
         RedirectResponse _ _ ->
@@ -344,6 +352,44 @@ spec = do
                    ]
             )
         _ -> expectationFailure "expected page response metadata to remain distinct from its SSR page"
+
+    it "preserves page-specific cache and referrer headers through the typed page route boundary" $ do
+      let headerRoute =
+            homeRouteDefinition
+              { routeHandler =
+                  Site.PageRouteHandler $ \_ routeRequest ->
+                    pure
+                      ( HarchWeb.RenderedPageWithHeaders
+                          HarchWeb.noStoreNoReferrerPageHeaders
+                          Page
+                            { pageTitle = "Terminal browser failure",
+                              pageRoute = HomeRoute,
+                              pageContext = requestContext routeRequest,
+                              pageBody = HarchWeb.text "safe failure",
+                              pageBootstrapHooks = []
+                            }
+                      )
+              }
+          application = buildSiteApplication (sampleSite {siteRouteDefinition = \case HomeRoute -> headerRoute; route -> sampleRouteDefinition route})
+      HarchWeb.renderResponse application (RouteRequest HomeRoute (SampleContext "/context")) >>= \case
+        PageResponseWithHeaders _ _ page -> pageTitle page `shouldBe` "Terminal browser failure"
+        _ -> expectationFailure "expected page-specific headers to remain distinct from the SSR page"
+      waiResponse <- performWaiRequest (toWaiApplication application) (waiRequest [])
+      expectAll
+        ( (lookup "Cache-Control" (Wai.responseHeaders waiResponse) `shouldBe` Just "no-store")
+            :| [lookup "Referrer-Policy" (Wai.responseHeaders waiResponse) `shouldBe` Just "no-referrer"]
+        )
+
+    it "carries an application-selected client-action failure route through site composition" $ do
+      let expectedReference = HarchWeb.failureReference siteRequestId
+          expectedRoute = SecondRoute
+          siteWithFailureRoute =
+            sampleSite
+              { siteClientActionFailureRoute = Just (\_ failureReference -> if failureReference == expectedReference then expectedRoute else HomeRoute)
+              }
+      case HarchWeb.applicationClientActionFailureRoute (buildSiteApplication siteWithFailureRoute) of
+        Just routeForFailure -> routeForFailure HarchWeb.StorageCleanupFailed expectedReference `shouldBe` expectedRoute
+        Nothing -> expectationFailure "expected the configured client-action failure route"
 
     it "takes method ownership from route definitions rather than a codec shadow table" $ do
       let conflictingCodec =

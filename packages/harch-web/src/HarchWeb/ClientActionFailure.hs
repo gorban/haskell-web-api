@@ -12,11 +12,14 @@
 -- than introducing another UUID parser or an application-defined query-string
 -- convention.  The closed failure sum is deliberately separate from a future
 -- application failure ADT: browser-discovered failures cannot safely carry
--- application values back to the server.  This initial value layer does not
--- yet add a route, action-response transport, or browser replacement path.
+-- application values back to the server.  The AHI-4C transport maps this
+-- value to an application-declared route and the navigation runtime either
+-- visits that route or clears the document with this safe fallback's message.
+-- Application-defined failures remain a deliberately separate follow-up.
 module HarchWeb.ClientActionFailure
   ( FailureReference,
     HarchClientFailure (..),
+    defaultClientActionFailurePage,
     failureReference,
     failureReferenceRequestId,
     failureReferenceText,
@@ -27,7 +30,10 @@ module HarchWeb.ClientActionFailure
 where
 
 import Data.Text (Text)
+import HarchWeb.Document (Page (..))
+import HarchWeb.Markup (element, headingOneTag, paragraphTag, sectionTag, text)
 import HarchWeb.RequestId (RequestId, mkRequestId, requestIdText)
+import HarchWeb.Routing (RouteRequest (..))
 
 -- | Browser failures which the framework can classify without exposing an
 -- exception, a storage key, a route, or session-related data.  The rendered
@@ -82,3 +88,25 @@ parseHarchClientFailure failureCode =
 -- a reference without the existing exact UUIDv4 validation.
 parseFailureReference :: Text -> Maybe FailureReference
 parseFailureReference = fmap FailureReference . mkRequestId
+
+-- | A complete SSR fallback page for a browser-detected client-action
+-- failure. It displays only the validated original action reference using
+-- text markup, never the closed failure tag, a storage key, or exception
+-- detail. Applications normally use this in their dedicated public failure
+-- route and may replace it with an equivalently safe branded page.
+defaultClientActionFailurePage :: FailureReference -> RouteRequest route context -> Page route context
+defaultClientActionFailurePage reference routeRequest =
+  Page
+    { pageTitle = "Request could not be completed",
+      pageRoute = requestRoute routeRequest,
+      pageContext = requestContext routeRequest,
+      pageBody =
+        element
+          sectionTag
+          []
+          [ element headingOneTag [] [text "Request could not be completed"],
+            element paragraphTag [] [text "The page was cleared to protect your account. Please contact support and provide this request ID."],
+            element paragraphTag [] [text (failureReferenceText reference)]
+          ],
+      pageBootstrapHooks = []
+    }

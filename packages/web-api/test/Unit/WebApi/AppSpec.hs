@@ -628,6 +628,7 @@ spec = do
             `shouldBe` "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
         HarchWeb.PageResponse _ _ -> expectationFailure "expected an API protocol response"
         HarchWeb.PageResponseWithMetadata {} -> expectationFailure "expected an API protocol response"
+        HarchWeb.PageResponseWithHeaders {} -> expectationFailure "expected an API protocol response"
         HarchWeb.RedirectResponse _ _ -> expectationFailure "expected an API protocol response"
         HarchWeb.InternalRedirectResponse _ _ -> expectationFailure "expected an API protocol response"
         HarchWeb.InternalRedirectResponseWithHeaders {} -> expectationFailure "expected an API protocol response"
@@ -832,6 +833,7 @@ spec = do
             `shouldBe` "{\"summary\":\"runtime:runtime_db:runtime_user\",\"highlights\":[\"configured-from-environment\"]}"
         HarchWeb.PageResponse _ _ -> expectationFailure "expected an API protocol response"
         HarchWeb.PageResponseWithMetadata {} -> expectationFailure "expected an API protocol response"
+        HarchWeb.PageResponseWithHeaders {} -> expectationFailure "expected an API protocol response"
         HarchWeb.RedirectResponse _ _ -> expectationFailure "expected an API protocol response"
         HarchWeb.InternalRedirectResponse _ _ -> expectationFailure "expected an API protocol response"
         HarchWeb.InternalRedirectResponseWithHeaders {} -> expectationFailure "expected an API protocol response"
@@ -1403,5 +1405,8 @@ assertRenderedPageResult pageResult response =
     (HarchWeb.RenderedPage expectedPage, HarchWeb.PageResponse _ actualPage) -> actualPage `shouldBe` expectedPage
     (HarchWeb.RenderedPageWithMetadata expectedMetadata expectedPage, HarchWeb.PageResponseWithMetadata _ actualMetadata actualPage) -> do
       actualMetadata `shouldBe` expectedMetadata
+      actualPage `shouldBe` expectedPage
+    (HarchWeb.RenderedPageWithHeaders expectedHeaders expectedPage, HarchWeb.PageResponseWithHeaders _ actualHeaders actualPage) -> do
+      actualHeaders `shouldBe` expectedHeaders
       actualPage `shouldBe` expectedPage
     _ -> expectationFailure "page result and rendered response did not have matching shapes"

@@ -14,8 +14,10 @@ import Control.Monad.IO.Class (liftIO)
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
+import HarchWeb.ClientActionFailure (HarchClientFailure (..), failureReference)
 import HarchWeb.Csrf (CsrfProtection (verifyCsrfToken), CsrfVerification (..))
 import HarchWeb.RequestId (RequestId)
+import HarchWeb.Routing (RouteRequest (..))
 import HarchWeb.Security (requestScheme)
 import HarchWeb.Server.Application
 import HarchWeb.Server.ClientAction
@@ -61,8 +63,33 @@ clientActionResponse webApplication requestId request requestMethod requestPath 
           CsrfVerificationUnavailable -> pure (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionCsrfUnavailable))
           CsrfVerified -> do
             maybeActionResponse <- liftIO (handleClientAction webApplication actionRequest)
-            pure (maybe (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionNotFound)) ClientActionBodyResponse maybeActionResponse)
+            pure
+              ( maybe
+                  (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionNotFound))
+                  (ClientActionBodyResponse . attachFailureDestinations)
+                  maybeActionResponse
+              )
   pure (either (BodyResponse . clientActionProtocolErrorResponse requestId) id result)
+  where
+    attachFailureDestinations actionResponse =
+      actionResponse
+        { clientActionFailureDestinations =
+            fmap
+              failureDestinations
+              (applicationClientActionFailureRoute webApplication)
+        }
+    failureDestinations failureRoute =
+      ClientActionFailureDestinations
+        { storageCleanupFailureDestination = failureRouteRequest StorageCleanupFailed,
+          actionResponseProtocolFailureDestination = failureRouteRequest ActionResponseProtocolFailed,
+          responseApplicationFailureDestination = failureRouteRequest ResponseApplicationFailed
+        }
+      where
+        failureRouteRequest clientFailure =
+          RouteRequest
+            { requestRoute = failureRoute clientFailure (failureReference requestId),
+              requestContext = routedRequestContext
+            }
 
 liftClientActionEither :: Either ClientActionProtocolError value -> ExceptT ClientActionProtocolError IO value
 liftClientActionEither = either throwError pure

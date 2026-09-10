@@ -102,6 +102,7 @@ spec = do
           HarchWeb.renderHtml (HarchWeb.pageBody page)
             `shouldNotSatisfy` Text.isInfixOf "profile database unavailable"
         HarchWeb.RenderedPage _ -> expectationFailure "expected unavailable profile diagnostics"
+        HarchWeb.RenderedPageWithHeaders _ _ -> expectationFailure "expected unavailable profile diagnostics"
 
     it "maps required second-page failures into explicit HTML 500 responses" $ do
       let failingDatabaseEffect =
@@ -194,3 +195,4 @@ stripVolatilePageResult pageResult =
     HarchWeb.RenderedPage page -> HarchWeb.RenderedPage page
     HarchWeb.RenderedPageWithMetadata metadata page ->
       HarchWeb.RenderedPageWithMetadata (stripVolatileDatabaseTimingResponseBody metadata) page
+    HarchWeb.RenderedPageWithHeaders pageHeaders page -> HarchWeb.RenderedPageWithHeaders pageHeaders page

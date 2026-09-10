@@ -12,7 +12,7 @@ import HarchWeb.Document (Page (..), testRuntimeNonce)
 import HarchWeb.EndpointMetadata (AccessRequirement (RequireAuthorized), EndpointProtocol (ActionEndpoint, HtmlEndpoint), endpointAccess, endpointName, endpointNameText, endpointProtocol, endpointRouteTemplate, routeTemplateText)
 import HarchWeb.Routing (RouteCodec (..), RouteLocation (..), RouteMethod (RouteGet), RouteParseResult (..), RouteRequest (..), requiredPathSegment, routeMethodPolicy)
 import HarchWeb.Routing qualified as Routing
-import HarchWeb.Server (ActionNavigation (StayOnCurrentRoute), ClientActionRequest (..), ClientActionResponse (..), PageResult (..), unboundedRouteExecutionPolicy)
+import HarchWeb.Server (ActionNavigation (StayOnCurrentRoute), ClientActionRequest (..), ClientActionResponse (..), PageResult (..), noClientActionFailureDestinations, unboundedRouteExecutionPolicy)
 import HarchWeb.Site (RouteDefinition (..), RouteHandler (..))
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
@@ -103,6 +103,7 @@ spec = describe "Unit.Catalog.Domain" $ do
         clientActionPatches actionResponse `shouldBe` []
         clientActionFocusId actionResponse `shouldBe` Nothing
         clientActionStorageCleanup actionResponse `shouldBe` noClientStorageCleanup
+        clientActionFailureDestinations actionResponse `shouldBe` noClientActionFailureDestinations
         clientActionNavigation actionResponse `shouldBe` StayOnCurrentRoute
         clientActionHeaders actionResponse `shouldBe` []
         clientActionObservabilityAttributes actionResponse `shouldBe` []

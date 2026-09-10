@@ -1,8 +1,10 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 -- | Private typed request and response contracts for the WAI server pipeline.
 module HarchWeb.Server.Response
   ( ActionNavigation (..),
+    ClientActionFailureDestinations (..),
     ClientActionDecodeResult (..),
     ClientActionIdempotencyKey,
     ClientActionPayload (..),
@@ -13,10 +15,14 @@ module HarchWeb.Server.Response
     RegionPatch,
     RequestMiddleware (..),
     PageResult (..),
+    PageResponseHeaders,
+    pageResponseHeaderValues,
     mapPageResult,
+    noStoreNoReferrerPageHeaders,
     NonPageResponse (..),
     nonPageResponse,
     mapClientActionResponse,
+    noClientActionFailureDestinations,
     mapNonPageResponse,
     Response (..),
     mapResponsePage,
@@ -199,6 +205,23 @@ data ActionNavigation route context
   | NavigateInternal HistoryMode (RouteRequest route context)
   deriving (Eq, Show)
 
+-- | The three concrete, application-owned public destinations the browser may
+-- use after a framework-classified enhanced-action failure.  They are already
+-- rendered from the root route codec and the original action's trusted request
+-- ID before the JSON response is written.  The browser therefore never
+-- assembles a failure URL from client input or exception data.
+--
+-- An application which has no enhanced-action failure route leaves this at
+-- 'noClientActionFailureDestinations'. It may still select cleanup; if browser
+-- cleanup or response application then fails, the runtime uses Harch's
+-- self-contained safe replacement rather than constructing a URL itself.
+data ClientActionFailureDestinations route context = ClientActionFailureDestinations
+  { storageCleanupFailureDestination :: RouteRequest route context,
+    actionResponseProtocolFailureDestination :: RouteRequest route context,
+    responseApplicationFailureDestination :: RouteRequest route context
+  }
+  deriving (Eq, Show)
+
 -- | Client-action status shares the ordinary response boundary's exact HTTP
 -- status representation, including its reason phrase.
 --
@@ -222,6 +245,10 @@ data ClientActionResponse route context = ClientActionResponse
     -- The response algebra owns the declaration; the browser interpreter owns
     -- execution and fatal failure presentation.
     clientActionStorageCleanup :: ClientStorageCleanup,
+    -- | Concrete public failure destinations prepared by the framework after
+    -- the handler returns.  Applications declare their typed route constructor
+    -- at application assembly; handlers do not construct browser failure URLs.
+    clientActionFailureDestinations :: Maybe (ClientActionFailureDestinations route context),
     clientActionHeaders :: Http.ResponseHeaders,
     clientActionObservabilityAttributes :: [Observability.ObservabilityAttribute],
     clientActionLogEntries :: [Text]
@@ -240,8 +267,26 @@ mapClientActionResponse mapRoute actionResponse =
     { clientActionNavigation =
         case clientActionNavigation actionResponse of
           StayOnCurrentRoute -> StayOnCurrentRoute
-          NavigateInternal historyMode routeRequest -> NavigateInternal historyMode (mapRoute routeRequest)
+          NavigateInternal historyMode routeRequest -> NavigateInternal historyMode (mapRoute routeRequest),
+      clientActionFailureDestinations = fmap (mapClientActionFailureDestinations mapRoute) (clientActionFailureDestinations actionResponse)
     }
+
+mapClientActionFailureDestinations ::
+  (RouteRequest route context -> RouteRequest mappedRoute mappedContext) ->
+  ClientActionFailureDestinations route context ->
+  ClientActionFailureDestinations mappedRoute mappedContext
+mapClientActionFailureDestinations mapRoute destinations =
+  ClientActionFailureDestinations
+    { storageCleanupFailureDestination = mapRoute (storageCleanupFailureDestination destinations),
+      actionResponseProtocolFailureDestination = mapRoute (actionResponseProtocolFailureDestination destinations),
+      responseApplicationFailureDestination = mapRoute (responseApplicationFailureDestination destinations)
+    }
+
+-- | The default for applications which do not opt into browser storage
+-- cleanup.  A response with no cleanup has no possible browser cleanup failure
+-- and therefore needs no public destination.
+noClientActionFailureDestinations :: Maybe (ClientActionFailureDestinations route context)
+noClientActionFailureDestinations = Nothing
 
 -- | The outcome of an SSR page handler before request execution attaches the
 -- one pre-rendered 'PageSecurity' value.  Keeping this distinct from
@@ -251,6 +296,7 @@ mapClientActionResponse mapRoute actionResponse =
 data PageResult route context
   = RenderedPage (Page route context)
   | RenderedPageWithMetadata ResponseBody (Page route context)
+  | RenderedPageWithHeaders PageResponseHeaders (Page route context)
   deriving (Eq, Show)
 
 -- | Adapt only the page carried by a page-handler outcome.  Composition
@@ -261,6 +307,27 @@ mapPageResult mapPage pageResult =
   case pageResult of
     RenderedPage page -> RenderedPage (mapPage page)
     RenderedPageWithMetadata responseBodyValue page -> RenderedPageWithMetadata responseBodyValue (mapPage page)
+    RenderedPageWithHeaders pageHeaders page -> RenderedPageWithHeaders pageHeaders (mapPage page)
+
+-- | The only page-specific response-header override presently supported by
+-- Harch. It is intentionally opaque: an error page may opt out of caching
+-- and referrers without gaining authority to replace CSP, request-ID, cookie,
+-- or other framework security headers.
+newtype PageResponseHeaders = PageResponseHeaders Http.ResponseHeaders
+  deriving (Eq, Show)
+
+-- | Privacy headers for a public support/error page whose URL carries an
+-- opaque correlation reference. The ordinary security policy remains in
+-- force; these additions only prevent storage and onward referrer disclosure.
+noStoreNoReferrerPageHeaders :: PageResponseHeaders
+noStoreNoReferrerPageHeaders =
+  PageResponseHeaders
+    [ ("Cache-Control", "no-store"),
+      ("Referrer-Policy", "no-referrer")
+    ]
+
+pageResponseHeaderValues :: PageResponseHeaders -> Http.ResponseHeaders
+pageResponseHeaderValues (PageResponseHeaders headers) = headers
 
 -- | Every response form which cannot carry an SSR page. Route protocol
 -- handlers and post-match guards use this narrower result, leaving 'Site' as
@@ -342,6 +409,7 @@ mapNonPageResponse mapRoute response =
 data Response route context
   = PageResponse PageSecurity (Page route context)
   | PageResponseWithMetadata PageSecurity ResponseBody (Page route context)
+  | PageResponseWithHeaders PageSecurity PageResponseHeaders (Page route context)
   | BodyResponse ResponseBody
   | RedirectResponse ResponseBody Text
   | InternalRedirectResponse ResponseBody (RouteRequest route context)
@@ -362,6 +430,7 @@ mapResponsePage mapPage mapRoute response =
   case response of
     PageResponse pageSecurity page -> PageResponse pageSecurity (mapPage page)
     PageResponseWithMetadata pageSecurity responseBodyValue page -> PageResponseWithMetadata pageSecurity responseBodyValue (mapPage page)
+    PageResponseWithHeaders pageSecurity pageHeaders page -> PageResponseWithHeaders pageSecurity pageHeaders (mapPage page)
     BodyResponse responseBodyValue -> BodyResponse responseBodyValue
     RedirectResponse responseBodyValue location -> RedirectResponse responseBodyValue location
     InternalRedirectResponse responseBodyValue routeRequest -> InternalRedirectResponse responseBodyValue (mapRoute routeRequest)
@@ -375,6 +444,7 @@ instance (Eq route, Eq context) => Eq (Response route context) where
     case (left, right) of
       (PageResponse leftSecurity leftPage, PageResponse rightSecurity rightPage) -> samePageSecurity leftSecurity rightSecurity && leftPage == rightPage
       (PageResponseWithMetadata leftSecurity leftBody leftPage, PageResponseWithMetadata rightSecurity rightBody rightPage) -> samePageSecurity leftSecurity rightSecurity && leftBody == rightBody && leftPage == rightPage
+      (PageResponseWithHeaders leftSecurity leftHeaders leftPage, PageResponseWithHeaders rightSecurity rightHeaders rightPage) -> samePageSecurity leftSecurity rightSecurity && leftHeaders == rightHeaders && leftPage == rightPage
       (BodyResponse leftBody, BodyResponse rightBody) -> leftBody == rightBody
       (RedirectResponse leftBody leftLocation, RedirectResponse rightBody rightLocation) -> leftBody == rightBody && leftLocation == rightLocation
       (InternalRedirectResponse leftBody leftRequest, InternalRedirectResponse rightBody rightRequest) -> leftBody == rightBody && leftRequest == rightRequest
@@ -389,6 +459,7 @@ instance (Show route, Show context) => Show (Response route context) where
     case response of
       PageResponse pageSecurity page -> showParen (precedence > 10) (showString "PageResponse " . showsPrec 11 pageSecurity . showChar ' ' . showsPrec 11 page)
       PageResponseWithMetadata pageSecurity responseBodyValue page -> showParen (precedence > 10) (showString "PageResponseWithMetadata " . showsPrec 11 pageSecurity . showChar ' ' . showsPrec 11 responseBodyValue . showChar ' ' . showsPrec 11 page)
+      PageResponseWithHeaders pageSecurity pageHeaders page -> showParen (precedence > 10) (showString "PageResponseWithHeaders " . showsPrec 11 pageSecurity . showChar ' ' . showsPrec 11 pageHeaders . showChar ' ' . showsPrec 11 page)
       BodyResponse responseBodyValue -> showParen (precedence > 10) (showString "BodyResponse " . showsPrec 11 responseBodyValue)
       RedirectResponse responseBodyValue location -> showParen (precedence > 10) (showString "RedirectResponse " . showsPrec 11 responseBodyValue . showChar ' ' . shows location)
       InternalRedirectResponse responseBodyValue routeRequest -> showParen (precedence > 10) (showString "InternalRedirectResponse " . showsPrec 11 responseBodyValue . showChar ' ' . showsPrec 11 routeRequest)

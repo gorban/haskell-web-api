@@ -32,6 +32,7 @@ where
 
 import Data.List.NonEmpty (NonEmpty)
 import Data.Text (Text)
+import HarchWeb.ClientActionFailure (FailureReference, HarchClientFailure)
 import HarchWeb.Csrf (CsrfProtection)
 import HarchWeb.Document (Document, NavigationRuntime, Page, RuntimeAsset)
 import HarchWeb.EndpointSecurity (ApplicationSecurity, EndpointMetadata (endpointName), EndpointName)
@@ -128,6 +129,12 @@ data Application route action context authorization = Application
     -- route matching, action URLs need not name a page route, so this declared
     -- bridge lets pre-decode guards apply route-family policy.
     clientActionRoute :: Text -> Text -> context -> Maybe route,
+    -- | The optional, application-owned route constructor for the closed
+    -- browser failure vocabulary.  The framework supplies the original
+    -- action's opaque 'FailureReference' and the routed context, then renders
+    -- these ordinary typed destinations through the root codec.  It does not
+    -- define application error routes or browser-storage conventions.
+    applicationClientActionFailureRoute :: Maybe (HarchClientFailure -> FailureReference -> route),
     -- | Selects the route-local policy only after the shared dispatcher has
     -- matched a route and method. It is not a second request-policy parser.
     routeExecutionPolicy :: route -> RouteExecutionPolicy,

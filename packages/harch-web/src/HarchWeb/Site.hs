@@ -122,6 +122,7 @@ data Site route action context authorization = Site
     siteRouteDefinition :: route -> RouteDefinition route context authorization,
     siteClientActionEndpointMetadata :: Text -> Text -> context -> Maybe (EndpointMetadata authorization),
     siteClientActionRoute :: Text -> Text -> context -> Maybe route,
+    siteClientActionFailureRoute :: Maybe (HarchWeb.HarchClientFailure -> HarchWeb.FailureReference -> route),
     siteDecodeClientAction :: ClientActionPayload context -> ClientActionDecodeResult action,
     siteCsrfProtection :: CsrfProtection context,
     siteHandleClientAction :: ClientActionRequest action context -> IO (Maybe (ClientActionResponse route context)),
@@ -175,6 +176,7 @@ simpleSite configuration =
       siteRouteDefinition = simpleSiteRouteDefinition configuration,
       siteClientActionEndpointMetadata = \_ _ _ -> Nothing,
       siteClientActionRoute = \_ _ _ -> Nothing,
+      siteClientActionFailureRoute = Nothing,
       siteDecodeClientAction = const HarchWeb.UnrecognizedClientAction,
       siteCsrfProtection = simpleSiteCsrfProtection configuration,
       siteHandleClientAction = const (pure Nothing),
@@ -264,6 +266,7 @@ buildSiteApplication site =
         routeEndpointMetadata = routeMetadata . siteRouteDefinition site,
         clientActionEndpointMetadata = siteClientActionEndpointMetadata site,
         clientActionRoute = siteClientActionRoute site,
+        applicationClientActionFailureRoute = siteClientActionFailureRoute site,
         HarchWeb.routeExecutionPolicy = routeDefinitionExecutionPolicy . siteRouteDefinition site,
         HarchWeb.routeExecutionIdentity = HarchWeb.routeExecutionIdentityFromMetadata . routeMetadata . siteRouteDefinition site,
         renderRequestResponse = renderSiteResponse site,
@@ -289,6 +292,7 @@ renderSiteResponse site requestId request routeRequest =
             case pageResult of
               RenderedPage page -> PageResponse pageSecurity page
               RenderedPageWithMetadata responseBodyValue page -> PageResponseWithMetadata pageSecurity responseBodyValue page
+              RenderedPageWithHeaders pageHeaders page -> PageResponseWithHeaders pageSecurity pageHeaders page
     ProtocolRouteHandler renderProtocol -> HarchWeb.nonPageResponse <$> renderProtocol request routeRequest
 
 csrfUnavailableResponse :: RequestId -> Response route context

@@ -20,6 +20,7 @@ where
 
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Encoding qualified as JsonEncoding
+import Data.Aeson.Key qualified as JsonKey
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.List.NonEmpty qualified as NonEmpty
@@ -28,6 +29,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Action (ActionMethod, actionMethodText)
+import HarchWeb.ClientActionFailure (HarchClientFailure (..), harchClientFailureCode)
 import HarchWeb.ClientStorage (BrowserStorageClass (..), ClientStorageCleanup, browserStorageKeyClass, browserStorageKeyText, clientStorageCleanupEntries, noClientStorageCleanup)
 import HarchWeb.Csrf (CsrfToken, mkCsrfToken, validateCsrfToken)
 import HarchWeb.Markup (ElementId, elementIdText, regionPatchHtml, regionPatchId, safeUrlText)
@@ -210,6 +212,7 @@ clientActionMethodNotAllowedResponse allowedMethods =
       clientActionFocusId = Nothing,
       clientActionNavigation = StayOnCurrentRoute,
       clientActionStorageCleanup = noClientStorageCleanup,
+      clientActionFailureDestinations = noClientActionFailureDestinations,
       clientActionHeaders =
         [ ("Allow", TextEncoding.encodeUtf8 (Text.intercalate ", " (map actionMethodText (NonEmpty.toList allowedMethods))))
         ],
@@ -229,6 +232,7 @@ clientActionReauthenticationRequiredResponse =
       clientActionFocusId = Nothing,
       clientActionNavigation = StayOnCurrentRoute,
       clientActionStorageCleanup = noClientStorageCleanup,
+      clientActionFailureDestinations = noClientActionFailureDestinations,
       clientActionHeaders = [("X-Harch-Action-Reauthenticate", "required")],
       clientActionObservabilityAttributes = [],
       clientActionLogEntries = []
@@ -247,16 +251,17 @@ clientActionResponseBody requestId routeCodec actionResponse =
 
 renderClientActionResponse :: RequestId -> RouteCodec route context -> ClientActionResponse route context -> Text
 renderClientActionResponse requestId routeCodec actionResponse =
-  clientActionResponseJson requestId routeCodec (clientActionPatches actionResponse) (clientActionFocusId actionResponse) (clientActionNavigation actionResponse) (clientActionStorageCleanup actionResponse)
+  clientActionResponseJson requestId routeCodec (clientActionPatches actionResponse) (clientActionFocusId actionResponse) (clientActionNavigation actionResponse) (clientActionStorageCleanup actionResponse) (clientActionFailureDestinations actionResponse)
 
-clientActionResponseJson :: RequestId -> RouteCodec route context -> [RegionPatch] -> Maybe ElementId -> ActionNavigation route context -> ClientStorageCleanup -> Text
-clientActionResponseJson requestId routeCodec patches maybeFocusId navigation storageCleanup =
+clientActionResponseJson :: RequestId -> RouteCodec route context -> [RegionPatch] -> Maybe ElementId -> ActionNavigation route context -> ClientStorageCleanup -> Maybe (ClientActionFailureDestinations route context) -> Text
+clientActionResponseJson requestId routeCodec patches maybeFocusId navigation storageCleanup maybeFailureDestinations =
   jsonText
     ( JsonEncoding.pairs
         ( JsonEncoding.pair "patches" (JsonEncoding.list renderPatch patches)
             <> JsonEncoding.pair "focusId" (Aeson.toEncoding (elementIdText <$> maybeFocusId))
             <> JsonEncoding.pair "navigation" (renderNavigation navigation)
             <> JsonEncoding.pair "storageCleanup" (JsonEncoding.list renderStorageEntry (clientStorageCleanupEntries storageCleanup))
+            <> JsonEncoding.pair "failureNavigation" (renderFailureDestinations maybeFailureDestinations)
             <> JsonEncoding.pair "requestId" (Aeson.toEncoding (requestIdText requestId))
         )
     )
@@ -284,6 +289,17 @@ clientActionResponseJson requestId routeCodec patches maybeFocusId navigation st
             ( JsonEncoding.pair "historyMode" (Aeson.toEncoding (historyModeText historyMode))
                 <> JsonEncoding.pair "href" (Aeson.toEncoding (safeUrlText (encodeRouteLocation (renderRoute routeCodec routeRequest))))
             )
+    renderFailureDestinations destinations =
+      case destinations of
+        Nothing -> JsonEncoding.null_
+        Just clientFailureDestinations ->
+          JsonEncoding.pairs
+            ( JsonEncoding.pair (JsonKey.fromText (harchClientFailureCode StorageCleanupFailed)) (renderDestination (storageCleanupFailureDestination clientFailureDestinations))
+                <> JsonEncoding.pair (JsonKey.fromText (harchClientFailureCode ActionResponseProtocolFailed)) (renderDestination (actionResponseProtocolFailureDestination clientFailureDestinations))
+                <> JsonEncoding.pair (JsonKey.fromText (harchClientFailureCode ResponseApplicationFailed)) (renderDestination (responseApplicationFailureDestination clientFailureDestinations))
+            )
+    renderDestination routeRequest =
+      Aeson.toEncoding (safeUrlText (encodeRouteLocation (renderRoute routeCodec routeRequest)))
 
 clientActionErrorResponseJson :: RequestId -> Text
 clientActionErrorResponseJson requestId =
@@ -292,6 +308,8 @@ clientActionErrorResponseJson requestId =
         ( JsonEncoding.pair "patches" (Aeson.toEncoding ([] :: [Text]))
             <> JsonEncoding.pair "focusId" JsonEncoding.null_
             <> JsonEncoding.pair "navigation" JsonEncoding.null_
+            <> JsonEncoding.pair "storageCleanup" (Aeson.toEncoding ([] :: [Text]))
+            <> JsonEncoding.pair "failureNavigation" JsonEncoding.null_
             <> JsonEncoding.pair "requestId" (Aeson.toEncoding (requestIdText requestId))
         )
     )

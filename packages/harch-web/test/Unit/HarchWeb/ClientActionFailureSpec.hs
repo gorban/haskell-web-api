@@ -4,8 +4,12 @@
 
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
+import Data.Text qualified as Text (isInfixOf)
 import HarchWeb.ClientActionFailure
+import HarchWeb.Document (Page (pageBody, pageBootstrapHooks, pageContext, pageRoute, pageTitle))
+import HarchWeb.Markup (renderHtml)
 import HarchWeb.RequestId (RequestId, mkRequestId)
+import HarchWeb.Routing (RouteRequest (RouteRequest))
 
 spec = describe "HarchWeb.ClientActionFailure" $ do
   it "round-trips only the closed browser-failure vocabulary" $
@@ -34,6 +38,21 @@ spec = describe "HarchWeb.ClientActionFailure" $ do
     expectAll
       ( (hasDerivedContract allFailures `shouldBe` True)
           :| [ hasDerivedContract [failureReference (requiredRequestId "3a99e441-7c35-4b87-91bf-c3583c008a0f")] `shouldBe` True
+             ]
+      )
+
+  it "renders the opaque reference in the complete default fallback page" $ do
+    let reference = failureReference (requiredRequestId "3a99e441-7c35-4b87-91bf-c3583c008a0f")
+        page = defaultClientActionFailurePage reference (RouteRequest ("failure" :: Text) ())
+        rendered = renderHtml (pageBody page)
+    expectAll
+      ( (pageTitle page `shouldBe` "Request could not be completed")
+          :| [ pageRoute page `shouldBe` "failure",
+               pageContext page `shouldBe` (),
+               rendered `shouldSatisfy` ("Request could not be completed" `Text.isInfixOf`),
+               rendered `shouldSatisfy` (failureReferenceText reference `Text.isInfixOf`),
+               pageBootstrapHooks page `shouldBe` [],
+               harchClientFailureCode StorageCleanupFailed `Text.isInfixOf` rendered `shouldBe` False
              ]
       )
 

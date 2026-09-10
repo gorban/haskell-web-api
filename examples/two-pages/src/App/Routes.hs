@@ -14,6 +14,7 @@ module App.Routes
     routeHref,
     twoPageActions,
     twoPageActionEndpointMetadata,
+    twoPageClientActionFailureEndpointMetadata,
     twoPageNavigationPath,
     twoPageNavigationHref,
     twoPageActionPath,
@@ -37,6 +38,8 @@ import HarchWeb
     EndpointMetadata,
     EndpointName,
     EndpointProtocol (ActionEndpoint, HtmlEndpoint),
+    FailureReference,
+    HarchClientFailure,
     PathSegment,
     RouteCodec (..),
     RouteLocation (..),
@@ -46,10 +49,14 @@ import HarchWeb
     RouteTemplate,
     SafeUrl,
     encodeRouteLocation,
+    failureReferenceText,
+    harchClientFailureCode,
     mkEndpointMetadata,
     mkEndpointName,
     mkRouteTemplate,
     mkSafeUrl,
+    parseFailureReference,
+    parseHarchClientFailure,
     requiredPathSegment,
     requiredSafeUrlOrDie,
     routeMethodPolicy,
@@ -87,6 +94,7 @@ data CustomRoute
   = PreviewPage PreviewSlug
   | NativeSubscriptionFallback
   | NativeSubscriptionResult
+  | ClientActionFailurePage HarchClientFailure FailureReference
   deriving (Show)
 
 data TwoPageRoute
@@ -125,6 +133,7 @@ endpointNameForRoute route =
     Custom (PreviewPage _) -> "two-pages.preview"
     Custom NativeSubscriptionFallback -> "two-pages.native-subscription"
     Custom NativeSubscriptionResult -> "two-pages.native-subscription-result"
+    Custom (ClientActionFailurePage _ _) -> "two-pages.client-action-failure"
 
 routeTemplateForRoute :: TwoPageRoute -> Text
 routeTemplateForRoute route =
@@ -137,6 +146,15 @@ routeTemplateForRoute route =
     Custom (PreviewPage _) -> "/preview/{slug}"
     Custom NativeSubscriptionFallback -> "/native-subscribe"
     Custom NativeSubscriptionResult -> "/subscription-received"
+    Custom (ClientActionFailurePage _ _) -> "/client-action-failure/{failure}/{request-id}"
+
+twoPageClientActionFailureEndpointMetadata :: EndpointMetadata ()
+twoPageClientActionFailureEndpointMetadata =
+  mkEndpointMetadata
+    (requiredEndpointName "two-pages.client-action-failure")
+    (requiredRouteTemplate "/client-action-failure/{failure}/{request-id}")
+    HtmlEndpoint
+    AllowUnauthenticated
 
 requiredEndpointName :: Text -> EndpointName
 requiredEndpointName endpointNameValue =
@@ -181,6 +199,13 @@ routeCodec =
                     { requestRoute = Custom NativeSubscriptionResult,
                       requestContext = requestContext
                     }
+              _
+                | Just (clientFailure, failureReference) <- parseClientActionFailurePath normalizedPath ->
+                    RouteParsed
+                      RouteRequest
+                        { requestRoute = Custom (ClientActionFailurePage clientFailure failureReference),
+                          requestContext = requestContext
+                        }
               _ ->
                 case parsePreviewPath normalizedPath of
                   Just previewSlug ->
@@ -206,6 +231,7 @@ twoPageRouteMethods route =
     Custom (PreviewPage _) -> [RouteGet]
     Custom NativeSubscriptionFallback -> [RoutePost]
     Custom NativeSubscriptionResult -> [RouteGet]
+    Custom (ClientActionFailurePage _ _) -> [RouteGet]
 
 routeHref :: TwoPageRoute -> Text
 routeHref route =
@@ -215,6 +241,7 @@ routeHref route =
     Custom (PreviewPage previewSlug) -> "/preview/" <> previewSlugText previewSlug
     Custom NativeSubscriptionFallback -> "/native-subscribe"
     Custom NativeSubscriptionResult -> "/subscription-received"
+    Custom (ClientActionFailurePage clientFailure failureReference) -> "/client-action-failure/" <> harchClientFailureCode clientFailure <> "/" <> failureReferenceText failureReference
 
 routeLocation :: TwoPageRoute -> RouteLocation
 routeLocation route =
@@ -237,6 +264,7 @@ routeSegmentsFor route =
     Custom (PreviewPage previewSlug) -> [requiredPathSegment "preview", requiredPathSegment (previewSlugText previewSlug)]
     Custom NativeSubscriptionFallback -> [requiredPathSegment "native-subscribe"]
     Custom NativeSubscriptionResult -> [requiredPathSegment "subscription-received"]
+    Custom (ClientActionFailurePage clientFailure failureReference) -> [requiredPathSegment "client-action-failure", requiredPathSegment (harchClientFailureCode clientFailure), requiredPathSegment (failureReferenceText failureReference)]
 
 twoPageActionPath :: TwoPageActionTarget -> Maybe Text
 twoPageActionPath = staticActionPath twoPageActions
@@ -303,3 +331,10 @@ previewSlugText (PreviewSlug value) = value
 parsePreviewPath :: Text -> Maybe PreviewSlug
 parsePreviewPath path =
   Text.stripPrefix "/preview/" path >>= mkPreviewSlug
+
+parseClientActionFailurePath :: Text -> Maybe (HarchClientFailure, FailureReference)
+parseClientActionFailurePath path =
+  case Text.splitOn "/" path of
+    ["", "client-action-failure", failureCode, referenceText] ->
+      (,) <$> parseHarchClientFailure failureCode <*> parseFailureReference referenceText
+    _ -> Nothing

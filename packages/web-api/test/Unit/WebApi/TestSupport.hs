@@ -1237,6 +1237,8 @@ stripVolatileDatabaseTimingResponse response =
     HarchWeb.PageResponse _ page -> HarchWeb.PageResponse testPageSecurity page
     HarchWeb.PageResponseWithMetadata _ responseBody page ->
       HarchWeb.PageResponseWithMetadata testPageSecurity (stripVolatileDatabaseTimingResponseBody responseBody) page
+    HarchWeb.PageResponseWithHeaders _ pageHeaders page ->
+      HarchWeb.PageResponseWithHeaders testPageSecurity pageHeaders page
     HarchWeb.BodyResponse responseBody ->
       HarchWeb.BodyResponse (stripVolatileDatabaseTimingResponseBody responseBody)
     HarchWeb.RedirectResponse responseBody location ->

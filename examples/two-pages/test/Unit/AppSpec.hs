@@ -84,6 +84,10 @@ spec =
       it "keeps the example site wiring small and explicit" $ do
         let previewSlug =
               fromMaybe (error "expected valid test preview slug") (mkPreviewSlug "summer-release")
+            failureReference =
+              HarchWeb.failureReference
+                (fromMaybe (error "expected valid test request identifier") (HarchWeb.mkRequestId "550e8400-e29b-41d4-a716-446655440000"))
+            failureRoute = Custom (ClientActionFailurePage HarchWeb.StorageCleanupFailed failureReference)
         exerciseGeneratedPageRouteInstances
         expectAll
           ( (siteName twoPageSite `shouldBe` "two-pages-example")
@@ -111,6 +115,10 @@ spec =
                      `shouldBe` Nothing,
                    Site.routeMethods (siteRouteDefinition twoPageSite (Custom NativeSubscriptionResult))
                      `shouldBe` [RouteGet],
+                   Site.routeMethods (siteRouteDefinition twoPageSite failureRoute)
+                     `shouldBe` [RouteGet],
+                   routeNavigationLabel (siteRouteDefinition twoPageSite failureRoute)
+                     `shouldBe` Nothing,
                    staticAssetRoots (siteStaticAssets twoPageSite)
                      `shouldBe` [HarchWeb.StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}],
                    staticAssetContentTypes (siteStaticAssets twoPageSite) `shouldBe` defaultStaticAssetContentTypes,
@@ -159,6 +167,10 @@ spec =
 
       it "maps every route and client action to explicit public endpoint metadata" $ do
         let previewSlug = fromMaybe (error "expected valid test preview slug") (mkPreviewSlug "summer-release")
+            failureReference =
+              HarchWeb.failureReference
+                (fromMaybe (error "expected valid test request identifier") (HarchWeb.mkRequestId "550e8400-e29b-41d4-a716-446655440000"))
+            failureRoute = Custom (ClientActionFailurePage HarchWeb.StorageCleanupFailed failureReference)
             endpointCases =
               [ (HarchWeb.HtmlEndpoint, Page HomePage, "two-pages.home", "/"),
                 (HarchWeb.HtmlEndpoint, Page SecondPage, "two-pages.second", "/second"),
@@ -167,7 +179,8 @@ spec =
                 (HarchWeb.ApiEndpoint, Api LiveDataEvents, "two-pages.live-data-events", "/live-data/events"),
                 (HarchWeb.HtmlEndpoint, Custom (PreviewPage previewSlug), "two-pages.preview", "/preview/{slug}"),
                 (HarchWeb.ApiEndpoint, Custom NativeSubscriptionFallback, "two-pages.native-subscription", "/native-subscribe"),
-                (HarchWeb.HtmlEndpoint, Custom NativeSubscriptionResult, "two-pages.native-subscription-result", "/subscription-received")
+                (HarchWeb.HtmlEndpoint, Custom NativeSubscriptionResult, "two-pages.native-subscription-result", "/subscription-received"),
+                (HarchWeb.HtmlEndpoint, failureRoute, "two-pages.client-action-failure", "/client-action-failure/{failure}/{request-id}")
               ]
         forM_ endpointCases $ \(endpointProtocol, route, expectedName, expectedTemplate) -> do
           let endpointMetadata = twoPageEndpointMetadata endpointProtocol route
@@ -210,6 +223,10 @@ spec =
       it "parses and renders the supported two-page routes" $ do
         let previewSlug =
               fromMaybe (error "expected valid test preview slug") (mkPreviewSlug "summer-release")
+            failureReference =
+              HarchWeb.failureReference
+                (fromMaybe (error "expected valid test request identifier") (HarchWeb.mkRequestId "550e8400-e29b-41d4-a716-446655440000"))
+            failureRoute = Custom (ClientActionFailurePage HarchWeb.StorageCleanupFailed failureReference)
         expectAll
           ( ((Page HomePage /= Page SecondPage) `shouldBe` True)
               :| [ show (Page HomePage) `shouldBe` "Page HomePage",
@@ -243,6 +260,7 @@ spec =
                    parseRoute ExampleRoutes.routeCodec () "/live-data/events" `shouldBe` Just RouteRequest {requestRoute = Api LiveDataEvents, requestContext = ()},
                    parseRoute ExampleRoutes.routeCodec () "/native-subscribe" `shouldBe` Just RouteRequest {requestRoute = Custom NativeSubscriptionFallback, requestContext = ()},
                    parseRoute ExampleRoutes.routeCodec () "/subscription-received" `shouldBe` Just RouteRequest {requestRoute = Custom NativeSubscriptionResult, requestContext = ()},
+                   parseRoute ExampleRoutes.routeCodec () "/client-action-failure/storage-cleanup-failed/550e8400-e29b-41d4-a716-446655440000" `shouldBe` Just RouteRequest {requestRoute = failureRoute, requestContext = ()},
                    parseRoute ExampleRoutes.routeCodec () "/preview/summer-release"
                      `shouldBe` (\slug -> RouteRequest {requestRoute = Custom (PreviewPage slug), requestContext = ()})
                      <$> mkPreviewSlug "summer-release",
@@ -260,12 +278,15 @@ spec =
                      `shouldBe` HarchWeb.routeMethodPolicy [RoutePost],
                    HarchWeb.routeMethods ExampleRoutes.routeCodec (Custom NativeSubscriptionResult)
                      `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
+                   HarchWeb.routeMethods ExampleRoutes.routeCodec failureRoute
+                     `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page HomePage, requestContext = ()} `shouldBe` "/",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page SecondPage, requestContext = ()} `shouldBe` "/second",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page LiveDataPage, requestContext = ()} `shouldBe` "/live-data",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Api LiveDataEvents, requestContext = ()} `shouldBe` "/live-data/events",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Custom NativeSubscriptionFallback, requestContext = ()} `shouldBe` "/native-subscribe",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Custom NativeSubscriptionResult, requestContext = ()} `shouldBe` "/subscription-received",
+                   renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = failureRoute, requestContext = ()} `shouldBe` "/client-action-failure/storage-cleanup-failed/550e8400-e29b-41d4-a716-446655440000",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page PageNotFound, requestContext = ()} `shouldBe` "/404",
                    routeHref (Page HomePage) `shouldBe` "/",
                    routeHref (Page SecondPage) `shouldBe` "/second",
@@ -273,6 +294,7 @@ spec =
                    routeHref (Api LiveDataEvents) `shouldBe` "/live-data/events",
                    routeHref (Custom NativeSubscriptionFallback) `shouldBe` "/native-subscribe",
                    routeHref (Custom NativeSubscriptionResult) `shouldBe` "/subscription-received",
+                   routeHref failureRoute `shouldBe` "/client-action-failure/storage-cleanup-failed/550e8400-e29b-41d4-a716-446655440000",
                    ExampleRoutes.twoPageActionPath () `shouldBe` Just "/actions/subscribe",
                    routeHref (Page PageNotFound) `shouldBe` "/404",
                    twoPageNavigationPath (NavigationPage HomePage) `shouldBe` "/",
@@ -455,6 +477,7 @@ spec =
                 case pageResult of
                   HarchWeb.RenderedPage page -> HarchWeb.PageResponse pageSecurity page
                   HarchWeb.RenderedPageWithMetadata responseBodyValue page -> HarchWeb.PageResponseWithMetadata pageSecurity responseBodyValue page
+                  HarchWeb.RenderedPageWithHeaders pageHeaders page -> HarchWeb.PageResponseWithHeaders pageSecurity pageHeaders page
             Site.ProtocolRouteHandler {} -> expectationFailure "expected preview page handler" >> fail "unreachable"
         expectAll
           ( (Wai.responseStatus response `shouldBe` Http.status200)
@@ -520,6 +543,30 @@ spec =
                  ]
           )
 
+      it "renders the public client-action failure page without session lookup and with privacy headers" $ do
+        response <-
+          performWaiRequest
+            (toWaiApplication buildApplication)
+            (waiRequest ["client-action-failure", "storage-cleanup-failed", "550e8400-e29b-41d4-a716-446655440000"])
+        responseBody <- readResponseBody response
+        malformedResponse <-
+          performWaiRequest
+            (toWaiApplication buildApplication)
+            (waiRequest ["client-action-failure", "unknown-failure", "<untrusted-reference>"])
+        malformedResponseBody <- readResponseBody malformedResponse
+        expectAll
+          ( (Wai.responseStatus response `shouldBe` Http.status200)
+              :| [ lookup "Cache-Control" (Wai.responseHeaders response) `shouldBe` Just "no-store",
+                   lookup "Referrer-Policy" (Wai.responseHeaders response) `shouldBe` Just "no-referrer",
+                   lookup "X-Request-ID" (Wai.responseHeaders response) `shouldSatisfy` (/= Nothing),
+                   Text.isInfixOf "Request could not be completed" responseBody `shouldBe` True,
+                   Text.isInfixOf "550e8400-e29b-41d4-a716-446655440000" responseBody `shouldBe` True,
+                   Text.isInfixOf "storage-cleanup-failed" responseBody `shouldBe` False,
+                   Wai.responseStatus malformedResponse `shouldBe` Http.status404,
+                   Text.isInfixOf "<untrusted-reference>" malformedResponseBody `shouldBe` False
+                 ]
+          )
+
       it "returns validation patches for captured subscription actions" $ do
         actionBodyChunks <- newIORef [TextEncoding.encodeUtf8 "email=ada%40example&_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
         let actionRequest =
@@ -545,6 +592,7 @@ spec =
               :| [ Text.isInfixOf "Enter a valid email address." responseBody `shouldBe` True,
                    Text.isInfixOf "\"focusId\":\"subscription-email\"" responseBody `shouldBe` True,
                    fmap HarchWeb.clientActionHeaders directResponse `shouldBe` Just [],
+                   fmap HarchWeb.clientActionFailureDestinations directResponse `shouldBe` Just HarchWeb.noClientActionFailureDestinations,
                    fmap HarchWeb.clientActionObservabilityAttributes directResponse `shouldBe` Just [],
                    fmap HarchWeb.clientActionLogEntries directResponse `shouldBe` Just []
                  ]
@@ -582,9 +630,13 @@ spec =
               :| [ Text.isInfixOf "Thanks. Your subscription request is ready." responseBody `shouldBe` True,
                    Text.isInfixOf "\"focusId\":null" responseBody `shouldBe` True,
                    Text.isInfixOf "\"navigation\":{\"historyMode\":\"push\",\"href\":\"/subscription-received\"}" responseBody `shouldBe` True,
+                   Text.isInfixOf "\"failureNavigation\":{\"storage-cleanup-failed\":\"/client-action-failure/storage-cleanup-failed/" responseBody `shouldBe` True,
+                   Text.isInfixOf "\"action-response-protocol-failed\":\"/client-action-failure/action-response-protocol-failed/" responseBody `shouldBe` True,
+                   Text.isInfixOf "\"response-application-failed\":\"/client-action-failure/response-application-failed/" responseBody `shouldBe` True,
                    requestRoute directNavigationTarget `shouldBe` Custom NativeSubscriptionResult,
                    requestContext directNavigationTarget `shouldBe` (),
                    fmap HarchWeb.clientActionHeaders directResponse `shouldBe` Just [],
+                   fmap HarchWeb.clientActionFailureDestinations directResponse `shouldBe` Just HarchWeb.noClientActionFailureDestinations,
                    fmap HarchWeb.clientActionObservabilityAttributes directResponse `shouldBe` Just [],
                    fmap HarchWeb.clientActionLogEntries directResponse `shouldBe` Just []
                  ]

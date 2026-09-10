@@ -23,7 +23,7 @@ import HarchWeb.Markup (safeUrlText, text)
 import HarchWeb.Routing
 import HarchWeb.Routing qualified as Routing
 import HarchWeb.SecurityEvent (ModuleName, mkModuleName)
-import HarchWeb.Server (ActionNavigation (StayOnCurrentRoute), ClientActionRequest (..), ClientActionResponse (..), NonPageResponse (..), PageResult (..), ProtocolResponse (..), ProtocolResponseBody (..), Response (..), ResponseBody (..), ServerSentEventSource (..), nonPageResponse, unboundedRouteExecutionPolicy)
+import HarchWeb.Server (ActionNavigation (StayOnCurrentRoute), ClientActionRequest (..), ClientActionResponse (..), NonPageResponse (..), PageResult (..), ProtocolResponse (..), ProtocolResponseBody (..), Response (..), ResponseBody (..), ServerSentEventSource (..), noClientActionFailureDestinations, nonPageResponse, unboundedRouteExecutionPolicy)
 import HarchWeb.Site (RouteDefinition (..), RouteHandler (..))
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
@@ -136,6 +136,7 @@ spec =
               Document.pageRoute page `shouldBe` CatalogRoute ChildItemRoute
               pageContext page `shouldBe` 42
             RenderedPageWithMetadata {} -> expectationFailure "expected the mounted page handler without response metadata"
+            RenderedPageWithHeaders {} -> expectationFailure "expected the mounted page handler without response headers"
         ProtocolRouteHandler {} -> expectationFailure "expected mounted page handler"
       actionResult <-
         moduleHandleAction
@@ -934,6 +935,7 @@ testClientActionResponse =
       clientActionFocusId = Nothing,
       clientActionNavigation = StayOnCurrentRoute,
       clientActionStorageCleanup = noClientStorageCleanup,
+      clientActionFailureDestinations = noClientActionFailureDestinations,
       clientActionHeaders = [],
       clientActionObservabilityAttributes = [],
       clientActionLogEntries = []
@@ -947,6 +949,7 @@ parentTestClientActionResponse =
       clientActionFocusId = Nothing,
       clientActionNavigation = StayOnCurrentRoute,
       clientActionStorageCleanup = noClientStorageCleanup,
+      clientActionFailureDestinations = noClientActionFailureDestinations,
       clientActionHeaders = [],
       clientActionObservabilityAttributes = [],
       clientActionLogEntries = []

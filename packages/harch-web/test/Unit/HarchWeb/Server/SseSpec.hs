@@ -3,7 +3,7 @@
 {-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
-import HarchWeb (ActionNavigation (StayOnCurrentRoute), ClientActionResponse (..), NonPageResponse (..), Response (..), ResponseBody (..), ServerSentEvent (..), eventStreamResponse, nextServerSentEvent, noClientStorageCleanup, renderServerSentEvent, serverSentEventContentType, serverSentEventSourceFromList)
+import HarchWeb (ActionNavigation (StayOnCurrentRoute), ClientActionResponse (..), NonPageResponse (..), Response (..), ResponseBody (..), ServerSentEvent (..), eventStreamResponse, nextServerSentEvent, noClientActionFailureDestinations, noClientStorageCleanup, renderServerSentEvent, serverSentEventContentType, serverSentEventSourceFromList)
 import Network.HTTP.Types qualified as Http
 
 spec =
@@ -39,13 +39,13 @@ spec =
       firstSource <- serverSentEventSourceFromList []
       secondSource <- serverSentEventSourceFromList []
       let responseBodyValue = ResponseBody Http.status204 "text/plain; charset=utf-8" "Done" [] [] []
-          actionResponse = ClientActionResponse Http.status200 [] Nothing StayOnCurrentRoute noClientStorageCleanup [] [] []
+          actionResponse = ClientActionResponse Http.status200 [] Nothing StayOnCurrentRoute noClientStorageCleanup noClientActionFailureDestinations [] [] []
           streamResponse = eventStreamResponse firstSource :: NonPageResponse () ()
           clientActionResponse = ClientActionBodyResponse actionResponse :: Response () ()
       expectAll
         ( (streamResponse `shouldBe` eventStreamResponse secondSource)
             :| [ streamResponse `shouldNotBe` NonPageBodyResponse responseBodyValue,
                  showsPrec 11 (RedirectResponse responseBodyValue "/next" :: Response () ()) "" `shouldBe` "(RedirectResponse (ResponseBody {responseStatus = Status {statusCode = 204, statusMessage = \"No Content\"}, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Done\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}) \"/next\")",
-                 showsPrec 11 clientActionResponse "" `shouldBe` "(ClientActionBodyResponse (ClientActionResponse {clientActionStatus = Status {statusCode = 200, statusMessage = \"OK\"}, clientActionPatches = [], clientActionFocusId = Nothing, clientActionNavigation = StayOnCurrentRoute, clientActionStorageCleanup = ClientStorageCleanup [], clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}))"
+                 showsPrec 11 clientActionResponse "" `shouldBe` "(ClientActionBodyResponse (ClientActionResponse {clientActionStatus = Status {statusCode = 200, statusMessage = \"OK\"}, clientActionPatches = [], clientActionFocusId = Nothing, clientActionNavigation = StayOnCurrentRoute, clientActionStorageCleanup = ClientStorageCleanup [], clientActionFailureDestinations = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}))"
                ]
         )

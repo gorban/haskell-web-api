@@ -51,6 +51,7 @@ responsePageSecurity response =
   case response of
     PageResponse pageSecurity _ -> Just pageSecurity
     PageResponseWithMetadata pageSecurity _ _ -> Just pageSecurity
+    PageResponseWithHeaders pageSecurity _ _ -> Just pageSecurity
     BodyResponse _ -> Nothing
     RedirectResponse _ _ -> Nothing
     InternalRedirectResponse _ _ -> Nothing
@@ -103,6 +104,7 @@ responseDiagnostics response =
   case response of
     PageResponse _ _ -> ResponseDiagnostics [] [] []
     PageResponseWithMetadata _ responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
+    PageResponseWithHeaders {} -> ResponseDiagnostics [] [] []
     BodyResponse responseBodyValue -> responseBodyDiagnostics responseBodyValue
     RedirectResponse responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
     InternalRedirectResponse responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
@@ -132,6 +134,7 @@ responseStatusCode webApplication response =
   case response of
     PageResponse _ page -> Http.statusCode (if isNotFoundPage webApplication page then Http.status404 else Http.status200)
     PageResponseWithMetadata _ responseBodyValue _ -> Http.statusCode (responseStatus responseBodyValue)
+    PageResponseWithHeaders _ _ page -> Http.statusCode (if isNotFoundPage webApplication page then Http.status404 else Http.status200)
     BodyResponse responseBodyValue -> Http.statusCode (responseStatus responseBodyValue)
     RedirectResponse responseBodyValue _ -> Http.statusCode (responseStatus responseBodyValue)
     InternalRedirectResponse responseBodyValue _ -> Http.statusCode (responseStatus responseBodyValue)
@@ -145,6 +148,7 @@ responseKind response =
   case response of
     PageResponse _ _ -> Observability.PageResponseKind
     PageResponseWithMetadata {} -> Observability.PageResponseKind
+    PageResponseWithHeaders {} -> Observability.PageResponseKind
     BodyResponse _ -> Observability.BodyResponseKind
     RedirectResponse _ _ -> Observability.BodyResponseKind
     InternalRedirectResponse _ _ -> Observability.BodyResponseKind
@@ -170,6 +174,8 @@ toWaiResponse requestId additionalHeaders maybePageSecurity webApplication respo
         page
     PageResponseWithMetadata pageSecurity pageResponseBodyValue page ->
       renderPageResponse (responseStatus pageResponseBodyValue) pageSecurity page
+    PageResponseWithHeaders pageSecurity pageHeaders page ->
+      renderPageResponseWithHeaders (if isNotFoundPage webApplication page then Http.status404 else Http.status200) pageSecurity (Just pageHeaders) page
     BodyResponse responseBodyValue -> toWaiBodyResponse additionalHeaders responseBodyValue
     RedirectResponse responseBodyValue location -> toWaiBodyResponse (additionalHeaders <> [(Http.hLocation, TextEncoding.encodeUtf8 location)]) responseBodyValue
     InternalRedirectResponse responseBodyValue routeRequest -> toWaiBodyResponse (additionalHeaders <> [(Http.hLocation, TextEncoding.encodeUtf8 (safeUrlText (encodeRouteLocation (renderRoute (routeCodec webApplication) routeRequest))))]) responseBodyValue
@@ -181,13 +187,15 @@ toWaiResponse requestId additionalHeaders maybePageSecurity webApplication respo
     EventStreamResponse responseBodyValue eventSource -> toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource
     ProtocolResponseResult protocolResponse -> toWaiProtocolResponse additionalHeaders protocolResponse
   where
-    renderPageResponse status pageSecurity page =
+    renderPageResponse status pageSecurity =
+      renderPageResponseWithHeaders status pageSecurity Nothing
+    renderPageResponseWithHeaders status pageSecurity maybePageHeaders page =
       case maybePageSecurity of
         Just renderedPageSecurity
           | samePageSecurity renderedPageSecurity pageSecurity ->
               Wai.responseLBS
                 status
-                (pageResponseHeaders additionalHeaders (pageSecurityCsrf pageSecurity))
+                (pageResponseHeaders (maybe additionalHeaders (`applyPageResponseHeaders` additionalHeaders) maybePageHeaders) (pageSecurityCsrf pageSecurity))
                 ( LazyByteString.fromStrict
                     ( TextEncoding.encodeUtf8
                         ( Document.renderDocumentWithNonceAndActionCsrf
@@ -221,6 +229,11 @@ pageResponseHeaders additionalHeaders pageCsrf =
       SetCsrfCookie ->
         [ ("Set-Cookie", TextEncoding.encodeUtf8 ("__Host-harch-csrf=" <> csrfTokenText (pageCsrfValue pageCsrf) <> "; Path=/; Max-Age=" <> Text.pack (show (csrfCookieMaxAgeSeconds (pageCsrfCookieMaxAge pageCsrf))) <> "; Secure; HttpOnly; SameSite=Strict"))
         ]
+
+applyPageResponseHeaders :: PageResponseHeaders -> Http.ResponseHeaders -> Http.ResponseHeaders
+applyPageResponseHeaders pageHeadersValue frameworkHeaders =
+  let pageHeaders = pageResponseHeaderValues pageHeadersValue
+   in filter (\(name, _) -> name `notElem` map fst pageHeaders) frameworkHeaders <> pageHeaders
 
 toWaiBodyResponse :: Http.ResponseHeaders -> ResponseBody -> Wai.Response
 toWaiBodyResponse additionalHeaders responseBodyValue =

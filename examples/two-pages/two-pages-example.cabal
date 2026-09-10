@@ -50,6 +50,7 @@ library
     App.Components.ExampleAuthor
     App.Components.Layout
     App.Components.SubscriptionEmailField
+    App.CustomPages.ClientActionFailure
     App.CustomPages.Preview
     App.Pages.Generated
     App.Pages.Home

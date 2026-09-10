@@ -123,36 +123,42 @@ responsePageBody response =
   case response of
     HarchWeb.RenderedPage page -> HarchWeb.renderHtml (HarchWeb.pageBody page)
     HarchWeb.RenderedPageWithMetadata _ page -> HarchWeb.renderHtml (HarchWeb.pageBody page)
+    HarchWeb.RenderedPageWithHeaders _ page -> HarchWeb.renderHtml (HarchWeb.pageBody page)
 
 responseStatus :: HarchWeb.PageResult AppRoute WebApi.Route.AppRequestContext -> Int
 responseStatus response =
   case response of
     HarchWeb.RenderedPage _ -> 200
     HarchWeb.RenderedPageWithMetadata metadata _ -> Http.statusCode (HarchWeb.responseStatus metadata)
+    HarchWeb.RenderedPageWithHeaders _ _ -> 200
 
 responsePageTitle :: HarchWeb.PageResult AppRoute WebApi.Route.AppRequestContext -> Text
 responsePageTitle response =
   case response of
     HarchWeb.RenderedPage page -> HarchWeb.pageTitle page
     HarchWeb.RenderedPageWithMetadata _ page -> HarchWeb.pageTitle page
+    HarchWeb.RenderedPageWithHeaders _ page -> HarchWeb.pageTitle page
 
 responseDiagnosticAttributes :: HarchWeb.PageResult AppRoute WebApi.Route.AppRequestContext -> [Observability.ObservabilityAttribute]
 responseDiagnosticAttributes pageResult =
   case pageResult of
     HarchWeb.RenderedPage _ -> []
     HarchWeb.RenderedPageWithMetadata metadata _ -> HarchWeb.responseObservabilityAttributes metadata
+    HarchWeb.RenderedPageWithHeaders _ _ -> []
 
 responseDiagnosticLogs :: HarchWeb.PageResult AppRoute WebApi.Route.AppRequestContext -> [Text]
 responseDiagnosticLogs pageResult =
   case pageResult of
     HarchWeb.RenderedPage _ -> []
     HarchWeb.RenderedPageWithMetadata metadata _ -> HarchWeb.responseLogEntries metadata
+    HarchWeb.RenderedPageWithHeaders _ _ -> []
 
 responseDiagnosticDatabaseOperations :: HarchWeb.PageResult AppRoute WebApi.Route.AppRequestContext -> [DatabaseOperation]
 responseDiagnosticDatabaseOperations pageResult =
   case pageResult of
     HarchWeb.RenderedPage _ -> []
     HarchWeb.RenderedPageWithMetadata metadata _ -> HarchWeb.responseDatabaseOperations metadata
+    HarchWeb.RenderedPageWithHeaders _ _ -> []
 
 profileFailureAttributes :: Text -> [Observability.ObservabilityAttribute]
 profileFailureAttributes errorType =

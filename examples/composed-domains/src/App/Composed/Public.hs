@@ -65,6 +65,7 @@ import HarchWeb.Server
     PageResult (RenderedPage),
     RequestBodyReadFailure (RequestBodyLimitExceeded),
     ResponseBody (..),
+    noClientActionFailureDestinations,
     nonPageInternalRedirectResponseWithHeaders,
     parseClientActionFields,
     readRequestBodyUpTo,
@@ -134,6 +135,7 @@ buildPublicModuleWithAdmissionWorkflow staticAssetsConfig csrfProtection _admiss
           clientActionFocusId = Nothing,
           clientActionNavigation = admissionSubmissionNavigation actionRequest returnTarget submissionResult,
           clientActionStorageCleanup = noClientStorageCleanup,
+          clientActionFailureDestinations = noClientActionFailureDestinations,
           clientActionHeaders = admissionSubmissionHeaders sessionConfig submissionResult,
           clientActionObservabilityAttributes = [],
           clientActionLogEntries = []

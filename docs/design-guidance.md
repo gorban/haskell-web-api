@@ -569,13 +569,12 @@ owner or make Harch guess product state it cannot safely own.
 characters and a closed storage class, then builds a duplicate-free collection
 of at most 32 entries. The two storage classes remain distinct even for equal
 key text. Rejected authored declarations expose only stable error constructors,
-not the key value. This is deliberately a partial foundational slice: it does
-not yet attach cleanup to an action response, execute browser mutation, or
-claim that any example logout clears Web Storage. AHI-4C's remaining client
-failure-route, terminal-document, and real-browser proof slice must connect
-this declaration before an application can opt in. The following transport
-slice now carries that declaration on a typed action response; execution and
-failure replacement remain deliberately unfinished.
+not the key value. This began as a deliberately partial foundational slice;
+the execution decision below now attaches it to typed action responses,
+executes the declared removals before visible successful-action effects, and
+proves the terminal browser path. Its remaining scope is application-defined
+extended failure values and server-detected Accept-negotiated terminal
+failures, not a second cleanup protocol.
 
 **Follow-on value-layer decision (AHI-4C, 2026-09-10): keep browser failure
 classification and the original-action reference inside Harch's existing
@@ -583,9 +582,9 @@ request-ID boundary.** `HarchClientFailure` is a closed, low-cardinality sum
 with stable route tags, and `FailureReference` wraps only an already validated
 UUIDv4 `RequestId`. This avoids a parallel application query-string convention
 or second UUID parser, while preventing arbitrary browser exception details
-from becoming page input. It remains intentionally unconnected until the
-typed public failure route, action-response document, and browser replacement
-interpreter land together; no application can opt into it yet.
+from becoming page input. The execution decision below connects the value to
+the typed public route, action-response document, and browser replacement
+interpreter; applications can opt in at assembly through that route alone.
 
 **Follow-on transport decision (AHI-4C, 2026-09-10): extend the existing
 `ClientActionResponse` algebra with the validated cleanup declaration and
@@ -594,9 +593,40 @@ response already owns typed patches, focus, and navigation, so a sibling
 logout-only response or application JavaScript configuration would split the
 ordering contract. Every existing response now names `noClientStorageCleanup`
 explicitly; a response which does opt in carries only its bounded, typed local
-or session entries as `storageCleanup` JSON. This slice deliberately does not
-yet execute the browser mutation or provide fatal replacement navigation:
-AHI-4C's following Document-runtime and failure-route work owns those effects.
+or session entries as `storageCleanup` JSON. The execution decision below
+implements the browser mutation and fatal replacement/navigation behavior;
+the transport remains the sole JSON contract for those effects.
+
+**Follow-on execution decision (AHI-4C, 2026-09-10): extend the one typed
+action-response lifecycle with concrete failure destinations, rather than add
+a logout-specific browser protocol or permit browser-built error URLs.** At
+application assembly, an optional constructor receives only the closed
+`HarchClientFailure` tag and the framework-created original-action
+`FailureReference`; after a handler returns, the server turns its three
+possible outcomes into ordinary typed `RouteRequest`s and renders them through
+the root codec. This keeps route mounting/composition correct and ensures the
+browser receives same-origin URLs already formed from trusted route data. The
+Document runtime validates the bounded cleanup wire data, attempts every
+declared removal, aggregates storage-operation failures, and performs that
+work before a patch, focus, or navigation. A storage or response-application
+failure stops the action and uses ordinary `assign` navigation to the typed
+public page; a missing or malformed destination replaces the entire document
+with Harch's safe text-only fallback. It never displays exception detail,
+storage keys, or route/session data.
+
+The dedicated public page receives only validated route values and can use
+`defaultClientActionFailurePage` or an application-branded equivalent. It
+must be no-store and no-referrer. Existing SSR results had no safe
+route-specific header capability, so this slice adds the opaque
+`noStoreNoReferrerPageHeaders` response form rather than arbitrary application
+page headers: applications cannot use it to override CSP, request-ID, or
+cookie policy. The response finalizer explicitly removes the corresponding
+site defaults before adding this opaque pair, avoiding ambiguous duplicate
+headers. The two-pages reference app proves its strict parser, headers,
+non-reflection of malformed input, action JSON destinations, and a real
+browser storage-removal failure that lands on the new document with no stale
+home content. Server-detected Accept-negotiated terminal failures and
+application-defined extended failure values remain AHI-4C follow-up work.
 
 ### Decision record — PostgreSQL database-change ledger (AHI-4C, 2026-09-03)
 

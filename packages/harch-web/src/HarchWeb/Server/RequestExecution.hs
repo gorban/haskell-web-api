@@ -453,7 +453,7 @@ finalizeRoutedResponse routedRequestExecution executionTimings routeDispatch pag
     respond
       ( omitResponseBodyWhen
           (isHeadDispatch routeDispatch)
-          (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request (pageSecurityRuntimeNonce <$> pageSecurity)) (toWaiResponse (routedRequestId routedRequestExecution) [] pageSecurity webApplication response))
+          (applyResponseHeaders (responsePolicyHeadersForResponse response (responsePolicyHeaders requestPolicyConfig request (pageSecurityRuntimeNonce <$> pageSecurity))) (toWaiResponse (routedRequestId routedRequestExecution) [] pageSecurity webApplication response))
       )
   reportRoutedResponseObservability
     (routedRequestObservabilityContext routedRequestExecution)
@@ -462,6 +462,18 @@ finalizeRoutedResponse routedRequestExecution executionTimings routeDispatch pag
     routeRequest
     response
   pure responseReceived
+
+-- | Page-local privacy headers are intentionally the one supported exception
+-- to the site-wide default referrer/cache policy. The opaque page-header
+-- value cannot introduce arbitrary overrides, and its names are removed from
+-- the outer policy layer before final rendering so a browser observes one
+-- unambiguous header value.
+responsePolicyHeadersForResponse :: Response route context -> Http.ResponseHeaders -> Http.ResponseHeaders
+responsePolicyHeadersForResponse response policyHeaders =
+  case response of
+    PageResponseWithHeaders _ pageHeaders _ ->
+      filter (\(name, _) -> name `notElem` map fst (pageResponseHeaderValues pageHeaders)) policyHeaders
+    _ -> policyHeaders
 
 omitResponseBodyWhen :: Bool -> Wai.Response -> Wai.Response
 omitResponseBodyWhen omitResponseBody waiResponse =

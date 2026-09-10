@@ -6,6 +6,7 @@
 
 import App.App qualified as App
 import App.Routes (TwoPageRoute)
+import Data.Text qualified as Text
 import HarchWeb (LocalTestServer (..), withLocalTestServer)
 import HarchWeb qualified
 import HarchWeb.Csrf (generateCsrfToken)
@@ -82,6 +83,23 @@ spec =
               assertAllObserved do
                 textContent (byRole Heading `named` "Subscription received") `shouldEqual` "Subscription received"
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 2}|])
+
+          it "clears the authenticated document through the typed failure page when controlled storage cleanup fails" $ \(browser, server) -> do
+            let homeUrl = localServerBaseUrl server <> "/"
+                failureUrlPrefix = localServerBaseUrl server <> "/client-action-failure/storage-cleanup-failed/"
+                subscriptionForm = byRole Form `named` "Subscription"
+                emailField = byLabel "Email address"
+                injectStorageCleanupFailure =
+                  "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); if (!String(arguments_[0]).includes('/actions/subscribe')) { return response; } const decode = response.json.bind(response); response.json = async () => ({ ...(await decode()), storageCleanup: [{ storage: 'local', key: 'controlled-test-key' }] }); return response; }; Storage.prototype.removeItem = function () { throw new Error('controlled storage cleanup failure'); };"
+            runBrowserSpec browser do
+              visit homeUrl
+              _ <- runPageScript injectStorageCleanupFailure
+              fill emailField "ada@example.com"
+              submit subscriptionForm
+              assertAllObserved do
+                currentUrl `satisfies` Text.isPrefixOf failureUrlPrefix
+                textContent (byRole Heading `named` "Request could not be completed") `shouldEqual` "Request could not be completed"
+                textContent (css "body") `satisfies` (not . Text.isInfixOf "This page is fully server-rendered on direct load and reload.")
 
           it "does not perform a native submission for the default exclusive client action when scripts are disabled" $ \(browser, server) -> do
             let homeUrl = localServerBaseUrl server <> "/"

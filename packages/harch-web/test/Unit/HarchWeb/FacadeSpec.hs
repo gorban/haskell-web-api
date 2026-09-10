@@ -16,7 +16,7 @@ import Data.Functor.Compose ()
 import Data.IORef ()
 import Data.List ()
 import Data.List.NonEmpty (NonEmpty (..))
-import Data.Maybe ()
+import Data.Maybe (isNothing)
 import Data.Text (Text)
 import Data.Text qualified as Text (isInfixOf)
 import Data.Text.Encoding qualified as TextEncoding ()
@@ -131,7 +131,7 @@ movedSpec = do
               }
           regionPatch = testRegionPatch "status-region" "Ready"
           clientActionResponse :: ClientActionResponse TestRoute TestContext
-          clientActionResponse = ClientActionResponse {clientActionStatus = Http.status200, clientActionPatches = [regionPatch], clientActionFocusId = Nothing, clientActionNavigation = StayOnCurrentRoute, clientActionStorageCleanup = noClientStorageCleanup, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
+          clientActionResponse = ClientActionResponse {clientActionStatus = Http.status200, clientActionPatches = [regionPatch], clientActionFocusId = Nothing, clientActionNavigation = StayOnCurrentRoute, clientActionStorageCleanup = noClientStorageCleanup, clientActionFailureDestinations = noClientActionFailureDestinations, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
           NavigationItem {navigationLabel = navigationItemLabel, navigationRoute = navigationItemRoute} = navigationItem
           ResolvedNavigationItem {navigationLabel = resolvedNavigationItemLabel, navigationRoute = resolvedNavigationItemRoute, navigationHref = resolvedNavigationItemHref, navigationIsActive = resolvedNavigationItemIsActive} = resolvedNavigationItem
 
@@ -190,7 +190,9 @@ movedSpec = do
                  Text.isInfixOf "harch:navigation-before-replace" defaultDialogRuntimeScript `shouldBe` True,
                  Text.isInfixOf "if (!settlement.completed())" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "async function navigateActionResponse(navigation)" defaultNavigationRuntimeScript `shouldBe` True,
-                 Text.isInfixOf "const navigation = applyActionResponse(outcome.actionResponse);\n        if (!outcome.responseSucceeded) {\n          settlement.recoverable();\n          return;\n        }\n        if (!settlement.completed())" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "try { cleanClientStorage(outcome.actionResponse); } catch (_error)" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "let navigation;\n        try { navigation = applyActionResponse(outcome.actionResponse); }" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "if (!outcome.responseSucceeded) {\n          if (!settlement.recoverable()) { return; }" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "harch:navigation-start" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "capturedActions.forEach((entry) => invalidate(entry));" defaultCaptureKernelScript `shouldBe` True,
                  Text.isInfixOf "const supersedeControl = (control)" defaultCaptureKernelScript `shouldBe` True,
@@ -246,6 +248,7 @@ movedSpec = do
       defaultRequestContext sampleApplication `shouldBe` defaultContext
       requestContextFromRequest sampleApplication Wai.defaultRequest sampleRequestId defaultContext `shouldBe` defaultContext
       applicationNavigationRuntime sampleApplication `shouldBe` Nothing
+      isNothing (applicationClientActionFailureRoute sampleApplication) `shouldBe` True
       length (applicationRequestMiddleware sampleApplication) `shouldBe` 0
       responseStatus responseBodyValue `shouldBe` Http.status202
       responseContentType responseBodyValue `shouldBe` "application/json"
@@ -266,6 +269,8 @@ movedSpec = do
       clientActionStatus clientActionResponse `shouldBe` Http.status200
       clientActionPatches clientActionResponse `shouldBe` [regionPatch]
       clientActionFocusId clientActionResponse `shouldBe` Nothing
+      clientActionStorageCleanup clientActionResponse `shouldBe` noClientStorageCleanup
+      clientActionFailureDestinations clientActionResponse `shouldBe` noClientActionFailureDestinations
       clientActionHeaders clientActionResponse `shouldBe` []
       clientActionObservabilityAttributes clientActionResponse `shouldBe` []
       clientActionLogEntries clientActionResponse `shouldBe` []
@@ -365,9 +370,9 @@ movedSpec = do
           regionPatch = testRegionPatch "status-region" "Ready"
           otherRegionPatch = testRegionPatch "other-region" "Other"
           clientActionResponse :: ClientActionResponse TestRoute TestContext
-          clientActionResponse = ClientActionResponse {clientActionStatus = Http.status200, clientActionPatches = [regionPatch], clientActionFocusId = Just (literalElementId "email"), clientActionNavigation = StayOnCurrentRoute, clientActionStorageCleanup = noClientStorageCleanup, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
+          clientActionResponse = ClientActionResponse {clientActionStatus = Http.status200, clientActionPatches = [regionPatch], clientActionFocusId = Just (literalElementId "email"), clientActionNavigation = StayOnCurrentRoute, clientActionStorageCleanup = noClientStorageCleanup, clientActionFailureDestinations = noClientActionFailureDestinations, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
           otherClientActionResponse :: ClientActionResponse TestRoute TestContext
-          otherClientActionResponse = ClientActionResponse {clientActionStatus = Http.status422, clientActionPatches = [otherRegionPatch], clientActionFocusId = Nothing, clientActionNavigation = StayOnCurrentRoute, clientActionStorageCleanup = noClientStorageCleanup, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
+          otherClientActionResponse = ClientActionResponse {clientActionStatus = Http.status422, clientActionPatches = [otherRegionPatch], clientActionFocusId = Nothing, clientActionNavigation = StayOnCurrentRoute, clientActionStorageCleanup = noClientStorageCleanup, clientActionFailureDestinations = noClientActionFailureDestinations, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
       runtimeNonce <- generateRuntimeNonce
       otherRuntimeNonce <- generateRuntimeNonce
 

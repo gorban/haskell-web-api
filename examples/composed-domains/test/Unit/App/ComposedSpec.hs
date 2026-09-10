@@ -71,11 +71,12 @@ import HarchWeb.Server
     ClientActionResponse (..),
     HistoryMode (ReplaceHistory),
     NonPageResponse (NonPageBodyResponse),
-    PageResult (RenderedPage, RenderedPageWithMetadata),
+    PageResult (RenderedPage, RenderedPageWithHeaders, RenderedPageWithMetadata),
     ProtocolResponse (..),
     ProtocolResponseBody (..),
     Response (..),
     ResponseBody (..),
+    noClientActionFailureDestinations,
     nonPageResponse,
     toWaiApplication,
     unboundedRouteExecutionPolicy,
@@ -1614,6 +1615,7 @@ runRouteDefinition definition request routeRequest =
         case pageResult of
           RenderedPage page -> PageResponse testPageSecurity page
           RenderedPageWithMetadata responseBodyValue page -> PageResponseWithMetadata testPageSecurity responseBodyValue page
+          RenderedPageWithHeaders pageHeaders page -> PageResponseWithHeaders testPageSecurity pageHeaders page
     ProtocolRouteHandler renderProtocol -> nonPageResponse <$> renderProtocol request routeRequest
 
 requiredRootModule :: IO (ApplicationModule RootRoute RootActionTarget RootAction ComposedContext RootAuthorization)
@@ -1793,6 +1795,7 @@ clientActionResponse status =
       clientActionFocusId = Nothing,
       clientActionNavigation = StayOnCurrentRoute,
       clientActionStorageCleanup = noClientStorageCleanup,
+      clientActionFailureDestinations = noClientActionFailureDestinations,
       clientActionHeaders = [],
       clientActionObservabilityAttributes = [],
       clientActionLogEntries = []
