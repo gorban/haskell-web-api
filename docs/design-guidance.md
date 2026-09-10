@@ -555,6 +555,26 @@ continuation or history mutation. The composed admission browser proof alters
 the submitted page token while retaining the genuine host cookie and verifies
 that the action neither establishes admission nor navigates.
 
+### Decision record — bounded application-declared browser-storage cleanup (AHI-4C, 2026-09-09)
+
+**Decision: begin the client-state cleanup path with an opaque, validated
+declaration value at Harch's existing client-action response boundary.** An
+application needs to name only storage keys it created, with each key's local
+or session store explicit. A raw JavaScript callback, an origin-wide
+`clear()`, an application naming convention enforced by Harch, or a
+login/logout-specific framework API would each either create a second action
+owner or make Harch guess product state it cannot safely own.
+
+`HarchWeb.ClientStorage` therefore accepts a non-empty key of at most 256
+characters and a closed storage class, then builds a duplicate-free collection
+of at most 32 entries. The two storage classes remain distinct even for equal
+key text. Rejected authored declarations expose only stable error constructors,
+not the key value. This is deliberately a partial foundational slice: it does
+not yet attach cleanup to an action response, execute browser mutation, or
+claim that any example logout clears Web Storage. AHI-4C's remaining client
+failure-route, terminal-document, and real-browser proof slice must connect
+this declaration before an application can opt in.
+
 ### Decision record — PostgreSQL database-change ledger (AHI-4C, 2026-09-03)
 
 **Decision: extract the existing connection-scoped migration transaction into
