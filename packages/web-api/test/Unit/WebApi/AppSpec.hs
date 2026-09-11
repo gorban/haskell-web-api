@@ -34,7 +34,7 @@ import WebApi.AccountJwt (AccountJwtIssuer (..), AccountJwtRawConfiguration (..)
 import WebApi.ActivityAudit (AccountActivity (..), ActivityAuditStore (..), ActivityAuditStoreError (ActivityAuditUnavailable), activityIdFromDatabase)
 import WebApi.Api.Endpoints (noApiRequestFields)
 import WebApi.App (buildAppWithDatabase, buildAppWithDatabaseAndAccountWorkflow, buildAppWithDatabaseAndAccountWorkflowAndSecurity, buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwtRuntime, buildRuntimeAppWithAccountJwt, buildRuntimeAppWithDatabaseBuilder, otlpExportFailureMessage, runWithConfig, unavailableAccountWorkflow)
-import WebApi.App.Observability (runOtlpExportAction)
+import WebApi.App.Observability (requestObservabilityLogContext, runOtlpExportAction)
 import WebApi.AppEffect (AccountWorkflow (accountWorkflowActivityAuditStore, accountWorkflowCredentialStore, accountWorkflowEmailDelivery, accountWorkflowJwtIssuer, accountWorkflowLoginAttemptStore, accountWorkflowPasswordWorkGate, accountWorkflowSessionStore, accountWorkflowStore))
 import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), AppMode (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), TlsCertificateSource (..), TlsConfig (..), databasePoolCapacity, defaultAppConfig, defaultAppEnvironmentConfig, defaultTlsPolicy)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), PageRepository (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed, defaultPageRepository)
@@ -1295,13 +1295,53 @@ spec = do
           unexpectedExportAction :: IO (Either HarchWeb.OtlpExportFailure ())
           unexpectedExportAction =
             throwIO (userError (Text.unpack exceptionSecret))
-      runOtlpExportAction reportLog "connection observability" unexpectedExportAction
+      runOtlpExportAction reportLog Nothing "connection observability" unexpectedExportAction
       reportedMessages <- readIORef reportedMessagesReference
       expectAll
         ( (reportedMessages `shouldBe` ["Failed to export connection observability to OTLP: unexpected exporter failure"])
             :| [ reportedMessages `shouldSatisfy` (not . any (Text.isInfixOf exceptionSecret))
                ]
         )
+
+    it "retains request correlation on a safe OTLP worker failure diagnostic" $ do
+      reportedMessagesReference <- newIORef []
+      let requestId = "550e8400-e29b-41d4-a716-446655440000"
+          exceptionSecret = "otlp-worker-exception-secret-sentinel"
+          reportLog message =
+            writeIORef reportedMessagesReference [message]
+          unexpectedExportAction :: IO (Either HarchWeb.OtlpExportFailure ())
+          unexpectedExportAction =
+            throwIO (userError (Text.unpack exceptionSecret))
+      runOtlpExportAction reportLog (Just ("request.id=" <> requestId)) "request observability" unexpectedExportAction
+      reportedMessages <- readIORef reportedMessagesReference
+      expectAll
+        ( (reportedMessages `shouldBe` ["request.id=" <> requestId <> " Failed to export request observability to OTLP: unexpected exporter failure"])
+            :| [ reportedMessages `shouldSatisfy` (not . any (Text.isInfixOf exceptionSecret))
+               ]
+        )
+
+    it "uses exactly one framework request ID for queued OTLP log correlation" $ do
+      let requestId = "550e8400-e29b-41d4-a716-446655440000"
+          otherRequestId = "550e8400-e29b-41d4-a716-446655440001"
+          requestObservation =
+            Observability.buildRequestObservability
+              Observability.RequestIdentity
+                { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                  Observability.requestIdentityScheme = "https",
+                  Observability.requestIdentityPath = "/api/status",
+                  Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/api/status"
+                }
+              200
+              Observability.BodyResponseKind
+          requestIdAttribute value =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "harch.request.id",
+                Observability.attributeValue = Observability.TextAttribute value
+              }
+      requestObservabilityLogContext (requestObservation [requestIdAttribute requestId])
+        `shouldBe` Just ("request.id=" <> requestId)
+      requestObservabilityLogContext (requestObservation []) `shouldBe` Nothing
+      requestObservabilityLogContext (requestObservation [requestIdAttribute requestId, requestIdAttribute otherRequestId]) `shouldBe` Nothing
 
     it "enqueues OTLP exports without blocking the caller, dropping and counting once the bounded queue is full" $
       withSlowOtlpCaptureServer 3000000 Http.ok200 "{}" $ \collectorUrl -> do

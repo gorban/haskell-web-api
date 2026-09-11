@@ -2,6 +2,7 @@
 
 module WebApi.App.Observability
   ( otlpExportFailureMessage,
+    requestObservabilityLogContext,
     runOtlpExportAction,
     runtimeApplicationLogReporter,
     runtimeConnectionObservabilityReporter,
@@ -26,18 +27,23 @@ import System.IO.Unsafe (unsafePerformIO)
 import WebApi.Config (AppConfig, AppMode (..), observability)
 
 runtimeRequestObservabilityReporter :: AppMode -> AppConfig -> Observability.RequestObservability -> IO ()
-runtimeRequestObservabilityReporter mode config =
-  runtimeObservabilityReporter
-    mode
-    config
-    "request observability"
-    (HarchWeb.exportRequestObservabilityToOtlp otlpHttpManager "web-api")
+runtimeRequestObservabilityReporter mode config requestObservability =
+  case requestObservabilityLogContext requestObservability of
+    requestLogContextValue ->
+      runtimeObservabilityReporter
+        mode
+        config
+        requestLogContextValue
+        "request observability"
+        (HarchWeb.exportRequestObservabilityToOtlp otlpHttpManager "web-api")
+        requestObservability
 
 runtimeConnectionObservabilityReporter :: AppMode -> AppConfig -> Observability.ConnectionObservability -> IO ()
 runtimeConnectionObservabilityReporter mode config =
   runtimeObservabilityReporter
     mode
     config
+    Nothing
     "connection observability"
     (HarchWeb.exportConnectionObservabilityToOtlp otlpHttpManager "web-api")
 
@@ -51,11 +57,12 @@ runtimeObservabilityReporter ::
   (Show observabilityValue) =>
   AppMode ->
   AppConfig ->
+  Maybe Text.Text ->
   Text.Text ->
   (HarchWeb.OtlpExporter -> observabilityValue -> IO (Either HarchWeb.OtlpExportFailure ())) ->
   observabilityValue ->
   IO ()
-runtimeObservabilityReporter mode config observabilityKind exportObservability observabilityValue = do
+runtimeObservabilityReporter mode config requestLogContextValue observabilityKind exportObservability observabilityValue = do
   -- 'unless's own no-op branch (not a local @pure ()@) is deliberate: a
   -- bare @()@ literal here is a lazy value nothing downstream forces, the
   -- same "genuinely never scrutinized" HPC gap this codebase has hit
@@ -65,7 +72,7 @@ runtimeObservabilityReporter mode config observabilityKind exportObservability o
   -- than adding a forced tick for a value with nothing to assert about.
   unless (mode == Production) (TextIO.hPutStrLn stderr ("TRACE " <> Text.pack (show observabilityValue)))
   forM_ (maybe [] pure (HarchWeb.tracingExporter (observability config))) $ \exporter ->
-    enqueueOtlpExport observabilityKind (exportObservability exporter observabilityValue)
+    enqueueOtlpExport requestLogContextValue observabilityKind (exportObservability exporter observabilityValue)
 
 -- | Decision record (AU, updated BZ 2026-08-21): the request-handling thread
 -- must never block on network I/O to the OTLP collector, so
@@ -90,20 +97,20 @@ runtimeObservabilityReporter mode config observabilityKind exportObservability o
 -- this queue already lives, rather than becoming a second framework-owned
 -- global. See @docs/design-guidance.md@'s "Follow-up decision — BZ" for
 -- the full record.
-enqueueOtlpExport :: Text.Text -> IO (Either HarchWeb.OtlpExportFailure ()) -> IO ()
-enqueueOtlpExport observabilityKind exportAction = do
+enqueueOtlpExport :: Maybe Text.Text -> Text.Text -> IO (Either HarchWeb.OtlpExportFailure ()) -> IO ()
+enqueueOtlpExport requestLogContextValue observabilityKind exportAction = do
   enqueued <- atomically $ do
     full <- isFullTBQueue otlpExportQueue
-    unless full (writeTBQueue otlpExportQueue (observabilityKind, exportAction))
+    unless full (writeTBQueue otlpExportQueue (requestLogContextValue, observabilityKind, exportAction))
     pure (not full)
   unless enqueued $ do
     droppedTotal <- atomicModifyIORef' otlpExportDroppedCount (\count -> (count + 1, count + 1))
-    runtimeApplicationLogReporter (otlpExportQueueFullMessage observabilityKind droppedTotal)
+    runtimeApplicationLogReporter (withRequestLogContext requestLogContextValue (otlpExportQueueFullMessage observabilityKind droppedTotal))
 
 otlpExportQueueCapacity :: Natural
 otlpExportQueueCapacity = 256
 
-otlpExportQueue :: TBQueue (Text.Text, IO (Either HarchWeb.OtlpExportFailure ()))
+otlpExportQueue :: TBQueue (Maybe Text.Text, Text.Text, IO (Either HarchWeb.OtlpExportFailure ()))
 {-# NOINLINE otlpExportQueue #-}
 otlpExportQueue =
   unsafePerformIO $ do
@@ -121,10 +128,10 @@ otlpHttpManager :: HttpClient.Manager
 otlpHttpManager =
   unsafePerformIO HarchWeb.newOtlpHttpManager
 
-otlpExportWorker :: TBQueue (Text.Text, IO (Either HarchWeb.OtlpExportFailure ())) -> IO ()
+otlpExportWorker :: TBQueue (Maybe Text.Text, Text.Text, IO (Either HarchWeb.OtlpExportFailure ())) -> IO ()
 otlpExportWorker queue = forever $ do
-  (observabilityKind, exportAction) <- atomically (readTBQueue queue)
-  runOtlpExportAction runtimeApplicationLogReporter observabilityKind exportAction
+  (requestLogContextValue, observabilityKind, exportAction) <- atomically (readTBQueue queue)
+  runOtlpExportAction runtimeApplicationLogReporter requestLogContextValue observabilityKind exportAction
 
 -- | Run an OTLP action off the request path, turning both the closed adapter
 -- failure result and any unexpected I/O exception into a payload-free log
@@ -132,17 +139,37 @@ otlpExportWorker queue = forever $ do
 -- be tested without redirecting process-wide stderr.
 runOtlpExportAction ::
   (Text.Text -> IO ()) ->
+  Maybe Text.Text ->
   Text.Text ->
   IO (Either HarchWeb.OtlpExportFailure ()) ->
   IO ()
-runOtlpExportAction reportLog observabilityKind exportAction = do
+runOtlpExportAction reportLog requestLogContextValue observabilityKind exportAction = do
   exportResult <- try exportAction :: IO (Either SomeException (Either HarchWeb.OtlpExportFailure ()))
   case exportResult of
     Left _ ->
-      reportLog (unexpectedExportFailureMessage observabilityKind)
+      reportLog (withRequestLogContext requestLogContextValue (unexpectedExportFailureMessage observabilityKind))
     Right (Left otlpFailure) ->
-      reportLog (otlpExportFailureMessage observabilityKind otlpFailure)
+      reportLog (withRequestLogContext requestLogContextValue (otlpExportFailureMessage observabilityKind otlpFailure))
     Right (Right ()) -> hFlush stderr
+
+-- | Derive the one authoritative, parseable log field from a framework request
+-- observation. Ambiguous or absent attributes deliberately yield no field: an
+-- application-provided diagnostic must not be able to choose a request ID.
+requestObservabilityLogContext :: Observability.RequestObservability -> Maybe Text.Text
+requestObservabilityLogContext requestObservability =
+  case [ requestId
+       | Observability.ObservabilityAttribute
+           { Observability.attributeName = "harch.request.id",
+             Observability.attributeValue = Observability.TextAttribute requestId
+           } <-
+           Observability.requestSpanAttributes (Observability.observabilityRequestSpan requestObservability)
+       ] of
+    [requestId] -> Just ("request.id=" <> requestId)
+    _ -> Nothing
+
+withRequestLogContext :: Maybe Text.Text -> Text.Text -> Text.Text
+withRequestLogContext requestLogContextValue message =
+  maybe message (<> " " <> message) requestLogContextValue
 
 otlpExportQueueFullMessage :: Text.Text -> Int -> Text.Text
 otlpExportQueueFullMessage observabilityKind droppedTotal =
