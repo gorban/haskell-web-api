@@ -114,6 +114,7 @@ library
     WebApi.Session
     WebApi.SetupConfig
     WebApi.SetupPlan
+    WebApi.VerificationResendAudit
 
   other-modules:
     WebApi.AccountPages.Actions.Login
@@ -150,6 +151,7 @@ library
     WebApi.Postgres.QueryRunner
     WebApi.Postgres.Runtime
     WebApi.Postgres.SessionRepository
+    WebApi.Postgres.VerificationResendAuditRepository
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
@@ -250,6 +252,7 @@ test-suite haskell-web-api-tests
     Unit.WebApi.Postgres.PendingRegistrationAuditRepositorySpec
     Unit.WebApi.Postgres.PoolSpec
     Unit.WebApi.Postgres.SessionRepositorySpec
+    Unit.WebApi.Postgres.VerificationResendAuditRepositorySpec
     Unit.WebApi.PostgresSpec
     Unit.WebApi.ProfileSpec
     Unit.WebApi.ResponseSpec

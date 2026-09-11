@@ -21,6 +21,7 @@ module WebApi.Postgres.ActivityAuditMigration
     accountAuditSessionIssueConflictFixStatements,
     accountAuditSessionIssueInsertPrivilegeFixStatements,
     accountAuditRegistrationDeliveryStatements,
+    accountAuditVerificationResendDeliveryStatements,
     accountAuditRuntimeReconciliationStatements,
   )
 where
@@ -100,6 +101,7 @@ accountAuditRuntimeReconciliationStatements databaseName runtimeRoleName =
     "GRANT EXECUTE ON FUNCTION account_audit.append_activity(TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) TO " <> quotedIdentifier runtimeRoleName <> ";",
     "GRANT EXECUTE ON FUNCTION account_audit.issue_account_session_with_activity(TEXT, TEXT, BIGINT, BIGINT, TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) TO " <> quotedIdentifier runtimeRoleName <> ";",
     "GRANT EXECUTE ON FUNCTION account_audit.complete_pending_registration_delivery_with_activity(TEXT, TEXT, TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) TO " <> quotedIdentifier runtimeRoleName <> ";",
+    "GRANT EXECUTE ON FUNCTION account_audit.complete_verification_resend_with_activity(TEXT, TEXT, BIGINT, TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) TO " <> quotedIdentifier runtimeRoleName <> ";",
     "INSERT INTO account_audit.runtime_scope (runtime_role_name, audit_scope_id) VALUES (" <> quotedLiteral runtimeRoleName <> ", 'default') ON CONFLICT (runtime_role_name) DO NOTHING;"
   ]
 
@@ -201,6 +203,24 @@ accountAuditRegistrationDeliveryStatements =
     "REVOKE ALL ON FUNCTION account_audit.complete_pending_registration_delivery_with_activity(TEXT, TEXT, TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) FROM PUBLIC;"
   ]
 
+-- | The generic resend lifecycle remains authoritative for candidate-token
+-- promotion and delivery-window accounting. This controlled operation runs
+-- that operation under the audit owner, then appends the required closed
+-- event before returning so any append failure rolls the promotion back.
+accountAuditVerificationResendDeliveryStatements :: [Text]
+accountAuditVerificationResendDeliveryStatements =
+  [ "GRANT USAGE ON SCHEMA web_api TO account_audit_owner;",
+    "GRANT SELECT (account_id, email_verified_at_nanoseconds), UPDATE (email_verified_at_nanoseconds) ON TABLE web_api.accounts TO account_audit_owner;",
+    "GRANT SELECT, DELETE ON TABLE web_api.verification_resend_claims TO account_audit_owner;",
+    "GRANT DELETE, INSERT ON TABLE web_api.email_verifications TO account_audit_owner;",
+    "GRANT INSERT ON TABLE web_api.verification_resend_deliveries TO account_audit_owner;",
+    "GRANT USAGE ON SEQUENCE web_api.verification_resend_deliveries_delivery_id_seq TO account_audit_owner;",
+    "GRANT EXECUTE ON FUNCTION web_api.complete_verification_resend(TEXT, TEXT, BIGINT) TO account_audit_owner;",
+    completeVerificationResendWithActivityFunction,
+    "ALTER FUNCTION account_audit.complete_verification_resend_with_activity(TEXT, TEXT, BIGINT, TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) OWNER TO account_audit_owner;",
+    "REVOKE ALL ON FUNCTION account_audit.complete_verification_resend_with_activity(TEXT, TEXT, BIGINT, TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) FROM PUBLIC;"
+  ]
+
 completePendingRegistrationDeliveryWithActivityFunction :: Text
 completePendingRegistrationDeliveryWithActivityFunction =
   Text.unlines
@@ -219,6 +239,30 @@ completePendingRegistrationDeliveryWithActivityFunction =
       "  IF NOT FOUND THEN RETURN; END IF;",
       "  PERFORM activity_id FROM account_audit.append_activity(p_audit_account_id, p_request_id, p_event_code, p_payload_version, p_payload_detail, p_route_endpoint_name, p_route_mount_chain, p_route_template, p_route_locale);",
       "  account_id := p_account_id; RETURN NEXT;",
+      "END;",
+      "$$;"
+    ]
+
+completeVerificationResendWithActivityFunction :: Text
+completeVerificationResendWithActivityFunction =
+  Text.unlines
+    [ "CREATE OR REPLACE FUNCTION account_audit.complete_verification_resend_with_activity(",
+      "  p_account_id TEXT, p_token_digest TEXT, p_now BIGINT, p_audit_account_id TEXT, p_request_id TEXT, p_event_code TEXT, p_payload_version SMALLINT, p_payload_detail TEXT,",
+      "  p_route_endpoint_name TEXT, p_route_mount_chain TEXT, p_route_template TEXT, p_route_locale TEXT",
+      ") RETURNS TABLE(outcome TEXT, value TEXT)",
+      "LANGUAGE plpgsql",
+      "SECURITY DEFINER",
+      "SET search_path = pg_catalog, account_audit, web_api",
+      "AS $$",
+      "DECLARE v_outcome TEXT; v_value TEXT;",
+      "BEGIN",
+      "  IF p_account_id <> p_audit_account_id THEN RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'verification resend audit subject does not match delivery account'; END IF;",
+      "  SELECT completion.outcome, completion.value INTO v_outcome, v_value FROM web_api.complete_verification_resend(p_account_id, p_token_digest, p_now) AS completion;",
+      "  IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE = 'XX000', MESSAGE = 'verification resend completion returned no result'; END IF;",
+      "  IF v_outcome = 'lost' THEN outcome := 'lost'; value := ''; RETURN NEXT; RETURN; END IF;",
+      "  IF v_outcome <> 'settled' OR v_value <> p_account_id THEN RAISE EXCEPTION USING ERRCODE = 'XX000', MESSAGE = 'verification resend completion returned an invalid result'; END IF;",
+      "  PERFORM activity_id FROM account_audit.append_activity(p_audit_account_id, p_request_id, p_event_code, p_payload_version, p_payload_detail, p_route_endpoint_name, p_route_mount_chain, p_route_template, p_route_locale);",
+      "  outcome := 'settled'; value := p_account_id; RETURN NEXT;",
       "END;",
       "$$;"
     ]

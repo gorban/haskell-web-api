@@ -19,16 +19,24 @@ import HarchWeb.Time (UnixTimeNanoseconds)
 import Network.HTTP.Types qualified as Http
 import WebApi.Account
   ( AccountProfile (..),
+    AccountStore (..),
+    AccountStoreError (..),
     EmailVerificationEnvironment (..),
     ResendVerificationError (..),
     ResendVerificationResult,
     VerificationDeliveryEnvironment (..),
+    VerificationResendClaim (..),
     resendEmailVerificationAt,
   )
 import WebApi.AccountPages.Actions.Common
 import WebApi.AccountPages.Actions.Contract (ProfileSubmission (..))
 import WebApi.AccountPages.Forms (PendingProfileForm (..))
 import WebApi.AccountPrincipal (AccountPrincipal)
+import WebApi.ActivityAudit
+  ( AccountActivity (..),
+    AccountAuditEvent (VerificationResendDelivered),
+    auditRouteObservationFromTrusted,
+  )
 import WebApi.AppEffect
   ( AccountWorkflow (..),
     AppM,
@@ -41,6 +49,10 @@ import WebApi.Profile
     loadProfileForPrincipal,
   )
 import WebApi.Route (AppRequestContext (..))
+import WebApi.VerificationResendAudit
+  ( VerificationResendAuditStore (..),
+    VerificationResendAuditStoreError (..),
+  )
 
 -- | All request-owned inputs required to process a profile submission.
 data ProfileWorkflowInput = ProfileWorkflowInput
@@ -87,7 +99,7 @@ resendEmailVerificationNow actionRequest now profile@AccountProfile {} = do
   liftIO $
     resendEmailVerificationAt
       EmailVerificationEnvironment
-        { verificationStore = accountWorkflowStore workflow,
+        { verificationStore = verificationResendAuditStore actionRequest workflow,
           verificationDeliveryEnvironment =
             VerificationDeliveryEnvironment
               { verificationDeliveryTimeout = accountWorkflowRegistrationDeliveryTimeout workflow,
@@ -99,6 +111,46 @@ resendEmailVerificationNow actionRequest now profile@AccountProfile {} = do
           verificationLifetime = emailVerificationLifetimeNanoseconds
         }
       profile
+
+-- | Keep the storage-neutral resend workflow as the owner of reservation,
+-- release, and lost-claim semantics.  Only its successful post-SMTP
+-- promotion is replaced here, where trusted request attribution can form the
+-- required closed operator activity.  A typed audit failure maps to the
+-- workflow's existing unavailable store rail, leaving the durable claim for
+-- a later retry instead of completing it without the event.
+verificationResendAuditStore :: AccountActionRequest -> AccountWorkflow -> AccountStore
+verificationResendAuditStore actionRequest workflow =
+  (accountWorkflowStore workflow)
+    { completeVerificationResend = completeWithAudit
+    }
+  where
+    completeWithAudit claim now =
+      case verificationResendDeliveryActivity actionRequest claim of
+        Left activityError -> pure (Left (verificationResendAuditAsAccountStoreError activityError))
+        Right activity -> do
+          settled <- completeVerificationResendWithAudit (accountWorkflowVerificationResendAuditStore workflow) claim now activity
+          pure (either (Left . verificationResendAuditAsAccountStoreError) Right settled)
+
+verificationResendDeliveryActivity :: AccountActionRequest -> VerificationResendClaim -> Either VerificationResendAuditStoreError AccountActivity
+verificationResendDeliveryActivity actionRequest claim = do
+  requestId <- maybe (Left VerificationResendAuditStoreCorruptData) Right (requestCorrelationId context)
+  route <- traverse (either (const (Left VerificationResendAuditStoreCorruptData)) Right . auditRouteObservationFromTrusted) (requestRouteObservation context)
+  pure
+    AccountActivity
+      { activitySubject = verificationResendClaimAccountId claim,
+        activityRequestId = requestId,
+        activityEvent = VerificationResendDelivered,
+        activityRoute = route
+      }
+  where
+    context = HarchWeb.clientActionContext actionRequest
+
+verificationResendAuditAsAccountStoreError :: VerificationResendAuditStoreError -> AccountStoreError
+verificationResendAuditAsAccountStoreError auditError =
+  case auditError of
+    VerificationResendAuditStoreUnavailable -> AccountStoreUnavailable "verification resend audit store unavailable"
+    VerificationResendAuditCapacityExceeded -> AccountStoreUnavailable "account audit partition capacity is exhausted"
+    VerificationResendAuditStoreCorruptData -> AccountStoreCorruptData "verification resend audit store returned corrupt data"
 
 interpretProfileResendResult ::
   AccountActionRequest ->

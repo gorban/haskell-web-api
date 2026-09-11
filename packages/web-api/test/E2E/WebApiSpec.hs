@@ -40,6 +40,7 @@ import WebApi.Mfa (MfaStore (..), StoredTotpEnrollment (..))
 import WebApi.Route (AppRoute (LoginRoute))
 import WebApi.Route qualified
 import WebApi.Session (AccountSessionStore (..), MfaEnrollmentSessionStore (..), mfaEnrollmentSessionCookiePolicy)
+import WebApi.VerificationResendAudit (VerificationResendAuditStore (..))
 
 -- | Share immutable browser configuration and assets for the suite, and one
 -- server per application variant for independent scenarios. Hspec's existing
@@ -1069,6 +1070,7 @@ pendingProfileWorkflow =
           { findAccountProfile = \receivedAccountId ->
               pure (Right (if receivedAccountId == pendingProfileAccountId then Just pendingProfile else Nothing))
           },
+      accountWorkflowVerificationResendAuditStore = VerificationResendAuditStore (\_ _ _ -> pure (Right VerificationResendClaimSettled)),
       accountWorkflowVerificationUrl = \_ _ -> "https://account.example.test/verify"
     }
 
@@ -1192,6 +1194,7 @@ reauthenticationProfileWorkflow sessionExpiry attemptStore environmentConfig iss
         accountWorkflowSessionStore = sessionStore,
         accountWorkflowSessionAuditStore = sessionAuditStore,
         accountWorkflowActivityAuditStore = accountWorkflowActivityAuditStore unavailableAccountWorkflow,
+        accountWorkflowVerificationResendAuditStore = VerificationResendAuditStore (\_ _ _ -> pure (Right VerificationResendClaimSettled)),
         accountWorkflowProfileStore = profileStore,
         accountWorkflowTotpEncryptionKey = totpEncryptionKey environmentConfig,
         accountWorkflowJwtIssuer = issuer,

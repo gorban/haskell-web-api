@@ -41,8 +41,10 @@ import WebApi.Postgres.MfaRepository (buildRuntimePostgresMfaStore)
 import WebApi.Postgres.PendingRegistrationAuditRepository (buildRuntimePostgresPendingRegistrationAuditStore)
 import WebApi.Postgres.Pool (PostgresPool)
 import WebApi.Postgres.SessionRepository (buildRuntimePostgresAccountSessionStore)
+import WebApi.Postgres.VerificationResendAuditRepository (buildRuntimePostgresVerificationResendAuditStore)
 import WebApi.Route (AppRequestContext, AppRoute (EmailVerificationRoute), renderRoutePath)
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..), MfaEnrollmentSessionStore (..), MfaEnrollmentSessionStoreError (..))
+import WebApi.VerificationResendAudit (VerificationResendAuditStore (..), VerificationResendAuditStoreError (..))
 
 buildRuntimeAccountWorkflow :: PostgresPool -> AppEnvironmentConfig -> AccountWorkflow
 buildRuntimeAccountWorkflow pool environmentConfig =
@@ -67,6 +69,7 @@ buildRuntimeAccountWorkflowWithJwt pool !environmentConfig jwtIssuer =
       accountWorkflowSessionStore = buildRuntimePostgresAccountSessionStore pool,
       accountWorkflowSessionAuditStore = buildRuntimePostgresAccountSessionAuditStore pool,
       accountWorkflowPendingRegistrationAuditStore = buildRuntimePostgresPendingRegistrationAuditStore pool,
+      accountWorkflowVerificationResendAuditStore = buildRuntimePostgresVerificationResendAuditStore pool,
       accountWorkflowActivityAuditStore = buildRuntimePostgresActivityAuditStore pool,
       accountWorkflowMfaEnrollmentSessionStore = buildRuntimePostgresMfaEnrollmentSessionStore pool,
       accountWorkflowProfileStore = buildRuntimePostgresAccountProfileStore pool,
@@ -140,6 +143,7 @@ unavailableAccountWorkflow =
       accountWorkflowSessionStore = unavailableAccountSessionStore,
       accountWorkflowSessionAuditStore = unavailableAccountSessionAuditStore,
       accountWorkflowPendingRegistrationAuditStore = unavailablePendingRegistrationAuditStore,
+      accountWorkflowVerificationResendAuditStore = unavailableVerificationResendAuditStore,
       accountWorkflowActivityAuditStore = unavailableActivityAuditStore,
       accountWorkflowMfaEnrollmentSessionStore = unavailableMfaEnrollmentSessionStore,
       accountWorkflowProfileStore = unavailableAccountProfileStore,
@@ -206,6 +210,10 @@ unavailableAccountSessionAuditStore =
 unavailablePendingRegistrationAuditStore :: PendingRegistrationAuditStore
 unavailablePendingRegistrationAuditStore =
   PendingRegistrationAuditStore (\_ _ -> unavailableResult PendingRegistrationAuditStoreUnavailable)
+
+unavailableVerificationResendAuditStore :: VerificationResendAuditStore
+unavailableVerificationResendAuditStore =
+  VerificationResendAuditStore (\_ _ _ -> unavailableResult VerificationResendAuditStoreUnavailable)
 
 unavailableActivityAuditStore :: ActivityAuditStore
 unavailableActivityAuditStore =

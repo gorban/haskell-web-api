@@ -487,6 +487,53 @@ spec = do
               "SELECT (SELECT delivery_state FROM web_api.email_verifications WHERE account_id = 'account_audit_delivery_test') || '|' || (SELECT count(*)::TEXT FROM account_audit.activity WHERE account_id = 'account_audit_delivery_test' AND request_id = '550e8400-e29b-41d4-a716-446655440004');"
           rolledBackAtomicDelivery `shouldBe` (ExitSuccess, "claimed|0\n", "")
 
+          -- Verification resend uses the generic claim-promotion lifecycle
+          -- inside a separate audit-owner operation. An invalid closed event
+          -- must roll back its candidate promotion, rolling delivery record,
+          -- and audit row together, preserving the currently delivered token
+          -- and retryable candidate claim.
+          runPsql
+            inheritedEnvironment
+            "web_api_owner"
+            "web_api_owner"
+            "DELETE FROM web_api.accounts WHERE account_id = 'account_audit_resend_test'; INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds) VALUES ('account_audit_resend_test', 'account-audit-resend@example.test', 'test-hash', 1); INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds, delivery_state, delivery_claimed_at_nanoseconds) VALUES ('account-audit-resend-old-digest', 'account_audit_resend_test', 'account-audit-resend@example.test', 200, 'delivered', NULL); INSERT INTO web_api.verification_resend_claims (account_id, token_digest, email_normalized, expires_at_nanoseconds, claimed_at_nanoseconds) VALUES ('account_audit_resend_test', 'account-audit-resend-candidate-digest', 'account-audit-resend@example.test', 300, 1);"
+            `shouldReturn` (ExitSuccess, "", "")
+          atomicResendSettlement <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "SELECT outcome || '|' || value FROM account_audit.complete_verification_resend_with_activity('account_audit_resend_test', 'account-audit-resend-candidate-digest', 100, 'account_audit_resend_test', '550e8400-e29b-41d4-a716-446655440005', 'verification-resend-delivered', 1::SMALLINT, NULL, NULL, NULL, NULL, NULL);"
+          atomicResendSettlement `shouldBe` (ExitSuccess, "settled|account_audit_resend_test\n", "")
+          committedAtomicResend <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT (SELECT token_digest FROM web_api.email_verifications WHERE account_id = 'account_audit_resend_test') || '|' || (SELECT count(*)::TEXT FROM web_api.verification_resend_claims WHERE account_id = 'account_audit_resend_test') || '|' || (SELECT count(*)::TEXT FROM web_api.verification_resend_deliveries WHERE account_id = 'account_audit_resend_test') || '|' || (SELECT count(*)::TEXT FROM account_audit.activity WHERE account_id = 'account_audit_resend_test' AND event_code = 'verification-resend-delivered');"
+          committedAtomicResend `shouldBe` (ExitSuccess, "account-audit-resend-candidate-digest|0|1|1\n", "")
+          runPsql
+            inheritedEnvironment
+            "web_api_owner"
+            "web_api_owner"
+            "DELETE FROM web_api.accounts WHERE account_id = 'account_audit_resend_rollback_test'; INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds) VALUES ('account_audit_resend_rollback_test', 'account-audit-resend-rollback@example.test', 'test-hash', 1); INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds, delivery_state, delivery_claimed_at_nanoseconds) VALUES ('account-audit-resend-rollback-old-digest', 'account_audit_resend_rollback_test', 'account-audit-resend-rollback@example.test', 200, 'delivered', NULL); INSERT INTO web_api.verification_resend_claims (account_id, token_digest, email_normalized, expires_at_nanoseconds, claimed_at_nanoseconds) VALUES ('account_audit_resend_rollback_test', 'account-audit-resend-rollback-candidate-digest', 'account-audit-resend-rollback@example.test', 300, 1);"
+            `shouldReturn` (ExitSuccess, "", "")
+          rejectedAtomicResend <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "SELECT outcome || '|' || value FROM account_audit.complete_verification_resend_with_activity('account_audit_resend_rollback_test', 'account-audit-resend-rollback-candidate-digest', 100, 'account_audit_resend_rollback_test', '550e8400-e29b-41d4-a716-446655440006', 'not-an-account-audit-event', 1::SMALLINT, NULL, NULL, NULL, NULL, NULL);"
+          fst3 rejectedAtomicResend `shouldNotBe` ExitSuccess
+          thd3 rejectedAtomicResend `shouldContain` "account audit append received invalid typed fields"
+          rolledBackAtomicResend <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT (SELECT token_digest FROM web_api.email_verifications WHERE account_id = 'account_audit_resend_rollback_test') || '|' || (SELECT count(*)::TEXT FROM web_api.verification_resend_claims WHERE account_id = 'account_audit_resend_rollback_test') || '|' || (SELECT count(*)::TEXT FROM web_api.verification_resend_deliveries WHERE account_id = 'account_audit_resend_rollback_test') || '|' || (SELECT count(*)::TEXT FROM account_audit.activity WHERE account_id = 'account_audit_resend_rollback_test' AND request_id = '550e8400-e29b-41d4-a716-446655440006');"
+          rolledBackAtomicResend `shouldBe` (ExitSuccess, "account-audit-resend-rollback-old-digest|1|0|0\n", "")
+
           directRuntimeRead <-
             runPsql
               inheritedEnvironment

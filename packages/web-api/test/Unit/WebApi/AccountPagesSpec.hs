@@ -47,7 +47,7 @@ import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buil
 import WebApi.AccountPages.Validation (Validation, invalid, valid, validate3, validate4, validationResult)
 import WebApi.AccountPrincipal (mkAccountPrincipal)
 import WebApi.AccountSessionAudit (AccountSessionAuditStore (..), AccountSessionAuditStoreError (..))
-import WebApi.ActivityAudit (AccountActivity (..), AccountAuditEvent (AccountSessionEnded, AccountSessionIssued, PendingRegistrationDelivered), ActivityAuditStore (..), ActivityAuditStoreError (..), AuditAuthenticationMethod (..), AuditRegistrationDeliveryStage (RegistrationCreated, RegistrationRetried), AuditSessionEndReason (ExplicitLogout), activityIdFromDatabase)
+import WebApi.ActivityAudit (AccountActivity (..), AccountAuditEvent (AccountSessionEnded, AccountSessionIssued, PendingRegistrationDelivered, VerificationResendDelivered), ActivityAuditStore (..), ActivityAuditStoreError (..), AuditAuthenticationMethod (..), AuditRegistrationDeliveryStage (RegistrationCreated, RegistrationRetried), AuditSessionEndReason (ExplicitLogout), activityIdFromDatabase)
 import WebApi.App (buildRuntimeAppWithDatabaseBuilder, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.AppEffect qualified as AppEffect
@@ -62,6 +62,7 @@ import WebApi.Postgres.Testing (buildRuntimePostgresAccountCredentialStoreWithRu
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), defaultRequestContext, renderRoutePath, routeCodec)
 import WebApi.RouteData (RouteDataResult (..), RouteDataSelection (..), selectRouteData, selectRouteDataSelectionWithDatabase)
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..), MfaEnrollmentSessionStore (..), MfaEnrollmentSessionStoreError (..))
+import WebApi.VerificationResendAudit (VerificationResendAuditStore (..), VerificationResendAuditStoreError (VerificationResendAuditCapacityExceeded))
 
 issuedCsrfToken :: AccountWorkflow -> AppRequestContext -> IO Csrf.CsrfToken
 issuedCsrfToken workflow requestContext = do
@@ -177,6 +178,7 @@ existingSpec = do
         `shouldReturn` HarchWeb.CsrfVerified
 
     it "resends pending-profile verification through a localized client-action patch" $ do
+      auditedResendActivitiesReference <- newIORef []
       let actionRequest requestContext fields =
             fromMaybe
               (error "expected a recognized profile action fixture")
@@ -231,6 +233,10 @@ existingSpec = do
                 accountWorkflowClock = pure now,
                 accountWorkflowSessionStore = existingSessionStore sessionResult,
                 accountWorkflowProfileStore = profileStore loadedProfile,
+                accountWorkflowVerificationResendAuditStore =
+                  VerificationResendAuditStore $ \claim _ activity -> do
+                    modifyIORef' auditedResendActivitiesReference (<> [(claim, activity)])
+                    pure (Right VerificationResendClaimSettled),
                 accountWorkflowVerificationUrl = \requestContext token ->
                   case WebApi.Route.requestLocale requestContext of
                     WebApi.Route.English -> "https://account.example.test/verify?token=" <> emailVerificationTokenText token
@@ -251,6 +257,18 @@ existingSpec = do
                          ]
                   )
       expect pendingWorkflow (actionRequest sessionRequestContext [("intent", "resend-verification")]) 202 "Check your inbox"
+      auditedResendActivities <- readIORef auditedResendActivitiesReference
+      case auditedResendActivities of
+        [(claim, activity)] ->
+          expectAll
+            ( (verificationResendClaimAccountId claim `shouldBe` activitySubject activity)
+                :| [ activityRequestId activity `shouldBe` testRequestId,
+                     case activityEvent activity of
+                       VerificationResendDelivered -> pure ()
+                       _ -> expectationFailure "expected the closed verification-resend audit event"
+                   ]
+            )
+        _ -> expectationFailure "expected exactly one verification-resend audit activity"
       expect pendingWorkflow (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 202 "Revisa tu bandeja"
       expect pendingWorkflow (actionRequest sessionRequestContext []) 422 "Choose a profile action"
       expect pendingWorkflow (actionRequest defaultRequestContext [("intent", "resend-verification")]) 403 "Sign in before"
@@ -270,6 +288,14 @@ existingSpec = do
       expect (workflow (Right True) delivery (Right (Just activeSession)) (Left (AccountStoreUnavailable "database unavailable")) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 503 "Tu perfil no esta disponible"
       expect (workflow (Right True) delivery (Right (Just (opaqueSession maxBound))) (Right (Just pendingProfile)) (maxBound - 1)) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
       expect (workflow (Right True) delivery (Right (Just (opaqueSession maxBound))) (Right (Just pendingProfile)) (maxBound - 1)) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 503 "Tu perfil no esta disponible"
+      expect
+        ( (workflow (Right True) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150)
+            { accountWorkflowVerificationResendAuditStore = VerificationResendAuditStore (\_ _ _ -> pure (Left VerificationResendAuditCapacityExceeded))
+            }
+        )
+        (actionRequest sessionRequestContext [("intent", "resend-verification")])
+        503
+        "temporarily unavailable"
 
     it "keeps PendingProfileForm comparable and its rendered region free of a false error flag" $
       expectAll $
@@ -302,7 +328,7 @@ profileStore :: Either AccountStoreError (Maybe AccountProfile) -> AccountProfil
 profileStore result = AccountProfileStore (\accountIdValue -> accountIdValue `seq` pure result)
 
 sessionRequestContext :: AppRequestContext
-sessionRequestContext = defaultRequestContext {WebApi.Route.requestAccountPrincipal = Just (mkAccountPrincipal existingAccountId testSessionId 200)}
+sessionRequestContext = defaultRequestContext {WebApi.Route.requestAccountPrincipal = Just (mkAccountPrincipal existingAccountId testSessionId 200), WebApi.Route.requestCorrelationId = Just testRequestId}
 
 spanishSessionRequestContext :: AppRequestContext
 spanishSessionRequestContext = sessionRequestContext {WebApi.Route.requestLocale = WebApi.Route.Spanish, WebApi.Route.requestLocaleIsExplicit = True}
@@ -683,6 +709,7 @@ spec = do
                   PendingRegistrationAuditStore $ \claim activity -> do
                     modifyIORef' auditedDeliveryActivitiesReference (<> [(claim, activity)])
                     pure (Right True),
+                accountWorkflowVerificationResendAuditStore = accountWorkflowVerificationResendAuditStore unavailableAccountWorkflow,
                 accountWorkflowActivityAuditStore = accountWorkflowActivityAuditStore unavailableAccountWorkflow,
                 accountWorkflowMfaEnrollmentSessionStore = accountWorkflowMfaEnrollmentSessionStore unavailableAccountWorkflow,
                 accountWorkflowProfileStore = accountWorkflowProfileStore unavailableAccountWorkflow,
@@ -1016,6 +1043,7 @@ spec = do
                 accountWorkflowSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow,
                 accountWorkflowSessionAuditStore = accountWorkflowSessionAuditStore unavailableAccountWorkflow,
                 accountWorkflowPendingRegistrationAuditStore = PendingRegistrationAuditStore (\_ _ -> pure (Right True)),
+                accountWorkflowVerificationResendAuditStore = accountWorkflowVerificationResendAuditStore unavailableAccountWorkflow,
                 accountWorkflowActivityAuditStore = accountWorkflowActivityAuditStore unavailableAccountWorkflow,
                 accountWorkflowMfaEnrollmentSessionStore = accountWorkflowMfaEnrollmentSessionStore unavailableAccountWorkflow,
                 accountWorkflowProfileStore = accountWorkflowProfileStore unavailableAccountWorkflow,

@@ -9,6 +9,7 @@ module WebApi.Postgres.Testing
     module WebApi.Postgres.MfaRepository,
     module WebApi.Postgres.Migration,
     module WebApi.Postgres.PendingRegistrationAuditRepository,
+    module WebApi.Postgres.VerificationResendAuditRepository,
     module WebApi.Postgres.Pool,
     module WebApi.Postgres.Runtime,
     module WebApi.Postgres.SessionRepository,
@@ -28,3 +29,4 @@ import WebApi.Postgres.PendingRegistrationAuditRepository
 import WebApi.Postgres.Pool
 import WebApi.Postgres.Runtime
 import WebApi.Postgres.SessionRepository
+import WebApi.Postgres.VerificationResendAuditRepository
