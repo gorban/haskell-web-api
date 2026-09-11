@@ -31,10 +31,11 @@ import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi (buildApp, run)
 import WebApi.Account (AccountStore (createPendingAccount), CreatePendingAccountOutcome (PendingAccountDeliveryClaimed), PendingAccount (..), defaultPendingRegistrationStoragePolicy)
 import WebApi.AccountJwt (AccountJwtIssuer (..), AccountJwtRawConfiguration (..), accountJwtIssuerFromRuntime, loadAccountJwtRuntime, mkAccountJwtConfiguration)
+import WebApi.ActivityAudit (AccountActivity (..), ActivityAuditStore (..), ActivityAuditStoreError (ActivityAuditUnavailable), activityIdFromDatabase)
 import WebApi.Api.Endpoints (noApiRequestFields)
 import WebApi.App (buildAppWithDatabase, buildAppWithDatabaseAndAccountWorkflow, buildAppWithDatabaseAndAccountWorkflowAndSecurity, buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwtRuntime, buildRuntimeAppWithAccountJwt, buildRuntimeAppWithDatabaseBuilder, otlpExportFailureMessage, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Observability (runOtlpExportAction)
-import WebApi.AppEffect (AccountWorkflow (accountWorkflowCredentialStore, accountWorkflowEmailDelivery, accountWorkflowJwtIssuer, accountWorkflowLoginAttemptStore, accountWorkflowPasswordWorkGate, accountWorkflowSessionStore, accountWorkflowStore))
+import WebApi.AppEffect (AccountWorkflow (accountWorkflowActivityAuditStore, accountWorkflowCredentialStore, accountWorkflowEmailDelivery, accountWorkflowJwtIssuer, accountWorkflowLoginAttemptStore, accountWorkflowPasswordWorkGate, accountWorkflowSessionStore, accountWorkflowStore))
 import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), AppMode (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), TlsCertificateSource (..), TlsConfig (..), databasePoolCapacity, defaultAppConfig, defaultAppEnvironmentConfig, defaultTlsPolicy)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), PageRepository (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed, defaultPageRepository)
 import WebApi.Login (AccountCredential (..), AccountCredentialStore (..))
@@ -318,6 +319,166 @@ spec = do
                    `shouldBe` normalizeRejectedLoginBody unknownRequestId "unknown@example.test" unknownBody
                ]
         )
+
+    it "keeps a known-login rejection correlated with its audit and private diagnostics while tracing is disabled" $ do
+      auditActivities <- newIORef []
+      auditAvailable <- newIORef True
+      capturedObservability <- newIORef []
+      capturedLogs <- newIORef []
+      let knownCredential =
+            AccountCredential
+              { accountCredentialId = accountId,
+                accountCredentialPasswordHash =
+                  case Password.hashPasswordWithSalt Password.defaultPasswordHashingPolicy (ByteString.replicate 16 8) (Password.mkPassword "correct horse battery staple") of
+                    Nothing -> error "expected deterministic password hash"
+                    Just passwordHash -> passwordHash,
+                accountCredentialEmailVerified = True
+              }
+          activityAuditStore =
+            ActivityAuditStore $ \activity -> do
+              available <- readIORef auditAvailable
+              if available
+                then do
+                  modifyIORef' auditActivities (<> [activity])
+                  pure (Right (activityIdFromDatabase 1))
+                else pure (Left ActivityAuditUnavailable)
+          accountWorkflow =
+            unavailableAccountWorkflow
+              { accountWorkflowCredentialStore =
+                  AccountCredentialStore
+                    { findAccountCredentialByEmail = \email ->
+                        if emailAddressText email == "known@example.test"
+                          then pure (Right (Just knownCredential))
+                          else pure (Right Nothing),
+                      findAccountCredentialByUsername = const (pure (Right Nothing)),
+                      replacePasswordHashIfCurrent = \_ _ _ -> pure (Right False)
+                    },
+                accountWorkflowLoginAttemptStore = permissiveLoginAttemptStore,
+                accountWorkflowPasswordWorkGate = testPasswordWorkGate,
+                accountWorkflowActivityAuditStore = activityAuditStore
+              }
+          loginApplication =
+            buildAppWithDatabaseAndAccountWorkflow
+              defaultAppConfig
+              defaultPageRepository
+              accountWorkflow
+          instrumentedLoginApplication =
+            loginApplication
+              { HarchWeb.reportRequestObservability = \observation ->
+                  modifyIORef' capturedObservability (<> [observation]),
+                HarchWeb.reportApplicationLog = \entry ->
+                  modifyIORef' capturedLogs (<> [entry])
+              }
+      waiApplication <- HarchWeb.toWaiApplication instrumentedLoginApplication
+      loginPage <- performWaiRequest (pure waiApplication) (waiRequest ["login"])
+      csrfCookie <-
+        case lookup "Set-Cookie" (Wai.responseHeaders loginPage) of
+          Nothing -> expectationFailure "login page did not issue a CSRF cookie" >> pure ByteString.empty
+          Just value -> pure (ByteString.takeWhile (/= 59) value)
+      let csrfToken = ByteString.drop (ByteString.length "__Host-harch-csrf=") csrfCookie
+          loginAction = do
+            actionBodyChunks <-
+              newIORef
+                [ ByteString.intercalate
+                    "&"
+                    [ "identifier=known%40example.test",
+                      "password=wrong-password",
+                      "proof=totp",
+                      "totpCode=123456",
+                      "_harch_csrf=" <> Http.urlEncode True csrfToken
+                    ]
+                ]
+            performWaiRequest
+              (pure waiApplication)
+              ( Wai.setRequestBodyChunks
+                  (nextRequestBodyChunk actionBodyChunks)
+                  ( (waiRequest ["login"])
+                      { Wai.requestMethod = "POST",
+                        Wai.requestHeaders =
+                          [ ("X-Harch-Action", "1"),
+                            (Http.hContentType, "application/x-www-form-urlencoded"),
+                            ("Host", "example.test"),
+                            ("Origin", "http://example.test"),
+                            ("Cookie", csrfCookie)
+                          ]
+                      }
+                  )
+              )
+          responseRequestId response =
+            case lookup "X-Request-ID" (Wai.responseHeaders response) of
+              Nothing -> expectationFailure "login response lacked X-Request-ID" >> pure Text.empty
+              Just rawRequestId ->
+                case TextEncoding.decodeUtf8' rawRequestId of
+                  Left failure -> expectationFailure (show failure) >> pure Text.empty
+                  Right requestId -> do
+                    HarchWeb.mkRequestId requestId `shouldSatisfy` isJust
+                    pure requestId
+          requiredRequestId requestId =
+            case HarchWeb.mkRequestId requestId of
+              Nothing -> error "response request ID did not parse"
+              Just value -> value
+          requestIdAttributes observation =
+            [ attributeValue
+            | Observability.ObservabilityAttribute {Observability.attributeName, Observability.attributeValue} <- Observability.requestSpanAttributes (Observability.observabilityRequestSpan observation),
+              attributeName == "harch.request.id"
+            ]
+          metricAttributes observation =
+            Observability.httpServerMetricAttributes (Observability.observabilityHttpServerMetrics observation)
+      writeIORef capturedObservability []
+      writeIORef capturedLogs []
+      successfulAuditResponse <- loginAction
+      successfulAuditRequestId <- responseRequestId successfulAuditResponse
+      successfulAuditActivities <- readIORef auditActivities
+      successfulAuditObservability <- readIORef capturedObservability
+      successfulAuditLogs <- readIORef capturedLogs
+      expectAll
+        ( (Wai.responseStatus successfulAuditResponse `shouldBe` Http.status422)
+            :| [ successfulAuditLogs `shouldBe` []
+               ]
+        )
+      case successfulAuditActivities of
+        [activity] -> activityRequestId activity `shouldBe` requiredRequestId successfulAuditRequestId
+        _ -> expectationFailure "expected one successful audit activity"
+      case successfulAuditObservability of
+        [observation] -> do
+          requestIdAttributes observation `shouldBe` [Observability.TextAttribute successfulAuditRequestId]
+          metricAttributes observation
+            `shouldSatisfy` all ((/= "harch.request.id") . Observability.attributeName)
+        observations -> expectationFailure ("expected one successful request observation, got " <> show observations)
+
+      writeIORef auditAvailable False
+      writeIORef capturedObservability []
+      writeIORef capturedLogs []
+      unavailableAuditResponse <- loginAction
+      unavailableAuditRequestId <- responseRequestId unavailableAuditResponse
+      unavailableAuditActivities <- readIORef auditActivities
+      unavailableAuditObservability <- readIORef capturedObservability
+      unavailableAuditLogs <- readIORef capturedLogs
+      expectAll
+        ( (Wai.responseStatus unavailableAuditResponse `shouldBe` Http.status422)
+            :| [ unavailableAuditRequestId `shouldNotBe` successfulAuditRequestId,
+                 length unavailableAuditLogs `shouldBe` 1
+               ]
+        )
+      case unavailableAuditLogs of
+        [entry] ->
+          expectAll
+            ( (entry `shouldSatisfy` Text.isPrefixOf ("request.id=" <> unavailableAuditRequestId <> " "))
+                :| [ entry
+                       `shouldSatisfy` Text.isInfixOf "[account.authentication-rejection.audit-append-failed] audit.operation=authentication-rejection audit.failure-kind=unavailable",
+                     entry `shouldSatisfy` (not . Text.isInfixOf "known@example.test")
+                   ]
+            )
+        _ -> expectationFailure "expected one unavailable-audit diagnostic"
+      case unavailableAuditActivities of
+        [activity] -> activityRequestId activity `shouldBe` requiredRequestId successfulAuditRequestId
+        _ -> expectationFailure "audit unavailability must not create a second activity"
+      case unavailableAuditObservability of
+        [observation] -> do
+          requestIdAttributes observation `shouldBe` [Observability.TextAttribute unavailableAuditRequestId]
+          metricAttributes observation
+            `shouldSatisfy` all ((/= "harch.request.id") . Observability.attributeName)
+        observations -> expectationFailure ("expected one unavailable-audit request observation, got " <> show observations)
 
     it "stores the default request context used by the WAI adapter" $
       HarchWeb.defaultRequestContext pureApplication `shouldBe` defaultRequestContext

@@ -394,6 +394,20 @@ spec = do
             (ExitSuccess, resultText, "") -> resultText `shouldContain` "|0\n"
             _ -> expectationFailure "expected the controlled audit append to return one committed ID"
 
+          -- Request IDs correlate a request, not an activity identity. A
+          -- second committed event may legitimately share the ID, and the
+          -- scoped reader lookup below must return both permitted records
+          -- while still hiding an equal-ID record in another scope.
+          secondRuntimeAppend <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "SELECT activity_id::TEXT || '|' || utilization_percent::TEXT FROM account_audit.append_activity('account_audit_test_second', '550e8400-e29b-41d4-a716-446655440000', 'account-session-issued', 1::SMALLINT, 'password', NULL, NULL, NULL, NULL);"
+          case secondRuntimeAppend of
+            (ExitSuccess, resultText, "") -> resultText `shouldContain` "|0\n"
+            _ -> expectationFailure "expected a second controlled append with the same request ID"
+
           -- AHI-5's first AuditRequired mutation is deliberately a separate
           -- controlled operation, not a best-effort append after the old
           -- session insert.  The runtime role sees one function result only;
@@ -563,8 +577,12 @@ spec = do
               inheritedEnvironment
               "web_api_audit_reader"
               "audit-reader"
-              "SELECT audit_scope_id || '|' || account_id FROM account_audit.activity WHERE request_id = '550e8400-e29b-41d4-a716-446655440000' ORDER BY audit_scope_id;"
-          scopedReaderRows `shouldBe` (ExitSuccess, "default|account_audit_test\n", "")
+              "SELECT audit_scope_id || '|' || account_id FROM account_audit.activity WHERE request_id = '550e8400-e29b-41d4-a716-446655440000' ORDER BY audit_scope_id, account_id;"
+          scopedReaderRows
+            `shouldBe` ( ExitSuccess,
+                         "default|account_audit_test\ndefault|account_audit_test_second\n",
+                         ""
+                       )
 
           schedulerExplicitTime <-
             runPsql
