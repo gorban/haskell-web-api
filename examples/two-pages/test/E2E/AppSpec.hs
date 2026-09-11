@@ -76,8 +76,7 @@ spec =
               releaseRequestsMatching "**/assets/navigation.js"
               assertAllObserved do
                 css "#subscription-result" `shouldHaveText` "Enter a valid email address."
-                isFocused emailField `satisfies` id
-                inputValue emailField `shouldEqual` "ada@example"
+                $([|observeElement emailField|] `matchesPattern` [p|Just ElementSnapshot {elementValue = Just "ada@example", elementFocused = True}|])
               fill emailField "ada@example.com"
               submit subscriptionForm
               assertAllObserved do

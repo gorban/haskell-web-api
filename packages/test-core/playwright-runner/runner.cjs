@@ -316,6 +316,7 @@ async function observeMany(observations) {
 async function observe(observation) {
   if (!observation || typeof observation.kind !== 'string') throw new Error('invalid browser observation');
   switch (observation.kind) {
+    case 'elementSnapshot': return observeSnapshot(observation);
     case 'textContent': return resolveLocator(observation.locator).textContent({ timeout: timeout() });
     case 'inputValue': return resolveLocator(observation.locator).inputValue({ timeout: timeout() });
     case 'attributeValue': return resolveLocator(observation.locator).getAttribute(requireString(observation.attribute, 'attribute name'), { timeout: timeout() });
@@ -325,6 +326,37 @@ async function observe(observation) {
     case 'browserMetrics': return browserMetrics();
     default: throw new Error(`unsupported browser observation: ${observation.kind}`);
   }
+}
+
+async function observeSnapshot(observation) {
+  // evaluateAll queries immediately, including when no element matches. Never
+  // use count + evaluate here: replacement between those calls loses identity.
+  return resolveLocator(observation.locator).evaluateAll((elements, request) => {
+    if (elements.length === 0) return null;
+    if (elements.length !== 1) throw new Error(`ambiguous snapshot locator ${JSON.stringify(request.locator)}: matched ${elements.length} elements`);
+    const element = elements[0];
+    const focused = element.getRootNode().activeElement === element;
+    // Keep visibility in the same evaluation as text/focus. These are the
+    // Chromium Playwright rules: rendered area and CSS visibility, including
+    // display:contents descendants; opacity and viewport position do not hide.
+    function visible(target) {
+      const style = target.ownerDocument.defaultView.getComputedStyle(target);
+      if (style.display === 'contents') {
+        return [...target.childNodes].some((child) => {
+          if (child.nodeType === Node.ELEMENT_NODE) return visible(child);
+          if (child.nodeType !== Node.TEXT_NODE) return false;
+          const range = child.ownerDocument.createRange();
+          range.selectNode(child);
+          const bounds = range.getBoundingClientRect();
+          return bounds.width > 0 && bounds.height > 0;
+        });
+      }
+      if (!target.checkVisibility() || style.visibility !== 'visible') return false;
+      const bounds = target.getBoundingClientRect();
+      return bounds.width > 0 && bounds.height > 0;
+    }
+    return { elementText: element.textContent, elementValue: ['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName) ? element.value : null, elementVisible: visible(element), elementFocused: focused };
+  }, observation);
 }
 
 async function browserMetrics() {

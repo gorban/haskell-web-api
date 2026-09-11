@@ -25,6 +25,7 @@ module TestCore.Browser.Model.Internal
     isFocused,
     isVisible,
     named,
+    observeElement,
     textContent,
     within,
   )
@@ -35,7 +36,7 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.Encoding qualified as AesonEncoding
 import Data.Text (Text)
 import Data.Text qualified as Text
-import TestCore.Browser.Types (BrowserMetrics)
+import TestCore.Browser.Types (BrowserMetrics, ElementSnapshot)
 
 data AriaRole
   = Button
@@ -156,6 +157,7 @@ containingText :: Locator -> Text -> Locator
 containingText = ContainingTextLocator
 
 data ObservationLeaf a where
+  ElementObservation :: Locator -> ObservationLeaf (Maybe ElementSnapshot)
   TextContentObservation :: Locator -> ObservationLeaf Text
   InputValueObservation :: Locator -> ObservationLeaf Text
   AttributeValueObservation :: Locator -> Text -> ObservationLeaf (Maybe Text)
@@ -176,6 +178,14 @@ instance Functor BrowserObservation where
 instance Applicative BrowserObservation where
   pure = PureObservation
   (<*>) = ApplyObservation
+
+-- | Extend the existing observation algebra with one immediate DOM snapshot.
+-- Zero matches yields Nothing without waiting; multiple matches are errors.
+-- The existing assertion boundary retries only when its matcher fails, so
+-- matching Nothing succeeds immediately. All properties come from one DOM
+-- evaluation, rather than composing separate, potentially changing reads.
+observeElement :: Locator -> BrowserObservation (Maybe ElementSnapshot)
+observeElement = LeafObservation . ElementObservation
 
 -- | Exact descendant text of an element, including whitespace and hidden text.
 -- An empty element yields empty Text. Null is not element text and is rejected
@@ -241,6 +251,7 @@ compileObservation observation =
 observationLeafJson :: ObservationLeaf a -> Value
 observationLeafJson leaf =
   case leaf of
+    ElementObservation locator -> locatedObservation "elementSnapshot" locator []
     TextContentObservation locator -> locatedObservation "textContent" locator []
     InputValueObservation locator -> locatedObservation "inputValue" locator []
     AttributeValueObservation locator attributeName -> locatedObservation "attributeValue" locator ["attribute" .= attributeName]

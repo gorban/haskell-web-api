@@ -18,6 +18,7 @@ module TestCore.Browser.Model
     isFocused,
     isVisible,
     named,
+    observeElement,
     textContent,
     within,
   )

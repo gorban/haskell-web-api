@@ -3973,3 +3973,31 @@ locators retain command failures and an absent attribute remains `Nothing`.
 Framework unit tests cover retries, aggregation and malformed null results;
 real-browser adapter tests distinguish empty/exact/hidden text, accessible names,
 input values, absent attributes, missing elements and ambiguous locators.
+
+
+### Browser element snapshots (2026-09-10)
+
+**Decision: extend the existing BrowserObservation algebra and Playwright
+adapter with `observeElement`, retaining the existing assertion retry boundary.**
+Composing independent property observations cannot guarantee one element state;
+the adapter therefore resolves all matches once and reads their properties together
+in one synchronous DOM evaluation. Zero matches returns `Nothing` immediately, one match returns
+`Just ElementSnapshot`, and multiple matches or invalid selectors remain command
+errors. `assertAllObserved` retries only a mismatching assertion: neither expected
+absence nor an already-matching present record waits out the timeout.
+
+The single record carries exact descendant `elementText`, `elementVisible`,
+`elementFocused`, and optional `elementValue`. A missing element is the outer
+`Nothing`; a present non-control has `elementValue = Nothing`; an empty input,
+textarea or select has `elementValue = Just ""`. No separate input observer or
+matcher is needed. Text is never nullable inside a present snapshot, and malformed
+protocol fields remain decoding failures. Record patterns use the existing
+`matchesPattern` diagnostics, which show actual `Nothing` and the expected pattern.
+
+Visibility is evaluated with Chromium's rendered-area/CSS rules in the same
+callback as the other fields, including display:contents descendants. Focus uses
+the element's document or shadow root. Focused browser contract tests compare
+visibility with Playwright for hidden, transparent, zero-area, offscreen,
+display:contents and closed-details elements, and cover missing/ambiguous
+locators, control values and shadow focus. Unit tests prove immediate absence,
+retries in both presence directions, malformed records and mismatch diagnostics.

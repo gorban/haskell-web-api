@@ -116,6 +116,30 @@ spec = do
             $([|Just <$> textContent (byRole Heading)|] `matchesPattern` [p|Just heading@"Home"|])
             $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
 
+    it "matches absent snapshots immediately in one observation attempt" $
+      withFakeRunner "snapshot-missing-once" $ \config ->
+        runBrowserSpec config $ assertAllObserved do
+          $([|observeElement (css "#missing")|] `matchesPattern` [p|Nothing|])
+
+    it "retries absent and present snapshots until the requested pattern matches" $ do
+      withFakeRunner "snapshot-appears" $ \config ->
+        runBrowserSpec config $ assertAllObserved do
+          $([|observeElement (byRole Heading)|] `matchesPattern` [p|Just ElementSnapshot {elementText = "Home", elementVisible = True}|])
+          $([|observeElement (byLabel "Email")|] `matchesPattern` [p|Just ElementSnapshot {elementValue = Just "person@example.com", elementFocused = True}|])
+      withFakeRunner "snapshot-disappears" $ \config ->
+        runBrowserSpec config $ assertAllObserved do
+          observeElement (byRole Heading) `shouldEqual` Nothing
+          observeElement (byLabel "Email") `shouldEqual` Nothing
+
+    it "includes Nothing and the expected snapshot pattern in failure diagnostics" $
+      withFakeRunner "snapshot-missing" $ \config -> do
+        result <- runBrowserScenario config $ assertAllObserved do
+          $([|observeElement (byRole Heading)|] `matchesPattern` [p|Just ElementSnapshot {elementText = "Profile"}|])
+        result `shouldSatisfy` \case
+          Left (BrowserAssertionFailed message _) ->
+            all (`Text.isInfixOf` Text.pack message) ["Nothing", "failed to match pattern", "Just", "ElementSnapshot", "Profile"]
+          _ -> False
+
     it "rejects an empty observed assertion block" $
       withFakeRunner "normal" $ \config -> do
         result <- runBrowserScenario config (assertAllObserved (pure ()))
@@ -297,6 +321,8 @@ spec = do
       observationFailure "observe-extra" (textContent (byRole Heading)) "unexpected observation values"
       observationFailure "observe-bad-type" (textContent (byRole Heading)) "text"
       observationFailure "observe-null-text" (textContent (byRole Heading)) "null"
+      observationFailure "observe-bad-type" (observeElement (byRole Heading)) "elementsnapshot"
+      observationFailure "snapshot-null-text" (observeElement (byRole Heading)) "null"
       observationFailure "metrics-invalid" browserMetrics "enhancednavigationfetchcount"
       observationFailure "observe-no-value" (textContent (byRole Heading)) "array"
 
@@ -341,6 +367,26 @@ spec = do
       result `shouldSatisfy` \case
         Left (BrowserRunnerLaunchError message) -> "missing-browser-runner" `Text.isInfixOf` Text.pack message
         _ -> False
+
+    it "decodes complete element snapshots and distinguishes each property" $ do
+      let snapshot = ElementSnapshot "Heading" Nothing True False
+          encoded = "{\"elementText\":\"Heading\",\"elementValue\":null,\"elementVisible\":true,\"elementFocused\":false}"
+      expectAll
+        ( ((Aeson.eitherDecode encoded :: Either String ElementSnapshot) `shouldBe` Right snapshot)
+            :| [ elementText snapshot `shouldBe` "Heading",
+                 elementValue snapshot `shouldBe` Nothing,
+                 elementVisible snapshot `shouldBe` True,
+                 elementFocused snapshot `shouldBe` False,
+                 snapshot `shouldNotBe` snapshot {elementText = "Other"},
+                 snapshot `shouldNotBe` snapshot {elementValue = Just ""},
+                 snapshot `shouldNotBe` snapshot {elementVisible = False},
+                 snapshot `shouldNotBe` snapshot {elementFocused = True},
+                 show [snapshot] `shouldContain'` "elementValue = Nothing",
+                 (Aeson.eitherDecode "{}" :: Either String ElementSnapshot) `shouldSatisfy` \case
+                   Left message -> "elementText" `Text.isInfixOf` Text.pack message
+                   Right _ -> False
+               ]
+        )
 
     it "covers public metric, config, and error instances" $ do
       let metrics = BrowserMetrics 1 2 3
@@ -460,6 +506,7 @@ spec = do
           "const mode = process.argv[2];",
           "const enteredPath = process.argv[3];",
           "let textAttempts = 0;",
+          "let snapshotAttempts = 0;",
           "const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });",
           "function reply(id, status, value, message, artifacts = []) {",
           "  process.stdout.write(JSON.stringify({ protocol: 1, id, status, value, message, artifacts }) + '\\n');",
@@ -500,9 +547,13 @@ spec = do
           "      if (mode === 'observe-null-text') { reply(request.id, 'ok', [null]); continue; }",
           "      if (mode === 'observe-bad-type') { reply(request.id, 'ok', [123]); continue; }",
           "      if (mode === 'metrics-invalid') { reply(request.id, 'ok', [{ invalid: true }]); continue; }",
+          "      snapshotAttempts++;",
+          "      if (mode === 'snapshot-missing-once' && snapshotAttempts > 1) { reply(request.id, 'error', null, 'unexpected retry'); continue; }",
+          "      const snapshotMissing = mode.startsWith('snapshot-missing') || (mode === 'snapshot-appears' && snapshotAttempts === 1) || (mode === 'snapshot-disappears' && snapshotAttempts > 1);",
           "      const values = request.observations.map((observation) => {",
           "        switch (observation.kind) {",
           "          case 'textContent': return mode === 'never-match' || mode === 'never-match-artifacts' || (mode === 'retry' && textAttempts++ === 0) ? 'Loading' : 'Home';",
+          "          case 'elementSnapshot': return snapshotMissing ? null : { elementText: mode === 'snapshot-null-text' ? null : 'Home', elementValue: 'person@example.com', elementVisible: true, elementFocused: true };",
           "          case 'inputValue': return 'person@example.com';",
           "          case 'attributeValue': return 'false';",
           "          case 'focused': case 'visible': return true;",

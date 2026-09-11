@@ -557,9 +557,8 @@ spec =
               paste codeField "123"
               click (byRole Button `named` "Confirm authenticator")
               assertAllObserved do
-                inputValue codeField `shouldEqual` ""
+                $([|observeElement codeField|] `matchesPattern` [p|Just ElementSnapshot {elementValue = Just "", elementFocused = True}|])
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
-                isFocused codeField `satisfies` id
 
       aroundWith (withBrowserServer (\config -> buildAppWithDatabaseAndAccountWorkflowAndSecurity config defaultPageRepository pendingProfileWorkflow pendingProfileE2eSecurity)) $
         describe "pending profile" $ do

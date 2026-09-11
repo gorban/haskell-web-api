@@ -4,10 +4,12 @@ module TestCore.Browser.Types
   ( BrowserConfig (..),
     BrowserMetrics (..),
     BrowserRunnerError (..),
+    ElementSnapshot (..),
   )
 where
 
 import Data.Aeson (FromJSON (parseJSON), withObject, (.:))
+import Data.Text (Text)
 import System.Exit (ExitCode)
 
 data BrowserConfig = BrowserConfig
@@ -44,6 +46,27 @@ instance FromJSON BrowserMetrics where
       <$> value .: "enhancedNavigationFetchCount"
       <*> value .: "hardNavigationCount"
       <*> value .: "mutationRequestCount"
+
+-- | Properties read together from one element. Text is exact descendant text;
+-- visibility follows the Chromium Playwright visibility contract, not opacity
+-- or viewport intersection. Absence belongs to the surrounding Maybe, not text.
+-- elementValue is present for inputs, textareas and selects; other elements
+-- have no form-control value. An empty control value is Just empty Text.
+data ElementSnapshot = ElementSnapshot
+  { elementText :: Text,
+    elementValue :: Maybe Text,
+    elementVisible :: Bool,
+    elementFocused :: Bool
+  }
+  deriving (Eq, Show)
+
+instance FromJSON ElementSnapshot where
+  parseJSON = withObject "ElementSnapshot" $ \value ->
+    ElementSnapshot
+      <$> value .: "elementText"
+      <*> value .: "elementValue"
+      <*> value .: "elementVisible"
+      <*> value .: "elementFocused"
 
 data BrowserRunnerError
   = BrowserRunnerLaunchError String
