@@ -15,7 +15,7 @@ import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb qualified
 import HarchWeb.Account qualified as Account
 import HarchWeb.Api (ApiRequestDecodeResult (..), apiRequestDataFromWaiRequest, runRequestCodec)
-import HarchWeb.Email (mkEmailAddress)
+import HarchWeb.Email (emailAddressText, mkEmailAddress)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Password qualified as Password
 import HarchWeb.Session (OpaqueSession (..), generateSessionId)
@@ -32,11 +32,12 @@ import WebApi (buildApp, run)
 import WebApi.Account (AccountStore (createPendingAccount), CreatePendingAccountOutcome (PendingAccountDeliveryClaimed), PendingAccount (..), defaultPendingRegistrationStoragePolicy)
 import WebApi.AccountJwt (AccountJwtIssuer (..), AccountJwtRawConfiguration (..), accountJwtIssuerFromRuntime, loadAccountJwtRuntime, mkAccountJwtConfiguration)
 import WebApi.Api.Endpoints (noApiRequestFields)
-import WebApi.App (buildAppWithDatabase, buildAppWithDatabaseAndAccountWorkflowAndSecurity, buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwtRuntime, buildRuntimeAppWithAccountJwt, buildRuntimeAppWithDatabaseBuilder, otlpExportFailureMessage, runWithConfig, unavailableAccountWorkflow)
+import WebApi.App (buildAppWithDatabase, buildAppWithDatabaseAndAccountWorkflow, buildAppWithDatabaseAndAccountWorkflowAndSecurity, buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwtRuntime, buildRuntimeAppWithAccountJwt, buildRuntimeAppWithDatabaseBuilder, otlpExportFailureMessage, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Observability (runOtlpExportAction)
-import WebApi.AppEffect (AccountWorkflow (accountWorkflowEmailDelivery, accountWorkflowJwtIssuer, accountWorkflowSessionStore, accountWorkflowStore))
+import WebApi.AppEffect (AccountWorkflow (accountWorkflowCredentialStore, accountWorkflowEmailDelivery, accountWorkflowJwtIssuer, accountWorkflowLoginAttemptStore, accountWorkflowPasswordWorkGate, accountWorkflowSessionStore, accountWorkflowStore))
 import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), AppMode (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), TlsCertificateSource (..), TlsConfig (..), databasePoolCapacity, defaultAppConfig, defaultAppEnvironmentConfig, defaultTlsPolicy)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), PageRepository (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed, defaultPageRepository)
+import WebApi.Login (AccountCredential (..), AccountCredentialStore (..))
 import WebApi.Page (renderPage)
 import WebApi.Postgres.Testing (closePostgresPool, newPostgresPool, runPostgresMigrationsForRuntime, runPostgresSeed)
 import WebApi.Response (selectResponse)
@@ -224,6 +225,99 @@ spec = do
                        `shouldSatisfy` Text.isInfixOf ("\"requestId\":\"" <> TextEncoding.decodeUtf8 requestId <> "\"")
                    ]
             )
+
+    it "joins enhanced known- and unknown-account login rejections to their own response IDs" $ do
+      let knownCredential =
+            AccountCredential
+              { accountCredentialId = accountId,
+                accountCredentialPasswordHash =
+                  case Password.hashPasswordWithSalt Password.defaultPasswordHashingPolicy (ByteString.replicate 16 8) (Password.mkPassword "correct horse battery staple") of
+                    Nothing -> error "expected deterministic password hash"
+                    Just passwordHash -> passwordHash,
+                accountCredentialEmailVerified = True
+              }
+          accountWorkflow =
+            unavailableAccountWorkflow
+              { accountWorkflowCredentialStore =
+                  AccountCredentialStore
+                    { findAccountCredentialByEmail = \email ->
+                        if emailAddressText email == "known@example.test"
+                          then pure (Right (Just knownCredential))
+                          else pure (Right Nothing),
+                      findAccountCredentialByUsername = const (pure (Right Nothing)),
+                      replacePasswordHashIfCurrent = \_ _ _ -> pure (Right False)
+                    },
+                accountWorkflowLoginAttemptStore = permissiveLoginAttemptStore,
+                accountWorkflowPasswordWorkGate = testPasswordWorkGate
+              }
+          loginApplication =
+            buildAppWithDatabaseAndAccountWorkflow
+              defaultAppConfig
+              defaultPageRepository
+              accountWorkflow
+      waiApplication <- HarchWeb.toWaiApplication loginApplication
+      loginPage <- performWaiRequest (pure waiApplication) (waiRequest ["login"])
+      csrfCookie <-
+        case lookup "Set-Cookie" (Wai.responseHeaders loginPage) of
+          Nothing -> expectationFailure "login page did not issue a CSRF cookie" >> pure ByteString.empty
+          Just value -> pure (ByteString.takeWhile (/= 59) value)
+      let csrfToken = ByteString.drop (ByteString.length "__Host-harch-csrf=") csrfCookie
+          loginAction identifier = do
+            actionBodyChunks <-
+              newIORef
+                [ ByteString.intercalate
+                    "&"
+                    [ "identifier=" <> Http.urlEncode True identifier,
+                      "password=wrong-password",
+                      "proof=totp",
+                      "totpCode=123456",
+                      "_harch_csrf=" <> Http.urlEncode True csrfToken
+                    ]
+                ]
+            performWaiRequest
+              (pure waiApplication)
+              ( Wai.setRequestBodyChunks
+                  (nextRequestBodyChunk actionBodyChunks)
+                  ( (waiRequest ["login"])
+                      { Wai.requestMethod = "POST",
+                        Wai.requestHeaders =
+                          [ ("X-Harch-Action", "1"),
+                            (Http.hContentType, "application/x-www-form-urlencoded"),
+                            ("Host", "example.test"),
+                            ("Origin", "http://example.test"),
+                            ("Cookie", csrfCookie)
+                          ]
+                      }
+                  )
+              )
+          responseRequestId response =
+            case lookup "X-Request-ID" (Wai.responseHeaders response) of
+              Nothing -> expectationFailure "login response lacked X-Request-ID" >> pure Text.empty
+              Just rawRequestId ->
+                case TextEncoding.decodeUtf8' rawRequestId of
+                  Left failure -> expectationFailure (show failure) >> pure Text.empty
+                  Right requestId -> do
+                    HarchWeb.mkRequestId requestId `shouldSatisfy` isJust
+                    pure requestId
+      knownResponse <- loginAction "known@example.test"
+      unknownResponse <- loginAction "unknown@example.test"
+      knownRequestId <- responseRequestId knownResponse
+      unknownRequestId <- responseRequestId unknownResponse
+      knownBody <- readResponseBody knownResponse
+      unknownBody <- readResponseBody unknownResponse
+      let normalizeRejectedLoginBody requestId identifier =
+            Text.replace identifier "<submitted-identifier>"
+              . Text.replace requestId "<request-id>"
+      expectAll
+        ( (Wai.responseStatus knownResponse `shouldBe` Http.status422)
+            :| [ Wai.responseStatus unknownResponse `shouldBe` Http.status422,
+                 knownRequestId `shouldNotBe` unknownRequestId,
+                 knownBody `shouldSatisfy` Text.isInfixOf ("\"requestId\":\"" <> knownRequestId <> "\""),
+                 unknownBody `shouldSatisfy` Text.isInfixOf ("\"requestId\":\"" <> unknownRequestId <> "\""),
+                 normalizeRejectedLoginBody knownRequestId "known@example.test" knownBody
+                   `shouldBe` normalizeRejectedLoginBody unknownRequestId "unknown@example.test" unknownBody
+               ]
+        )
 
     it "stores the default request context used by the WAI adapter" $
       HarchWeb.defaultRequestContext pureApplication `shouldBe` defaultRequestContext
