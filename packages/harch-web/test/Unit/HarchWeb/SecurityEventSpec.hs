@@ -9,7 +9,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import HarchWeb
 
-spec = do
+spec =
   describe "security event contracts" $ do
     it "constructs root-owned route observation from declarations rather than request text" $ do
       invalidModuleName <- newIORef "Root/Web" >>= readIORef

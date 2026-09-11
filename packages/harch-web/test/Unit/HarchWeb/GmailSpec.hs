@@ -15,7 +15,7 @@ import Network.Socket qualified as Socket
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
 
-spec = do
+spec =
   describe "deliverGmailApiEmailWithRunner" $ do
     it "posts a base64url RFC 2822 message with a delegated bearer token" $ do
       receivedRequest <- newIORef Nothing

@@ -13,8 +13,8 @@ import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Secret
 
 spec = do
-  describe "SecretEncryptionKey" $ do
-    it "accepts exactly one 256-bit base64url key" $ do
+  describe "SecretEncryptionKey" $
+    it "accepts exactly one 256-bit base64url key" $
       expectAll
         ( (isJust (mkSecretEncryptionKey encodedKey) `shouldBe` True)
             :| [ isNothing (mkSecretEncryptionKey "not-base64") `shouldBe` True,

@@ -158,7 +158,7 @@ spec =
                ]
         )
 
-    it "prepares ACME runtime plans as manual TLS listeners after certificate acquisition" $ do
+    it "prepares ACME runtime plans as manual TLS listeners after certificate acquisition" $
       withSystemTempDirectory "harch-web-certbot-shared" $ \sharedDirectory ->
         withFakeCertbotScript
           [ "#!/bin/sh",

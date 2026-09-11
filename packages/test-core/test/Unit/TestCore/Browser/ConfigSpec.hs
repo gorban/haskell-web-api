@@ -13,7 +13,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.HUnit.Lang (FailureReason (Reason), HUnitFailure (HUnitFailure))
 import TestCore.Browser
 
-spec = do
+spec =
   describe "browser configuration" $ do
     it "uses the bundled Playwright runner defaults" $
       expectAll
@@ -48,7 +48,7 @@ spec = do
               browserArtifactDirectory = "artifacts/browser"
             }
 
-    it "accepts the supported boolean aliases and rejects invalid overrides" $ do
+    it "accepts the supported boolean aliases and rejects invalid overrides" $
       expectAll
         ( (parseBrowserConfig [] `shouldBe` Right defaultPlaywrightBrowserConfig)
             :| [ fmap browserHeadless (parseBrowserConfig [("TEST_CORE_BROWSER_HEADLESS", "true")]) `shouldBe` Right True,

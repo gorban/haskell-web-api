@@ -16,7 +16,7 @@ requestIdFixture =
     Nothing -> error "test request identifier must be canonical UUIDv4"
     Just requestId -> requestId
 
-spec = do
+spec =
   describe "config model values" $ do
     it "can represent manual, shared, and certbot-backed ACME certificates plus exporter endpoints" $ do
       let certbotConfig =
@@ -516,13 +516,14 @@ spec = do
       SecondRoute `shouldNotBe` NotFoundRoute
 
     it "covers high-precedence show rendering for the remaining public types" $ do
-      let shouldBeParenthesized rendered = do
-            case rendered of
-              '(' : rest ->
-                case reverse rest of
-                  ')' : _ -> pure ()
-                  _ -> expectationFailure "expected parenthesized rendering"
-              _ -> expectationFailure "expected parenthesized rendering"
+      let shouldBeParenthesized rendered =
+            ( case rendered of
+                '(' : rest ->
+                  case reverse rest of
+                    ')' : _ -> pure ()
+                    _ -> expectationFailure "expected parenthesized rendering"
+                _ -> expectationFailure "expected parenthesized rendering"
+            )
           certbotConfig =
             CertbotConfig
               { certbotExecutable = "certbot",

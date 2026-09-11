@@ -7,7 +7,7 @@ import Data.Text (Text)
 import WebApi.App (unavailableAccountWorkflow)
 import WebApi.AppEffect qualified as AppEffect
 
-spec = do
+spec =
   describe "WebApi.AppEffect" $ do
     it "renders every closed failure code to its stable telemetry value" $
       map

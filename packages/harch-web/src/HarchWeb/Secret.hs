@@ -84,7 +84,7 @@ encryptSecretWithNonce (SecretEncryptionKey _ key) (EncryptionNonce nonce) (Secr
 -- malformed or unsupported envelopes so callers can log private diagnostics
 -- without exposing the cause in a public response.
 decryptSecret :: SecretEncryptionKey -> Text -> CryptoFailable (Either SecretDecryptionError ByteString.ByteString)
-decryptSecret (SecretEncryptionKey _ key) encodedEnvelope = do
+decryptSecret (SecretEncryptionKey _ key) encodedEnvelope =
   case first (const SecretDecryptionMalformedEnvelope) (Base64Url.decodeUnpadded (TextEncoding.encodeUtf8 encodedEnvelope)) >>= splitEnvelope of
     Left failure -> pure (Left failure)
     Right (nonce, authenticationTag, ciphertext) -> decrypt key nonce authenticationTag ciphertext

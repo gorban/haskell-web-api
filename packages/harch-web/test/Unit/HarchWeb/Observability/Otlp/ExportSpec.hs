@@ -261,7 +261,7 @@ spec = do
               homePageDbDuration,
               healthCheckDbDuration
               ]
-            ) -> do
+            ) ->
               expectAll
                 ( (rootDuration `shouldBe` 5000000)
                     :| [ rootEnd - rootStart `shouldBe` rootDuration,
@@ -511,7 +511,7 @@ spec = do
             }
           (Observability.buildConnectionObservability "CONNECTION malformed OTLP endpoint" [])
       case exportResult of
-        Left failure@OtlpInvalidEndpoint -> do
+        Left failure@OtlpInvalidEndpoint ->
           renderOtlpExportFailure failure `shouldBe` "OTLP endpoint is invalid"
         Left otherFailure -> expectationFailure ("expected invalid OTLP endpoint category, got: " <> Text.unpack (renderOtlpExportFailure otherFailure))
         Right () -> expectationFailure "expected malformed OTLP endpoint to fail before transport"

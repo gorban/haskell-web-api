@@ -205,8 +205,8 @@ prepareCertbotManualTlsBindPlan webrootStore =
 -- the second reference — evaluating an already-WHNF thunk — does not.
 {-# ANN prepareCertbotManualTlsBindPlanWithLogger ("HLint: ignore Redundant $!" :: String) #-}
 prepareCertbotManualTlsBindPlanWithLogger :: CertbotWebrootStore -> (Text -> IO ()) -> RuntimeAcmeBindPlan -> CertbotConfig -> IO (Maybe ManualTlsBindPlan, FilePath)
-prepareCertbotManualTlsBindPlanWithLogger webrootStore applicationLogger runtimeAcmePlan certbotConfig = do
-  prepareCertbotManualTlsBindPlanWithOptionalLogger webrootStore (Just applicationLogger) runtimeAcmePlan certbotConfig
+prepareCertbotManualTlsBindPlanWithLogger webrootStore applicationLogger =
+  prepareCertbotManualTlsBindPlanWithOptionalLogger webrootStore (Just applicationLogger)
 
 -- | The public preparation helper has no application logger.  Keeping that
 -- absence explicit avoids manufacturing a no-op callback solely to satisfy a

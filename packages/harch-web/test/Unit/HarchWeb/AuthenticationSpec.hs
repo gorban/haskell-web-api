@@ -405,7 +405,7 @@ spec = do
                          AuthenticationEvaluated (AuthenticationEvent AuthenticationDependencyUnavailable (Just (requiredFailureCode "identity.unavailable")))
                        ]
 
-  describe "scope authorization" $ do
+  describe "scope authorization" $
     it "requires every required scope or at least one alternative" $ do
       let authorize :: AuthorizationInterpreter [Text] (ScopeRequirement Text) ScopeAuthorizationDenial
           authorize = scopeAuthorizationInterpreter id

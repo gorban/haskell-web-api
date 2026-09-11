@@ -28,8 +28,7 @@ spec = beforeAll requirePlaywrightBrowserConfig $ parallel $ describe "browser t
   it "fails for a missing element instead of accepting empty text" $ \browser -> do
     result <- runBrowserScenario browser {browserTimeoutMilliseconds = 1000} do
       visit fixtureUrl
-      assertAllObserved do
-        css "#missing" `shouldHaveText` ""
+      assertAllObserved $ css "#missing" `shouldHaveText` ""
     result `shouldSatisfy` \case
       Left (BrowserCommandFailed _ message _) -> "#missing" `Text.isInfixOf` Text.pack message && "Timeout" `Text.isInfixOf` Text.pack message
       _ -> False
@@ -37,8 +36,7 @@ spec = beforeAll requirePlaywrightBrowserConfig $ parallel $ describe "browser t
   it "fails for ambiguous elements instead of choosing one" $ \browser -> do
     result <- runBrowserScenario browser do
       visit fixtureUrl
-      assertAllObserved do
-        css ".duplicate" `shouldHaveText` "same"
+      assertAllObserved $ css ".duplicate" `shouldHaveText` "same"
     result `shouldSatisfy` \case
       Left (BrowserCommandFailed _ message _) -> "strict mode violation" `Text.isInfixOf` Text.pack message
       _ -> False

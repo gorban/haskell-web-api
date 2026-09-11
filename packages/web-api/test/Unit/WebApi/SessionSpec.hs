@@ -9,7 +9,7 @@ import HarchWeb.Time (UnixTimeNanoseconds)
 import Unit.WebApi.TestSupport (accountId, shouldReturnEqual)
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..), issueAccountSession)
 
-spec = do
+spec =
   describe "account-session issuance" $ do
     it "generates and persists an opaque session after authentication succeeds" $ do
       savedSessionReference <- newIORef Nothing

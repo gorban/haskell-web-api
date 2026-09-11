@@ -9,9 +9,9 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Postgres.DatabaseChange
 
-spec = do
+spec =
   describe "Postgres.DatabaseChange" $ do
-    it "validates bounded IDs and ledger identifiers before SQL construction" $ do
+    it "validates bounded IDs and ledger identifiers before SQL construction" $
       expectAll
         ( (mkDatabaseChangeId "initial-schema" `shouldBe` Right (requiredId "initial-schema"))
             :| [ mkDatabaseChangeId "a_b.c-2" `shouldBe` Right (requiredId "a_b.c-2"),

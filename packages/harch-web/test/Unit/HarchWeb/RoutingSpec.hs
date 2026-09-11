@@ -221,7 +221,7 @@ existingSpec = do
           }
       prefixRouteLocation emptyPathPrefix location `shouldBe` location
 
-  describe "mountRouteCodec" $ do
+  describe "mountRouteCodec" $
     it "projects context one way and owns only its typed structured prefix" $
       expectAll
         ( ( parseRoute mountedCatalogCodec 42 (testRouteLocation "/catalog/items")
@@ -285,7 +285,7 @@ existingSpec = do
       showsPrec 11 (RouteFamilyB RoutingSecondOnlyRoute :: RouteFamily RoutingTestRoute SecondFamilyRoute) "" `shouldSatisfy` not . null
       showList routes "" `shouldSatisfy` not . null
 
-  describe "mapRouteParseResult" $ do
+  describe "mapRouteParseResult" $
     it "changes only a parsed route and preserves miss and malformed outcomes" $ do
       let mapTestResult :: RouteParseResult RoutingTestRoute RoutingTestContext -> RouteParseResult (RouteFamily RoutingTestRoute SecondFamilyRoute) RoutingTestContext
           mapTestResult = mapRouteParseResult RouteFamilyA

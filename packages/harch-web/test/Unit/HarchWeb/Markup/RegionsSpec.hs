@@ -13,7 +13,7 @@ spec =
           quoted = [harch|<section><Region value={statusRegion} /></section>|]
       renderHtml quoted `shouldBe` "<section><p id=\"status\" data-harch-region=\"true\" role=\"status\">Ready</p></section>"
 
-    it "makes a region's SSR root and replacement root derive from the same identifier" $ do
+    it "makes a region's SSR root and replacement root derive from the same identifier" $
       case Markup.mkElementId "subscription-result" of
         Nothing -> expectationFailure "expected the literal region ID to be valid"
         Just resultElementId -> do
@@ -27,7 +27,7 @@ spec =
           renderedRegion
             `shouldBe` "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"status\">Ready</p>"
 
-    it "keeps framework-owned region attributes on repeated replacements" $ do
+    it "keeps framework-owned region attributes on repeated replacements" $
       case (Markup.mkElementId "subscription-result", Markup.mkElementId "attempted-override") of
         (Just regionElementId, Just overrideElementId) -> do
           let renderedPatch =

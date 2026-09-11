@@ -110,8 +110,8 @@ smtpConfigInput host port heloName sender authentication =
     }
 
 spec = do
-  describe "EmailAddress" $ do
-    it "accepts safe mailbox values and rejects ambiguous envelope addresses" $ do
+  describe "EmailAddress" $
+    it "accepts safe mailbox values and rejects ambiguous envelope addresses" $
       expectAll
         ( (emailAddressText sampleRecipient `shouldBe` "ada@example.test")
             :| [ mkEmailAddress "A1._+-@Example-1.test" `shouldSatisfy` (/= Nothing),
@@ -129,8 +129,8 @@ spec = do
                ]
         )
 
-  describe "EmailMessage" $ do
-    it "keeps header injection out of application-authored messages" $ do
+  describe "EmailMessage" $
+    it "keeps header injection out of application-authored messages" $
       expectAll
         ( (emailMessageRecipient sampleMessage `shouldBe` sampleRecipient)
             :| [ emailMessageSubject sampleMessage `shouldBe` "Account verification",
@@ -145,7 +145,7 @@ spec = do
                ]
         )
 
-  describe "verificationEmail" $ do
+  describe "verificationEmail" $
     it "renders localized English and Spanish verification content" $ do
       let englishEmail = verificationEmail EmailEnglish sampleRecipient "https://account.example.test/verify/en"
           spanishEmail = verificationEmail EmailSpanish sampleRecipient "https://account.example.test/verify/es"
@@ -163,8 +163,8 @@ spec = do
                ]
         )
 
-  describe "SmtpConfig" $ do
-    it "requires a resolved host, nonzero port, and header-safe HELO name" $ do
+  describe "SmtpConfig" $
+    it "requires a resolved host, nonzero port, and header-safe HELO name" $
       expectAll
         ( (isJust (mkSmtpConfig (smtpConfigInput "127.0.0.1" 2525 "account.example.test" sampleSender Nothing)) `shouldBe` True)
             :| [ isNothing (mkSmtpConfig (smtpConfigInput "" 2525 "account.example.test" sampleSender Nothing)) `shouldBe` True,
@@ -214,7 +214,7 @@ spec = do
         let config = required "rejecting SMTP config" (mkSmtpConfig (smtpConfigInput "127.0.0.1" port "account.example.test" sampleSender Nothing))
         result <- try (deliverSmtpEmail config sampleMessage) :: IO (Either IOException ())
         case result of
-          Left failure -> do
+          Left failure ->
             expectAll
               ( (displayException failure `shouldContain` "Unexpected SMTP response status: \"500\"")
                   :| [ displayException failure `shouldNotContain` "smtp-response-line-sentinel",

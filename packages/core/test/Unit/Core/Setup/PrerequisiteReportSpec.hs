@@ -218,7 +218,7 @@ spec = do
                   )
             }
 
-  describe "renderSetupPrerequisiteReport" $ do
+  describe "renderSetupPrerequisiteReport" $
     it "renders load failures, reachability outcomes, and autostart hints deterministically" $ do
       let loadError =
             PrerequisiteConfig.SetupPrerequisiteConfigParseError
@@ -717,8 +717,7 @@ spec = do
                 ]
             )
           output <-
-            withCurrentDirectory tempDirectory $
-              captureStdout PrerequisiteReport.reportSetupPrerequisites
+            withCurrentDirectory tempDirectory $ captureStdout PrerequisiteReport.reportSetupPrerequisites
           output
             `shouldBe` unlines
               [ "Setup: Database prerequisite reachable at "
@@ -766,8 +765,7 @@ spec = do
                     ]
                 )
               output <-
-                withCurrentDirectory tempDirectory $
-                  captureStdout PrerequisiteReport.reportSetupPrerequisites
+                withCurrentDirectory tempDirectory $ captureStdout PrerequisiteReport.reportSetupPrerequisites
               output
                 `shouldBe` unlines
                   [ "Setup: Database prerequisite unreachable at "
@@ -799,8 +797,7 @@ spec = do
                       ]
                   )
                 output <-
-                  withCurrentDirectory tempDirectory $
-                    captureStdout PrerequisiteReport.reportSetupPrerequisites
+                  withCurrentDirectory tempDirectory $ captureStdout PrerequisiteReport.reportSetupPrerequisites
                 output
                   `shouldBe` unlines
                     [ "Setup: Database prerequisite reachable at "

@@ -45,7 +45,7 @@ import TestCore.Wai ()
 import Text.Read ()
 import Unit.HarchWeb.TestSupport ()
 
-spec = do
+spec =
   describe "PathPrefix and UrlPath" $ do
     it "keeps both path roles distinct while applying and stripping prefixes" $
       let prefix = validPathPrefix "/app"

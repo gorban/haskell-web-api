@@ -11,7 +11,7 @@ import HarchWeb.Password (defaultPasswordHashingPolicy)
 import HarchWeb.RecoveryCode
 
 spec = do
-  describe "RecoveryCode" $ do
+  describe "RecoveryCode" $
     it "canonicalizes user-entered hexadecimal codes and generates 80-bit codes" $ do
       expectAll
         ( (recoveryCodeText knownCode `shouldBe` "12345-6789A-BCDEF-01234")
@@ -31,7 +31,7 @@ spec = do
       generatedCode <- generateRecoveryCode
       fmap recoveryCodeText (mkRecoveryCode (recoveryCodeText generatedCode)) `shouldBe` Just (recoveryCodeText generatedCode)
 
-  describe "RecoveryCodeHash" $ do
+  describe "RecoveryCodeHash" $
     it "stores an Argon2id verifier without retaining the recovery code" $ do
       let maybeHash = hashRecoveryCodeWithSalt defaultPasswordHashingPolicy (ByteString.replicate 16 1) knownCode
           hashValue = required maybeHash

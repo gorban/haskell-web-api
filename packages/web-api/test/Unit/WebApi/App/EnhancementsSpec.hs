@@ -18,7 +18,7 @@ import WebApi.Page (renderPage)
 import WebApi.PageShell qualified as LegacyPageShell
 import WebApi.Route (AppRoute (..), defaultRequestContext, routeMetadata)
 
-spec = do
+spec =
   describe "page shell integration" $ do
     it "keeps every page route's path, title, and enhancements in one metadata table" $
       map (metadataFields . routeMetadata) [HomeRoute, SecondRoute, SpacesRoute, RegistrationRoute, EmailVerificationRoute, MfaEnrollmentRoute, LoginRoute, LogoutRoute, ProfileRoute, LanguageRoute, HelpRoute, NotFoundRoute, StatusApiRoute]

@@ -15,8 +15,7 @@ spec = beforeAll requirePlaywrightBrowserConfig $ parallel $ describe "browser e
     runBrowserSpec browser {browserTimeoutMilliseconds = 60000} do
       visit fixtureUrl
       _ <- runPageScript "window.snapshotStarted = performance.now(); true"
-      assertAllObserved do
-        $([|observeElement (css "#missing")|] `matchesPattern` [p|Nothing|])
+      assertAllObserved $ $([|observeElement (css "#missing")|] `matchesPattern` [p|Nothing|])
       elapsed <- runPageScript "performance.now() - window.snapshotStarted"
       -- A generous bound distinguishes immediate success from waiting out the
       -- 60-second assertion timeout without measuring browser startup speed.
@@ -35,7 +34,7 @@ spec = beforeAll requirePlaywrightBrowserConfig $ parallel $ describe "browser e
         $([|observeElement (css "#nested")|] `matchesPattern` [p|Just ElementSnapshot {elementText = "  beforehiddenafter  "}|])
       press (css "input") "ControlOrMeta+A"
       press (css "input") "Backspace"
-      assertAllObserved do
+      assertAllObserved $
         $([|observeElement (css "input")|] `matchesPattern` [p|Just ElementSnapshot {elementValue = Just "", elementFocused = True}|])
 
   it "keeps hidden elements present and agrees with Playwright visibility" $ \browser ->
@@ -55,14 +54,13 @@ spec = beforeAll requirePlaywrightBrowserConfig $ parallel $ describe "browser e
       visit fixtureUrl
       _ <- runPageScript "document.querySelector('#shadow-host').attachShadow({ mode: 'open' }).innerHTML = '<input id=shadow-input>'; true"
       fill (css "#shadow-input") "shadow value"
-      assertAllObserved do
+      assertAllObserved $
         $([|observeElement (css "#shadow-input")|] `matchesPattern` [p|Just ElementSnapshot {elementValue = Just "shadow value", elementFocused = True}|])
 
   it "rejects ambiguous locators instead of treating them as absence" $ \browser -> do
     result <- runBrowserScenario browser do
       visit fixtureUrl
-      assertAllObserved do
-        observeElement (css ".duplicate") `shouldEqual` Nothing
+      assertAllObserved $ observeElement (css ".duplicate") `shouldEqual` Nothing
     result `shouldSatisfy` \case
       Left (BrowserCommandFailed _ message _) -> all (`Text.isInfixOf` Text.pack message) ["ambiguous snapshot locator", ".duplicate", "2 elements"]
       _ -> False
@@ -70,8 +68,7 @@ spec = beforeAll requirePlaywrightBrowserConfig $ parallel $ describe "browser e
   it "keeps invalid selectors as command failures" $ \browser -> do
     result <- runBrowserScenario browser do
       visit fixtureUrl
-      assertAllObserved do
-        observeElement (css "[") `shouldEqual` Nothing
+      assertAllObserved $ observeElement (css "[") `shouldEqual` Nothing
     result `shouldSatisfy` \case
       Left BrowserCommandFailed {} -> True
       _ -> False

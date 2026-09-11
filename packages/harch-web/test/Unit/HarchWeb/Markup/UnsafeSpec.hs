@@ -8,7 +8,7 @@ import HarchWeb.Markup qualified as Markup
 import HarchWeb.Markup.Unsafe qualified as Unsafe
 
 spec =
-  describe "HarchWeb.Markup.Unsafe" $ do
+  describe "HarchWeb.Markup.Unsafe" $
     it "escapes ordinary text and attribute values while leaving trusted fragments explicit" $ do
       let renderedHtml =
             Markup.renderHtml

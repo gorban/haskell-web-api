@@ -32,7 +32,7 @@ spec = do
             ("LISTENER_0_PORT", "6001")
           ]
 
-    it "rejects malformed override lines with the original line content" $ do
+    it "rejects malformed override lines with the original line content" $
       expectAll
         ( ( CoreConfig.parseConfigOverridesFile
               ( Text.unlines
@@ -49,7 +49,7 @@ spec = do
 
   describe "loadConfigOverridesFile" $ do
     it "returns no overrides when the file does not exist" $
-      withSystemTempDirectory "core-config" $ \tempDirectory -> do
+      withSystemTempDirectory "core-config" $ \tempDirectory ->
         CoreConfig.loadConfigOverridesFile (tempDirectory <> "/missing.overrides")
           `shouldReturn` Right []
 
@@ -115,7 +115,7 @@ spec = do
       CoreConfig.parsePositiveInt "PORT" "5001"
         `shouldBe` Right 5001
 
-    it "rejects zero, negatives, and non-numeric values" $ do
+    it "rejects zero, negatives, and non-numeric values" $
       expectAll
         ( (CoreConfig.parsePositiveInt "PORT" "0" `shouldBe` Left (CoreConfig.InvalidConfigValue "PORT" "0"))
             :| [ CoreConfig.parsePositiveInt "PORT" "-1" `shouldBe` Left (CoreConfig.InvalidConfigValue "PORT" "-1"),
@@ -124,19 +124,19 @@ spec = do
         )
 
   describe "parseNonNegativeInt" $ do
-    it "accepts zero and positive integers" $ do
+    it "accepts zero and positive integers" $
       expectAll
         ( (CoreConfig.parseNonNegativeInt "CACHE" "0" `shouldBe` Right 0)
             :| [CoreConfig.parseNonNegativeInt "CACHE" "60" `shouldBe` Right 60]
         )
 
-    it "rejects negatives and non-numeric values" $ do
+    it "rejects negatives and non-numeric values" $
       expectAll
         ( (CoreConfig.parseNonNegativeInt "CACHE" "-1" `shouldBe` Left (CoreConfig.InvalidConfigValue "CACHE" "-1"))
             :| [CoreConfig.parseNonNegativeInt "CACHE" "nope" `shouldBe` Left (CoreConfig.InvalidConfigValue "CACHE" "nope")]
         )
 
-  describe "parseBoolean" $ do
+  describe "parseBoolean" $
     -- Shape B per docs/design-guidance.md's CN decision record: these rows
     -- are interchangeable instances of one property ("parseBoolean handles
     -- this literal correctly"), not individually-named cases, so they stay
@@ -169,7 +169,7 @@ spec = do
       CoreConfig.parseDelimitedTexts "EMAILS" " , "
         `shouldBe` Left (CoreConfig.InvalidConfigValue "EMAILS" " , ")
 
-  describe "parseDelimitedTextsUnsafe" $ do
+  describe "parseDelimitedTextsUnsafe" $
     it "trims whitespace and removes empty entries" $
       CoreConfig.parseDelimitedTextsUnsafe ";" " first ; ; second ; "
         `shouldBe` ["first", "second"]
@@ -188,7 +188,7 @@ spec = do
             result `shouldBe` Left (CoreConfig.InvalidConfigEntry "OTLP_HEADERS" 2)
             show result `shouldNotContain` "otlp-header-sentinel"
 
-  describe "declaredIndices" $ do
+  describe "declaredIndices" $
     it "extracts sorted unique indices while ignoring malformed keys" $ do
       let entries =
             [ ("LISTENER_2_PORT", "5002"),
@@ -202,12 +202,12 @@ spec = do
             :| [CoreConfig.declaredIndices "SERVER_" entries `shouldBe` []]
         )
 
-  describe "indexedConfigKey" $ do
+  describe "indexedConfigKey" $
     it "builds indexed configuration keys predictably" $
       CoreConfig.indexedConfigKey "LISTENER" 3 "PORT"
         `shouldBe` "LISTENER_3_PORT"
 
-  describe "config error rendering" $ do
+  describe "config error rendering" $
     it "renders parse errors predictably" $ do
       let missingPort = CoreConfig.MissingConfigValue "PORT"
           invalidPort = CoreConfig.InvalidConfigValue "PORT" "abc"

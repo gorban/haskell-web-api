@@ -19,7 +19,7 @@ import HarchWeb.Totp (TotpCode, TotpSecret, generateTotpSecret, mkTotpCode, mkTo
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaConfirmationEnvironment (..), MfaEnrollmentConfirmation (..), MfaEnrollmentEnvironment (..), MfaEnrollmentError (..), MfaEnrollmentStart (..), confirmMfaEnrollment, confirmMfaEnrollmentWith, startMfaEnrollment)
 
-spec = do
+spec =
   describe "TOTP enrollment workflow" $ do
     it "uses secure production generators and hashers for enrollment confirmation" $ do
       encryptedSecretReference <- newIORef Nothing
@@ -102,7 +102,7 @@ spec = do
         else expectationFailure "expected the encrypted enrollment to be confirmed"
       confirmationCalls <- readIORef confirmationCallsReference
       case confirmationCalls of
-        [(receivedAccountId, hashes, now)] -> do
+        [(receivedAccountId, hashes, now)] ->
           expectAll
             ( (receivedAccountId `shouldBe` accountId)
                 :| [length hashes `shouldBe` 8, now `shouldBe` 500]

@@ -46,7 +46,7 @@ import TestCore.Wai (nextRequestBodyChunk, performWaiRequest, readResponseBody)
 import Text.Read ()
 import Unit.HarchWeb.TestSupport (TestRoute (DataRoute), defaultContext, defaultRequestPolicy, emptyStaticAssets, renderSampleResponse, sampleApplicationWithConfig)
 
-spec = do
+spec =
   describe "request-head limits" $ do
     it "keeps the default policy deliberately unbounded" $
       validateRequestHead

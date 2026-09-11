@@ -26,7 +26,7 @@ withListeningTcpEndpoint action = do
 
 spec = do
   describe "parseTracingEndpoint" $ do
-    it "parses supported tracing URLs into TCP endpoints" $ do
+    it "parses supported tracing URLs into TCP endpoints" $
       expectAll
         ( ( Prerequisite.parseTracingEndpoint "http://collector:4318/v1/traces"
               `shouldBe` Right Prerequisite.TcpEndpoint {Prerequisite.tcpEndpointHost = "collector", Prerequisite.tcpEndpointPort = 4318}
@@ -42,7 +42,7 @@ spec = do
                ]
         )
 
-    it "rejects malformed or unsupported tracing endpoints explicitly" $ do
+    it "rejects malformed or unsupported tracing endpoints explicitly" $
       expectAll
         ( (Prerequisite.parseTracingEndpoint "://collector:4318/v1/traces" `shouldBe` Left (Prerequisite.InvalidTracingEndpointFormat "://collector:4318/v1/traces"))
             :| [ Prerequisite.parseTracingEndpoint "collector:4318/v1/traces" `shouldBe` Left (Prerequisite.InvalidTracingEndpointFormat "collector:4318/v1/traces"),

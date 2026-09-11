@@ -288,7 +288,7 @@ pullAllStreamingChunks streamingRequest accumulated = do
 
 spec =
   describe "HarchWeb.Api.Endpoint" $ do
-    describe "apiRequestBodyByteLimit" $ do
+    describe "apiRequestBodyByteLimit" $
       it "accepts zero and ordinary byte limits, and rejects a Natural too large for the private Int reader" $
         expectAll
           ( (apiRequestBodyByteLimitValue <$> apiRequestBodyByteLimit 0 `shouldBe` Just 0)
@@ -542,7 +542,7 @@ spec =
                ]
         )
 
-    describe "apiResponseBodyToProtocolResponse" $ do
+    describe "apiResponseBodyToProtocolResponse" $
       it "converts status, headers, and body into the server protocol response" $
         apiResponseBodyToProtocolResponse
           ((apiTextResponse "hello") {apiResponseStatus = HttpTypes.status201, apiResponseHeaders = [("X-Example", testHeaderValue "present")]})

@@ -48,7 +48,7 @@ import Text.Read ()
 import Unit.HarchWeb.TestSupport (manualTlsCertificatePem, manualTlsPrivateKeyPem, sampleApplication, withManualTlsFiles, withUnusedLoopbackPort)
 
 spec = do
-  describe "startWarpRuntimeServerOnSocket" $ do
+  describe "startWarpRuntimeServerOnSocket" $
     it "surfaces startup exceptions that happen before the runtime server becomes ready" $
       startWarpRuntimeServerOnSocket (\_ -> ioError (userError "synthetic runtime startup failure"))
         `shouldThrow` (\exception -> show (exception :: IOError) == "user error (synthetic runtime startup failure)")
@@ -247,7 +247,7 @@ spec = do
               (const (pure ()))
           readIORef starterInvoked `shouldReturn` True
 
-  describe "startHttpRuntimeServerWithStarter" $ do
+  describe "startHttpRuntimeServerWithStarter" $
     it "closes the listener socket when HTTP startup throws before the server thread starts" $
       withUnusedLoopbackPort $ \httpPort -> do
         let endpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = httpPort}

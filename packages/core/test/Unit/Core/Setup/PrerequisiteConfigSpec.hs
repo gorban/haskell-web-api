@@ -24,7 +24,7 @@ withUnreadableFile filePath _fileContents action = do
   action `finally` removePathForcibly filePath
 
 spec = do
-  describe "defaultSetupPrerequisiteConfig" $ do
+  describe "defaultSetupPrerequisiteConfig" $
     it "matches the committed defaults and keeps selectors, equality, and rendering deterministic" $ do
       let setupConfig = PrerequisiteConfig.defaultSetupPrerequisiteConfig
       expectAll
@@ -121,7 +121,7 @@ spec = do
               PrerequisiteConfig.setupAutostartJaeger = True
             }
 
-    it "fails missing required values and invalid port or boolean entries explicitly" $ do
+    it "fails missing required values and invalid port or boolean entries explicitly" $
       expectAll
         ( (PrerequisiteConfig.parseSetupPrerequisiteConfig [] [] [] `shouldBe` Left (CoreConfig.MissingConfigValue "DATABASE_HOST"))
             :| [ PrerequisiteConfig.parseSetupPrerequisiteConfig [] [("DATABASE_HOST", "db.internal"), ("DATABASE_PORT", "nope")] [] `shouldBe` Left (CoreConfig.InvalidConfigValue "DATABASE_PORT" "nope"),
@@ -218,7 +218,7 @@ spec = do
                     not (Text.null errorMessage)
             _ -> False
 
-  describe "loadSetupPrerequisiteConfig" $ do
+  describe "loadSetupPrerequisiteConfig" $
     it "loads the default .env filenames from the current directory" $
       withSystemTempDirectory "setup-prerequisite-default-files" $ \tempDirectory -> do
         writeFile
@@ -248,7 +248,7 @@ spec = do
                   PrerequisiteConfig.setupAutostartJaeger = False
                 }
 
-  describe "SetupPrerequisiteConfigLoadError" $ do
+  describe "SetupPrerequisiteConfigLoadError" $
     it "keeps load error equality and rendering deterministic" $ do
       let fileLoadError =
             PrerequisiteConfig.SetupPrerequisiteOverridesFileError

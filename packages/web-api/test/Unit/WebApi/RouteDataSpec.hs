@@ -6,7 +6,7 @@ import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi.Database (DatabaseOperation (..), DatabaseSeed (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed)
 import WebApi.RouteData (RouteDataResult (..), RouteDataSelection (..), SecondRouteData (..), selectRouteData, selectRouteDataSelectionWithDatabase, selectRouteDataWithDatabase)
 
-spec = do
+spec =
   describe "selectRouteData" $ do
     it "selects second-route domain data for the rendered page" $ do
       let seededDatabaseEffect =

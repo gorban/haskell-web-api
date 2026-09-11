@@ -7,7 +7,7 @@ import HarchWeb.Acme.Json (jsonArrayBytes, jsonObjectBytes, jsonStringBytes)
 
 spec =
   describe "ACME JSON encoding helpers" $
-    it "encodes strings, arrays, and objects as JSON bytes" $ do
+    it "encodes strings, arrays, and objects as JSON bytes" $
       expectAll
         ( ( jsonStringBytes "\"\\\b\f\n\r\tplain"
               `shouldBe` "\"\\\"\\\\\\u0008\\u000c\\n\\r\\tplain\""

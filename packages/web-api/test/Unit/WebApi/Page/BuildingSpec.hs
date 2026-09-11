@@ -13,7 +13,7 @@ import WebApi.Route (AppRoute (..), defaultRequestContext)
 import WebApi.RouteData (RouteDataResult (..), SecondRouteData (..))
 
 spec = do
-  describe "buildCallToActionHref" $ do
+  describe "buildCallToActionHref" $
     it "preserves the route renderer's unsafe-URL diagnostic" $
       evaluate (buildCallToActionHref "javascript:alert(1)" `seq` ())
         `shouldThrow` \case
@@ -36,7 +36,7 @@ spec = do
                   }
             }
 
-    it "ports the spaces placeholder with its source-app English and Spanish copy" $ do
+    it "ports the spaces placeholder with its source-app English and Spanish copy" $
       buildPageModel spacesRequest
         `shouldReturn` SpacesPage
           SpacesPageModel

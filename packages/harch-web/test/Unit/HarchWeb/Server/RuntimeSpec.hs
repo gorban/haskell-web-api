@@ -1897,7 +1897,7 @@ spec = do
                 `shouldThrow` isAlreadyInUseError
               expectLoopbackPortReusable firstTlsPort
 
-  describe "runServerWithWaiMiddleware" $ do
+  describe "runServerWithWaiMiddleware" $
     it "composes the given Wai.Middleware in front of the rendered application" $
       withUnusedLoopbackPort $ \unusedPort ->
         withSystemTempFile "harch-web-middleware-output.txt" $ \_ outputHandle -> do

@@ -68,8 +68,7 @@ spec =
                   secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
               runBrowserSpec browser do
                 visit secondUrl
-                assertAllObserved do
-                  byRole Heading `shouldHaveText` "Second"
+                assertAllObserved $ byRole Heading `shouldHaveText` "Second"
                 visitWithoutScripts homeUrl
                 assertAllObserved do
                   currentUrl `shouldEqual` (HarchWeb.localServerBaseUrl server <> "/spaces")
@@ -115,11 +114,9 @@ spec =
                   closeControl = byRole Button `named` "Close language picker"
               runBrowserSpec browser do
                 visit secondUrl
-                assertAllObserved do
-                  attributeValue (css "html") "lang" `shouldEqual` Just "en"
+                assertAllObserved $ attributeValue (css "html") "lang" `shouldEqual` Just "en"
                 reload
-                assertAllObserved do
-                  attributeValue (css "html") "lang" `shouldEqual` Just "en"
+                assertAllObserved $ attributeValue (css "html") "lang" `shouldEqual` Just "en"
                 click languageTrigger
                 assertAllObserved do
                   attributeValue (css "#language-dialog") "open" `shouldEqual` Just ""
@@ -127,20 +124,16 @@ spec =
                 _ <-
                   runPageScript
                     "const dialog = document.querySelector('#language-dialog'); document.querySelector('nav a').focus(); dialog.dataset.testBackgroundContained = String(dialog.contains(document.activeElement)); true"
-                assertAllObserved do
+                assertAllObserved $
                   attributeValue (css "#language-dialog") "data-test-background-contained" `shouldEqual` Just "true"
                 press englishChoice "Tab"
-                assertAllObserved do
-                  isFocused spanishChoice `satisfies` id
+                assertAllObserved $ isFocused spanishChoice `satisfies` id
                 press spanishChoice "Tab"
-                assertAllObserved do
-                  isFocused closeControl `satisfies` id
+                assertAllObserved $ isFocused closeControl `satisfies` id
                 press closeControl "Tab"
-                assertAllObserved do
-                  isFocused englishChoice `satisfies` id
+                assertAllObserved $ isFocused englishChoice `satisfies` id
                 press (css "#language-dialog") "Escape"
-                assertAllObserved do
-                  isFocused languageTrigger `satisfies` id
+                assertAllObserved $ isFocused languageTrigger `satisfies` id
                 click languageTrigger
                 click spanishChoice
                 assertAllObserved do
@@ -149,14 +142,11 @@ spec =
                   byRole Status `shouldHaveText` "web-api: Language"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
                   attributeValue (css "html") "lang" `shouldEqual` Just "es"
-                assertAllObserved do
-                  attributeValue (css "#language-dialog") "open" `shouldEqual` Nothing
+                assertAllObserved $ attributeValue (css "#language-dialog") "open" `shouldEqual` Nothing
                 historyBack
-                assertAllObserved do
-                  attributeValue (css "html") "lang" `shouldEqual` Just "en"
+                assertAllObserved $ attributeValue (css "html") "lang" `shouldEqual` Just "en"
                 historyForward
-                assertAllObserved do
-                  attributeValue (css "html") "lang" `shouldEqual` Just "es"
+                assertAllObserved $ attributeValue (css "html") "lang" `shouldEqual` Just "es"
 
             it "keeps the Help FAB usable in a desktop narrow-width, layout-zoomed viewport and absent at its destination" $ \(browser, server) -> do
               let baseUrl = HarchWeb.localServerBaseUrl server
@@ -169,16 +159,14 @@ spec =
                 _ <-
                   runPageScript
                     "document.documentElement.style.zoom = '2'; const fab = document.querySelector('[data-help-fab]'); fab.focus(); const box = fab.getBoundingClientRect(); const overlaps = [...document.querySelectorAll('#app-main a, #app-main button, #app-main input, #app-main select')].filter((control) => control !== fab && !control.closest('dialog')).some((control) => { const other = control.getBoundingClientRect(); return box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top; }); fab.dataset.testGeometry = String(box.width >= 44 && box.height >= 44 && box.right <= window.innerWidth && box.bottom <= window.innerHeight && !overlaps && getComputedStyle(fab).outlineStyle !== 'none'); true"
-                assertAllObserved do
-                  attributeValue helpFab "data-test-geometry" `shouldEqual` Just "true"
+                assertAllObserved $ attributeValue helpFab "data-test-geometry" `shouldEqual` Just "true"
                 press helpFab "Enter"
                 assertAllObserved do
                   currentUrl `shouldEqual` helpUrl
                   byRole Heading `named` "Help and support" `shouldHaveText` "Help and support"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
                 _ <- runPageScript "document.body.dataset.testNoHelpFab = String(!document.querySelector('[data-help-fab]')); true"
-                assertAllObserved do
-                  attributeValue (css "body") "data-test-no-help-fab" `shouldEqual` Just "true"
+                assertAllObserved $ attributeValue (css "body") "data-test-no-help-fab" `shouldEqual` Just "true"
                 visitWithoutScripts secondUrl
                 press helpFab "Enter"
                 assertAllObserved do
@@ -196,8 +184,7 @@ spec =
                 _ <-
                   runPageScript
                     "const viewport = document.querySelector('meta[name=viewport]'); const fab = document.querySelector('[data-help-fab]'); const box = fab.getBoundingClientRect(); const policy = viewport && viewport.content === 'width=device-width, initial-scale=1'; document.body.dataset.testMobileViewport = String(policy && window.innerWidth === 320 && document.documentElement.scrollWidth <= window.innerWidth && box.width >= 44 && box.height >= 44 && box.right <= window.innerWidth && box.bottom <= window.innerHeight); true"
-                assertAllObserved do
-                  attributeValue (css "body") "data-test-mobile-viewport" `shouldEqual` Just "true"
+                assertAllObserved $ attributeValue (css "body") "data-test-mobile-viewport" `shouldEqual` Just "true"
                 press helpFab "Enter"
                 assertAllObserved do
                   currentUrl `shouldEqual` helpUrl
@@ -209,7 +196,7 @@ spec =
                 _ <-
                   runPageScript
                     "const viewport = document.querySelector('meta[name=viewport]'); const fab = document.querySelector('[data-help-fab]'); const box = fab.getBoundingClientRect(); document.body.dataset.testMobileHistoryViewport = String(viewport && viewport.content === 'width=device-width, initial-scale=1' && document.documentElement.scrollWidth <= window.innerWidth && box.width >= 44 && box.height >= 44); true"
-                assertAllObserved do
+                assertAllObserved $
                   attributeValue (css "body") "data-test-mobile-history-viewport" `shouldEqual` Just "true"
 
             it "focuses and announces one lifecycle for keyboard navigation, history, and final redirected URLs" $ \(browser, server) -> do
@@ -221,8 +208,7 @@ spec =
               runBrowserSpec browser do
                 setViewportSize 320 480
                 visit secondUrl
-                assertAllObserved do
-                  routeStatus `shouldHaveText` ""
+                assertAllObserved $ routeStatus `shouldHaveText` ""
                 _ <-
                   runPageScript
                     "window.__ahi8HistoryLength = history.length; const status = document.querySelector('[data-navigation-route-status]'); let count = 0; status.dataset.testMutationCount = '0'; new MutationObserver((records) => { count += records.filter((record) => record.type === 'childList' || record.type === 'characterData').length; status.dataset.testMutationCount = String(count); }).observe(status, { childList: true, characterData: true, subtree: true }); document.documentElement.style.zoom = '2'; true"
@@ -255,8 +241,7 @@ spec =
                   attributeValue routeStatus "data-test-mutation-count" `shouldEqual` Just "3"
                   attributeValue (byRole Link `named` "Spaces") "aria-current" `shouldEqual` Just "page"
                 _ <- runPageScript "document.querySelector('#app-main').dataset.testHistoryStable = String(history.length === window.__ahi8HistoryLength + 1); true"
-                assertAllObserved do
-                  attributeValue mainContent "data-test-history-stable" `shouldEqual` Just "true"
+                assertAllObserved $ attributeValue mainContent "data-test-history-stable" `shouldEqual` Just "true"
                 visit secondUrl
                 press (byRole Link `named` "Home") "Enter"
                 assertAllObserved do
@@ -317,11 +302,9 @@ spec =
                 releaseRequestsMatching "**/assets/navigation.js"
                 visitWithoutScripts secondUrl
                 press (css "body") "Tab"
-                assertAllObserved do
-                  isFocused (byRole Link `named` "Skip to main content") `satisfies` id
+                assertAllObserved $ isFocused (byRole Link `named` "Skip to main content") `satisfies` id
                 press (byRole Link `named` "Skip to main content") "Enter"
-                assertAllObserved do
-                  isFocused mainContent `satisfies` id
+                assertAllObserved $ isFocused mainContent `satisfies` id
                 press (byRole Link `named` "Spaces") "Enter"
                 assertAllObserved do
                   currentUrl `shouldEqual` spacesUrl
@@ -344,14 +327,11 @@ spec =
                 paste passwordField "short"
                 paste authenticatorField "1"
                 press identifierField "Tab"
-                assertAllObserved do
-                  isFocused passwordField `satisfies` id
+                assertAllObserved $ isFocused passwordField `satisfies` id
                 press passwordField "Tab"
-                assertAllObserved do
-                  isFocused proofField `satisfies` id
+                assertAllObserved $ isFocused proofField `satisfies` id
                 press proofField "Tab"
-                assertAllObserved do
-                  isFocused authenticatorField `satisfies` id
+                assertAllObserved $ isFocused authenticatorField `satisfies` id
                 click (byRole Button `named` "Sign in")
                 assertAllObserved do
                   isFocused (css "#login-error-summary") `satisfies` id
@@ -367,8 +347,7 @@ spec =
                 _ <-
                   runPageScript
                     "const field = document.querySelector('#login-recovery-code'); field.focus(); field.scrollIntoView({ block: 'nearest' }); const box = field.getBoundingClientRect(); field.dataset.testFocusVisible = String(field === document.activeElement && box.top >= 0 && box.bottom <= window.innerHeight); field.dataset.testFocusVisible"
-                assertAllObserved do
-                  attributeValue recoveryField "data-test-focus-visible" `shouldEqual` Just "true"
+                assertAllObserved $ attributeValue recoveryField "data-test-focus-visible" `shouldEqual` Just "true"
                 click (byRole Button `named` "Sign in")
                 assertAllObserved do
                   inputValue identifierField `shouldEqual` "person@example.test"
@@ -384,14 +363,11 @@ spec =
                   attributeValue (css "#registration-region form") "method" `shouldEqual` Just "dialog"
                   inputValue (byLabel "Password") `shouldEqual` ""
                 press (byLabel "Username") "Tab"
-                assertAllObserved do
-                  isFocused (byLabel "Email address") `satisfies` id
+                assertAllObserved $ isFocused (byLabel "Email address") `satisfies` id
                 press (byLabel "Email address") "Tab"
-                assertAllObserved do
-                  isFocused (byLabel "Display name (optional)") `satisfies` id
+                assertAllObserved $ isFocused (byLabel "Display name (optional)") `satisfies` id
                 press (byLabel "Display name (optional)") "Tab"
-                assertAllObserved do
-                  isFocused (byLabel "Password") `satisfies` id
+                assertAllObserved $ isFocused (byLabel "Password") `satisfies` id
                 visitWithoutScripts (baseUrl <> "/login")
                 assertAllObserved do
                   attributeValue (css "#login-region form") "method" `shouldEqual` Just "dialog"
@@ -401,8 +377,7 @@ spec =
                   attributeValue (css "#verification-region form") "method" `shouldEqual` Just "dialog"
                   inputValue (byLabel "Verification token") `shouldEqual` "delivered-token"
                 press (byLabel "Verification token") "Tab"
-                assertAllObserved do
-                  isFocused (byRole Button `named` "Verify email") `satisfies` id
+                assertAllObserved $ isFocused (byRole Button `named` "Verify email") `satisfies` id
                 visitWithoutScripts (baseUrl <> "/mfa")
                 assertAllObserved do
                   attributeValue (css "#mfa-enrollment-region form") "method" `shouldEqual` Just "dialog"
@@ -421,7 +396,7 @@ spec =
                 _ <-
                   runPageScript
                     "const link = document.querySelector('nav a'); link.focus(); const style = getComputedStyle(link); link.dataset.testFocusVisibleStyle = String(link.matches(':focus-visible') && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0); true"
-                assertAllObserved do
+                assertAllObserved $
                   attributeValue (byRole Link `named` "Home") "data-test-focus-visible-style" `shouldEqual` Just "true"
                 click (byRole Link `named` "Profile")
                 assertAllObserved do
@@ -429,11 +404,9 @@ spec =
                   byRole Heading `shouldHaveText` "Sign in"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
                 visitWithoutScripts profileUrl
-                assertAllObserved do
-                  byRole Heading `shouldHaveText` "Sign in"
+                assertAllObserved $ byRole Heading `shouldHaveText` "Sign in"
                 visitWithoutScripts spanishProfileUrl
-                assertAllObserved do
-                  byRole Heading `shouldHaveText` "Iniciar sesion"
+                assertAllObserved $ byRole Heading `shouldHaveText` "Iniciar sesion"
 
             it "keeps language selection and dialog startup failure complete without enhanced behavior" $ \(browser, server) -> do
               let baseUrl = HarchWeb.localServerBaseUrl server
@@ -495,8 +468,7 @@ spec =
               runBrowserSpec browser do
                 blockRequestsMatching "**/assets/navigation.js"
                 visit registrationUrl
-                assertAllObserved do
-                  byRole Heading `shouldHaveText` "Crea tu cuenta"
+                assertAllObserved $ byRole Heading `shouldHaveText` "Crea tu cuenta"
                 fill usernameField "person_01"
                 _ <-
                   runPageScript
@@ -536,11 +508,10 @@ spec =
                   inputValue passwordField `shouldEqual` ""
                   attributeValue passwordField "aria-describedby" `shouldEqual` Just "registration-password-hint"
                 press usernameErrorLink "Enter"
-                assertAllObserved do
-                  isFocused usernameField `satisfies` id
+                assertAllObserved $ isFocused usernameField `satisfies` id
 
       aroundWith (withBrowserServer (\config -> buildAppWithDatabaseAndAccountWorkflow config defaultPageRepository mfaEnrollmentBrowserWorkflow)) $
-        describe "MFA enrollment" $ do
+        describe "MFA enrollment" $
           it "keeps MFA confirmation keyboard- and paste-usable after its server patch" $ \(browser, server) -> do
             let mfaUrl = HarchWeb.localServerBaseUrl server <> "/mfa"
                 codeField = byLabel "Authenticator code"
@@ -550,11 +521,9 @@ spec =
               csrfToken <- documentCsrfToken
               setCookie mfaUrl "__Host-harch-csrf" csrfToken
               click (byRole Button `named` "Start authenticator enrollment")
-              assertAllObserved do
-                isFocused codeField `satisfies` id
+              assertAllObserved $ isFocused codeField `satisfies` id
               press codeField "Tab"
-              assertAllObserved do
-                isFocused (byRole Button `named` "Confirm authenticator") `satisfies` id
+              assertAllObserved $ isFocused (byRole Button `named` "Confirm authenticator") `satisfies` id
               paste codeField "123"
               click (byRole Button `named` "Confirm authenticator")
               assertAllObserved do
@@ -562,7 +531,7 @@ spec =
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
 
       aroundWith (withBrowserServer (\config -> buildAppWithDatabaseAndAccountWorkflowAndSecurity config defaultPageRepository pendingProfileWorkflow pendingProfileE2eSecurity)) $
-        describe "pending profile" $ do
+        describe "pending profile" $
           it "resends a pending-profile verification email through the immediate capture path" $ \(browser, server) -> do
             let profileUrl = HarchWeb.localServerBaseUrl server <> "/profile"
             runBrowserSpec browser do
@@ -736,8 +705,7 @@ spec =
               runBrowserSpec browser do
                 setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
                 visit profileUrl
-                assertAllObserved do
-                  isVisible (byRole Heading `named` "Profile") `shouldEqual` True
+                assertAllObserved $ isVisible (byRole Heading `named` "Profile") `shouldEqual` True
                 click profileSubmit
                 assertAllObserved do
                   attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
@@ -998,7 +966,7 @@ spec =
                 fill passwordField "correct horse battery staple"
                 fill authenticatorCodeField reauthenticationTotpCode
                 click (byRole Button `named` "Sign in")
-                assertAllObserved do
+                assertAllObserved $
                   css "[data-web-api-reauthentication-status]" `shouldHaveText` "Signed in. Confirm to retry the original action."
                 click retryOriginalAction
                 assertAllObserved do

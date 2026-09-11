@@ -13,7 +13,7 @@ import WebApi.Config (DatabaseConfig (..))
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.Postgres.Testing (buildRuntimePostgresMfaStore, buildRuntimePostgresMfaStoreWithRunner, newPostgresPool, runPostgresMigrationsForRuntime)
 
-spec = do
+spec =
   describe "runtime PostgreSQL MFA persistence" $ do
     it "uses bound parameters to enroll, load, confirm, and consume recovery-code hashes" $ do
       queriesReference <- newIORef []

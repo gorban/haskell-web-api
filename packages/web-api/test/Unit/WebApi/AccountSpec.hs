@@ -17,7 +17,7 @@ import HarchWeb.Username qualified as Username
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress)
 import WebApi.Account (AccountProfile (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), EmailVerificationEnvironment (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), RegistrationEnvironment (..), RegistrationError (..), RegistrationRequest (..), RegistrationResult (..), ResendVerificationError (..), ResendVerificationResult (..), VerificationDeliveryEnvironment (..), VerificationDeliveryFailure (..), VerificationResendAdmission (..), VerificationResendClaim (..), VerificationResendClaimSettlement (..), VerificationResendSuppression (..), confirmEmailVerificationAt, defaultPendingRegistrationStoragePolicy, defaultRegistrationDeliveryTimeout, defaultVerificationResendPolicy, mkPendingRegistrationStoragePolicy, mkRegistrationDeliveryTimeout, mkVerificationResendPolicy, pendingRegistrationClaimLeaseNanoseconds, pendingRegistrationMaximumAccounts, registerAccount, resendEmailVerificationAt, verificationResendClaimLeaseNanoseconds, verificationResendMaximumDeliveries, verificationResendMaximumRecords, verificationResendWindowNanoseconds)
 
-spec = do
+spec =
   describe "WebApi.Account" $ do
     it "reports exhausted password work before hashing or persisting registration" $ do
       passwordWorkGate <- Password.newPasswordWorkGate (required "password-work budget" (Password.mkPasswordWorkBudget 1))
@@ -446,8 +446,8 @@ spec = do
                       reserveVerificationResend = \_ verification _ -> do
                         let claim = VerificationResendClaim (Account.storedVerificationAccountId verification) (Account.storedVerificationTokenDigest verification)
                         pure (Right (VerificationResendReserved claim)),
-                      completeVerificationResend = \_ _ -> do
-                        if interruptDelivery then pure (Right VerificationResendClaimSettled) else putMVar interruptionPoint () >> threadDelay 10000000 >> pure (Right VerificationResendClaimSettled),
+                      completeVerificationResend = \_ _ ->
+                        (if interruptDelivery then pure (Right VerificationResendClaimSettled) else putMVar interruptionPoint () >> threadDelay 10000000 >> pure (Right VerificationResendClaimSettled)),
                       releaseVerificationResend = \claim -> do
                         case claim of
                           VerificationResendClaim claimedAccountId claimedDigest -> do
@@ -587,10 +587,11 @@ spec = do
         Left (RegistrationDeliveryFailed VerificationDeliveryTimedOut) -> pure ()
         _ -> expectationFailure "expected timed-out delivery to release its claim"
       readIORef releasedClaimsReference >>= \case
-        [failedClaim, timedOutClaim] -> do
-          case (pendingRegistrationClaimStage failedClaim, pendingRegistrationClaimStage timedOutClaim) of
-            (PendingRegistrationRetried, PendingRegistrationRetried) -> pure ()
-            _ -> expectationFailure "failed and timed-out deliveries must release retry claims"
+        [failedClaim, timedOutClaim] ->
+          ( case (pendingRegistrationClaimStage failedClaim, pendingRegistrationClaimStage timedOutClaim) of
+              (PendingRegistrationRetried, PendingRegistrationRetried) -> pure ()
+              _ -> expectationFailure "failed and timed-out deliveries must release retry claims"
+          )
         _ -> expectationFailure "expected failed and timed-out deliveries to release their claims"
 
     it "keeps invalid registration bounds out of the lifecycle and reports typed staging failures" $ do

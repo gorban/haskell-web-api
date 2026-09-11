@@ -35,7 +35,7 @@ loadSecondPageValueForRequest pageRepository requestContext =
 
 spec = do
   describe "main" $ do
-    it "stays running while idle, serves real HTTP traffic, and only stops when terminated" $ withTestAccountJwtFixture $ \_ jwtConfigLines -> do
+    it "stays running while idle, serves real HTTP traffic, and only stops when terminated" $ withTestAccountJwtFixture $ \_ jwtConfigLines ->
       withUnusedLoopbackPort $ \unusedPort ->
         withSystemTempDirectory "haskell-web-api-run" $ \workingDirectory -> do
           writeFile
@@ -642,7 +642,7 @@ spec = do
           let runtimePostgresEffect = buildRuntimePostgresPageRepository unreachablePool
           loadSecondPageValueForRequest runtimePostgresEffect defaultRequestContext
             >>= \case
-              Left (SecondPageDataError errorMessage) -> do
+              Left (SecondPageDataError errorMessage) ->
                 expectAll
                   ( (errorMessage `shouldSatisfy` (not . Text.null))
                       :| [errorMessage `shouldSatisfy` (not . Text.isInfixOf "posix_spawnp")]

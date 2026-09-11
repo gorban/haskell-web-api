@@ -8,7 +8,7 @@ import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), DatabaseConfig 
 import WebApi.SetupConfig (AppSetupConfig (..), SetupAutostartConfig (..), defaultAppSetupConfig, defaultSetupAutostartConfig)
 import WebApi.SetupPlan (AppPrerequisitePlan (..), ContainerAutostartPlan (..), ContainerRuntime (..), DatabasePrerequisitePlan (..), TcpEndpoint (..), TracingPrerequisitePlan (..), defaultContainerAutostartPlan, planAppPrerequisites, toSetupPrerequisiteConfig)
 
-spec = do
+spec =
   describe "planAppPrerequisites" $ do
     it "preserves runtime database identity fields in the shared setup prerequisite config" $ do
       let setupConfig =

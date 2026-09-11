@@ -17,25 +17,25 @@ spec = describe "handleError" $ do
     result <- throwError expectedError `handleError` pure
     result `shouldBe` expectedError
 
-  it "lifts present optional values and explains missing ones" $ do
+  it "lifts present optional values and explains missing ones" $
     expectAll
       ( (runExceptT (fromMaybeError "missing" (Just "present")) `shouldReturn` Right "present")
           :| [runExceptT (fromMaybeError "missing" (Nothing :: Maybe String)) `shouldReturn` Left "missing"]
       )
 
-  it "continues only when a required condition holds" $ do
+  it "continues only when a required condition holds" $
     expectAll
       ( (runExceptT (guardError "rejected" True) `shouldReturn` Right ())
           :| [runExceptT (guardError "rejected" False) `shouldReturn` Left "rejected"]
       )
 
-  it "lifts effectful Either values while mapping their errors" $ do
+  it "lifts effectful Either values while mapping their errors" $
     expectAll
       ( (runExceptT (liftEitherWith length (pure (Right "value" :: Either String String))) `shouldReturn` Right "value")
           :| [runExceptT (liftEitherWith length (pure (Left "failed" :: Either String String))) `shouldReturn` Left 6]
       )
 
-  it "lifts effectful optional values and explains missing ones" $ do
+  it "lifts effectful optional values and explains missing ones" $
     expectAll
       ( (runExceptT (liftMaybeWith "missing" (pure (Just "present"))) `shouldReturn` Right "present")
           :| [runExceptT (liftMaybeWith "missing" (pure Nothing :: IO (Maybe String))) `shouldReturn` Left "missing"]

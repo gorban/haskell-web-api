@@ -200,31 +200,29 @@ spec = do
       $ withPathScripts
         [ ("docker", "#!/bin/sh\nprintf 'docker stderr' >&2\nexit 7\n")
         ]
-      $ do
-        DatabaseAutostart.attemptDatabaseAutostart
-          PrerequisiteConfig.defaultSetupPrerequisiteConfig
-          (singleRuntimePlan PrerequisitePlan.DockerRuntime)
-          `shouldReturn` DatabaseAutostart.DatabaseAutostartFailed
-            [ DatabaseAutostart.ContainerRuntimeFailure
-                { DatabaseAutostart.failedContainerRuntime = PrerequisitePlan.DockerRuntime,
-                  DatabaseAutostart.containerRuntimeFailureMessage = "docker stderr"
-                }
-            ]
+      $ DatabaseAutostart.attemptDatabaseAutostart
+        PrerequisiteConfig.defaultSetupPrerequisiteConfig
+        (singleRuntimePlan PrerequisitePlan.DockerRuntime)
+        `shouldReturn` DatabaseAutostart.DatabaseAutostartFailed
+          [ DatabaseAutostart.ContainerRuntimeFailure
+              { DatabaseAutostart.failedContainerRuntime = PrerequisitePlan.DockerRuntime,
+                DatabaseAutostart.containerRuntimeFailureMessage = "docker stderr"
+              }
+          ]
 
     it "uses the fallback exit-code message when the real runner exits silently"
       $ withPathScripts
         [ ("docker", "#!/bin/sh\nexit 7\n")
         ]
-      $ do
-        DatabaseAutostart.attemptDatabaseAutostart
-          PrerequisiteConfig.defaultSetupPrerequisiteConfig
-          (singleRuntimePlan PrerequisitePlan.DockerRuntime)
-          `shouldReturn` DatabaseAutostart.DatabaseAutostartFailed
-            [ DatabaseAutostart.ContainerRuntimeFailure
-                { DatabaseAutostart.failedContainerRuntime = PrerequisitePlan.DockerRuntime,
-                  DatabaseAutostart.containerRuntimeFailureMessage = "command failed with exit code 7"
-                }
-            ]
+      $ DatabaseAutostart.attemptDatabaseAutostart
+        PrerequisiteConfig.defaultSetupPrerequisiteConfig
+        (singleRuntimePlan PrerequisitePlan.DockerRuntime)
+        `shouldReturn` DatabaseAutostart.DatabaseAutostartFailed
+          [ DatabaseAutostart.ContainerRuntimeFailure
+              { DatabaseAutostart.failedContainerRuntime = PrerequisitePlan.DockerRuntime,
+                DatabaseAutostart.containerRuntimeFailureMessage = "command failed with exit code 7"
+              }
+          ]
 
     it "surfaces missing runtime executables from the real runner explicitly" $
       withEmptyPath $

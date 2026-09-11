@@ -40,8 +40,7 @@ spec =
                 visitWithoutScripts uploadUrl
                 setInputFiles (css "#native-upload-file") filePath
                 submit (byRole Form `named` "Upload a file")
-                assertAllObserved do
-                  byRole Heading `named` "Upload received" `shouldHaveText` "Upload received"
+                assertAllObserved $ byRole Heading `named` "Upload received" `shouldHaveText` "Upload received"
               nativeUploadDiscardCount uploadState `shouldReturn` 1
 
 withBrowserAndUploadServer :: ((BrowserConfig, LocalTestServer, NativeUploadState) -> IO a) -> BrowserConfig -> IO a

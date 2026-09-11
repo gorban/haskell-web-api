@@ -45,7 +45,7 @@ requiredRouteLocation target =
     Right location -> location
 
 spec = do
-  describe "closed route families" $ do
+  describe "closed route families" $
     it "keeps every page and API constructor enumerable, comparable, and inspectable" $ do
       let pageRoutes = [minBound .. maxBound] :: [PageRoute]
           apiRoutes = [minBound .. maxBound] :: [ApiRoute]
@@ -104,7 +104,7 @@ spec = do
       show HelpRoute `shouldBe` "HelpRoute"
       Page WebApi.Route.HomePage `shouldNotBe` Api ApiNotFound
 
-  describe "requestContextFromWaiRequest" $ do
+  describe "requestContextFromWaiRequest" $
     it "accepts only a valid MFA-enrollment cookie while preserving the supplied context" $ do
       let validSession = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
           validRequest =
@@ -146,8 +146,7 @@ spec = do
       parseRoute defaultRequestContext "/api/missing" `shouldBe` Just apiNotFoundRequest
       parseRoute defaultRequestContext "/api/status/extra" `shouldBe` Just apiNotFoundRequest
 
-    it "parses the second page path" $
-      parseRoute defaultRequestContext "/second" `shouldBe` Just secondRequest
+    it "parses the second page path" $ parseRoute defaultRequestContext "/second" `shouldBe` Just secondRequest
 
     it "parses the app-home spaces path with its typed locale" $ do
       parseRoute defaultRequestContext "/spaces" `shouldBe` Just spacesRequest
@@ -257,7 +256,7 @@ spec = do
       renderRoutePath prefixedSpanishSecondRequest `shouldBe` "/app/es/second"
       renderRoutePath prefixedApiStatusRequest `shouldBe` "/app/api/status"
 
-  describe "endpointMetadata" $ do
+  describe "endpointMetadata" $
     it "gives every closed route a stable public endpoint identity" $ do
       let endpointDeclarationFields endpointMetadataValue =
             ( HarchWeb.endpointNameText (HarchWeb.endpointName endpointMetadataValue),
@@ -308,5 +307,4 @@ spec = do
       ("falls back to the stable not-found route for unknown paths", "/missing", notFoundRequest)
       ]
       `forM_` \(label, path, expected) ->
-        it label $
-          pureRouteMatcher path `shouldBe` expected
+        it label $ pureRouteMatcher path `shouldBe` expected

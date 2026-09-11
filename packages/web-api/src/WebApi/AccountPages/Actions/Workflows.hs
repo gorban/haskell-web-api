@@ -154,7 +154,7 @@ handleVerificationSubmission actionRequest submission =
 -- enrollment session from clobbering an authenticator it already confirmed
 -- in an earlier session.
 handleMfaEnrollmentSubmission :: AccountActionRequest -> MfaEnrollmentSubmission -> AccountActionWorkflow
-handleMfaEnrollmentSubmission actionRequest submission = do
+handleMfaEnrollmentSubmission actionRequest submission =
   case requestMfaEnrollmentSessionId (HarchWeb.clientActionContext actionRequest) of
     Nothing -> pure (invalidEnrollmentSessionResponse actionRequest)
     Just enrollmentSessionId -> do

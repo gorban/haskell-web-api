@@ -16,7 +16,7 @@ import WebApi.Config (DatabaseConfig (..))
 import WebApi.Login
 import WebApi.Postgres.Testing (buildRuntimePostgresAccountCredentialStore, buildRuntimePostgresAccountCredentialStoreWithRunner, newPostgresPool, runPostgresMigrationsForRuntime)
 
-spec = do
+spec =
   describe "runtime PostgreSQL credential lookup" $ do
     it "uses an email parameter and decodes verified credentials" $ do
       let store = buildRuntimePostgresAccountCredentialStoreWithRunner runner databaseConfig

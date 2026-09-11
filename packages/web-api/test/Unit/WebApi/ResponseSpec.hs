@@ -19,7 +19,7 @@ import WebApi.Response (selectResponse, selectResponseWithDatabase, selectRespon
 import WebApi.Route (AppRequestContext (..), AppRoute (..), defaultRequestContext)
 import WebApi.RouteData (RouteDataResult (..), SecondRouteData (..))
 
-spec = do
+spec =
   describe "selectResponse" $ do
     it "resolves page routes to page responses that still flow through the shared shell" $ do
       renderedPage <- renderPage defaultAppConfig secondRequest

@@ -62,7 +62,7 @@ spec =
                ]
         )
 
-    it "rejects unsupported module paths and missing conventional definitions" $ do
+    it "rejects unsupported module paths and missing conventional definitions" $
       expectAll
         ( ( pageSpecFromRelativePath "account/Login.hs" "pageDefinition = login"
               `shouldBe` Left (InvalidPagePath "account/Login.hs")

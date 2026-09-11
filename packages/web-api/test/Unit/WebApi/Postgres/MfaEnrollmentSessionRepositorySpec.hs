@@ -12,7 +12,7 @@ import WebApi.Config (DatabaseConfig (..))
 import WebApi.Postgres.Testing (buildRuntimePostgresMfaEnrollmentSessionStore, buildRuntimePostgresMfaEnrollmentSessionStoreWithRunner, newPostgresPool, runPostgresMigrationsForRuntime)
 import WebApi.Session (MfaEnrollmentSessionStore (..), MfaEnrollmentSessionStoreError (..))
 
-spec = do
+spec =
   describe "runtime PostgreSQL MFA-enrollment-session persistence" $ do
     it "uses bound parameters to save, load, and invalidate an opaque session" $ do
       queriesReference <- newIORef []
@@ -90,5 +90,5 @@ spec = do
       pool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
       loadMfaEnrollmentSession (buildRuntimePostgresMfaEnrollmentSessionStore pool) unknownSessionId `shouldReturnEqual` Right Nothing
 
-    it "keeps the MFA-enrollment-session errors comparable without exposing persistence details" $ do
+    it "keeps the MFA-enrollment-session errors comparable without exposing persistence details" $
       MfaEnrollmentSessionStoreUnavailable /= MfaEnrollmentSessionStoreCorruptData `shouldBe` True

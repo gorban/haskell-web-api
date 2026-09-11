@@ -65,7 +65,7 @@ tamperSignedTokenMac token =
         Just (prefix, finalByte) -> ByteString.snoc prefix (finalByte `xor` 1)
 
 spec = do
-  describe "opaque token generation" $ do
+  describe "opaque token generation" $
     it "uses 256-bit URL-safe values for session identifiers and CSRF tokens" $ do
       generatedSessionId <- generateSessionId
       generatedCsrfToken <- generateCsrfToken
@@ -77,8 +77,8 @@ spec = do
                ]
         )
 
-  describe "opaque tokens" $ do
-    it "accepts long URL-safe values and rejects short or unsafe cookie values" $ do
+  describe "opaque tokens" $
+    it "accepts long URL-safe values and rejects short or unsafe cookie values" $
       expectAll
         ( (sessionIdText sampleSessionId `shouldBe` validSessionToken)
             :| [ csrfTokenText sampleCsrfToken `shouldBe` otherSessionToken,
@@ -152,7 +152,7 @@ spec = do
         )
 
   describe "validateSession" $ do
-    it "distinguishes missing, expired, and active server-side session state" $ do
+    it "distinguishes missing, expired, and active server-side session state" $
       expectAll
         ( (validateSession 100 Nothing `shouldBe` (MissingSession :: SessionValidation Text))
             :| [ validateSession 200 (Just sampleSession) `shouldBe` ExpiredSession,
@@ -184,13 +184,13 @@ spec = do
       lookupOpaqueSession sessionLookup sampleSessionId `shouldReturn` Nothing
 
   describe "validateCsrfToken" $ do
-    it "accepts only the matching synchronizer token" $ do
+    it "accepts only the matching synchronizer token" $
       expectAll
         ( (validateCsrfToken sampleCsrfToken sampleCsrfToken `shouldBe` True)
             :| [validateCsrfToken sampleCsrfToken (required "different csrf token" (mkCsrfToken validSessionToken)) `shouldBe` False]
         )
 
-    it "constructs only positive backend-approved cookie lifetimes" $ do
+    it "constructs only positive backend-approved cookie lifetimes" $
       expectAll
         ( (fmap Csrf.csrfCookieMaxAgeSeconds (Csrf.mkCsrfCookieMaxAgeSeconds 1) `shouldBe` Just 1)
             :| [Csrf.mkCsrfCookieMaxAgeSeconds 0 `shouldBe` Nothing]
@@ -225,7 +225,7 @@ spec = do
                ]
         )
 
-    it "requires positive signed-token lifetime and clock-skew policy" $ do
+    it "requires positive signed-token lifetime and clock-skew policy" $
       expectAll
         ( (Csrf.mkSignedCsrfPolicy 1 1 `shouldSatisfy` (/= Nothing))
             :| [ Csrf.mkSignedCsrfPolicy 0 1 `shouldBe` Nothing,
@@ -478,7 +478,7 @@ spec = do
                ]
         )
 
-  describe "SafeReturnPath" $ do
+  describe "SafeReturnPath" $
     it "keeps navigation same-origin and rejects redirect, control-character, and backslash escapes" $ do
       let returnPath = required "safe return path" (mkSafeReturnPath "/account/settings?tab=security")
       expectAll

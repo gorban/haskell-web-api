@@ -27,8 +27,8 @@ required :: String -> Maybe value -> value
 required label = fromMaybe (error ("expected " <> label))
 
 spec = do
-  describe "PasswordHashingPolicy" $ do
-    it "uses an Argon2id production policy and rejects invalid resource settings" $ do
+  describe "PasswordHashingPolicy" $
+    it "uses an Argon2id production policy and rejects invalid resource settings" $
       expectAll
         ( (passwordHashIterations defaultPasswordHashingPolicy `shouldBe` 3)
             :| [ passwordHashMemoryKibibytes defaultPasswordHashingPolicy `shouldBe` 65536,
@@ -113,7 +113,7 @@ spec = do
           mixedHash = required "mixed hash" (hashPasswordWithSalt mixedPolicy sampleSalt samplePassword)
       passwordHashNeedsRehash defaultPasswordHashingPolicy mixedHash `shouldBe` False
 
-    it "rejects malformed, unsupported, and truncated stored hashes" $ do
+    it "rejects malformed, unsupported, and truncated stored hashes" $
       expectAll
         ( (isNothing (hashPasswordWithSalt testPolicy "short" samplePassword) `shouldBe` True)
             :| [ isNothing (readPasswordHash "$argon2id$v=19$m=8,t=1,p=1$MDEyMzQ1Njc4OWFiY2RlZg$short") `shouldBe` True,

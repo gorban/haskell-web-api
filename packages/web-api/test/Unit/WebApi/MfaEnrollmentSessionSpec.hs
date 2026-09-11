@@ -11,7 +11,7 @@ import WebApi.Session (MfaEnrollmentSessionStore (..), MfaEnrollmentSessionStore
 
 spec = do
   describe "mfaEnrollmentSessionCookiePolicy" $
-    it "uses a distinct, short-lived cookie separate from the ordinary login session" $ do
+    it "uses a distinct, short-lived cookie separate from the ordinary login session" $
       sessionCookieNameText (sessionCookieName mfaEnrollmentSessionCookiePolicy) `shouldBe` "__Host-harch-mfa-enrollment"
 
   describe "MFA-enrollment-session issuance" $ do

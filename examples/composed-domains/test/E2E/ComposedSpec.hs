@@ -67,8 +67,7 @@ spec =
                   currentUrl `shouldEqual` catalogUrl
                   byRole Heading `named` "en catalog" `shouldHaveText` "en catalog"
                 reload
-                assertAllObserved do
-                  byRole Heading `named` "en catalog" `shouldHaveText` "en catalog"
+                assertAllObserved $ byRole Heading `named` "en catalog" `shouldHaveText` "en catalog"
                 click (byRole Link `named` "Orders")
                 assertAllObserved do
                   currentUrl `shouldEqual` ordersUrl
@@ -84,18 +83,14 @@ spec =
                   byRole Heading `named` "Login" `shouldHaveText` "Login"
                   byRole Link `named` "Catalog" `shouldHaveText` "Catalog"
                 click (byRole Link `named` "Catalog")
-                assertAllObserved do
-                  byRole Heading `named` "en catalog" `shouldHaveText` "en catalog"
+                assertAllObserved $ byRole Heading `named` "en catalog" `shouldHaveText` "en catalog"
                 click (byRole Link `named` "Orders")
-                assertAllObserved do
-                  byRole Heading `named` "en orders" `shouldHaveText` "en orders"
+                assertAllObserved $ byRole Heading `named` "en orders" `shouldHaveText` "en orders"
                 visitWithoutScripts spanishLoginUrl
                 click (byRole Link `named` "Catalog")
-                assertAllObserved do
-                  byRole Heading `named` "es catalog" `shouldHaveText` "es catalog"
+                assertAllObserved $ byRole Heading `named` "es catalog" `shouldHaveText` "es catalog"
                 click (byRole Link `named` "Orders")
-                assertAllObserved do
-                  byRole Heading `named` "es orders" `shouldHaveText` "es orders"
+                assertAllObserved $ byRole Heading `named` "es orders" `shouldHaveText` "es orders"
 
       aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture) $
         parallel $
@@ -159,8 +154,7 @@ spec =
                 fill loginField "support_operator"
                 fill codeField browserAdmissionCode
                 submit (byRole Form `named` "Admission")
-                assertAllObserved do
-                  currentUrl `shouldEqual` loginUrl
+                assertAllObserved $ currentUrl `shouldEqual` loginUrl
                 visit admissionUrl
                 fill loginField "support_operator"
                 fill codeField browserAdmissionCode
@@ -193,8 +187,7 @@ spec =
               runBrowserSpec browser do
                 setCookie loginUrl "__Host-composed-admission" expiredAdmissionBrowserSessionValue
                 visit loginUrl
-                assertAllObserved do
-                  currentUrl `shouldEqual` admissionUrl
+                assertAllObserved $ currentUrl `shouldEqual` admissionUrl
 
             it "submits the same admission workflow through its CSRF-protected native fallback" $ \(browser, server) -> do
               let admissionUrl = localServerBaseUrl server <> "/public/admission"
@@ -210,7 +203,7 @@ spec =
 
       aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture {admissionFixtureAttempts = throttledAdmissionAttemptStore}) $
         parallel $
-          describe "throttled admission" $ do
+          describe "throttled admission" $
             it "keeps a throttled admission attempt recoverable without navigating or clearing its draft" $ \(browser, server) -> do
               let admissionUrl = localServerBaseUrl server <> "/public/admission"
                   loginField = byLabel "Admission name"
@@ -229,19 +222,18 @@ spec =
 
       aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture {admissionFixtureSessions = [expiredAdmissionBrowserSession]}) $
         parallel $
-          describe "expired admission sessions" $ do
+          describe "expired admission sessions" $
             it "redirects a browser-deliverable expired admission cookie to a fresh challenge" $ \(browser, server) -> do
               let admissionUrl = localServerBaseUrl server <> "/en/public/admission"
                   loginUrl = localServerBaseUrl server <> "/en/public/login"
               runBrowserSpec browser do
                 setCookie loginUrl "__Host-composed-admission" expiredAdmissionBrowserSessionValue
                 visit loginUrl
-                assertAllObserved do
-                  currentUrl `shouldEqual` admissionUrl
+                assertAllObserved $ currentUrl `shouldEqual` admissionUrl
 
       aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture {admissionFixtureCredentials = BrowserAdmissionCredentialStoreUnavailable}) $
         parallel $
-          describe "unavailable admission credentials" $ do
+          describe "unavailable admission credentials" $
             it "keeps an unavailable admission credential store recoverable without navigating or clearing its draft" $ \(browser, server) -> do
               let admissionUrl = localServerBaseUrl server <> "/public/admission"
                   loginField = byLabel "Admission name"
@@ -260,7 +252,7 @@ spec =
 
       aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture {admissionFixtureCredentials = BrowserAdmissionCredentialStoreCorrupt}) $
         parallel $
-          describe "corrupt admission credentials" $ do
+          describe "corrupt admission credentials" $
             it "keeps corrupt encrypted admission credentials recoverable without navigating or clearing its draft" $ \(browser, server) -> do
               let admissionUrl = localServerBaseUrl server <> "/public/admission"
                   loginField = byLabel "Admission name"
@@ -334,12 +326,12 @@ admissionBrowserApplication AdmissionBrowserFixture {admissionFixtureAttempts = 
           Nothing
       sessionStore =
         AdmissionSessionStore
-          { saveAdmissionSession = \session -> do
+          { saveAdmissionSession = \session ->
               atomicModifyIORef' sessions (\saved -> (session : filter ((/= sessionId session) . sessionId) saved, Right True)),
             loadAdmissionSession = \requestedSessionId -> do
               saved <- readIORef sessions
               pure (Right (find ((== requestedSessionId) . mkAdmissionSessionId . sessionId) saved)),
-            invalidateAdmissionSession = \requestedSessionId _ -> do
+            invalidateAdmissionSession = \requestedSessionId _ ->
               atomicModifyIORef' sessions (\saved -> (filter ((/= requestedSessionId) . mkAdmissionSessionId . sessionId) saved, Right True))
           }
       credentialStore =

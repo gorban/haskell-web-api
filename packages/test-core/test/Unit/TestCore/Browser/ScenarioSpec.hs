@@ -28,7 +28,7 @@ data FieldState = FieldState
   }
   deriving (Eq, Show)
 
-spec = do
+spec =
   describe "runBrowserScenario" $ do
     it "terminates the runner when initialization is interrupted asynchronously" $
       withCancellableFakeRunner $ \config enteredPath -> do
@@ -110,7 +110,7 @@ spec = do
 
     it "batches heterogeneous observed assertions in one browser snapshot" $
       withFakeRunner "aggregate-only" $ \config ->
-        runBrowserSpec config $ do
+        runBrowserSpec config $
           assertAllObserved do
             currentUrl `satisfies` (== "http://localhost/")
             $([|Just <$> textContent (byRole Heading)|] `matchesPattern` [p|Just heading@"Home"|])
@@ -118,8 +118,7 @@ spec = do
 
     it "matches absent snapshots immediately in one observation attempt" $
       withFakeRunner "snapshot-missing-once" $ \config ->
-        runBrowserSpec config $ assertAllObserved do
-          $([|observeElement (css "#missing")|] `matchesPattern` [p|Nothing|])
+        runBrowserSpec config $ assertAllObserved $ $([|observeElement (css "#missing")|] `matchesPattern` [p|Nothing|])
 
     it "retries absent and present snapshots until the requested pattern matches" $ do
       withFakeRunner "snapshot-appears" $ \config ->
@@ -133,8 +132,10 @@ spec = do
 
     it "includes Nothing and the expected snapshot pattern in failure diagnostics" $
       withFakeRunner "snapshot-missing" $ \config -> do
-        result <- runBrowserScenario config $ assertAllObserved do
-          $([|observeElement (byRole Heading)|] `matchesPattern` [p|Just ElementSnapshot {elementText = "Profile"}|])
+        result <-
+          runBrowserScenario config $
+            assertAllObserved $
+              $([|observeElement (byRole Heading)|] `matchesPattern` [p|Just ElementSnapshot {elementText = "Profile"}|])
         result `shouldSatisfy` \case
           Left (BrowserAssertionFailed message _) ->
             all (`Text.isInfixOf` Text.pack message) ["Nothing", "failed to match pattern", "Just", "ElementSnapshot", "Profile"]
@@ -163,15 +164,17 @@ spec = do
 
     it "retries a failed aggregate block against fresh snapshots" $
       withFakeRunner "retry" $ \config ->
-        runBrowserSpec config $ do
+        runBrowserSpec config $
           assertAllObserved do
             byRole Heading `shouldHaveText` "Home"
             $([|inputValue (css "input[name=email]")|] `matchesPattern` [p|"person@example.com"|])
 
     it "does not retry an unexpected aggregate matcher exception" $
       withFakeRunner "normal" $ \config -> do
-        result <- runBrowserScenario config $ assertAllObserved do
-          textContent (byRole Heading) `matches` (\_ -> ioError (userError "aggregate callback exploded"))
+        result <-
+          runBrowserScenario config $
+            assertAllObserved $
+              textContent (byRole Heading) `matches` (\_ -> ioError (userError "aggregate callback exploded"))
         result `shouldSatisfy` \case
           Left (BrowserRunnerProtocolError message) -> "aggregate callback exploded" `Text.isInfixOf` Text.pack message
           _ -> False

@@ -60,7 +60,7 @@ spec =
                ]
         )
 
-    it "adds durable durations only when the resulting instant is representable" $ do
+    it "adds durable durations only when the resulting instant is representable" $
       expectAll
         ( (addUnixTimeNanoseconds (unixTimeNanoseconds 10) 15 `shouldBe` Just (unixTimeNanoseconds 25))
             :| [ addUnixTimeNanoseconds maxBound 1 `shouldBe` Nothing,

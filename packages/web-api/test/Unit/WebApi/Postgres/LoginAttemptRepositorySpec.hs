@@ -23,7 +23,7 @@ import WebApi.Config (AppConfig (..), DatabaseConfig (..), DatabaseTransportSecu
 import WebApi.Login (LoginAttemptAdmission (..), LoginAttemptBudget (..), LoginAttemptBudgets, LoginAttemptReservation (..), LoginAttemptScope (..), LoginAttemptStore (..), LoginAttemptStoreError (..), LoginPrincipal (..), LoginStage (..), mkLoginAttemptBudgets)
 import WebApi.Postgres.Testing (buildRuntimePostgresLoginAttemptStore, buildRuntimePostgresLoginAttemptStoreWithRunner, buildRuntimePostgresLoginAttemptStoreWithRunnerAndStoragePolicy, buildRuntimePostgresLoginAttemptStoreWithStoragePolicy, mkLoginAttemptStoragePolicy, newPostgresPool, runPostgresMigrationsForRuntime, runRuntimeRowsQuery)
 
-spec = do
+spec =
   describe "runtime PostgreSQL login-attempt persistence" $ do
     it "uses one bound-parameter query to reserve, then settles or cancels its opaque reservation" $ do
       queriesReference <- newIORef []

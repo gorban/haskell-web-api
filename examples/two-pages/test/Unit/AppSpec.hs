@@ -135,7 +135,7 @@ spec =
                  ]
           )
 
-      it "uses a minimal local server config without extra deployment concerns" $ do
+      it "uses a minimal local server config without extra deployment concerns" $
         expectAll
           ( ( listenerConfigs twoPageServerConfig
                 `shouldBe` [ ListenerConfig

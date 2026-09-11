@@ -68,7 +68,7 @@ testResponseRequestId :: HarchWeb.RequestId
 testResponseRequestId =
   fromMaybe (error "invalid fixed response request ID") (HarchWeb.mkRequestId "550e8400-e29b-41d4-a716-446655440000")
 
-spec = do
+spec =
   describe "toWaiApplication" $ do
     it "fails closed if a page response reaches rendering without its CSP nonce" $ do
       let pageResponse = PageResponse testPageSecurity (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))

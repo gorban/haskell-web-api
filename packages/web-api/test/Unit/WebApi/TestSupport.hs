@@ -466,7 +466,7 @@ testRouteLocation target =
     (path, query) = Text.breakOn "?" target
 
 renderedShell :: AppConfig -> AppRoute -> IO Text
-renderedShell config route = do
+renderedShell config route =
   renderedShellForRequest
     config
     HarchWeb.RouteRequest

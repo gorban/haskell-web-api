@@ -324,7 +324,7 @@ spec =
           result <- withMultipartBodyWith (storageFromOpener trackedOpener) testLimits boundaryToken readChunk (const (pure (Right ())))
           maybeSpooledPath <- IORef.readIORef spooledPathReference
           case (result, maybeSpooledPath) of
-            (Left MultipartMissingDisposition, Just spooledPath) -> do
+            (Left MultipartMissingDisposition, Just spooledPath) ->
               doesFileExist spooledPath `shouldReturn` False
             other -> expectationFailure ("unexpected result: " <> show other)
 

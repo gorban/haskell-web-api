@@ -54,7 +54,7 @@ loginCountOperation =
     }
 
 spec = do
-  describe "DatabaseEffect" $ do
+  describe "DatabaseEffect" $
     it "preserves each operation's typed result while exposing performed operations" $ do
       runDatabaseEffect sampleDatabaseEffect LoadDisplayName
         `shouldReturn` DatabaseResult
@@ -110,7 +110,7 @@ spec = do
                ]
         )
 
-  describe "DatabaseOperation" $ do
+  describe "DatabaseOperation" $
     it "keeps query metadata stable while ignoring volatile timing" $ do
       let sameQueryWithDifferentTiming =
             displayNameOperation

@@ -228,7 +228,7 @@ spec = do
                         databaseTransportSecurity = DatabaseTransportLibpqDefault
                       }
 
-  describe "parseAccountAuditSchedulerConfig" $ do
+  describe "parseAccountAuditSchedulerConfig" $
     it "requires a direct connection using the fixed least-privileged scheduler identity" $ do
       parseAccountAuditSchedulerConfig
         [ ("WEB_API_AUDIT_SCHEDULER_DATABASE_HOST", "127.0.0.1"),

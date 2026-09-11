@@ -12,7 +12,7 @@ testMediaType :: Text -> ApiMediaType
 testMediaType value = fromMaybe (error "expected test media type to be valid") (apiMediaType value)
 
 spec =
-  describe "HarchWeb.Api.Negotiation" $ do
+  describe "HarchWeb.Api.Negotiation" $
     describe "Content negotiation" $ do
       let jsonAndText = testMediaType "application/json" :| [testMediaType "text/plain"]
 
@@ -36,8 +36,7 @@ spec =
         ("is case-insensitive for the declared media type", Just "APPLICATION/JSON", SelectedRepresentation (testMediaType "application/json"))
         ]
         `forM_` \(label, acceptHeader, expected) ->
-          it label $
-            selectRepresentation jsonAndText acceptHeader `shouldBe` expected
+          it label $ selectRepresentation jsonAndText acceptHeader `shouldBe` expected
 
       -- Tabled per docs/design-guidance.md's CN decision record: one act
       -- (selectContentTypeRepresentation textContentTypes), one comparison,
@@ -57,8 +56,7 @@ spec =
             ("does not let an Accept extension after q constrain Content-Type matching", "text/plain; q=0.5; charset=us-ascii", plainExpected)
           ]
             `forM_` \(label, acceptHeader, expected) ->
-              it label $
-                selectContentTypeRepresentation textContentTypes (Just acceptHeader) `shouldBe` expected
+              it label $ selectContentTypeRepresentation textContentTypes (Just acceptHeader) `shouldBe` expected
 
       it "lets a more specific range's q=0 exclude a representation despite a permissive wildcard" $
         selectRepresentation jsonAndText (Just "*/*;q=1, application/json;q=0")
@@ -79,8 +77,7 @@ spec =
         selectRepresentation jsonAndText (Just "*/*;q=0.1, text/*;q=0.9, text/plain;q=0.5")
           `shouldBe` SelectedRepresentation (testMediaType "text/plain")
 
-      it "only accepts validated declared representations" $
-        apiMediaType "not-a-media-type" `shouldBe` Nothing
+      it "only accepts validated declared representations" $ apiMediaType "not-a-media-type" `shouldBe` Nothing
 
       it "is case-insensitive for the declared media type" $
         selectRepresentation jsonAndText (Just "APPLICATION/JSON")
@@ -111,8 +108,7 @@ spec =
         ("rejects a quality value with a non-numeric suffix", "text/plain;q=0.5suffix", [])
         ]
         `forM_` \(label, acceptHeader, expected) ->
-          it label $
-            parseAcceptHeader acceptHeader `shouldBe` expected
+          it label $ parseAcceptHeader acceptHeader `shouldBe` expected
 
       it "parses valid quality values including a zero, a mid-range, and a trailing-zero boundary form" $
         map acceptedRangeQuality (parseAcceptHeader "text/plain;q=0, application/json;q=0.125, image/svg+xml;q=1.000")

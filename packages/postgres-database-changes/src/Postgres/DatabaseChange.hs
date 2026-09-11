@@ -347,7 +347,7 @@ executeCommand executor sql = do
     DatabaseChangeRows _ -> throwError DatabaseChangeCommandReturnedRows
 
 executeQuery :: DatabaseChangeExecutor -> Text -> ExceptT DatabaseChangeError IO ()
-executeQuery executor sql = do
+executeQuery executor sql =
   void (executeRows executor sql)
 
 executeRows :: DatabaseChangeExecutor -> Text -> ExceptT DatabaseChangeError IO [[Maybe ByteString.ByteString]]

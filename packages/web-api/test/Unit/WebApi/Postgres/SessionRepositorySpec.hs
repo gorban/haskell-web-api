@@ -13,7 +13,7 @@ import WebApi.Config (DatabaseConfig (..))
 import WebApi.Postgres.Testing (buildRuntimePostgresAccountSessionStore, buildRuntimePostgresAccountSessionStoreWithRunner, newPostgresPool, runPostgresMigrationsForRuntime)
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..))
 
-spec = do
+spec =
   describe "runtime PostgreSQL account-session persistence" $ do
     it "uses bound parameters to save, load, and invalidate an opaque session" $ do
       queriesReference <- newIORef []
@@ -91,5 +91,5 @@ spec = do
       pool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
       loadAccountSession (buildRuntimePostgresAccountSessionStore pool) unknownSessionId `shouldReturnEqual` Right Nothing
 
-    it "keeps the account-session errors comparable without exposing persistence details" $ do
+    it "keeps the account-session errors comparable without exposing persistence details" $
       AccountSessionStoreUnavailable /= AccountSessionStoreCorruptData `shouldBe` True

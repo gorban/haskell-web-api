@@ -465,7 +465,7 @@ existingSpec = do
           }
 
 movedSpec :: Spec
-movedSpec = do
+movedSpec =
   describe "planObservabilityStartup" $ do
     it "produces no exporter startup actions when tracing and metrics are disabled" $
       planObservabilityStartup ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}

@@ -13,7 +13,7 @@ import WebApi.Database (DatabaseError (..), DatabaseSeed (..), buildSeededPageRe
 import WebApi.Page (AppPageModel (..), AuthenticatedProfilePageDetails (..), CallToAction (..), PendingProfilePageDetails (..), ProfilePageModel (..), SecondPageModel (..), SignedOutProfilePageDetails (..), UnavailableProfilePageDetails (..), buildPageModel, renderPageBody, renderPageWithDatabase)
 import WebApi.Route (AppRoute (..), defaultRequestContext)
 
-spec = do
+spec =
   describe "renderPageBody" $ do
     it "renders account page bodies alongside ordinary page bodies" $ do
       renderPageBody (RegistrationPage RegisterAccountTarget emptyRegistrationForm)

@@ -10,8 +10,8 @@ policy :: LoginProtectionPolicy
 policy = LoginProtectionPolicy 2 100 50
 
 spec = do
-  describe "LoginProtectionPolicy" $ do
-    it "has a secure default and exposes stable diagnostics" $ do
+  describe "LoginProtectionPolicy" $
+    it "has a secure default and exposes stable diagnostics" $
       expectAll
         ( (defaultLoginProtectionPolicy `shouldBe` LoginProtectionPolicy 5 900000000000 900000000000)
             :| [ defaultLoginProtectionPolicy /= policy `shouldBe` True,
@@ -21,7 +21,7 @@ spec = do
         )
 
   describe "evaluateLoginAttempt" $ do
-    it "permits requests below the failure threshold and ignores successful or expired attempts" $ do
+    it "permits requests below the failure threshold and ignores successful or expired attempts" $
       expectAll
         ( (evaluateLoginAttempt policy 100 [] `shouldBe` LoginPermitted)
             :| [ evaluateLoginAttempt policy 100 [LoginAttempt 99 False] `shouldBe` LoginPermitted,
@@ -33,7 +33,7 @@ spec = do
                ]
         )
 
-    it "throttles at the failure threshold until the newest relevant failure expires" $ do
+    it "throttles at the failure threshold until the newest relevant failure expires" $
       expectAll
         ( (evaluateLoginAttempt policy 100 [LoginAttempt 60 False, LoginAttempt 90 False] `shouldBe` LoginThrottledUntil 140)
             :| [ evaluateLoginAttempt policy 141 [LoginAttempt 60 False, LoginAttempt 90 False] `shouldBe` LoginPermitted,
@@ -45,7 +45,7 @@ spec = do
                ]
         )
 
-    it "computes the same lockout regardless of whether the caller passes attempts oldest-first or newest-first" $ do
+    it "computes the same lockout regardless of whether the caller passes attempts oldest-first or newest-first" $
       expectAll
         ( (evaluateLoginAttempt policy 100 [LoginAttempt 90 False, LoginAttempt 60 False] `shouldBe` LoginThrottledUntil 140)
             :| [ evaluateLoginAttempt policy 100 [LoginAttempt 60 False, LoginAttempt 90 False] `shouldBe` LoginThrottledUntil 140,
@@ -53,7 +53,7 @@ spec = do
                ]
         )
 
-  describe "AuthenticationAuditSink" $ do
+  describe "AuthenticationAuditSink" $
     it "leaves audit delivery application-owned" $ do
       events <- newIORef []
       let sink =

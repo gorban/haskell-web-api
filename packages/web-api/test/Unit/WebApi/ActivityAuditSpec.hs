@@ -49,7 +49,7 @@ spec = describe "WebApi.ActivityAudit" $ do
     activityRequestId activity `shouldBe` requiredMaybe "request id" (mkRequestId "550e8400-e29b-41d4-a716-446655440000")
     payloadText (activityEvent activity) `shouldBe` "account-session-issued\npassword"
 
-  it "projects only trusted declared route facts into bounded audit columns" $ do
+  it "projects only trusted declared route facts into bounded audit columns" $
     case auditRouteObservationFromTrusted (requiredTrustedRouteObservation "account.login" ("root" :| ["account"]) "/account/login" "en") of
       Left AuditRouteMountChainTooLong -> expectationFailure "expected a bounded mount chain"
       Left AuditRouteLocaleTooLong -> expectationFailure "expected a bounded locale"
@@ -65,10 +65,10 @@ spec = describe "WebApi.ActivityAudit" $ do
     expectMountChainTooLong longMountRoute
     expectLocaleTooLong longLocaleRoute
 
-  it "keeps unavailable audit storage in an explicit result rail" $ do
+  it "keeps unavailable audit storage in an explicit result rail" $
     appendAccountActivity unavailableStore (error "activity must not be evaluated for unavailable storage") >>= expectUnavailable
 
-  it "materializes a successfully appended audit identifier without exposing it" $ do
+  it "materializes a successfully appended audit identifier without exposing it" $
     appendAccountActivity successfulStore (error "activity belongs to the storage adapter") >>= expectActivityId
 
   it "keeps the immutable audit schema and deployment reconciliation on controlled function boundaries" $ do

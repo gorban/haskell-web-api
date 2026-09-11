@@ -10,7 +10,7 @@ import HarchWeb.Totp
 
 spec = do
   describe "TotpSecret" $ do
-    it "round-trips canonical Base32 enrollment secrets" $ do
+    it "round-trips canonical Base32 enrollment secrets" $
       expectAll
         ( (renderTotpSecret rfcSecret `shouldBe` "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
             :| [ rfcSecret /= alternateSecret `shouldBe` True,
@@ -21,11 +21,11 @@ spec = do
                ]
         )
 
-    it "accepts every canonical Base32 alphabet value" $ do
+    it "accepts every canonical Base32 alphabet value" $
       map (fmap renderTotpSecret . mkTotpSecret . Text.replicate 32 . Text.singleton) "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
         `shouldBe` map (Just . Text.replicate 32 . Text.singleton) "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
 
-    it "rejects empty, malformed, non-canonical, and undersized secrets" $ do
+    it "rejects empty, malformed, non-canonical, and undersized secrets" $
       expectAll
         ( (isNothing (mkTotpSecret "") `shouldBe` True)
             :| [ isNothing (mkTotpSecret "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJ0") `shouldBe` True,

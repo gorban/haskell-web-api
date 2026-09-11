@@ -289,7 +289,7 @@ spec = do
         secondResponseBytes <- readRawLoopbackHttpResponse (localServerPort localTestServer) "GET /known HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
         secondResponseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "200"
 
-  describe "withLocalTestServerForApplication" $ do
+  describe "withLocalTestServerForApplication" $
     it "serves an already-built Wai.Application over a real loopback HTTP listener" $ do
       gatedApplication <- toWaiApplication sampleApplication
       let markedWaiApplication request respond =
@@ -305,7 +305,7 @@ spec = do
               :| [Text.isInfixOf "handled by middleware" markerResponseText `shouldBe` True]
           )
 
-  describe "withLocalTestServer startup cleanup" $ do
+  describe "withLocalTestServer startup cleanup" $
     it "closes its loopback listener when Warp rejects the transport settings" $ do
       let startupFailure = "synthetic local-server transport startup failure"
           failingApplication =

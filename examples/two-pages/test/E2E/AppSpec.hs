@@ -49,8 +49,7 @@ spec =
             runBrowserSpec browser do
               visit homeUrl
               click (byRole Link `named` "Go to the second page")
-              assertAllObserved do
-                currentUrl `shouldEqual` secondUrl
+              assertAllObserved $ currentUrl `shouldEqual` secondUrl
               historyBack
               assertAllObserved do
                 currentUrl `shouldEqual` homeUrl
@@ -135,8 +134,7 @@ spec =
               visit homeUrl
               fill emailField "ada@example.com"
               submit subscriptionForm
-              assertAllObserved do
-                actionStatus `shouldHaveText` "Still waiting for this action to be handled."
+              assertAllObserved $ actionStatus `shouldHaveText` "Still waiting for this action to be handled."
               click (byRole Button `named` "Cancel action")
               assertAllObserved do
                 actionStatus `shouldHaveText` "Action cancelled."
@@ -156,8 +154,7 @@ spec =
               visit homeUrl
               fill emailField "ada@example.com"
               submit subscriptionForm
-              assertAllObserved do
-                actionStatus `shouldHaveText` "Still waiting for this action to be handled."
+              assertAllObserved $ actionStatus `shouldHaveText` "Still waiting for this action to be handled."
               releaseRequestsMatching "**/assets/navigation.js"
               assertAllObserved do
                 byRole Heading `named` "Subscription received" `shouldHaveText` "Subscription received"
@@ -179,7 +176,7 @@ spec =
               waitForBlockedRequestsMatching "**/actions/subscribe"
               click (byRole Button `named` "Cancel action")
               releaseRequestsMatching "**/actions/subscribe"
-              assertAllObserved do
+              assertAllObserved $
                 attributeValue (css "body") "data-harch-action-response-decoded" `shouldEqual` Just "true"
               assertAllObserved do
                 currentUrl `shouldEqual` homeUrl
@@ -200,10 +197,9 @@ spec =
               submit subscriptionForm
               waitForBlockedRequestsMatching "**/actions/subscribe"
               click (byRole Link `named` "Go to the second page")
-              assertAllObserved do
-                currentUrl `shouldEqual` secondUrl
+              assertAllObserved $ currentUrl `shouldEqual` secondUrl
               releaseRequestsMatching "**/actions/subscribe"
-              assertAllObserved do
+              assertAllObserved $
                 attributeValue (css "body") "data-harch-action-response-decoded" `shouldEqual` Just "true"
               assertAllObserved do
                 currentUrl `shouldEqual` secondUrl
@@ -222,8 +218,7 @@ spec =
               fill emailField "second@example.com"
               submit subscriptionForm
               waitForBlockedRequestCountMatching "**/actions/subscribe" 2
-              assertAllObserved do
-                (mutationRequestCount <$> browserMetrics) `shouldEqual` 2
+              assertAllObserved $ (mutationRequestCount <$> browserMetrics) `shouldEqual` 2
               releaseRequestsMatching "**/actions/subscribe"
               assertAllObserved do
                 byRole Heading `named` "Subscription received" `shouldHaveText` "Subscription received"
@@ -242,8 +237,7 @@ spec =
               _ <- runPageScript handler
               fill emailField "throw@example.com"
               submit subscriptionForm
-              assertAllObserved do
-                actionStatus `shouldHaveText` "This action needs your attention."
+              assertAllObserved $ actionStatus `shouldHaveText` "This action needs your attention."
               fill emailField "reject@example.com"
               submit subscriptionForm
               assertAllObserved do
@@ -266,8 +260,7 @@ spec =
               _ <- runPageScript handlerSafeRetry
               fill emailField "safe@example.com"
               submit subscriptionForm
-              assertAllObserved do
-                actionStatus `shouldHaveText` "This action needs your attention."
+              assertAllObserved $ actionStatus `shouldHaveText` "This action needs your attention."
               click retryButton
               assertAllObserved do
                 actionStatus `shouldHaveText` "Completed."
@@ -275,8 +268,7 @@ spec =
               _ <- runPageScript idempotentRetry
               fill emailField "idempotent@example.com"
               submit subscriptionForm
-              assertAllObserved do
-                actionStatus `shouldHaveText` "This action needs your attention."
+              assertAllObserved $ actionStatus `shouldHaveText` "This action needs your attention."
               click retryButton
               assertAllObserved do
                 actionStatus `shouldHaveText` "Completed."
@@ -300,8 +292,7 @@ spec =
                 actionStatus `shouldHaveText` "Still waiting for this action to be handled."
                 attributeValue subscriptionForm "aria-busy" `shouldEqual` Just "true"
               _ <- runPageScript "const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event); document.body.dataset.harchBeforeUnload = String(event.defaultPrevented);"
-              assertAllObserved do
-                attributeValue (css "body") "data-harch-before-unload" `shouldEqual` Just "true"
+              assertAllObserved $ attributeValue (css "body") "data-harch-before-unload" `shouldEqual` Just "true"
               click (byRole Button `named` "Cancel action")
               _ <- runPageScript "document.body.dataset.harchStaleSettlement = String(window.__harchTestSettlement.completed()); const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event); document.body.dataset.harchBeforeUnload = String(event.defaultPrevented);"
               assertAllObserved do
@@ -358,8 +349,7 @@ spec =
             runBrowserSpec browser do
               visit secondUrl
               reload
-              assertAllObserved do
-                byRole Heading `named` "Second" `shouldHaveText` "Second"
+              assertAllObserved $ byRole Heading `named` "Second" `shouldHaveText` "Second"
               visitWithoutScripts homeUrl
               click (byRole Link `named` "Go to the second page")
               assertAllObserved do
@@ -375,21 +365,19 @@ spec =
                 byRole Heading `named` "Live updates" `shouldHaveText` "Live updates"
                 css "#live-data-status" `shouldHaveText` "Waiting for an update."
               visit liveDataUrl
-              assertAllObserved do
-                css "#live-data-status" `shouldHaveText` "The live update arrived."
+              assertAllObserved $ css "#live-data-status" `shouldHaveText` "The live update arrived."
 
           it "reconciles declared page enhancements across enhanced navigation and history" $ \(browser, server) -> do
             let homeUrl = localServerBaseUrl server <> "/"
                 liveDataUrl = localServerBaseUrl server <> "/live-data"
             runBrowserSpec browser do
               visit homeUrl
-              assertAllObserved do
+              assertAllObserved $
                 css "[data-home-enhancement-status]" `shouldHaveText` "The page-scoped home enhancement is ready."
               click (byRole Link `named` "See live updates")
-              assertAllObserved do
-                css "#live-data-status" `shouldHaveText` "The live update arrived."
+              assertAllObserved $ css "#live-data-status" `shouldHaveText` "The live update arrived."
               click (byRole Link `named` "Home")
-              assertAllObserved do
+              assertAllObserved $
                 css "[data-home-enhancement-status]" `shouldHaveText` "The page-scoped home enhancement is ready."
               historyBack
               assertAllObserved do

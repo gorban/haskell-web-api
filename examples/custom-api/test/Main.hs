@@ -203,7 +203,7 @@ mainSpec application = describe "Unit.App.Api.Declarative" $ do
       body <- readResponseBody response
       body `shouldBe` "invalid multipart body"
 
-  describe "a path no declared endpoint owns" $ do
+  describe "a path no declared endpoint owns" $
     it "renders the shared endpoint table's own 404, since the table is the sole path/method authority" $ do
       response <- performWaiRequest application Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/unrelated"}
       Wai.responseStatus response `shouldBe` HttpTypes.status404

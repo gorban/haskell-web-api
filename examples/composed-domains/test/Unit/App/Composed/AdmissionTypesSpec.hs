@@ -36,7 +36,7 @@ spec = describe "Unit.App.Composed.AdmissionTypes" $ do
              ]
       )
 
-  it "rejects malformed and overlong login, principal, and encrypted-secret values" $ do
+  it "rejects malformed and overlong login, principal, and encrypted-secret values" $
     expectAll
       ( (mkAdmissionLoginName "" `shouldBe` Nothing)
           :| [ mkAdmissionLoginName "invalid login" `shouldBe` Nothing,

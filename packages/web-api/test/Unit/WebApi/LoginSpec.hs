@@ -86,11 +86,11 @@ spec = do
       beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore permissiveThrottle passwordWorkGate emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginPasswordWorkBudgetExhausted
 
-    it "keeps unknown-account verification on the fixed timing-defense path" $ do
+    it "keeps unknown-account verification on the fixed timing-defense path" $
       beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore permissiveThrottle testPasswordWorkGate emailAddress (mkPassword "login-existence-oracle-defense")
         `shouldReturnEqual` PasswordLoginRejected
 
-    it "rejects an externally malformed stored password hash without native password work" $ do
+    it "rejects an externally malformed stored password hash without native password work" $
       beginPasswordLogin (credentialStore (Right (Just (AccountCredential accountId (PasswordHash "malformed") True)))) unexpectedMfaStore permissiveThrottle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginKnownAccountRejected accountId
 
@@ -405,7 +405,7 @@ spec = do
         )
 
   describe "login throttling" $ do
-    it "raises the existence-oracle dummy-hash construction error for an invalid input" $ do
+    it "raises the existence-oracle dummy-hash construction error for an invalid input" $
       evaluate (requiredPasswordHashOrDie "test failure" Nothing `seq` ())
         `shouldThrow` \case
           ErrorCall message -> "test failure" `Text.isInfixOf` Text.pack message

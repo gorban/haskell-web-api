@@ -7,7 +7,7 @@ import HarchWeb.Username (mkUsername, usernameText)
 
 spec =
   describe "Username" $ do
-    it "accepts the source app's 3-20 character ASCII handle grammar" $ do
+    it "accepts the source app's 3-20 character ASCII handle grammar" $
       expectAll
         ( (fmap usernameText (mkUsername "eve_42-dev") `shouldBe` Just "eve_42-dev")
             :| [ fmap usernameText (mkUsername "AbC") `shouldBe` Just "AbC",
@@ -15,7 +15,7 @@ spec =
                ]
         )
 
-    it "rejects short, long, non-ASCII, and punctuation-bearing handles" $ do
+    it "rejects short, long, non-ASCII, and punctuation-bearing handles" $
       expectAll
         ( (mkUsername "ab" `shouldBe` Nothing)
             :| [ mkUsername "abcdefghijklmnopqrstu" `shouldBe` Nothing,

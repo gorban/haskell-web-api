@@ -27,7 +27,7 @@ import HarchWeb.Gmail (GmailHttpRequest (..), GmailHttpResponse (..))
 import HarchWeb.GoogleWorkspace
 
 spec = do
-  describe "decodeGoogleWorkspaceServiceAccount" $ do
+  describe "decodeGoogleWorkspaceServiceAccount" $
     it "validates encoded credentials without exposing their contents" $ do
       errorText (decodeGoogleWorkspaceServiceAccount "not-base64" "worker@example.test")
         `shouldBe` "Google Workspace credentials must be base64-encoded JSON"

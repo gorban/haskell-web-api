@@ -71,7 +71,7 @@ data ChildPolicy = MaySaveCatalog
 data ParentPolicy = MayManageCatalog
   deriving (Eq, Show)
 
-spec = do
+spec =
   describe "HarchWeb.Action" $ do
     it "mounts a child action codec through typed context and policy projections" $ do
       let childMetadata =
@@ -856,7 +856,7 @@ spec = do
       Action.decodeAction optionalCodec ((validationPayload []) {Action.clientActionPath = "/optional"})
         `shouldBe` Action.DecodedClientAction Nothing
 
-    it "rejects ambiguous endpoint declarations during codec construction" $ do
+    it "rejects ambiguous endpoint declarations during codec construction" $
       case Action.actionCodec [Action.action () Action.DoNotRetain Action.ApplyActionResponse (Action.post "/duplicate") (pure ()), Action.action () Action.DoNotRetain Action.ApplyActionResponse (Action.post "/duplicate") (pure ())] of
         Left codecError -> do
           codecError `shouldBe` Action.DuplicateActionEndpoint Action.ActionPost "/duplicate"

@@ -827,7 +827,7 @@ parseAppStartupConfig committedDefaults localOverrides environmentOverrides =
     <*> parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides
 
 parseRuntimeAppConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError AppConfig
-parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
+parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides =
   runReaderT
     parseAppConfig
     ConfigSources

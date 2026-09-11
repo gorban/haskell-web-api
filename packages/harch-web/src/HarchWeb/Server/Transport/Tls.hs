@@ -162,7 +162,7 @@ reloadTlsCredentialsIfChanged reloadingTlsCredentials = do
                   (tlsCredentialPrivateKeyPath reloadingTlsCredentials)
                   times
               case latestSnapshotResult of
-                Right latestSnapshot -> do
+                Right latestSnapshot ->
                   pure (latestSnapshot, tlsCredentialValues latestSnapshot)
                 Left _ ->
                   pure (cachedSnapshot, tlsCredentialValues cachedSnapshot)

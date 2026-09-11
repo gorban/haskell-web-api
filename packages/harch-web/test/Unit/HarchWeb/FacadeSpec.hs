@@ -49,7 +49,7 @@ import Unit.HarchWeb.TestSupport (TestContext, TestRoute (DataRoute, KnownRoute,
 
 movedSpec :: Spec
 movedSpec = do
-  describe "public role-safe boundaries" $ do
+  describe "public role-safe boundaries" $
     it "constructs and applies opaque path, password, secret, TLS, and span roles through their public modules" $ do
       urlPathText (applyRequestPathPrefix (testPathPrefix "/app/") (mkUrlPath "/second")) `shouldBe` "/app/second"
       urlPathText (stripRequestPathPrefix (testPathPrefix "/app") (mkUrlPath "/app/second")) `shouldBe` "/second"
@@ -545,5 +545,5 @@ movedSpec = do
         )
       reportApplicationLog sampleApplication "ignored log entry"
 
-spec = do
+spec =
   movedSpec

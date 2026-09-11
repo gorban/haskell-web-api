@@ -47,7 +47,7 @@ import Text.Read ()
 import Unit.HarchWeb.TestSupport (certbotHttp01Backend, serverConfigWithListeners)
 
 spec = do
-  describe "TLS policy vocabulary" $ do
+  describe "TLS policy vocabulary" $
     it "resolves every documented cipher identifier to an installed cipher usable by a supported protocol" $ do
       let supportedCipherSuites =
             [ ("TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384", TlsEcdheEcdsaAes256GcmSha384),
@@ -224,13 +224,14 @@ spec = do
       toServerConfig serverConfig `shouldBe` serverConfig
 
     it "covers derived Eq and Show instances for the shared server config types" $ do
-      let shouldBeParenthesized rendered = do
-            case rendered of
-              '(' : rest ->
-                case reverse rest of
-                  ')' : _ -> pure ()
-                  _ -> expectationFailure "expected parenthesized rendering"
-              _ -> expectationFailure "expected parenthesized rendering"
+      let shouldBeParenthesized rendered =
+            ( case rendered of
+                '(' : rest ->
+                  case reverse rest of
+                    ')' : _ -> pure ()
+                    _ -> expectationFailure "expected parenthesized rendering"
+                _ -> expectationFailure "expected parenthesized rendering"
+            )
           certbotConfig = CertbotConfig {certbotExecutable = "certbot", certbotArguments = ["certonly", "--webroot"]}
           otherCertbotConfig = CertbotConfig {certbotExecutable = "certbot", certbotArguments = ["renew"]}
           strictTransportSecurityConfig =

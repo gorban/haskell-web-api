@@ -15,7 +15,7 @@ spec =
       renderServerSentEvent (ServerSentEvent (Just "page-update") (Just "42") "Ready")
         `shouldBe` "event: page-update\nid: 42\ndata: Ready\n\n"
 
-    it "renders every payload line as a data field and keeps an empty payload observable" $ do
+    it "renders every payload line as a data field and keeps an empty payload observable" $
       expectAll
         ( (renderServerSentEvent (ServerSentEvent Nothing Nothing "first\nsecond") `shouldBe` "data: first\ndata: second\n\n")
             :| [renderServerSentEvent (ServerSentEvent Nothing Nothing "") `shouldBe` "data: \n\n"]

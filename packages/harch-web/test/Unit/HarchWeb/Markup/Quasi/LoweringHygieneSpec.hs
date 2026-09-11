@@ -14,8 +14,8 @@
 import HarchWeb
 import HarchWeb.Markup qualified as Markup
 
-spec = do
-  describe "quasiquoter splice hygiene" $ do
+spec =
+  describe "quasiquoter splice hygiene" $
     it "resolves framework identifiers hygienically even when a local binding shadows their names" $
       -- Regression for an mkName splice-capture bug: the quasiquoter used to
       -- resolve every framework identifier (text, value, name, method,

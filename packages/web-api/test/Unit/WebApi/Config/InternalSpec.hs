@@ -52,18 +52,18 @@ productionCsrfSigningKeyring =
     _ -> error "expected valid production CSRF signing material"
 
 spec = do
-  describe "DatabasePoolCapacity" $ do
-    it "accepts only positive capacities" $ do
-      forM_
-        [ (1, Just 1),
-          (0, Nothing),
-          (-1, Nothing)
-        ]
-        $ \(capacity, expectedCapacity) ->
-          fmap databasePoolCapacityValue (mkDatabasePoolCapacity capacity) `shouldBe` expectedCapacity
+  describe "DatabasePoolCapacity"
+    $ it "accepts only positive capacities"
+    $ forM_
+      [ (1, Just 1),
+        (0, Nothing),
+        (-1, Nothing)
+      ]
+    $ \(capacity, expectedCapacity) ->
+      fmap databasePoolCapacityValue (mkDatabasePoolCapacity capacity) `shouldBe` expectedCapacity
 
-  describe "defaultAppConfig" $ do
-    it "reserves structured listener, static asset, and observability settings" $ do
+  describe "defaultAppConfig" $
+    it "reserves structured listener, static asset, and observability settings" $
       defaultAppConfig
         `shouldBe` AppConfig
           { appTitlePrefix = "web-api",
@@ -1669,8 +1669,7 @@ spec = do
       ("rejects a non-boolean X_CONTENT_TYPE_OPTIONS_NOSNIFF value", committedRuntimeDefaults, [], [("X_CONTENT_TYPE_OPTIONS_NOSNIFF", "maybe")], InvalidConfigValue "X_CONTENT_TYPE_OPTIONS_NOSNIFF" "maybe")
       ]
       `forM_` \(label, envPairs, listenerPairs, otherPairs, expectedError) ->
-        it label $
-          parseRuntimeAppConfig envPairs listenerPairs otherPairs `shouldBe` Left expectedError
+        it label $ parseRuntimeAppConfig envPairs listenerPairs otherPairs `shouldBe` Left expectedError
 
   describe "defaultAppEnvironmentConfig" $ do
     it "keeps committed .env defaults free of credentials and encryption keys while documenting JWT selectors" $ do

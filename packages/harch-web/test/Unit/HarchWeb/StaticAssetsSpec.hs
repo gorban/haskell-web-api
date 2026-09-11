@@ -45,7 +45,7 @@ import TestCore.Wai ()
 import Text.Read ()
 import Unit.HarchWeb.TestSupport (testPathPrefix)
 
-spec = do
+spec =
   describe "staticAssetHref" $
     it "renders asset URLs from the configured static prefix" $ do
       staticAssetHref (StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}) "app.js"

@@ -246,7 +246,7 @@ spec =
         Left mountError -> mountError `shouldBe` InvalidMountedActionCodec (Action.InvalidActionEndpointMetadata EndpointMetadata.EndpointNameTooLong)
         Right _ -> expectationFailure "expected an invalid mounted action declaration"
 
-    it "maps every non-page response shape without allowing a child route or context to escape its mount" $ do
+    it "maps every non-page response shape without allowing a child route or context to escape its mount" $
       forM_ [minBound .. maxBound] $ \responseKind -> do
         actionContext <- newIORef Nothing
         guardContext <- newIORef Nothing

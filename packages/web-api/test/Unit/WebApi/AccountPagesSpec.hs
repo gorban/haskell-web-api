@@ -72,7 +72,7 @@ issuedCsrfToken workflow requestContext = do
     HarchWeb.CsrfProtectionUnavailable -> expectationFailure "expected CSRF issuance to succeed" >> error "unreachable"
 
 existingSpec :: SpecWith ()
-existingSpec = do
+existingSpec =
   describe "WebApi.AccountPages" $ do
     it "accumulates application-form validation without changing to a fail-fast monad" $ do
       validationResult (fmap (+ 1) (valid 1 :: Validation Text.Text Int)) `shouldBe` Right 2

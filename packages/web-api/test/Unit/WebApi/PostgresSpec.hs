@@ -42,7 +42,7 @@ isConnectionFailure = \case
   Left _ -> True
   Right _ -> False
 
-spec = do
+spec =
   describe "WebApi.Postgres" $ do
     it "uses bound parameters for pending account and verification persistence" $ do
       recordedQueriesReference <- newIORef []
@@ -887,7 +887,7 @@ spec = do
         `shouldReturn` Right ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1", "keyed-login-attempt-groups-v1", "remove-session-csrf-v1", "account-audit-schema-v1", "account-audit-controlled-append-policy-v1", "account-audit-controlled-append-rls-v2", "account-audit-append-result-v1", "account-audit-initial-maintenance-v1", "account-audit-session-issue-v1", "account-audit-session-issue-conflict-fix-v1", "account-audit-session-issue-insert-privilege-fix-v1", "account-audit-registration-delivery-v1", "account-audit-verification-resend-delivery-v1"]
       runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT column_name FROM information_schema.columns WHERE table_schema = 'web_api' AND table_name IN ('account_sessions', 'mfa_enrollment_sessions') AND column_name = 'csrf_token';"
         `shouldReturn` Right []
-      withUnusedTcpEndpoint $ \unusedEndpoint -> do
+      withUnusedTcpEndpoint $ \unusedEndpoint ->
         runPostgresMigrations
           defaultMigrationPostgresConfig
             { databasePort = tcpEndpointPort unusedEndpoint
@@ -942,7 +942,7 @@ spec = do
       runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT table_name FROM information_schema.tables WHERE table_schema = 'web_api' AND table_name = 'schema_migrations';"
         `shouldReturn` Right []
 
-    it "creates account verification, MFA, and opaque-session storage without persisting raw bearer secrets" $ do
+    it "creates account verification, MFA, and opaque-session storage without persisting raw bearer secrets" $
       migrationStatementsFor
         `shouldSatisfy` \statements ->
           all
@@ -958,7 +958,7 @@ spec = do
               "CREATE TABLE IF NOT EXISTS web_api.account_sessions (session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, csrf_token TEXT NOT NULL, issued_at_nanoseconds BIGINT NOT NULL, expires_at_nanoseconds BIGINT NOT NULL, invalidated_at_nanoseconds BIGINT);"
             ]
 
-    it "stops database setup when a migration or seed command fails" $ do
+    it "stops database setup when a migration or seed command fails" $
       case seedStatements of
         failingSeedStatement : _ -> do
           let runner command =

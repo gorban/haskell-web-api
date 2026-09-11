@@ -73,11 +73,10 @@ spec = do
             _ <- evaluate (length outputContents)
             outputContents `shouldBe` malformedPragma ++ "\n"
 
-    around (withExampleSpecTemp defaultModuleSegments exampleModuleBase) $ do
+    around (withExampleSpecTemp defaultModuleSegments exampleModuleBase) $
       it "processes a simple spec file (default hs-source-dir)" $ \(_, tempFile) -> do
         let expectedHeader =
-              getModuleHeader $
-                getModuleName {- "test" -> empty segments: -} [] exampleModuleBase
+              getModuleHeader $ getModuleName {- "test" -> empty segments: -} [] exampleModuleBase
             outputFile = getOutputFile tempFile
         writeFile tempFile "  {-#   SPEC   #-}  "
         result <- runExceptT $ run [tempFile, outputFile]
@@ -104,14 +103,13 @@ spec = do
             outputFile = getOutputFile tempFile
         writeFile tempFile "{-# SPEC #-}"
         result <-
-          runExceptT $
-            run ["hs-source-dir=" ++ hsSourceDir, "spec-prelude=Test.Hspec", tempFile, outputFile]
+          runExceptT $ run ["hs-source-dir=" ++ hsSourceDir, "spec-prelude=Test.Hspec", tempFile, outputFile]
         result `shouldBe` Right ()
         outputContents <- readFile outputFile
         _ <- evaluate (length outputContents)
         outputContents `shouldContain'` "import Test.Hspec"
 
-    around (withExampleSpecTemp nestedModuleSegments exampleModuleBase) $ do
+    around (withExampleSpecTemp nestedModuleSegments exampleModuleBase) $
       it "processes a simple e2e spec file (2 file args)" $ \(tempDir, tempFile) -> do
         let expectedHeader = getModuleHeader $ getModuleName nestedModuleSegments exampleModuleBase
             hsSourceDir = takeFileName tempDir
@@ -124,7 +122,7 @@ spec = do
         outputContents `shouldContain'` expectedHeader
         outputContents `shouldContain'` "import TestCore.E2EPrelude"
 
-    around (withExampleSpecTemp defaultModuleSegments exampleModuleBase) $ do
+    around (withExampleSpecTemp defaultModuleSegments exampleModuleBase) $
       it "processes a simple spec file (3 file args like GHC calls it)" $ \(tempDir, tempFile) -> do
         let expectedHeader = getModuleHeader $ getModuleName defaultModuleSegments exampleModuleBase
             hsSourceDir = takeFileName tempDir
@@ -181,8 +179,7 @@ spec = do
                   ++ show (length topSegments + length importSegments + 4)
                   ++ ")"
               )
-              $ do
-                let moduleBase = "PureSpec"
+              $ let moduleBase = "PureSpec"
                     hsRoot = "test"
                     inputPath = hsRoot </> getRelativePath nestedModuleSegments moduleBase
                     absolutePath = "" </> "abs" </> inputPath

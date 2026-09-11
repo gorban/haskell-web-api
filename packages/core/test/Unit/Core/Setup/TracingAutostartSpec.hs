@@ -213,28 +213,26 @@ spec = do
     it "surfaces real runner stderr failures from docker"
       $ withPathScripts
         [("docker", "#!/bin/sh\nprintf 'docker stderr' >&2\nexit 7\n")]
-      $ do
-        TracingAutostart.attemptTracingAutostart
-          (singleRuntimePlan PrerequisitePlan.DockerRuntime)
-          `shouldReturn` TracingAutostart.TracingAutostartFailed
-            [ DatabaseAutostart.ContainerRuntimeFailure
-                { DatabaseAutostart.failedContainerRuntime = PrerequisitePlan.DockerRuntime,
-                  DatabaseAutostart.containerRuntimeFailureMessage = "docker stderr"
-                }
-            ]
+      $ TracingAutostart.attemptTracingAutostart
+        (singleRuntimePlan PrerequisitePlan.DockerRuntime)
+        `shouldReturn` TracingAutostart.TracingAutostartFailed
+          [ DatabaseAutostart.ContainerRuntimeFailure
+              { DatabaseAutostart.failedContainerRuntime = PrerequisitePlan.DockerRuntime,
+                DatabaseAutostart.containerRuntimeFailureMessage = "docker stderr"
+              }
+          ]
 
     it "uses the fallback exit-code message when the real runner exits silently"
       $ withPathScripts
         [("docker", "#!/bin/sh\nexit 7\n")]
-      $ do
-        TracingAutostart.attemptTracingAutostart
-          (singleRuntimePlan PrerequisitePlan.DockerRuntime)
-          `shouldReturn` TracingAutostart.TracingAutostartFailed
-            [ DatabaseAutostart.ContainerRuntimeFailure
-                { DatabaseAutostart.failedContainerRuntime = PrerequisitePlan.DockerRuntime,
-                  DatabaseAutostart.containerRuntimeFailureMessage = "command failed with exit code 7"
-                }
-            ]
+      $ TracingAutostart.attemptTracingAutostart
+        (singleRuntimePlan PrerequisitePlan.DockerRuntime)
+        `shouldReturn` TracingAutostart.TracingAutostartFailed
+          [ DatabaseAutostart.ContainerRuntimeFailure
+              { DatabaseAutostart.failedContainerRuntime = PrerequisitePlan.DockerRuntime,
+                DatabaseAutostart.containerRuntimeFailureMessage = "command failed with exit code 7"
+              }
+          ]
 
     it "surfaces missing runtime executables from the real runner explicitly" $
       withEmptyPath $

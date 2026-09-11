@@ -47,8 +47,7 @@ import Unit.HarchWeb.TestSupport (TestContext (requestLanguage), TestRoute (Data
 
 spec = do
   describe "application" $ do
-    it "preserves the supplied application description" $
-      appName (application sampleApplication) `shouldBe` "sample"
+    it "preserves the supplied application description" $ appName (application sampleApplication) `shouldBe` "sample"
 
     it "can render non-page responses for future API routes" $
       renderResponse sampleApplication (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})
@@ -78,7 +77,7 @@ spec = do
                ]
         )
 
-  describe "runRequestMiddlewarePipeline" $ do
+  describe "runRequestMiddlewarePipeline" $
     it "runs in declaration order, carries context forward, and stops after a halt" $ do
       visitedMiddleware <- newIORef ([] :: [Text])
       let responseBodyValue = ResponseBody {responseStatus = Http.status401, responseContentType = "text/plain; charset=utf-8", responseBody = "Sign in required", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}

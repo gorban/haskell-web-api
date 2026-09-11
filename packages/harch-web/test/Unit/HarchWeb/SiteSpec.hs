@@ -81,7 +81,7 @@ requiredSampleRouteTemplate route =
     Right routeTemplate -> routeTemplate
     Left metadataError -> error ("invalid sample route template: " <> show metadataError)
 
-spec = do
+spec =
   describe "buildSiteApplication" $ do
     it "keeps the simpleSite defaults available when the composition root does not override them" $ do
       let siteApplication = buildSiteApplication sampleSite
