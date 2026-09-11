@@ -1,5 +1,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+-- | Account-action workflows.
+--
+-- Decision record (AHI-5, 2026-09-11): retain known-account rejection
+-- provenance in the existing application login-result algebra and append its
+-- closed audit event at this action interpreter. The password/MFA workflow
+-- remains the sole owner of whether the account is known; this interpreter
+-- neither performs another lookup nor changes the public denial. A failed
+-- best-effort append adds only a bounded operational signal and private log
+-- entry, preserving the already-denied outcome. Unknown identifiers retain
+-- no account subject and produce no audit row. This extends existing login
+-- and action boundaries rather than adding an audit middleware or a second
+-- authentication workflow.
 module WebApi.AccountPages.Actions.Workflows
   ( handleRegistrationSubmission,
     handleVerificationSubmission,
@@ -57,9 +69,10 @@ import WebApi.AccountPages.Validation (Validation, invalid, valid, validate3, va
 import WebApi.AccountPrincipal (accountPrincipalAccountId, accountPrincipalSessionId)
 import WebApi.ActivityAudit
   ( AccountActivity (..),
-    AccountAuditEvent (AccountSessionEnded),
+    AccountAuditEvent (AccountSessionEnded, AuthenticationRejected),
     ActivityAuditStore (..),
     ActivityAuditStoreError (..),
+    AuditAuthenticationStage (..),
     AuditSessionEndReason (ExplicitLogout),
     auditRouteObservationFromTrusted,
   )
@@ -74,6 +87,7 @@ import WebApi.AppEffect
 import WebApi.Localization (AppMessage (..))
 import WebApi.Login
   ( LoginIdentifier (..),
+    LoginStage (..),
     LoginThrottleContext (..),
     MfaLoginProof (..),
     PasswordLoginEnvironment (..),
@@ -369,6 +383,12 @@ interpretLoginResult actionRequest identifierValue proofChoice nowNanoseconds lo
         PasswordMfaLoginEmailVerificationRequired _ -> pure (response Http.status403 (localized actionRequest VerifyEmailBeforeSignIn) FormStatusFailure Nothing [])
         PasswordMfaLoginEnrollmentRequired accountId -> issueLoginEnrollmentSession actionRequest identifierValue proofChoice nowNanoseconds accountId
         PasswordMfaLoginRejected -> pure (response Http.status422 (localized actionRequest SignInRejected) FormStatusFailure (Just proofFocus) [])
+        PasswordMfaLoginKnownAccountRejected accountId loginStage ->
+          appendKnownLoginRejection
+            actionRequest
+            accountId
+            loginStage
+            (response Http.status422 (localized actionRequest SignInRejected) FormStatusFailure (Just proofFocus) [])
         PasswordMfaLoginThrottled _retryAfterNanoseconds -> pure (response Http.status429 (localized actionRequest SignInThrottled) FormStatusFailure (Just loginIdentifierId) [])
         PasswordMfaLoginCredentialStoreError storeError -> throwClientActionFailure (unavailable (Just loginIdentifierId)) LoginCredentialStoreFailure "AccountCredentialStoreError" (credentialStoreErrorMessage storeError)
         PasswordMfaLoginMfaStoreError storeError -> throwClientActionFailure (unavailable (Just proofFocus)) LoginMfaStoreFailure "MfaStoreError" (mfaStoreErrorMessage storeError)
@@ -381,6 +401,35 @@ loginProofFocusId proofChoice =
   case proofChoice of
     LoginAuthenticatorProof -> loginAuthenticatorCodeId
     LoginRecoveryProof -> loginRecoveryCodeId
+
+appendKnownLoginRejection :: AccountActionRequest -> Account.AccountId -> LoginStage -> AccountActionResponse -> AccountActionWorkflow
+appendKnownLoginRejection actionRequest accountId loginStage deniedResponse =
+  case knownLoginRejectionActivity actionRequest accountId loginStage of
+    Left activityError -> pure (attachBestEffortAuditFailure KnownAuthenticationRejectionAudit activityError deniedResponse)
+    Right activity -> do
+      workflow <- accountWorkflow
+      appendResult <- liftIO (appendAccountActivity (accountWorkflowActivityAuditStore workflow) activity)
+      pure (either (\storeError -> attachBestEffortAuditFailure KnownAuthenticationRejectionAudit storeError deniedResponse) (const deniedResponse) appendResult)
+
+knownLoginRejectionActivity :: AccountActionRequest -> Account.AccountId -> LoginStage -> Either ActivityAuditStoreError AccountActivity
+knownLoginRejectionActivity actionRequest accountId loginStage = do
+  requestId <- maybe (Left ActivityAuditCorruptResult) Right (requestCorrelationId context)
+  route <- traverse (either (const (Left ActivityAuditCorruptResult)) Right . auditRouteObservationFromTrusted) (requestRouteObservation context)
+  pure
+    AccountActivity
+      { activitySubject = accountId,
+        activityRequestId = requestId,
+        activityEvent = AuthenticationRejected (auditAuthenticationStage loginStage),
+        activityRoute = route
+      }
+  where
+    context = HarchWeb.clientActionContext actionRequest
+
+auditAuthenticationStage :: LoginStage -> AuditAuthenticationStage
+auditAuthenticationStage loginStage =
+  case loginStage of
+    PasswordLoginStage -> PasswordAuthenticationStage
+    SecondFactorLoginStage -> SecondFactorAuthenticationStage
 
 -- | A correct password already proves account ownership even though MFA
 -- enrollment is still outstanding, so this is the second legitimate place
@@ -457,20 +506,45 @@ logoutSuccessResponse actionRequest auditFailure = do
   pure (maybe response (`attachLogoutAuditFailure` response) auditFailure)
 
 attachLogoutAuditFailure :: ActivityAuditStoreError -> AccountActionResponse -> AccountActionResponse
-attachLogoutAuditFailure storeError response =
+attachLogoutAuditFailure = attachBestEffortAuditFailure LogoutAuditAppend
+
+data BestEffortAuditOperation
+  = LogoutAuditAppend
+  | KnownAuthenticationRejectionAudit
+
+attachBestEffortAuditFailure :: BestEffortAuditOperation -> ActivityAuditStoreError -> AccountActionResponse -> AccountActionResponse
+attachBestEffortAuditFailure operation storeError response =
   response
     { HarchWeb.clientActionObservabilityAttributes =
         HarchWeb.clientActionObservabilityAttributes response
-          <> [ Observability.ObservabilityAttribute "app.operational.signal.account.logout.audit-append-failed" (Observability.TextAttribute "true"),
-               Observability.ObservabilityAttribute "account.audit.operation" (Observability.TextAttribute "append"),
+          <> [ Observability.ObservabilityAttribute (bestEffortAuditSignalName operation) (Observability.TextAttribute "true"),
+               Observability.ObservabilityAttribute "account.audit.operation" (Observability.TextAttribute (bestEffortAuditOperationName operation)),
                Observability.ObservabilityAttribute "account.audit.failure-kind" (Observability.TextAttribute (auditFailureKind storeError))
              ]
           <> capacityExceededSignal storeError,
       HarchWeb.clientActionLogEntries =
         HarchWeb.clientActionLogEntries response
-          <> ["[account.logout.audit-append-failed] audit.operation=append audit.failure-kind=" <> auditFailureKind storeError]
+          <> ["[" <> bestEffortAuditLogName operation <> "] audit.operation=" <> bestEffortAuditOperationName operation <> " audit.failure-kind=" <> auditFailureKind storeError]
           <> capacityExceededLog storeError
     }
+
+bestEffortAuditSignalName :: BestEffortAuditOperation -> Text
+bestEffortAuditSignalName operation =
+  case operation of
+    LogoutAuditAppend -> "app.operational.signal.account.logout.audit-append-failed"
+    KnownAuthenticationRejectionAudit -> "app.operational.signal.account.authentication-rejection.audit-append-failed"
+
+bestEffortAuditLogName :: BestEffortAuditOperation -> Text
+bestEffortAuditLogName operation =
+  case operation of
+    LogoutAuditAppend -> "account.logout.audit-append-failed"
+    KnownAuthenticationRejectionAudit -> "account.authentication-rejection.audit-append-failed"
+
+bestEffortAuditOperationName :: BestEffortAuditOperation -> Text
+bestEffortAuditOperationName operation =
+  case operation of
+    LogoutAuditAppend -> "append"
+    KnownAuthenticationRejectionAudit -> "authentication-rejection"
 
 auditFailureKind :: ActivityAuditStoreError -> Text
 auditFailureKind storeError =

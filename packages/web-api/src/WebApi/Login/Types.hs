@@ -207,6 +207,7 @@ data PasswordLoginEnvironment = PasswordLoginEnvironment
 
 data PasswordLoginResult
   = PasswordLoginRejected
+  | PasswordLoginKnownAccountRejected AccountId
   | PasswordLoginThrottled UnixTimeNanoseconds
   | PasswordLoginEmailVerificationRequired AccountId
   | PasswordLoginMfaEnrollmentRequired AccountId
@@ -224,6 +225,7 @@ data MfaLoginProof
 
 data PasswordMfaLoginResult
   = PasswordMfaLoginRejected
+  | PasswordMfaLoginKnownAccountRejected AccountId LoginStage
   | PasswordMfaLoginThrottled UnixTimeNanoseconds
   | PasswordMfaLoginEmailVerificationRequired AccountId
   | PasswordMfaLoginEnrollmentRequired AccountId

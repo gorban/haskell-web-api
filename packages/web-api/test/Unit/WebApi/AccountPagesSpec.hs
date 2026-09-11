@@ -47,7 +47,7 @@ import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buil
 import WebApi.AccountPages.Validation (Validation, invalid, valid, validate3, validate4, validationResult)
 import WebApi.AccountPrincipal (mkAccountPrincipal)
 import WebApi.AccountSessionAudit (AccountSessionAuditStore (..), AccountSessionAuditStoreError (..))
-import WebApi.ActivityAudit (AccountActivity (..), AccountAuditEvent (AccountSessionEnded, AccountSessionIssued, PendingRegistrationDelivered, VerificationResendDelivered), ActivityAuditStore (..), ActivityAuditStoreError (..), AuditAuthenticationMethod (..), AuditRegistrationDeliveryStage (RegistrationCreated, RegistrationRetried), AuditSessionEndReason (ExplicitLogout), activityIdFromDatabase)
+import WebApi.ActivityAudit (AccountActivity (..), AccountAuditEvent (AccountSessionEnded, AccountSessionIssued, AuthenticationRejected, PendingRegistrationDelivered, VerificationResendDelivered), ActivityAuditStore (..), ActivityAuditStoreError (..), AuditAuthenticationMethod (..), AuditAuthenticationStage (PasswordAuthenticationStage, SecondFactorAuthenticationStage), AuditRegistrationDeliveryStage (RegistrationCreated, RegistrationRetried), AuditSessionEndReason (ExplicitLogout), activityIdFromDatabase)
 import WebApi.App (buildRuntimeAppWithDatabaseBuilder, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.AppEffect qualified as AppEffect
@@ -1908,6 +1908,125 @@ spec = do
       spanishLogoutSuccess <- handleAccountAction validWorkflow (typedAccountActionRequest "POST" "/es/logout" [] (spanishRequestContext {requestAccountPrincipal = Just (mkAccountPrincipal existingAccountId sessionId 200)}))
       spanishLogoutSuccess `shouldSatisfy` actionHasStatusAndFocus 200 Nothing "Has cerrado sesion"
 
+    it "records only known login rejections and preserves their denied outcome when appending fails" $ do
+      let accountId = requiredAccountId "account_03"
+          password = Password.mkPassword "correct horse battery staple"
+          passwordHash = fromMaybe (error "expected test password hash") (Password.hashPasswordWithSalt Password.defaultPasswordHashingPolicy (ByteString.replicate 16 9) password)
+          confirmedCredential = AccountCredential accountId passwordHash True
+          totpSecret = fromMaybe (error "expected TOTP secret") (Totp.mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
+          encryptedTotpSecret = requiredSecretEnvelope (Secret.encryptSecretWithNonce (totpEncryptionKey defaultAppEnvironmentConfig) (requiredSecretNonce (ByteString.replicate 12 9)) (Secret.mkSecretPlaintext (TextEncoding.encodeUtf8 (Totp.renderTotpSecret totpSecret))))
+          confirmedEnrollment = StoredTotpEnrollment encryptedTotpSecret (Just 1) Nothing
+          auditRequestId = fromMaybe (error "expected request id") (mkRequestId "660e8400-e29b-41d4-a716-446655440000")
+          auditRoute =
+            RouteObservation
+              { observedEndpointName = fromRight (error "expected valid endpoint name") (mkEndpointName "account.login"),
+                observedMountChain = requiredModuleNameOrDie "web-api" :| [],
+                observedRouteTemplate = fromRight (error "expected valid route template") (mkRouteTemplate "/login"),
+                observedLocale = Localization.locale "en"
+              }
+          overlongAuditRoute =
+            auditRoute
+              { observedMountChain =
+                  requiredModuleNameOrDie (Text.replicate 128 "a")
+                    :| [ requiredModuleNameOrDie (Text.replicate 128 "b"),
+                         requiredModuleNameOrDie (Text.replicate 128 "c"),
+                         requiredModuleNameOrDie (Text.replicate 128 "d"),
+                         requiredModuleNameOrDie "e"
+                       ]
+              }
+          actionContext = defaultRequestContext {requestCorrelationId = Just auditRequestId, requestRouteObservation = Just auditRoute}
+          requestWith requestContext fields = typedAccountActionRequest "POST" "/login" fields requestContext
+          request = requestWith actionContext
+          workflowFor credentialResult auditStore =
+            unavailableAccountWorkflow
+              { accountWorkflowCredentialStore = AccountCredentialStore (\_ -> pure credentialResult) (\_ -> pure credentialResult) (\_ _ _ -> pure (Right False)),
+                accountWorkflowMfaStore =
+                  MfaStore
+                    { saveUnconfirmedTotpEnrollment = \_ _ _ -> error "unexpected enrollment save",
+                      loadTotpEnrollment = \_ -> pure (Right (Just confirmedEnrollment)),
+                      confirmTotpEnrollment = \_ _ _ -> error "unexpected enrollment confirmation",
+                      loadUnusedRecoveryCodeHashes = \_ -> pure (Right []),
+                      consumeRecoveryCodeHash = \_ _ _ -> error "unexpected recovery-code consumption",
+                      markTotpCodeUsed = \_ _ -> error "unexpected TOTP counter update"
+                    },
+                accountWorkflowActivityAuditStore = auditStore,
+                accountWorkflowLoginAttemptStore = permissiveLoginAttemptStore,
+                accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
+                accountWorkflowClock = pure 500,
+                accountWorkflowTotpClock = const 123456
+              }
+          invalidPasswordFields = [("identifier", "person@example.test"), ("password", "incorrect password"), ("proof", "totp"), ("totpCode", "000000")]
+          validCode = Totp.totpCodeText (Totp.totpCode 123456 totpSecret)
+          invalidCode = Text.take 5 validCode <> if Text.drop 5 validCode == "0" then "1" else "0"
+          invalidTotpFields = [("identifier", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("totpCode", invalidCode)]
+      capturedActivities <- newIORef []
+      let recordingAuditStore =
+            ActivityAuditStore $ \activity -> do
+              modifyIORef' capturedActivities (activity :)
+              pure (Right (activityIdFromDatabase 1))
+          knownWorkflow = workflowFor (Right (Just confirmedCredential)) recordingAuditStore
+          unknownWorkflow =
+            workflowFor
+              (Right Nothing)
+              (ActivityAuditStore (\_ -> error "unknown login rejection must not append an account activity"))
+      handleAccountAction knownWorkflow (request invalidPasswordFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-authenticator-code") "Sign-in was rejected")
+      handleAccountAction knownWorkflow (request invalidTotpFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-authenticator-code") "Sign-in was rejected")
+      handleAccountAction unknownWorkflow (request invalidPasswordFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-authenticator-code") "Sign-in was rejected")
+      readIORef capturedActivities >>= \case
+        [ AccountActivity secondFactorAccountId secondFactorRequestId (AuthenticationRejected SecondFactorAuthenticationStage) (Just _),
+          AccountActivity passwordAccountId passwordRequestId (AuthenticationRejected PasswordAuthenticationStage) (Just _)
+          ] ->
+            expectAll
+              ( (secondFactorAccountId `shouldBe` accountId)
+                  :| [ secondFactorRequestId `shouldBe` auditRequestId,
+                       passwordAccountId `shouldBe` accountId,
+                       passwordRequestId `shouldBe` auditRequestId
+                     ]
+              )
+        _ -> expectationFailure "expected password- and second-factor known-account rejection audit activities"
+      forM_
+        [ (ActivityAuditUnavailable, "unavailable", False),
+          (ActivityAuditCapacityExceeded, "capacity-exhausted", True),
+          (ActivityAuditCorruptResult, "corrupt-result", False)
+        ]
+        $ \(storeError, failureKind, expectsCapacitySignal) -> do
+          auditFailure <-
+            handleAccountAction
+              (workflowFor (Right (Just confirmedCredential)) (ActivityAuditStore (const (pure (Left storeError)))))
+              (request invalidPasswordFields)
+          auditFailure `shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-authenticator-code") "Sign-in was rejected"
+          assertBestEffortAuditFailureSignal
+            "app.operational.signal.account.authentication-rejection.audit-append-failed"
+            "account.authentication-rejection.audit-append-failed"
+            "authentication-rejection"
+            failureKind
+            expectsCapacitySignal
+            auditFailure
+      forM_
+        [ defaultRequestContext,
+          actionContext {requestRouteObservation = Just overlongAuditRoute}
+        ]
+        $ \malformedContext -> do
+          metadataFailure <- handleAccountAction knownWorkflow (requestWith malformedContext invalidPasswordFields)
+          metadataFailure `shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-authenticator-code") "Sign-in was rejected"
+          assertBestEffortAuditFailureSignal
+            "app.operational.signal.account.authentication-rejection.audit-append-failed"
+            "account.authentication-rejection.audit-append-failed"
+            "authentication-rejection"
+            "corrupt-result"
+            False
+            metadataFailure
+      routeAbsent <- handleAccountAction knownWorkflow (requestWith (defaultRequestContext {requestCorrelationId = Just auditRequestId}) invalidPasswordFields)
+      case routeAbsent of
+        Just response -> do
+          Just response `shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-authenticator-code") "Sign-in was rejected"
+          HarchWeb.clientActionObservabilityAttributes response `shouldBe` []
+          HarchWeb.clientActionLogEntries response `shouldBe` []
+        Nothing -> expectationFailure "expected an unaudited-route login rejection response"
+
     it "captures a complete authenticator enrollment and returns recovery codes in one patch" $ do
       encryptedSecretReference <- newIORef Nothing
       confirmationHashesReference <- newIORef []
@@ -2127,6 +2246,27 @@ assertRequiredAuditFailureSignal operation failureKind expectsCapacitySignal act
       expectAll
         ( (relevantAttributes `shouldBe` expectedAttributes)
             :| [ relevantLogs `shouldBe` ["[account.audit.required-append-failed] audit.operation=" <> operation <> " audit.failure-kind=" <> failureKind],
+                 HarchWeb.clientActionObservabilityAttributes response `shouldNotSatisfy` any ((== "request.id") . Observability.attributeName)
+               ]
+        )
+
+assertBestEffortAuditFailureSignal :: Text.Text -> Text.Text -> Text.Text -> Text.Text -> Bool -> Maybe (HarchWeb.ClientActionResponse route context) -> Expectation
+assertBestEffortAuditFailureSignal signalName logName operation failureKind expectsCapacitySignal actionResult =
+  case actionResult of
+    Nothing -> expectationFailure "expected a best-effort audit failure response"
+    Just response -> do
+      let relevantAttributeNames = [signalName, "app.operational.signal.audit_capacity_exceeded", "account.audit.operation", "account.audit.failure-kind"]
+          relevantAttributes = filter (\attribute -> Observability.attributeName attribute `elem` relevantAttributeNames) (HarchWeb.clientActionObservabilityAttributes response)
+          expectedAttributes =
+            [ Observability.ObservabilityAttribute signalName (Observability.TextAttribute "true"),
+              Observability.ObservabilityAttribute "account.audit.operation" (Observability.TextAttribute operation),
+              Observability.ObservabilityAttribute "account.audit.failure-kind" (Observability.TextAttribute failureKind)
+            ]
+              <> [Observability.ObservabilityAttribute "app.operational.signal.audit_capacity_exceeded" (Observability.TextAttribute "true") | expectsCapacitySignal]
+          relevantLogs = filter (Text.isPrefixOf ("[" <> logName <> "]")) (HarchWeb.clientActionLogEntries response)
+      expectAll
+        ( (relevantAttributes `shouldBe` expectedAttributes)
+            :| [ relevantLogs `shouldBe` ["[" <> logName <> "] audit.operation=" <> operation <> " audit.failure-kind=" <> failureKind],
                  HarchWeb.clientActionObservabilityAttributes response `shouldNotSatisfy` any ((== "request.id") . Observability.attributeName)
                ]
         )

@@ -63,7 +63,7 @@ spec = do
       beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedMfaStore permissiveThrottle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginMfaRequired accountId
       beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) unexpectedMfaStore permissiveThrottle testPasswordWorkGate emailAddress (mkPassword "incorrect password")
-        `shouldReturnEqual` PasswordLoginRejected
+        `shouldReturnEqual` PasswordLoginKnownAccountRejected accountId
       beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore permissiveThrottle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginRejected
 
@@ -92,7 +92,7 @@ spec = do
 
     it "rejects an externally malformed stored password hash without native password work" $ do
       beginPasswordLogin (credentialStore (Right (Just (AccountCredential accountId (PasswordHash "malformed") True)))) unexpectedMfaStore permissiveThrottle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")
-        `shouldReturnEqual` PasswordLoginRejected
+        `shouldReturnEqual` PasswordLoginKnownAccountRejected accountId
 
     it "upgrades a verified weaker hash once, without making a failed best-effort update a login failure" $ do
       let password = mkPassword "correct horse battery staple"
@@ -173,11 +173,11 @@ spec = do
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor confirmedStore (TotpLoginProof (totpCode (123456 + 30) secret))) emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginAccepted accountId
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor confirmedStore (TotpLoginProof (totpCode (123456 + 60) secret))) emailAddress (mkPassword "correct horse battery staple")
-        `shouldReturnEqual` PasswordMfaLoginRejected
+        `shouldReturnEqual` PasswordMfaLoginKnownAccountRejected accountId SecondFactorLoginStage
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor confirmedStore validProof) emailAddress (mkPassword "incorrect password")
-        `shouldReturnEqual` PasswordMfaLoginRejected
+        `shouldReturnEqual` PasswordMfaLoginKnownAccountRejected accountId PasswordLoginStage
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor confirmedStore (TotpLoginProof (required "invalid TOTP code" (mkTotpCode "000000")))) emailAddress (mkPassword "correct horse battery staple")
-        `shouldReturnEqual` PasswordMfaLoginRejected
+        `shouldReturnEqual` PasswordMfaLoginKnownAccountRejected accountId SecondFactorLoginStage
 
     it "rejects a replayed TOTP code without ever consulting the store again, and closes the race with an atomic mark" $ do
       let secret = required "TOTP secret" (mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
@@ -191,9 +191,9 @@ spec = do
               { markTotpCodeUsed = \_ _ -> error "unexpected TOTP counter update while already replayed"
               }
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor (storeWithLastUsed (Just matchedCounter)) validProof) emailAddress (mkPassword "correct horse battery staple")
-        `shouldReturnEqual` PasswordMfaLoginRejected
+        `shouldReturnEqual` PasswordMfaLoginKnownAccountRejected accountId SecondFactorLoginStage
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor (storeWithLastUsed (Just (matchedCounter + 1))) validProof) emailAddress (mkPassword "correct horse battery staple")
-        `shouldReturnEqual` PasswordMfaLoginRejected
+        `shouldReturnEqual` PasswordMfaLoginKnownAccountRejected accountId SecondFactorLoginStage
       markCallsReference <- newIORef []
       let acceptingStore =
             (mfaStore (Right (Just (StoredTotpEnrollment encryptedSecret (Just 100) (Just (matchedCounter - 1))))))
@@ -209,7 +209,7 @@ spec = do
               { markTotpCodeUsed = \_ _ -> pure (Right False)
               }
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor racedStore validProof) emailAddress (mkPassword "correct horse battery staple")
-        `shouldReturnEqual` PasswordMfaLoginRejected
+        `shouldReturnEqual` PasswordMfaLoginKnownAccountRejected accountId SecondFactorLoginStage
       let unavailableMarkStore =
             (mfaStore (Right (Just (StoredTotpEnrollment encryptedSecret (Just 100) (Just (matchedCounter - 1))))))
               { markTotpCodeUsed = \_ _ -> pure (Left (MfaStoreUnavailable "counter store down"))
@@ -264,7 +264,7 @@ spec = do
               emailAddress
               (mkPassword "correct horse battery staple")
       complete testPasswordWorkGate (recoveryStore [recoveryCodeHashText otherRecoveryCodeHash] (Right True))
-        `shouldReturnEqual` PasswordMfaLoginRejected
+        `shouldReturnEqual` PasswordMfaLoginKnownAccountRejected accountId SecondFactorLoginStage
       consumptionAttempted <- newIORef False
       settledOutcome <- newIORef Nothing
       let racedRecoveryStore =
@@ -283,7 +283,7 @@ spec = do
               settlingThrottle
               (withSecondFactorWorkGate testPasswordWorkGate (secondFactorContextFor racedRecoveryStore (RecoveryCodeLoginProof recoveryCode)))
       completeContext racedContext
-        `shouldReturnEqual` PasswordMfaLoginRejected
+        `shouldReturnEqual` PasswordMfaLoginKnownAccountRejected accountId SecondFactorLoginStage
       readIORef consumptionAttempted `shouldReturn` True
       readIORef settledOutcome `shouldReturn` Just False
 
@@ -334,7 +334,7 @@ spec = do
               { loadUnusedRecoveryCodeHashes = \_ -> pure (Right [recoveryCodeHashText recoveryCodeHash]),
                 consumeRecoveryCodeHash = \_ _ _ -> pure (Right False)
               }
-      completeWith racedStore (RecoveryCodeLoginProof recoveryCode) `shouldReturnEqual` PasswordMfaLoginRejected
+      completeWith racedStore (RecoveryCodeLoginProof recoveryCode) `shouldReturnEqual` PasswordMfaLoginKnownAccountRejected accountId SecondFactorLoginStage
 
     it "preserves every password and second-factor state without authenticating early" $ do
       let secret = required "TOTP secret" (mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
@@ -369,7 +369,7 @@ spec = do
               }
       completeWith (storeFor (Left (MfaStoreUnavailable "recovery lookup failed")) (Right True)) `shouldReturnEqual` PasswordMfaLoginMfaStoreError (MfaStoreUnavailable "recovery lookup failed")
       completeWith (storeFor (Right ["not-a-password-hash"]) (Right True)) `shouldReturnEqual` PasswordMfaLoginCorruptEnrollment
-      completeWith (storeFor (Right []) (Right True)) `shouldReturnEqual` PasswordMfaLoginRejected
+      completeWith (storeFor (Right []) (Right True)) `shouldReturnEqual` PasswordMfaLoginKnownAccountRejected accountId SecondFactorLoginStage
       let recoveryCodeHash = required "recovery-code hash" (hashRecoveryCodeWithSalt defaultPasswordHashingPolicy "0123456789abcdef" recoveryCode)
       completeWith (storeFor (Right [recoveryCodeHashText recoveryCodeHash]) (Left (MfaStoreCorruptData "recovery consumption failed"))) `shouldReturnEqual` PasswordMfaLoginMfaStoreError (MfaStoreCorruptData "recovery consumption failed")
 
@@ -382,6 +382,7 @@ spec = do
         ( (AccountCredentialStoreUnavailable "unavailable" /= AccountCredentialStoreUnavailable "other" `shouldBe` True)
             :| [ AccountCredentialStoreUnavailable "unavailable" /= AccountCredentialStoreCorruptData "unavailable" `shouldBe` True,
                  PasswordLoginRejected /= PasswordLoginMfaRequired accountId `shouldBe` True,
+                 PasswordLoginRejected /= PasswordLoginKnownAccountRejected accountId `shouldBe` True,
                  PasswordLoginEmailVerificationRequired accountId /= PasswordLoginMfaEnrollmentRequired accountId `shouldBe` True,
                  PasswordLoginCredentialStoreError (AccountCredentialStoreUnavailable "unavailable") /= PasswordLoginMfaStoreError (MfaStoreUnavailable "unavailable") `shouldBe` True,
                  reservation == sameReservation `shouldBe` True,
@@ -391,6 +392,7 @@ spec = do
                  LoginAttemptThrottled 500 == LoginAttemptThrottled (250 + 250) `shouldBe` True,
                  totpProof /= recoveryProof `shouldBe` True,
                  PasswordMfaLoginRejected /= PasswordMfaLoginEmailVerificationRequired accountId `shouldBe` True,
+                 PasswordMfaLoginRejected /= PasswordMfaLoginKnownAccountRejected accountId PasswordLoginStage `shouldBe` True,
                  PasswordMfaLoginEnrollmentRequired accountId /= PasswordMfaLoginAccepted accountId `shouldBe` True,
                  PasswordMfaLoginCredentialStoreError (AccountCredentialStoreUnavailable "unavailable") /= PasswordMfaLoginMfaStoreError (MfaStoreUnavailable "unavailable") `shouldBe` True,
                  PasswordMfaLoginCorruptEnrollment /= PasswordMfaLoginRejected `shouldBe` True,
@@ -459,7 +461,7 @@ spec = do
       knownReference <- newIORef []
       knownScopesReference <- newIORef []
       beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) unexpectedMfaStore (recordingThrottle knownScopesReference knownReference) testPasswordWorkGate emailAddress (mkPassword "incorrect password")
-        `shouldReturnEqual` PasswordLoginRejected
+        `shouldReturnEqual` PasswordLoginKnownAccountRejected accountId
       knownRecorded <- readIORef knownReference
       unknownScopes <- readIORef unknownScopesReference
       knownScopes <- readIORef knownScopesReference
@@ -889,13 +891,13 @@ spec = do
               emailAddress
               (mkPassword "correct horse battery staple")
       complete totpStore (TotpLoginProof (required "invalid TOTP code" (mkTotpCode "000000")))
-        `shouldReturnEqual` PasswordMfaLoginRejected
+        `shouldReturnEqual` PasswordMfaLoginKnownAccountRejected accountId SecondFactorLoginStage
       complete totpStore (TotpLoginProof (totpCode 123456 secret))
         `shouldReturnEqual` PasswordMfaLoginAccepted accountId
       complete replayedTotpStore (TotpLoginProof (totpCode 123456 secret))
-        `shouldReturnEqual` PasswordMfaLoginRejected
+        `shouldReturnEqual` PasswordMfaLoginKnownAccountRejected accountId SecondFactorLoginStage
       complete racedTotpStore (TotpLoginProof (totpCode 123456 secret))
-        `shouldReturnEqual` PasswordMfaLoginRejected
+        `shouldReturnEqual` PasswordMfaLoginKnownAccountRejected accountId SecondFactorLoginStage
       recordedAttempts <- readIORef recordedAttemptsReference
       filter ((== "account-mfa:" <> accountIdText accountId) . fst) recordedAttempts
         `shouldBe` [ ("account-mfa:" <> accountIdText accountId, False),
@@ -934,7 +936,7 @@ spec = do
       complete (recoveryStore [recoveryCodeHashText recoveryCodeHash])
         `shouldReturnEqual` PasswordMfaLoginAccepted accountId
       complete (recoveryStore [])
-        `shouldReturnEqual` PasswordMfaLoginRejected
+        `shouldReturnEqual` PasswordMfaLoginKnownAccountRejected accountId SecondFactorLoginStage
       recordedAttempts <- readIORef recordedAttemptsReference
       filter ((== "account-mfa:" <> accountIdText accountId) . fst) recordedAttempts
         `shouldBe` [ ("account-mfa:" <> accountIdText accountId, False),

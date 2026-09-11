@@ -91,6 +91,7 @@ passwordAttemptBudgets throttle identifier maybeCredential =
 
 data CredentialCheckOutcome
   = CredentialCheckRejected
+  | CredentialCheckKnownAccountRejected AccountId
   | CredentialCheckEmailVerificationRequired AccountId
   | CredentialCheckMfaEnrollmentRequired AccountId
   | CredentialCheckMfaRequired AccountId
@@ -101,6 +102,7 @@ credentialCheckToPasswordLoginAdmission :: CredentialCheckOutcome -> (PasswordLo
 credentialCheckToPasswordLoginAdmission outcome =
   case outcome of
     CredentialCheckRejected -> (PasswordLoginRejected, Just False)
+    CredentialCheckKnownAccountRejected accountId -> (PasswordLoginKnownAccountRejected accountId, Just False)
     CredentialCheckEmailVerificationRequired accountId -> (PasswordLoginEmailVerificationRequired accountId, Just True)
     CredentialCheckMfaEnrollmentRequired accountId -> (PasswordLoginMfaEnrollmentRequired accountId, Just True)
     CredentialCheckMfaRequired accountId -> (PasswordLoginMfaRequired accountId, Just True)
@@ -116,32 +118,33 @@ lookupCredential credentialStore identifier =
 continueWithCredential :: PasswordLoginEnvironment -> Password -> Maybe AccountCredential -> IO CredentialCheckOutcome
 continueWithCredential environment password maybeCredential =
   case maybeCredential of
-    Nothing -> credentialCheckFromPasswordWork passwordWorkGate password dummyPasswordHash (pure CredentialCheckRejected)
+    Nothing -> credentialCheckFromPasswordWork passwordWorkGate password dummyPasswordHash CredentialCheckRejected (pure CredentialCheckRejected)
     Just credential -> continueWithKnownCredential environment password credential
   where
     passwordWorkGate = passwordLoginWorkGate environment
 
 continueWithKnownCredential :: PasswordLoginEnvironment -> Password -> AccountCredential -> IO CredentialCheckOutcome
 continueWithKnownCredential environment password credential =
-  credentialCheckFromPasswordWork passwordWorkGate password (accountCredentialPasswordHash credential) acceptedCredential
+  credentialCheckFromPasswordWork passwordWorkGate password (accountCredentialPasswordHash credential) rejectedCredential acceptedCredential
   where
     passwordWorkGate = passwordLoginWorkGate environment
     accountId = accountCredentialId credential
+    rejectedCredential = CredentialCheckKnownAccountRejected accountId
     acceptedCredential = do
       opportunisticallyRehashPassword environment password credential
       case accountCredentialEmailVerified credential of
         False -> pure (CredentialCheckEmailVerificationRequired accountId)
         True -> classifyMfaEnrollment accountId <$> loadTotpEnrollment (passwordLoginMfaStore environment) accountId
 
-credentialCheckFromPasswordWork :: PasswordWorkGate -> Password -> PasswordHash -> IO CredentialCheckOutcome -> IO CredentialCheckOutcome
-credentialCheckFromPasswordWork passwordWorkGate password passwordHash accepted =
+credentialCheckFromPasswordWork :: PasswordWorkGate -> Password -> PasswordHash -> CredentialCheckOutcome -> IO CredentialCheckOutcome -> IO CredentialCheckOutcome
+credentialCheckFromPasswordWork passwordWorkGate password passwordHash rejected accepted =
   case passwordHashWorkKibibytes passwordHash of
-    Nothing -> pure CredentialCheckRejected
+    Nothing -> pure rejected
     Just cost -> do
       maybeVerified <- withPasswordWork passwordWorkGate cost (evaluate (verifyPassword password passwordHash))
       case maybeVerified of
         Nothing -> pure CredentialCheckPasswordWorkBudgetExhausted
-        Just False -> pure CredentialCheckRejected
+        Just False -> pure rejected
         Just True -> accepted
 
 -- | A verified weaker hash is replaced only best-effort. An upgrade failure

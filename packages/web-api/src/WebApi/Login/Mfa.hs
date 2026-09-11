@@ -55,6 +55,7 @@ continuePasswordLogin :: SecondFactorContext -> PasswordLoginResult -> IO Passwo
 continuePasswordLogin context passwordResult =
   case passwordResult of
     PasswordLoginRejected -> pure PasswordMfaLoginRejected
+    PasswordLoginKnownAccountRejected accountId -> pure (PasswordMfaLoginKnownAccountRejected accountId PasswordLoginStage)
     PasswordLoginThrottled lockoutEndsAt -> pure (PasswordMfaLoginThrottled lockoutEndsAt)
     PasswordLoginEmailVerificationRequired accountId -> pure (PasswordMfaLoginEmailVerificationRequired accountId)
     PasswordLoginMfaEnrollmentRequired accountId -> pure (PasswordMfaLoginEnrollmentRequired accountId)
@@ -101,17 +102,17 @@ verifyPermittedTotpProof context accountId enrollment suppliedCode =
     Nothing -> pure (PasswordMfaLoginCorruptEnrollment, Nothing)
     Just secret ->
       case validateTotpCodeCounter (secondFactorNowSeconds context) 1 secret suppliedCode of
-        Nothing -> pure (PasswordMfaLoginRejected, Just False)
+        Nothing -> pure (PasswordMfaLoginKnownAccountRejected accountId SecondFactorLoginStage, Just False)
         Just matchedCounter ->
           case storedTotpLastUsedCounter enrollment of
             Just lastUsedCounter
-              | matchedCounter <= lastUsedCounter -> pure (PasswordMfaLoginRejected, Just False)
+              | matchedCounter <= lastUsedCounter -> pure (PasswordMfaLoginKnownAccountRejected accountId SecondFactorLoginStage, Just False)
             _ -> do
               markResult <- markTotpCodeUsed mfaStore accountId matchedCounter
               case markResult of
                 Left storeError -> pure (PasswordMfaLoginMfaStoreError storeError, Nothing)
                 Right True -> pure (PasswordMfaLoginAccepted accountId, Just True)
-                Right False -> pure (PasswordMfaLoginRejected, Just False)
+                Right False -> pure (PasswordMfaLoginKnownAccountRejected accountId SecondFactorLoginStage, Just False)
   where
     mfaStore = passwordLoginMfaStore (secondFactorPasswordLoginEnvironment context)
 
@@ -132,13 +133,13 @@ completeRecoveryCode context accountId suppliedCode =
           matchingHash <- findMatchingRecoveryHash (passwordLoginWorkGate environment) suppliedCode recoveryHashes
           case matchingHash of
             Nothing -> pure (PasswordMfaLoginPasswordWorkBudgetExhausted, Nothing)
-            Just Nothing -> pure (PasswordMfaLoginRejected, Just False)
+            Just Nothing -> pure (PasswordMfaLoginKnownAccountRejected accountId SecondFactorLoginStage, Just False)
             Just (Just hashValue) -> do
               consumed <- runExceptT (consumeMatchingHash hashValue)
               case consumed of
                 Left infrastructureError -> pure (infrastructureFailureResult infrastructureError, Nothing)
                 Right True -> pure (PasswordMfaLoginAccepted accountId, Just True)
-                Right False -> pure (PasswordMfaLoginRejected, Just False)
+                Right False -> pure (PasswordMfaLoginKnownAccountRejected accountId SecondFactorLoginStage, Just False)
     consumeMatchingHash matchingHash =
       liftMfaStore
         (consumeRecoveryCodeHash mfaStore accountId (recoveryCodeHashText matchingHash) (secondFactorNowNanoseconds context))
