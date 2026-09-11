@@ -464,6 +464,9 @@ spec =
                   routeStatus = css "[data-navigation-route-status]"
               runBrowserSpec browser do
                 visit spacesUrl
+                _ <-
+                  runPageScript
+                    "new Promise((resolve) => { if (window.__harchNavigationRuntimeReady) { resolve(true); return; } window.addEventListener('harch:navigation-runtime-ready', () => resolve(true), { once: true }); })"
                 blockRequestsMatching "**/second"
                 _ <-
                   runPageScript

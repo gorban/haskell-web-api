@@ -891,6 +891,8 @@ defaultNavigationRuntimeScript =
       "  document.addEventListener('click', handleDocumentClick);",
       "  window.addEventListener('popstate', handlePopState);",
       "  registerCapturedActionHandler();",
+      "  window.__harchNavigationRuntimeReady = true;",
+      "  window.dispatchEvent(new Event('harch:navigation-runtime-ready'));",
       "  void installInitialPageEnhancements();",
       "})();"
     ]
