@@ -3953,3 +3953,23 @@ concurrent-client correctness. The local follow-up "multipart concurrent-client
 CSRF ownership" must replace this application limitation using the existing CSRF
 capability and prove overlapping clients, rejection cleanup, and both native
 script modes before that server is shared across independent upload scenarios.
+
+
+### Browser text assertion contract (2026-09-10)
+
+`shouldHaveText` extends the existing observation/assertion block by composing
+`textContent` and `shouldEqual`. It checks exact descendant text, including
+whitespace and hidden descendants; it does not substitute accessible names,
+visible text, or input values. For readiness checks whose intent is visibility,
+use `isVisible locator` instead. Both retain the existing retry boundary.
+
+Locators select elements, whose DOM text content is a string (possibly empty).
+The broader [DOM textContent API](https://dom.spec.whatwg.org/#dom-node-textcontent)
+also permits null for document/doctype nodes;
+that is not optional absence of a located element. The Playwright adapter now
+passes its result unchanged to the typed decoder instead of replacing null with
+empty text. An unexpected null is a protocol failure, while missing/ambiguous
+locators retain command failures and an absent attribute remains `Nothing`.
+Framework unit tests cover retries, aggregation and malformed null results;
+real-browser adapter tests distinguish empty/exact/hidden text, accessible names,
+input values, absent attributes, missing elements and ambiguous locators.

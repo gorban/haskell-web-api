@@ -34,13 +34,13 @@ spec =
             runBrowserSpec browser do
               visit homeUrl
               assertAllObserved do
-                textContent (byRole Heading `named` "Home") `shouldEqual` "Home"
+                byRole Heading `named` "Home" `shouldHaveText` "Home"
                 attributeValue (css "link[href='/assets/two-pages.css']") "href" `shouldEqual` Just "/assets/two-pages.css"
                 attributeValue (css "section[data-page='home']") "class" `shouldEqual` Just "harch-home-root"
               click (byRole Link `named` "Go to the second page")
               assertAllObserved do
                 currentUrl `shouldEqual` secondUrl
-                textContent (byRole Heading `named` "Second") `shouldEqual` "Second"
+                byRole Heading `named` "Second" `shouldHaveText` "Second"
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
 
           it "uses the enhanced path for Back and Forward" $ \(browser, server) -> do
@@ -54,11 +54,11 @@ spec =
               historyBack
               assertAllObserved do
                 currentUrl `shouldEqual` homeUrl
-                textContent (byRole Heading `named` "Home") `shouldEqual` "Home"
+                byRole Heading `named` "Home" `shouldHaveText` "Home"
               historyForward
               assertAllObserved do
                 currentUrl `shouldEqual` secondUrl
-                textContent (byRole Heading `named` "Second") `shouldEqual` "Second"
+                byRole Heading `named` "Second" `shouldHaveText` "Second"
 
           it "captures a submitted control before the deferred module loads, then settles its patch before navigating" $ \(browser, server) -> do
             let homeUrl = localServerBaseUrl server <> "/"
@@ -75,13 +75,13 @@ spec =
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 0, mutationRequestCount = 0}|])
               releaseRequestsMatching "**/assets/navigation.js"
               assertAllObserved do
-                textContent (css "#subscription-result") `shouldEqual` "Enter a valid email address."
+                css "#subscription-result" `shouldHaveText` "Enter a valid email address."
                 isFocused emailField `satisfies` id
                 inputValue emailField `shouldEqual` "ada@example"
               fill emailField "ada@example.com"
               submit subscriptionForm
               assertAllObserved do
-                textContent (byRole Heading `named` "Subscription received") `shouldEqual` "Subscription received"
+                byRole Heading `named` "Subscription received" `shouldHaveText` "Subscription received"
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 2}|])
 
           it "clears the authenticated document through the typed failure page when controlled storage cleanup fails" $ \(browser, server) -> do
@@ -98,7 +98,7 @@ spec =
               submit subscriptionForm
               assertAllObserved do
                 currentUrl `satisfies` Text.isPrefixOf failureUrlPrefix
-                textContent (byRole Heading `named` "Request could not be completed") `shouldEqual` "Request could not be completed"
+                byRole Heading `named` "Request could not be completed" `shouldHaveText` "Request could not be completed"
                 textContent (css "body") `satisfies` (not . Text.isInfixOf "This page is fully server-rendered on direct load and reload.")
 
           it "does not perform a native submission for the default exclusive client action when scripts are disabled" $ \(browser, server) -> do
@@ -123,7 +123,7 @@ spec =
               fill fallbackEmail "native@example.com"
               submit fallbackForm
               assertAllObserved do
-                textContent (byRole Heading `named` "Subscription received") `shouldEqual` "Subscription received"
+                byRole Heading `named` "Subscription received" `shouldHaveText` "Subscription received"
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 2, mutationRequestCount = 0}|])
 
           it "keeps a permanently blocked action visibly recoverable until the user cancels it" $ \(browser, server) -> do
@@ -137,14 +137,14 @@ spec =
               fill emailField "ada@example.com"
               submit subscriptionForm
               assertAllObserved do
-                textContent actionStatus `shouldEqual` "Still waiting for this action to be handled."
+                actionStatus `shouldHaveText` "Still waiting for this action to be handled."
               click (byRole Button `named` "Cancel action")
               assertAllObserved do
-                textContent actionStatus `shouldEqual` "Action cancelled."
+                actionStatus `shouldHaveText` "Action cancelled."
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 0}|])
               releaseRequestsMatching "**/assets/navigation.js"
               assertAllObserved do
-                textContent actionStatus `shouldEqual` "Action cancelled."
+                actionStatus `shouldHaveText` "Action cancelled."
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 0}|])
 
           it "lets a handler arrive after the liveness threshold without replaying a cancellation" $ \(browser, server) -> do
@@ -158,10 +158,10 @@ spec =
               fill emailField "ada@example.com"
               submit subscriptionForm
               assertAllObserved do
-                textContent actionStatus `shouldEqual` "Still waiting for this action to be handled."
+                actionStatus `shouldHaveText` "Still waiting for this action to be handled."
               releaseRequestsMatching "**/assets/navigation.js"
               assertAllObserved do
-                textContent (byRole Heading `named` "Subscription received") `shouldEqual` "Subscription received"
+                byRole Heading `named` "Subscription received" `shouldHaveText` "Subscription received"
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 1}|])
 
           it "does not present a delayed response after its action is cancelled" $ \(browser, server) -> do
@@ -184,7 +184,7 @@ spec =
                 attributeValue (css "body") "data-harch-action-response-decoded" `shouldEqual` Just "true"
               assertAllObserved do
                 currentUrl `shouldEqual` homeUrl
-                textContent actionStatus `shouldEqual` "Action cancelled."
+                actionStatus `shouldHaveText` "Action cancelled."
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 0, mutationRequestCount = 1}|])
 
           it "does not let a delayed action replace a page selected by navigation" $ \(browser, server) -> do
@@ -208,7 +208,7 @@ spec =
                 attributeValue (css "body") "data-harch-action-response-decoded" `shouldEqual` Just "true"
               assertAllObserved do
                 currentUrl `shouldEqual` secondUrl
-                textContent (byRole Heading `named` "Second") `shouldEqual` "Second"
+                byRole Heading `named` "Second" `shouldHaveText` "Second"
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 1}|])
 
           it "supersedes an earlier delayed submission from the same control" $ \(browser, server) -> do
@@ -227,7 +227,7 @@ spec =
                 (mutationRequestCount <$> browserMetrics) `shouldEqual` 2
               releaseRequestsMatching "**/actions/subscribe"
               assertAllObserved do
-                textContent (byRole Heading `named` "Subscription received") `shouldEqual` "Subscription received"
+                byRole Heading `named` "Subscription received" `shouldHaveText` "Subscription received"
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 2}|])
 
           it "shows immediate recoverable outcomes for throwing and rejected handlers" $ \(browser, server) -> do
@@ -244,11 +244,11 @@ spec =
               fill emailField "throw@example.com"
               submit subscriptionForm
               assertAllObserved do
-                textContent actionStatus `shouldEqual` "This action needs your attention."
+                actionStatus `shouldHaveText` "This action needs your attention."
               fill emailField "reject@example.com"
               submit subscriptionForm
               assertAllObserved do
-                textContent actionStatus `shouldEqual` "This action needs your attention."
+                actionStatus `shouldHaveText` "This action needs your attention."
                 attributeValue (within subscriptionForm (css "[data-harch-action-retry]")) "hidden" `shouldEqual` Just ""
 
           it "retries only declared safe handlers and preserves the idempotency identity for mutation retries" $ \(browser, server) -> do
@@ -268,19 +268,19 @@ spec =
               fill emailField "safe@example.com"
               submit subscriptionForm
               assertAllObserved do
-                textContent actionStatus `shouldEqual` "This action needs your attention."
+                actionStatus `shouldHaveText` "This action needs your attention."
               click retryButton
               assertAllObserved do
-                textContent actionStatus `shouldEqual` "Completed."
+                actionStatus `shouldHaveText` "Completed."
                 attributeValue (css "body") "data-harch-retry-evidence" `shouldEqual` Just "2:safe@example.com"
               _ <- runPageScript idempotentRetry
               fill emailField "idempotent@example.com"
               submit subscriptionForm
               assertAllObserved do
-                textContent actionStatus `shouldEqual` "This action needs your attention."
+                actionStatus `shouldHaveText` "This action needs your attention."
               click retryButton
               assertAllObserved do
-                textContent actionStatus `shouldEqual` "Completed."
+                actionStatus `shouldHaveText` "Completed."
                 attributeValue (css "body") "data-harch-idempotency-evidence" `shouldEqual` Just "2:mutation-1"
 
           it "keeps an unsettled claim local, rejects stale settlement, and warns only opted-in unresolved actions" $ \(browser, server) -> do
@@ -298,7 +298,7 @@ spec =
               fill emailField "ada@example.com"
               submit subscriptionForm
               assertAllObserved do
-                textContent actionStatus `shouldEqual` "Still waiting for this action to be handled."
+                actionStatus `shouldHaveText` "Still waiting for this action to be handled."
                 attributeValue subscriptionForm "aria-busy" `shouldEqual` Just "true"
               _ <- runPageScript "const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event); document.body.dataset.harchBeforeUnload = String(event.defaultPrevented);"
               assertAllObserved do
@@ -306,7 +306,7 @@ spec =
               click (byRole Button `named` "Cancel action")
               _ <- runPageScript "document.body.dataset.harchStaleSettlement = String(window.__harchTestSettlement.completed()); const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event); document.body.dataset.harchBeforeUnload = String(event.defaultPrevented);"
               assertAllObserved do
-                textContent actionStatus `shouldEqual` "Action cancelled."
+                actionStatus `shouldHaveText` "Action cancelled."
                 attributeValue (css "body") "data-harch-stale-settlement" `shouldEqual` Just "false"
                 attributeValue (css "body") "data-harch-before-unload" `shouldEqual` Just "false"
 
@@ -332,8 +332,8 @@ spec =
               submit firstForm
               submit secondForm
               assertAllObserved do
-                textContent firstStatus `shouldEqual` "Still waiting for this action to be handled."
-                textContent secondStatus `shouldEqual` "Still waiting for this action to be handled."
+                firstStatus `shouldHaveText` "Still waiting for this action to be handled."
+                secondStatus `shouldHaveText` "Still waiting for this action to be handled."
                 inputValue firstEmail `shouldEqual` "first@example.com"
                 inputValue secondEmail `shouldEqual` "second@example.com"
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 0}|])
@@ -350,7 +350,7 @@ spec =
               submit subscriptionForm
               failBlockedRequestsMatching "**/assets/navigation.js"
               assertAllObserved do
-                textContent actionStatus `shouldEqual` "This action needs your attention."
+                actionStatus `shouldHaveText` "This action needs your attention."
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 0}|])
 
           it "keeps reload and script-disabled navigation fully server rendered" $ \(browser, server) -> do
@@ -360,12 +360,12 @@ spec =
               visit secondUrl
               reload
               assertAllObserved do
-                textContent (byRole Heading `named` "Second") `shouldEqual` "Second"
+                byRole Heading `named` "Second" `shouldHaveText` "Second"
               visitWithoutScripts homeUrl
               click (byRole Link `named` "Go to the second page")
               assertAllObserved do
                 currentUrl `shouldEqual` secondUrl
-                textContent (byRole Heading `named` "Second") `shouldEqual` "Second"
+                byRole Heading `named` "Second" `shouldHaveText` "Second"
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
 
           it "preserves the server-rendered live status until the optional EventSource module updates it" $ \(browser, server) -> do
@@ -373,11 +373,11 @@ spec =
             runBrowserSpec browser do
               visitWithoutScripts liveDataUrl
               assertAllObserved do
-                textContent (byRole Heading `named` "Live updates") `shouldEqual` "Live updates"
-                textContent (css "#live-data-status") `shouldEqual` "Waiting for an update."
+                byRole Heading `named` "Live updates" `shouldHaveText` "Live updates"
+                css "#live-data-status" `shouldHaveText` "Waiting for an update."
               visit liveDataUrl
               assertAllObserved do
-                textContent (css "#live-data-status") `shouldEqual` "The live update arrived."
+                css "#live-data-status" `shouldHaveText` "The live update arrived."
 
           it "reconciles declared page enhancements across enhanced navigation and history" $ \(browser, server) -> do
             let homeUrl = localServerBaseUrl server <> "/"
@@ -385,17 +385,17 @@ spec =
             runBrowserSpec browser do
               visit homeUrl
               assertAllObserved do
-                textContent (css "[data-home-enhancement-status]") `shouldEqual` "The page-scoped home enhancement is ready."
+                css "[data-home-enhancement-status]" `shouldHaveText` "The page-scoped home enhancement is ready."
               click (byRole Link `named` "See live updates")
               assertAllObserved do
-                textContent (css "#live-data-status") `shouldEqual` "The live update arrived."
+                css "#live-data-status" `shouldHaveText` "The live update arrived."
               click (byRole Link `named` "Home")
               assertAllObserved do
-                textContent (css "[data-home-enhancement-status]") `shouldEqual` "The page-scoped home enhancement is ready."
+                css "[data-home-enhancement-status]" `shouldHaveText` "The page-scoped home enhancement is ready."
               historyBack
               assertAllObserved do
                 currentUrl `shouldEqual` liveDataUrl
-                textContent (css "#live-data-status") `shouldEqual` "The live update arrived."
+                css "#live-data-status" `shouldHaveText` "The live update arrived."
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 3, hardNavigationCount = 0}|])
 
           it "supersedes a pending page enhancement before it can mount stale behavior" $ \(browser, server) -> do
@@ -410,7 +410,7 @@ spec =
               failBlockedRequestsMatching "**/assets/live-data.js"
               assertAllObserved do
                 currentUrl `shouldEqual` secondUrl
-                textContent (byRole Heading `named` "Second") `shouldEqual` "Second"
+                byRole Heading `named` "Second" `shouldHaveText` "Second"
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 2, hardNavigationCount = 0}|])
 
           it "uses a native SSR navigation when a declared page enhancement fails to load" $ \(browser, server) -> do
@@ -424,7 +424,7 @@ spec =
               failBlockedRequestsMatching "**/assets/live-data.js"
               assertAllObserved do
                 currentUrl `shouldEqual` liveDataUrl
-                textContent (byRole Heading `named` "Live updates") `shouldEqual` "Live updates"
+                byRole Heading `named` "Live updates" `shouldHaveText` "Live updates"
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
 
 withBrowserAndServer :: ((BrowserConfig, LocalTestServer) -> IO a) -> BrowserConfig -> IO a

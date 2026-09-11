@@ -33,6 +33,7 @@ module TestCore.Browser.Scenario
     runBrowserSpec,
     satisfies,
     shouldEqual,
+    shouldHaveText,
     matches,
     setCookie,
     setInputFiles,
@@ -302,6 +303,15 @@ infix 1 `shouldEqual`
 -- Hspec equality diagnostics without introducing a separate assertion path.
 shouldEqual :: (Eq value, Show value) => BrowserObservation value -> value -> BrowserAssertionBlock ()
 shouldEqual observation expected = observation `matches` (`shouldBe` expected)
+
+infix 1 `shouldHaveText`
+
+-- | Assert exact DOM text from one matching element through the existing
+-- observation block. This preserves batching, retries and Hspec diagnostics.
+-- Empty text is valid; missing/ambiguous elements and malformed observations
+-- remain failures. Accessible names and visibility are separate properties.
+shouldHaveText :: Locator -> Text -> BrowserAssertionBlock ()
+shouldHaveText locator expected = textContent locator `shouldEqual` expected
 
 infix 1 `matches`
 

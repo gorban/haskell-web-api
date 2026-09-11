@@ -177,6 +177,9 @@ instance Applicative BrowserObservation where
   pure = PureObservation
   (<*>) = ApplyObservation
 
+-- | Exact descendant text of an element, including whitespace and hidden text.
+-- An empty element yields empty Text. Null is not element text and is rejected
+-- by the protocol decoder; locator failures do not represent optional absence.
 textContent :: Locator -> BrowserObservation Text
 textContent = LeafObservation . TextContentObservation
 

@@ -126,7 +126,7 @@ spec = do
         result <-
           runBrowserScenario config $ assertAllObserved do
             $([|currentUrl|] `matchesPattern` [p|"https://wrong.example/"|])
-            textContent (byRole Heading) `shouldEqual` "Wrong heading"
+            byRole Heading `shouldHaveText` "Wrong heading"
         result `shouldSatisfy` \case
           Left (BrowserAssertionFailed message _) ->
             let rendered = Text.pack message
@@ -141,7 +141,7 @@ spec = do
       withFakeRunner "retry" $ \config ->
         runBrowserSpec config $ do
           assertAllObserved do
-            textContent (byRole Heading) `shouldEqual` "Home"
+            byRole Heading `shouldHaveText` "Home"
             $([|inputValue (css "input[name=email]")|] `matchesPattern` [p|"person@example.com"|])
 
     it "does not retry an unexpected aggregate matcher exception" $
@@ -296,6 +296,7 @@ spec = do
       observationFailure "observe-missing" (textContent (byRole Heading)) "omitted"
       observationFailure "observe-extra" (textContent (byRole Heading)) "unexpected observation values"
       observationFailure "observe-bad-type" (textContent (byRole Heading)) "text"
+      observationFailure "observe-null-text" (textContent (byRole Heading)) "null"
       observationFailure "metrics-invalid" browserMetrics "enhancednavigationfetchcount"
       observationFailure "observe-no-value" (textContent (byRole Heading)) "array"
 
@@ -496,6 +497,7 @@ spec = do
           "      if (mode === 'observe-no-value') { rawReply({ protocol: 1, id: request.id, status: 'ok' }); continue; }",
           "      if (mode === 'observe-missing') { reply(request.id, 'ok', []); continue; }",
           "      if (mode === 'observe-extra') { reply(request.id, 'ok', ['Home', 'extra']); continue; }",
+          "      if (mode === 'observe-null-text') { reply(request.id, 'ok', [null]); continue; }",
           "      if (mode === 'observe-bad-type') { reply(request.id, 'ok', [123]); continue; }",
           "      if (mode === 'metrics-invalid') { reply(request.id, 'ok', [{ invalid: true }]); continue; }",
           "      const values = request.observations.map((observation) => {",

@@ -60,7 +60,7 @@ spec =
                 visit homeUrl
                 assertAllObserved do
                   currentUrl `shouldEqual` (HarchWeb.localServerBaseUrl server <> "/spaces")
-                  textContent (byRole Heading) `shouldEqual` "Site under construction"
+                  byRole Heading `shouldHaveText` "Site under construction"
 
             it "keeps direct second-page loads and script-disabled root redirects usable" $ \(browser, server) -> do
               let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
@@ -68,11 +68,11 @@ spec =
               runBrowserSpec browser do
                 visit secondUrl
                 assertAllObserved do
-                  textContent (byRole Heading) `shouldEqual` "Second"
+                  byRole Heading `shouldHaveText` "Second"
                 visitWithoutScripts homeUrl
                 assertAllObserved do
                   currentUrl `shouldEqual` (HarchWeb.localServerBaseUrl server <> "/spaces")
-                  textContent (byRole Heading) `shouldEqual` "Site under construction"
+                  byRole Heading `shouldHaveText` "Site under construction"
 
             it "redirects Spanish roots to localized Spaces SSR content while scripts are disabled" $ \(browser, server) -> do
               let spanishHomeUrl = HarchWeb.localServerBaseUrl server <> "/es"
@@ -80,7 +80,7 @@ spec =
                 visitWithoutScripts spanishHomeUrl
                 assertAllObserved do
                   currentUrl `shouldEqual` (HarchWeb.localServerBaseUrl server <> "/es/spaces")
-                  textContent (byRole Heading) `shouldEqual` "Sitio en construcción"
+                  byRole Heading `shouldHaveText` "Sitio en construcción"
                   attributeValue (css "html") "lang" `shouldEqual` Just "es"
 
             it "serves the app-home spaces placeholder through SSR and enhanced navigation" $ \(browser, server) -> do
@@ -92,17 +92,17 @@ spec =
                 visit homeUrl
                 assertAllObserved do
                   currentUrl `shouldEqual` spacesUrl
-                  textContent (byRole Heading) `shouldEqual` "Site under construction"
+                  byRole Heading `shouldHaveText` "Site under construction"
                 visit secondUrl
                 click (byRole Link `named` "Spaces")
                 assertAllObserved do
                   currentUrl `shouldEqual` spacesUrl
-                  textContent (byRole Heading) `shouldEqual` "Site under construction"
+                  byRole Heading `shouldHaveText` "Site under construction"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
                 visitWithoutScripts spanishSpacesUrl
                 assertAllObserved do
-                  textContent (byRole Heading) `shouldEqual` "Sitio en construcción"
-                  textContent (byText "Sigan este espacio.") `shouldEqual` "Sigan este espacio."
+                  byRole Heading `shouldHaveText` "Sitio en construcción"
+                  byText "Sigan este espacio." `shouldHaveText` "Sigan este espacio."
 
             it "opens the language picker accessibly and navigates its typed choices" $ \(browser, server) -> do
               let baseUrl = HarchWeb.localServerBaseUrl server
@@ -144,8 +144,8 @@ spec =
                 click spanishChoice
                 assertAllObserved do
                   currentUrl `shouldEqual` spanishLanguageUrl
-                  textContent (byRole Heading `named` "Elige un idioma") `shouldEqual` "Elige un idioma"
-                  textContent (byRole Status) `shouldEqual` "web-api: Language"
+                  byRole Heading `named` "Elige un idioma" `shouldHaveText` "Elige un idioma"
+                  byRole Status `shouldHaveText` "web-api: Language"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
                   attributeValue (css "html") "lang" `shouldEqual` Just "es"
                 assertAllObserved do
@@ -173,7 +173,7 @@ spec =
                 press helpFab "Enter"
                 assertAllObserved do
                   currentUrl `shouldEqual` helpUrl
-                  textContent (byRole Heading `named` "Help and support") `shouldEqual` "Help and support"
+                  byRole Heading `named` "Help and support" `shouldHaveText` "Help and support"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
                 _ <- runPageScript "document.body.dataset.testNoHelpFab = String(!document.querySelector('[data-help-fab]')); true"
                 assertAllObserved do
@@ -182,7 +182,7 @@ spec =
                 press helpFab "Enter"
                 assertAllObserved do
                   currentUrl `shouldEqual` helpUrl
-                  textContent (byRole Heading) `shouldEqual` "Help and support"
+                  byRole Heading `shouldHaveText` "Help and support"
 
             it "uses the responsive document viewport on mobile for Help FAB navigation and history" $ \(browser, server) -> do
               let baseUrl = HarchWeb.localServerBaseUrl server
@@ -200,11 +200,11 @@ spec =
                 press helpFab "Enter"
                 assertAllObserved do
                   currentUrl `shouldEqual` helpUrl
-                  textContent (byRole Heading `named` "Help and support") `shouldEqual` "Help and support"
+                  byRole Heading `named` "Help and support" `shouldHaveText` "Help and support"
                 historyBack
                 assertAllObserved do
                   currentUrl `shouldEqual` secondUrl
-                  textContent (byRole Heading `named` "Second") `shouldEqual` "Second"
+                  byRole Heading `named` "Second" `shouldHaveText` "Second"
                 _ <-
                   runPageScript
                     "const viewport = document.querySelector('meta[name=viewport]'); const fab = document.querySelector('[data-help-fab]'); const box = fab.getBoundingClientRect(); document.body.dataset.testMobileHistoryViewport = String(viewport && viewport.content === 'width=device-width, initial-scale=1' && document.documentElement.scrollWidth <= window.innerWidth && box.width >= 44 && box.height >= 44); true"
@@ -221,7 +221,7 @@ spec =
                 setViewportSize 320 480
                 visit secondUrl
                 assertAllObserved do
-                  textContent routeStatus `shouldEqual` ""
+                  routeStatus `shouldHaveText` ""
                 _ <-
                   runPageScript
                     "window.__ahi8HistoryLength = history.length; const status = document.querySelector('[data-navigation-route-status]'); let count = 0; status.dataset.testMutationCount = '0'; new MutationObserver((records) => { count += records.filter((record) => record.type === 'childList' || record.type === 'characterData').length; status.dataset.testMutationCount = String(count); }).observe(status, { childList: true, characterData: true, subtree: true }); document.documentElement.style.zoom = '2'; true"
@@ -234,23 +234,23 @@ spec =
                     "const main = document.querySelector('#app-main'); const box = main.getBoundingClientRect(); const sampleX = Math.min(window.innerWidth - 1, Math.max(0, box.left + 1)); const sampleY = Math.min(window.innerHeight - 1, Math.max(0, box.top + 1)); const topElement = document.elementFromPoint(sampleX, sampleY); const style = getComputedStyle(main); main.dataset.testFocusUnobscured = String(document.activeElement === main && box.top >= 0 && box.top < window.innerHeight && (topElement === main || main.contains(topElement)) && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0); true"
                 assertAllObserved do
                   currentUrl `shouldEqual` spacesUrl
-                  textContent (css "title") `shouldEqual` "web-api: Spaces"
-                  textContent (byRole Heading) `shouldEqual` "Site under construction"
-                  textContent routeStatus `shouldEqual` "web-api: Spaces"
+                  css "title" `shouldHaveText` "web-api: Spaces"
+                  byRole Heading `shouldHaveText` "Site under construction"
+                  routeStatus `shouldHaveText` "web-api: Spaces"
                   isFocused mainContent `satisfies` id
                   attributeValue routeStatus "data-test-mutation-count" `shouldEqual` Just "1"
                   attributeValue mainContent "data-test-focus-unobscured" `shouldEqual` Just "true"
                 historyBack
                 assertAllObserved do
                   currentUrl `shouldEqual` secondUrl
-                  textContent (css "title") `shouldEqual` "web-api: Second"
-                  textContent routeStatus `shouldEqual` "web-api: Second"
+                  css "title" `shouldHaveText` "web-api: Second"
+                  routeStatus `shouldHaveText` "web-api: Second"
                   attributeValue routeStatus "data-test-mutation-count" `shouldEqual` Just "2"
                   isFocused mainContent `satisfies` id
                 historyForward
                 assertAllObserved do
                   currentUrl `shouldEqual` spacesUrl
-                  textContent routeStatus `shouldEqual` "web-api: Spaces"
+                  routeStatus `shouldHaveText` "web-api: Spaces"
                   attributeValue routeStatus "data-test-mutation-count" `shouldEqual` Just "3"
                   attributeValue (byRole Link `named` "Spaces") "aria-current" `shouldEqual` Just "page"
                 _ <- runPageScript "document.querySelector('#app-main').dataset.testHistoryStable = String(history.length === window.__ahi8HistoryLength + 1); true"
@@ -260,8 +260,8 @@ spec =
                 press (byRole Link `named` "Home") "Enter"
                 assertAllObserved do
                   currentUrl `shouldEqual` spacesUrl
-                  textContent (css "title") `shouldEqual` "web-api: Spaces"
-                  textContent routeStatus `shouldEqual` "web-api: Spaces"
+                  css "title" `shouldHaveText` "web-api: Spaces"
+                  routeStatus `shouldHaveText` "web-api: Spaces"
                   isFocused mainContent `satisfies` id
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
 
@@ -272,8 +272,8 @@ spec =
                   routeStatus = byRole Status
                   assertNativeFallback = assertAllObserved do
                     currentUrl `shouldEqual` secondUrl
-                    textContent (byRole Heading) `shouldEqual` "Second"
-                    textContent routeStatus `shouldEqual` ""
+                    byRole Heading `shouldHaveText` "Second"
+                    routeStatus `shouldHaveText` ""
                     $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
               runBrowserSpec browser do
                 visit spacesUrl
@@ -311,7 +311,7 @@ spec =
                 press (byRole Link `named` "Spaces") "Enter"
                 assertAllObserved do
                   currentUrl `shouldEqual` spacesUrl
-                  textContent (byRole Status) `shouldEqual` ""
+                  byRole Status `shouldHaveText` ""
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
                 releaseRequestsMatching "**/assets/navigation.js"
                 visitWithoutScripts secondUrl
@@ -324,7 +324,7 @@ spec =
                 press (byRole Link `named` "Spaces") "Enter"
                 assertAllObserved do
                   currentUrl `shouldEqual` spacesUrl
-                  textContent (byRole Heading) `shouldEqual` "Site under construction"
+                  byRole Heading `shouldHaveText` "Site under construction"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
 
             it "accepts pasted and autofill-compatible login values, clears secrets, and keeps focus visible when narrow and zoomed" $ \(browser, server) -> do
@@ -394,7 +394,7 @@ spec =
                 visitWithoutScripts (baseUrl <> "/login")
                 assertAllObserved do
                   attributeValue (css "#login-region form") "method" `shouldEqual` Just "dialog"
-                  textContent (byText "Choose Authenticator code above, then enter or paste its six-digit code.") `shouldEqual` "Choose Authenticator code above, then enter or paste its six-digit code."
+                  byText "Choose Authenticator code above, then enter or paste its six-digit code." `shouldHaveText` "Choose Authenticator code above, then enter or paste its six-digit code."
                 visitWithoutScripts (baseUrl <> "/verify?token=delivered-token")
                 assertAllObserved do
                   attributeValue (css "#verification-region form") "method" `shouldEqual` Just "dialog"
@@ -405,7 +405,7 @@ spec =
                 visitWithoutScripts (baseUrl <> "/mfa")
                 assertAllObserved do
                   attributeValue (css "#mfa-enrollment-region form") "method" `shouldEqual` Just "dialog"
-                  textContent (byRole Button `named` "Start authenticator enrollment") `shouldEqual` "Start authenticator enrollment"
+                  byRole Button `named` "Start authenticator enrollment" `shouldHaveText` "Start authenticator enrollment"
 
       aroundAllWith (withBrowserServer challengedBrowserApp) $
         parallel $
@@ -425,14 +425,14 @@ spec =
                 click (byRole Link `named` "Profile")
                 assertAllObserved do
                   currentUrl `shouldEqual` loginUrl
-                  textContent (byRole Heading) `shouldEqual` "Sign in"
+                  byRole Heading `shouldHaveText` "Sign in"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
                 visitWithoutScripts profileUrl
                 assertAllObserved do
-                  textContent (byRole Heading) `shouldEqual` "Sign in"
+                  byRole Heading `shouldHaveText` "Sign in"
                 visitWithoutScripts spanishProfileUrl
                 assertAllObserved do
-                  textContent (byRole Heading) `shouldEqual` "Iniciar sesion"
+                  byRole Heading `shouldHaveText` "Iniciar sesion"
 
             it "keeps language selection and dialog startup failure complete without enhanced behavior" $ \(browser, server) -> do
               let baseUrl = HarchWeb.localServerBaseUrl server
@@ -451,11 +451,11 @@ spec =
                 press (byRole Link `named` "Language") "Enter"
                 assertAllObserved do
                   currentUrl `shouldEqual` languageUrl
-                  textContent (byRole Heading) `shouldEqual` "Choose a language"
+                  byRole Heading `shouldHaveText` "Choose a language"
                 press (byRole Link `named` "Spanish") "Enter"
                 assertAllObserved do
                   currentUrl `shouldEqual` spanishLanguageUrl
-                  textContent (byRole Heading) `shouldEqual` "Elige un idioma"
+                  byRole Heading `shouldHaveText` "Elige un idioma"
 
             it "keeps only the newest overlapping enhanced navigation lifecycle" $ \(browser, server) -> do
               let baseUrl = HarchWeb.localServerBaseUrl server
@@ -477,8 +477,8 @@ spec =
                 releaseRequestsMatching "**/second"
                 assertAllObserved do
                   currentUrl `shouldEqual` loginUrl
-                  textContent (byRole Heading) `shouldEqual` "Sign in"
-                  textContent routeStatus `shouldEqual` "web-api: Sign in"
+                  byRole Heading `shouldHaveText` "Sign in"
+                  routeStatus `shouldHaveText` "web-api: Sign in"
                   attributeValue routeStatus "data-test-mutation-count" `shouldEqual` Just "1"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 2, hardNavigationCount = 0}|])
                   isFocused (css "#app-main") `satisfies` id
@@ -495,7 +495,7 @@ spec =
                 blockRequestsMatching "**/assets/navigation.js"
                 visit registrationUrl
                 assertAllObserved do
-                  textContent (byRole Heading) `shouldEqual` "Crea tu cuenta"
+                  byRole Heading `shouldHaveText` "Crea tu cuenta"
                 fill usernameField "person_01"
                 _ <-
                   runPageScript
@@ -511,7 +511,7 @@ spec =
                 releaseRequestsMatching "**/assets/navigation.js"
                 assertAllObserved do
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {mutationRequestCount = 1}|])
-                  textContent (byText "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") `shouldEqual` "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion."
+                  byText "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion." `shouldHaveText` "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion."
                   inputValue passwordField `shouldEqual` ""
 
             it "focuses a multi-error registration summary and follows its field link by keyboard" $ \(browser, server) -> do
@@ -529,7 +529,7 @@ spec =
                 click (byRole Button `named` "Create account")
                 assertAllObserved do
                   isFocused (css "#registration-error-summary") `satisfies` id
-                  textContent (byRole Heading `named` "Fix the following problems") `shouldEqual` "Fix the following problems"
+                  byRole Heading `named` "Fix the following problems" `shouldHaveText` "Fix the following problems"
                   inputValue usernameField `shouldEqual` "no!"
                   inputValue emailField `shouldEqual` oversizedEmail
                   inputValue passwordField `shouldEqual` ""
@@ -571,11 +571,11 @@ spec =
               csrfToken <- documentCsrfToken
               setCookie profileUrl "__Host-harch-csrf" csrfToken
               assertAllObserved do
-                textContent (byRole Heading) `shouldEqual` "Profile"
-                textContent (byText "person@example.test") `shouldEqual` "person@example.test"
+                byRole Heading `shouldHaveText` "Profile"
+                byText "person@example.test" `shouldHaveText` "person@example.test"
               click (byRole Button `named` "Resend verification email")
               assertAllObserved do
-                textContent (byText "Check your inbox for a verification link.") `shouldEqual` "Check your inbox for a verification link."
+                byText "Check your inbox for a verification link." `shouldHaveText` "Check your inbox for a verification link."
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {mutationRequestCount = 1}|])
 
       describe "isolated reauthentication workflows" $ do
@@ -602,7 +602,7 @@ spec =
                 click (byRole Button `named` "Resend verification email")
                 assertAllObserved do
                   attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
-                  textContent (css "[data-profile-resend] [data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  css "[data-profile-resend] [data-harch-action-status]" `shouldHaveText` "This action needs your attention."
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
             readIORef profileLoadsReference `shouldReturn` 1
             readIORef deliveryCountReference `shouldReturn` 0
@@ -628,7 +628,7 @@ spec =
                 visit logoutUrl
                 click logoutSubmit
                 assertAllObserved do
-                  textContent (css "#logout-region [data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  css "#logout-region [data-harch-action-status]" `shouldHaveText` "This action needs your attention."
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
             readIORef sessionsReference `shouldReturn` [initialSession {Session.sessionExpiresAtNanoseconds = initialNow}]
 
@@ -660,7 +660,7 @@ spec =
                 _ <- runPageScript "new Promise((resolve) => window.setTimeout(resolve, 1100))"
                 assertAllObserved do
                   attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
-                  textContent (css "[data-profile-resend] [data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  css "[data-profile-resend] [data-harch-action-status]" `shouldHaveText` "This action needs your attention."
                   isFocused profileSubmit `satisfies` id
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
                 click profileSubmit
@@ -701,7 +701,7 @@ spec =
                 _ <- runPageScript "Array.from(document.querySelectorAll('nav a')).find((link) => link.textContent === 'Home')?.click(); true"
                 assertAllObserved do
                   currentUrl `shouldEqual` spacesUrl
-                  textContent (byRole Heading) `shouldEqual` "Site under construction"
+                  byRole Heading `shouldHaveText` "Site under construction"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 1}|])
             readIORef deliveryCountReference `shouldReturn` 0
 
@@ -737,7 +737,7 @@ spec =
                 setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
                 visit profileUrl
                 assertAllObserved do
-                  textContent (byRole Heading `named` "Profile") `shouldEqual` "Profile"
+                  isVisible (byRole Heading `named` "Profile") `shouldEqual` True
                 click profileSubmit
                 assertAllObserved do
                   attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
@@ -765,12 +765,12 @@ spec =
                 fill authenticatorCodeField reauthenticationTotpCode
                 click (byRole Button `named` "Sign in")
                 assertAllObserved do
-                  textContent (css "[data-web-api-reauthentication-status]") `shouldEqual` "Signed in. Confirm to retry the original action."
+                  css "[data-web-api-reauthentication-status]" `shouldHaveText` "Signed in. Confirm to retry the original action."
                   attributeValue retryOriginalAction "hidden" `shouldEqual` Nothing
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
                 click retryOriginalAction
                 assertAllObserved do
-                  textContent (byText "Check your inbox for a verification link.") `shouldEqual` "Check your inbox for a verification link."
+                  byText "Check your inbox for a verification link." `shouldHaveText` "Check your inbox for a verification link."
                   attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 5}|])
             deliveryCount <- readIORef deliveryCountReference
@@ -837,12 +837,12 @@ spec =
                 fill authenticatorCodeField reauthenticationTotpCode
                 click (byRole Button `named` "Sign in")
                 assertAllObserved do
-                  textContent (css "[data-web-api-reauthentication-status]") `shouldEqual` "Signed in. Confirm to retry the original action."
+                  css "[data-web-api-reauthentication-status]" `shouldHaveText` "Signed in. Confirm to retry the original action."
                   attributeValue retryOriginalAction "hidden" `shouldEqual` Nothing
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
                 click retryOriginalAction
                 assertAllObserved do
-                  textContent (byText "Check your inbox for a verification link.") `shouldEqual` "Check your inbox for a verification link."
+                  byText "Check your inbox for a verification link." `shouldHaveText` "Check your inbox for a verification link."
                   attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 5}|])
             readIORef deliveryCountReference `shouldReturn` 1
@@ -888,18 +888,18 @@ spec =
                 fill authenticatorCodeField reauthenticationTotpCode
                 click (byRole Button `named` "Sign in")
                 assertAllObserved do
-                  textContent (css "[data-web-api-reauthentication-status]") `shouldEqual` "Signed in. Confirm to retry the original action."
+                  css "[data-web-api-reauthentication-status]" `shouldHaveText` "Signed in. Confirm to retry the original action."
                   attributeValue retryOriginalAction "hidden" `shouldEqual` Nothing
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
                 click retryOriginalAction
                 assertAllObserved do
                   attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
-                  textContent profileMessage `shouldEqual` "Choose a profile action."
+                  profileMessage `shouldHaveText` "Choose a profile action."
                   attributeValue profileMessage "role" `shouldEqual` Just "alert"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
                 click profileSubmit
                 assertAllObserved do
-                  textContent (byText "Check your inbox for a verification link.") `shouldEqual` "Check your inbox for a verification link."
+                  byText "Check your inbox for a verification link." `shouldHaveText` "Check your inbox for a verification link."
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
             readIORef deliveryCountReference `shouldReturn` 1
 
@@ -958,12 +958,12 @@ spec =
                 fill authenticatorCodeField reauthenticationTotpCode
                 click (byRole Button `named` "Sign in")
                 assertAllObserved do
-                  textContent (css "[data-web-api-reauthentication-status]") `shouldEqual` "Signed in. Confirm to retry the original action."
+                  css "[data-web-api-reauthentication-status]" `shouldHaveText` "Signed in. Confirm to retry the original action."
                   attributeValue retryOriginalAction "hidden" `shouldEqual` Nothing
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
                 click retryOriginalAction
                 assertAllObserved do
-                  textContent (byText "Check your inbox for a verification link.") `shouldEqual` "Check your inbox for a verification link."
+                  byText "Check your inbox for a verification link." `shouldHaveText` "Check your inbox for a verification link."
                   attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
             readIORef attemptsReference `shouldReturn` 3
@@ -999,11 +999,11 @@ spec =
                 fill authenticatorCodeField reauthenticationTotpCode
                 click (byRole Button `named` "Sign in")
                 assertAllObserved do
-                  textContent (css "[data-web-api-reauthentication-status]") `shouldEqual` "Signed in. Confirm to retry the original action."
+                  css "[data-web-api-reauthentication-status]" `shouldHaveText` "Signed in. Confirm to retry the original action."
                 click retryOriginalAction
                 assertAllObserved do
                   attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
-                  textContent (css "[data-profile-resend] [data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  css "[data-profile-resend] [data-harch-action-status]" `shouldHaveText` "This action needs your attention."
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
             readIORef deliveryCountReference `shouldReturn` 0
 

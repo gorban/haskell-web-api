@@ -316,7 +316,7 @@ async function observeMany(observations) {
 async function observe(observation) {
   if (!observation || typeof observation.kind !== 'string') throw new Error('invalid browser observation');
   switch (observation.kind) {
-    case 'textContent': return (await resolveLocator(observation.locator).textContent({ timeout: timeout() })) || '';
+    case 'textContent': return resolveLocator(observation.locator).textContent({ timeout: timeout() });
     case 'inputValue': return resolveLocator(observation.locator).inputValue({ timeout: timeout() });
     case 'attributeValue': return resolveLocator(observation.locator).getAttribute(requireString(observation.attribute, 'attribute name'), { timeout: timeout() });
     case 'focused': return resolveLocator(observation.locator).evaluate((element) => document.activeElement === element);

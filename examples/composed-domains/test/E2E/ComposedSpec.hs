@@ -42,21 +42,21 @@ spec =
               runBrowserSpec browser do
                 visit loginUrl
                 assertAllObserved do
-                  textContent (byRole Link `named` "Catalog") `shouldEqual` "Catalog"
-                  textContent (byRole Link `named` "Orders") `shouldEqual` "Orders"
+                  byRole Link `named` "Catalog" `shouldHaveText` "Catalog"
+                  byRole Link `named` "Orders" `shouldHaveText` "Orders"
                 click (byRole Link `named` "Catalog")
                 assertAllObserved do
                   currentUrl `shouldEqual` catalogUrl
-                  textContent (byRole Heading `named` "es catalog") `shouldEqual` "es catalog"
+                  byRole Heading `named` "es catalog" `shouldHaveText` "es catalog"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
                 reload
                 assertAllObserved do
                   currentUrl `shouldEqual` catalogUrl
-                  textContent (byRole Heading `named` "es catalog") `shouldEqual` "es catalog"
+                  byRole Heading `named` "es catalog" `shouldHaveText` "es catalog"
                 click (byRole Link `named` "Orders")
                 assertAllObserved do
                   currentUrl `shouldEqual` ordersUrl
-                  textContent (byRole Heading `named` "es orders") `shouldEqual` "es orders"
+                  byRole Heading `named` "es orders" `shouldHaveText` "es orders"
 
             it "keeps default-locale mounted navigation SSR-complete across reload and enhancement" $ \(browser, server) -> do
               let catalogUrl = localServerBaseUrl server <> "/catalog"
@@ -65,14 +65,14 @@ spec =
                 visit catalogUrl
                 assertAllObserved do
                   currentUrl `shouldEqual` catalogUrl
-                  textContent (byRole Heading `named` "en catalog") `shouldEqual` "en catalog"
+                  byRole Heading `named` "en catalog" `shouldHaveText` "en catalog"
                 reload
                 assertAllObserved do
-                  textContent (byRole Heading `named` "en catalog") `shouldEqual` "en catalog"
+                  byRole Heading `named` "en catalog" `shouldHaveText` "en catalog"
                 click (byRole Link `named` "Orders")
                 assertAllObserved do
                   currentUrl `shouldEqual` ordersUrl
-                  textContent (byRole Heading `named` "en orders") `shouldEqual` "en orders"
+                  byRole Heading `named` "en orders" `shouldHaveText` "en orders"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
 
             it "keeps public and mounted-domain navigation usable when scripts are disabled" $ \(browser, server) -> do
@@ -81,21 +81,21 @@ spec =
               runBrowserSpec browser do
                 visitWithoutScripts loginUrl
                 assertAllObserved do
-                  textContent (byRole Heading `named` "Login") `shouldEqual` "Login"
-                  textContent (byRole Link `named` "Catalog") `shouldEqual` "Catalog"
+                  byRole Heading `named` "Login" `shouldHaveText` "Login"
+                  byRole Link `named` "Catalog" `shouldHaveText` "Catalog"
                 click (byRole Link `named` "Catalog")
                 assertAllObserved do
-                  textContent (byRole Heading `named` "en catalog") `shouldEqual` "en catalog"
+                  byRole Heading `named` "en catalog" `shouldHaveText` "en catalog"
                 click (byRole Link `named` "Orders")
                 assertAllObserved do
-                  textContent (byRole Heading `named` "en orders") `shouldEqual` "en orders"
+                  byRole Heading `named` "en orders" `shouldHaveText` "en orders"
                 visitWithoutScripts spanishLoginUrl
                 click (byRole Link `named` "Catalog")
                 assertAllObserved do
-                  textContent (byRole Heading `named` "es catalog") `shouldEqual` "es catalog"
+                  byRole Heading `named` "es catalog" `shouldHaveText` "es catalog"
                 click (byRole Link `named` "Orders")
                 assertAllObserved do
-                  textContent (byRole Heading `named` "es orders") `shouldEqual` "es orders"
+                  byRole Heading `named` "es orders" `shouldHaveText` "es orders"
 
       aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture) $
         parallel $
@@ -110,7 +110,7 @@ spec =
                 submit (byRole Form `named` "Admission")
                 assertAllObserved do
                   currentUrl `shouldEqual` loginUrl
-                  textContent (byRole Heading `named` "Login") `shouldEqual` "Login"
+                  byRole Heading `named` "Login" `shouldHaveText` "Login"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
 
             it "rejects a mismatched admission CSRF submission without issuing admission or navigating" $ \(browser, server) -> do
@@ -123,7 +123,7 @@ spec =
                 submit (byRole Form `named` "Admission")
                 assertAllObserved do
                   currentUrl `shouldEqual` admissionUrl
-                  textContent (css "[data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  css "[data-harch-action-status]" `shouldHaveText` "This action needs your attention."
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
 
             it "keeps an invalid admission TOTP draft editable until its corrected submission succeeds" $ \(browser, server) -> do
@@ -138,7 +138,7 @@ spec =
                 submit (byRole Form `named` "Admission")
                 assertAllObserved do
                   currentUrl `shouldEqual` admissionUrl
-                  textContent (css "[data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  css "[data-harch-action-status]" `shouldHaveText` "This action needs your attention."
                   inputValue loginField `shouldEqual` "support_operator"
                   inputValue codeField `shouldEqual` "000000"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
@@ -146,7 +146,7 @@ spec =
                 submit (byRole Form `named` "Admission")
                 assertAllObserved do
                   currentUrl `shouldEqual` loginUrl
-                  textContent (byRole Heading `named` "Login") `shouldEqual` "Login"
+                  byRole Heading `named` "Login" `shouldHaveText` "Login"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
 
             it "rejects a replayed admission TOTP without navigating or clearing the new draft" $ \(browser, server) -> do
@@ -167,7 +167,7 @@ spec =
                 submit (byRole Form `named` "Admission")
                 assertAllObserved do
                   currentUrl `shouldEqual` admissionUrl
-                  textContent (css "[data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  css "[data-harch-action-status]" `shouldHaveText` "This action needs your attention."
                   inputValue loginField `shouldEqual` "support_operator"
                   inputValue codeField `shouldEqual` browserAdmissionCode
 
@@ -182,7 +182,7 @@ spec =
                 submit (byRole Form `named` "Admission")
                 assertAllObserved do
                   currentUrl `shouldEqual` admissionUrl
-                  textContent (css "[data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  css "[data-harch-action-status]" `shouldHaveText` "This action needs your attention."
                   inputValue loginField `shouldEqual` "unknown_operator"
                   inputValue codeField `shouldEqual` browserAdmissionCode
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
@@ -206,7 +206,7 @@ spec =
                 submit (byRole Form `named` "Admission")
                 assertAllObserved do
                   currentUrl `shouldEqual` loginUrl
-                  textContent (byRole Heading `named` "Login") `shouldEqual` "Login"
+                  byRole Heading `named` "Login" `shouldHaveText` "Login"
 
       aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture {admissionFixtureAttempts = throttledAdmissionAttemptStore}) $
         parallel $
@@ -222,7 +222,7 @@ spec =
                 submit (byRole Form `named` "Admission")
                 assertAllObserved do
                   currentUrl `shouldEqual` admissionUrl
-                  textContent (css "[data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  css "[data-harch-action-status]" `shouldHaveText` "This action needs your attention."
                   inputValue loginField `shouldEqual` "support_operator"
                   inputValue codeField `shouldEqual` browserAdmissionCode
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
@@ -253,7 +253,7 @@ spec =
                 submit (byRole Form `named` "Admission")
                 assertAllObserved do
                   currentUrl `shouldEqual` admissionUrl
-                  textContent (css "[data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  css "[data-harch-action-status]" `shouldHaveText` "This action needs your attention."
                   inputValue loginField `shouldEqual` "support_operator"
                   inputValue codeField `shouldEqual` browserAdmissionCode
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
@@ -272,7 +272,7 @@ spec =
                 submit (byRole Form `named` "Admission")
                 assertAllObserved do
                   currentUrl `shouldEqual` admissionUrl
-                  textContent (css "[data-harch-action-status]") `shouldEqual` "This action needs your attention."
+                  css "[data-harch-action-status]" `shouldHaveText` "This action needs your attention."
                   inputValue loginField `shouldEqual` "support_operator"
                   inputValue codeField `shouldEqual` browserAdmissionCode
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])

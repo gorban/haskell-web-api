@@ -120,6 +120,7 @@ test-suite test-core-tests
   -- hspec-discover imports every test module. Keep this complete and let the
   -- manifest check verify it against test/ rather than suppress Cabal's warning.
   other-modules:
+    Integration.BrowserTextSpec
     Integration.SpecPreprocessorSpec
     Unit.TestCore.Browser.ConfigSpec
     Unit.TestCore.Browser.ScenarioSpec

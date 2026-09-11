@@ -28,7 +28,7 @@ spec =
                 setInputFiles (css "#native-upload-file") filePath
                 submit (byRole Form `named` "Upload a file")
                 assertAllObserved do
-                  textContent (byRole Heading `named` "Upload received") `shouldEqual` "Upload received"
+                  byRole Heading `named` "Upload received" `shouldHaveText` "Upload received"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1, mutationRequestCount = 0}|])
               nativeUploadDiscardCount uploadState `shouldReturn` 1
 
@@ -41,7 +41,7 @@ spec =
                 setInputFiles (css "#native-upload-file") filePath
                 submit (byRole Form `named` "Upload a file")
                 assertAllObserved do
-                  textContent (byRole Heading `named` "Upload received") `shouldEqual` "Upload received"
+                  byRole Heading `named` "Upload received" `shouldHaveText` "Upload received"
               nativeUploadDiscardCount uploadState `shouldReturn` 1
 
 withBrowserAndUploadServer :: ((BrowserConfig, LocalTestServer, NativeUploadState) -> IO a) -> BrowserConfig -> IO a
