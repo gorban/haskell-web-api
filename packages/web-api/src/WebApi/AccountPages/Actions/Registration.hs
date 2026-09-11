@@ -192,9 +192,9 @@ auditDeliveryStage deliveryStage =
 pendingRegistrationAuditAsAccountStoreError :: PendingRegistrationAuditStoreError -> AccountStoreError
 pendingRegistrationAuditAsAccountStoreError auditError =
   case auditError of
-    PendingRegistrationAuditStoreUnavailable -> AccountStoreUnavailable "pending registration audit store unavailable"
-    PendingRegistrationAuditCapacityExceeded -> AccountStoreUnavailable "account audit partition capacity is exhausted"
-    PendingRegistrationAuditStoreCorruptData -> AccountStoreCorruptData "pending registration audit store returned corrupt data"
+    PendingRegistrationAuditStoreUnavailable -> AccountStoreRequiredAuditUnavailable
+    PendingRegistrationAuditCapacityExceeded -> AccountStoreRequiredAuditCapacityExceeded
+    PendingRegistrationAuditStoreCorruptData -> AccountStoreRequiredAuditCorruptResult
 
 parseRegistrationForm ::
   AccountActionRequest ->
@@ -290,6 +290,9 @@ interpretRegistrationResult actionRequest usernameValue emailValue displayNameVa
     throwRegistrationFailure = \case
       RegistrationDeliveryFailed VerificationDeliveryTimedOut -> throwClientActionFailure deliveryFailureResponse RegistrationDeliveryTimeoutFailure "EmailDeliveryTimeout" "registration verification delivery timed out"
       RegistrationDeliveryFailed VerificationDeliveryTransportFailed -> throwClientActionFailure deliveryFailureResponse RegistrationDeliveryFailure "EmailDeliveryError" "registration verification delivery transport failed"
+      RegistrationStoreError AccountStoreRequiredAuditUnavailable -> throwRequiredAuditFailure unavailableRegistration RegistrationStoreFailure PendingRegistrationDeliveryAudit RequiredAuditUnavailable
+      RegistrationStoreError AccountStoreRequiredAuditCapacityExceeded -> throwRequiredAuditFailure unavailableRegistration RegistrationStoreFailure PendingRegistrationDeliveryAudit RequiredAuditCapacityExceeded
+      RegistrationStoreError AccountStoreRequiredAuditCorruptResult -> throwRequiredAuditFailure unavailableRegistration RegistrationStoreFailure PendingRegistrationDeliveryAudit RequiredAuditCorruptResult
       RegistrationStoreError storeError -> throwClientActionFailure unavailableRegistration RegistrationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
       RegistrationPasswordHashingFailed -> throwClientActionFailure unavailableRegistration RegistrationPasswordHashFailure "PasswordHashingError" "password hashing failed"
       RegistrationPasswordWorkBudgetExhausted -> throwClientActionFailure unavailableRegistration RegistrationPasswordWorkBudgetFailure "PasswordWorkBudgetExhausted" "password work budget is exhausted"

@@ -57,7 +57,7 @@ In particular, `web-api`'s account-activity audit is application-owned: its
 `pg_cron` bootstrap are a reference deployment procedure. They are not Harch
 telemetry, a generic audit API, automatic compliance, or protection from a
 database owner/superuser. See the [PostgreSQL effects guide][postgres-guide]
-for the concrete operational boundary.
+for the concrete operational boundary and its [audit monitoring inventory](examples/postgres-effects/README.md#runtime-monitoring-and-alerting-inventory).
 
 ## How Harch differs from common rendering architectures
 

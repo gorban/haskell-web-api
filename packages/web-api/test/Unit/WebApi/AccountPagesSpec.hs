@@ -57,12 +57,12 @@ import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), Accoun
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), ProfilePageModel (..), SignedOutProfilePageDetails (..), buildPageModelFromRouteData, renderPageFromRouteData)
-import WebApi.PendingRegistrationAudit (PendingRegistrationAuditStore (..), PendingRegistrationAuditStoreError (PendingRegistrationAuditCapacityExceeded))
+import WebApi.PendingRegistrationAudit (PendingRegistrationAuditStore (..), PendingRegistrationAuditStoreError (..))
 import WebApi.Postgres.Testing (buildRuntimePostgresAccountCredentialStoreWithRunner, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStoreWithRunner)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), defaultRequestContext, renderRoutePath, routeCodec)
 import WebApi.RouteData (RouteDataResult (..), RouteDataSelection (..), selectRouteData, selectRouteDataSelectionWithDatabase)
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..), MfaEnrollmentSessionStore (..), MfaEnrollmentSessionStoreError (..))
-import WebApi.VerificationResendAudit (VerificationResendAuditStore (..), VerificationResendAuditStoreError (VerificationResendAuditCapacityExceeded))
+import WebApi.VerificationResendAudit (VerificationResendAuditStore (..), VerificationResendAuditStoreError (..))
 
 issuedCsrfToken :: AccountWorkflow -> AppRequestContext -> IO Csrf.CsrfToken
 issuedCsrfToken workflow requestContext = do
@@ -286,16 +286,30 @@ existingSpec = do
       expect (workflow (Right True) delivery (Left AccountSessionStoreUnavailable) (Right (Just pendingProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 202 "Revisa tu bandeja"
       expect (workflow (Right True) delivery (Right (Just activeSession)) (Left (AccountStoreUnavailable "database unavailable")) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
       expect (workflow (Right True) delivery (Right (Just activeSession)) (Left (AccountStoreUnavailable "database unavailable")) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 503 "Tu perfil no esta disponible"
+      forM_
+        [ AccountStoreRequiredAuditUnavailable,
+          AccountStoreRequiredAuditCapacityExceeded,
+          AccountStoreRequiredAuditCorruptResult
+        ]
+        $ \storeError ->
+          expect (workflow (Right True) delivery (Right (Just activeSession)) (Left storeError) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
       expect (workflow (Right True) delivery (Right (Just (opaqueSession maxBound))) (Right (Just pendingProfile)) (maxBound - 1)) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
       expect (workflow (Right True) delivery (Right (Just (opaqueSession maxBound))) (Right (Just pendingProfile)) (maxBound - 1)) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 503 "Tu perfil no esta disponible"
-      expect
-        ( (workflow (Right True) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150)
-            { accountWorkflowVerificationResendAuditStore = VerificationResendAuditStore (\_ _ _ -> pure (Left VerificationResendAuditCapacityExceeded))
-            }
-        )
-        (actionRequest sessionRequestContext [("intent", "resend-verification")])
-        503
-        "temporarily unavailable"
+      forM_
+        [ (VerificationResendAuditStoreUnavailable, "unavailable", False),
+          (VerificationResendAuditCapacityExceeded, "capacity-exhausted", True),
+          (VerificationResendAuditStoreCorruptData, "corrupt-result", False)
+        ]
+        $ \(storeError, failureKind, expectsCapacitySignal) -> do
+          auditFailure <-
+            handleAccountAction
+              ( (workflow (Right True) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150)
+                  { accountWorkflowVerificationResendAuditStore = VerificationResendAuditStore (\_ _ _ -> pure (Left storeError))
+                  }
+              )
+              (actionRequest sessionRequestContext [("intent", "resend-verification")])
+          auditFailure `shouldSatisfy` maybe False (\response -> Http.statusCode (HarchWeb.clientActionStatus response) == 503 && any (Text.isInfixOf "temporarily unavailable" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response))
+          assertRequiredAuditFailureSignal "verification-resend-delivery" failureKind expectsCapacitySignal auditFailure
 
     it "keeps PendingProfileForm comparable and its rendered region free of a false error flag" $
       expectAll $
@@ -1194,20 +1208,27 @@ spec = do
               actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable" (Just response)
                 && any (\attribute -> Observability.attributeName attribute == "app.failure.code" && Observability.attributeValue attribute == Observability.TextAttribute "account.registration.delivery-claim") (HarchWeb.clientActionObservabilityAttributes response)
           )
-      auditCapacityFailure <-
-        handleAccountAction
-          ( (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 delivery)
-              { accountWorkflowPendingRegistrationAuditStore = PendingRegistrationAuditStore (\_ _ -> pure (Left PendingRegistrationAuditCapacityExceeded))
-              }
-          )
-          (request "/register" validRegistration)
-      auditCapacityFailure
-        `shouldSatisfy` maybe
-          False
-          ( \response ->
-              actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable" (Just response)
-                && any (\attribute -> Observability.attributeName attribute == "app.failure.code" && Observability.attributeValue attribute == Observability.TextAttribute "account.registration.store") (HarchWeb.clientActionObservabilityAttributes response)
-          )
+      forM_
+        [ (PendingRegistrationAuditStoreUnavailable, "unavailable", False),
+          (PendingRegistrationAuditCapacityExceeded, "capacity-exhausted", True),
+          (PendingRegistrationAuditStoreCorruptData, "corrupt-result", False)
+        ]
+        $ \(storeError, failureKind, expectsCapacitySignal) -> do
+          auditFailure <-
+            handleAccountAction
+              ( (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 delivery)
+                  { accountWorkflowPendingRegistrationAuditStore = PendingRegistrationAuditStore (\_ _ -> pure (Left storeError))
+                  }
+              )
+              (request "/register" validRegistration)
+          auditFailure
+            `shouldSatisfy` maybe
+              False
+              ( \response ->
+                  actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable" (Just response)
+                    && any (\attribute -> Observability.attributeName attribute == "app.failure.code" && Observability.attributeValue attribute == Observability.TextAttribute "account.registration.store") (HarchWeb.clientActionObservabilityAttributes response)
+              )
+          assertRequiredAuditFailureSignal "pending-registration-delivery" failureKind expectsCapacitySignal auditFailure
       passwordHashingFailure <-
         handleAccountAction
           ( (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 delivery)
@@ -1620,10 +1641,15 @@ spec = do
         _ -> expectationFailure "expected one recovery-code account-session audit event"
       handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Right (Just confirmedEnrollment)) (Right False) (Right True)) (loginRequest defaultRequestContext validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
-      handleAccountAction (auditStoreFailure AccountSessionAuditCapacityExceeded) (loginRequest defaultRequestContext validFields)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
-      handleAccountAction (auditStoreFailure AccountSessionAuditStoreCorruptData) (loginRequest defaultRequestContext validFields)
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
+      forM_
+        [ (AccountSessionAuditStoreUnavailable, "unavailable", False),
+          (AccountSessionAuditCapacityExceeded, "capacity-exhausted", True),
+          (AccountSessionAuditStoreCorruptData, "corrupt-result", False)
+        ]
+        $ \(storeError, failureKind, expectsCapacitySignal) -> do
+          auditFailure <- handleAccountAction (auditStoreFailure storeError) (loginRequest defaultRequestContext validFields)
+          auditFailure `shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable"
+          assertRequiredAuditFailureSignal "account-session-issue" failureKind expectsCapacitySignal auditFailure
       handleAccountAction validWorkflow (typedAccountActionRequest "POST" "/login" validFields defaultRequestContext)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-identifier") "temporarily unavailable")
       handleAccountAction validWorkflow (loginRequest (defaultRequestContext {requestRouteObservation = Just overlongAuditMountRoute}) validFields)
@@ -2078,6 +2104,32 @@ spec = do
                 `shouldSatisfy` not
                 . any (Text.isInfixOf "encrypted-mfa-recovery-sentinel")
         Right _ -> expectationFailure "expected malformed MFA persistence output to fail"
+
+assertRequiredAuditFailureSignal :: Text.Text -> Text.Text -> Bool -> Maybe (HarchWeb.ClientActionResponse route context) -> Expectation
+assertRequiredAuditFailureSignal operation failureKind expectsCapacitySignal actionResult =
+  case actionResult of
+    Nothing -> expectationFailure "expected a required-audit failure response"
+    Just response -> do
+      let signalNames =
+            [ "app.operational.signal.account.audit.required-append-failed",
+              "app.operational.signal.audit_capacity_exceeded",
+              "account.audit.operation",
+              "account.audit.failure-kind"
+            ]
+          relevantAttributes = filter (\attribute -> Observability.attributeName attribute `elem` signalNames) (HarchWeb.clientActionObservabilityAttributes response)
+          expectedAttributes =
+            [ Observability.ObservabilityAttribute "app.operational.signal.account.audit.required-append-failed" (Observability.TextAttribute "true"),
+              Observability.ObservabilityAttribute "account.audit.operation" (Observability.TextAttribute operation),
+              Observability.ObservabilityAttribute "account.audit.failure-kind" (Observability.TextAttribute failureKind)
+            ]
+              <> [Observability.ObservabilityAttribute "app.operational.signal.audit_capacity_exceeded" (Observability.TextAttribute "true") | expectsCapacitySignal]
+          relevantLogs = filter (Text.isPrefixOf "[account.audit.required-append-failed]") (HarchWeb.clientActionLogEntries response)
+      expectAll
+        ( (relevantAttributes `shouldBe` expectedAttributes)
+            :| [ relevantLogs `shouldBe` ["[account.audit.required-append-failed] audit.operation=" <> operation <> " audit.failure-kind=" <> failureKind],
+                 HarchWeb.clientActionObservabilityAttributes response `shouldNotSatisfy` any ((== "request.id") . Observability.attributeName)
+               ]
+        )
 
 peerAttemptBudgets :: LoginProtection.LoginProtectionPolicy -> LoginAttemptBudgets
 peerAttemptBudgets policy =

@@ -99,6 +99,9 @@ import System.Timeout (timeout)
 data AccountStoreError
   = AccountStoreUnavailable Text
   | AccountStoreCorruptData Text
+  | AccountStoreRequiredAuditUnavailable
+  | AccountStoreRequiredAuditCapacityExceeded
+  | AccountStoreRequiredAuditCorruptResult
   deriving (Eq, Show)
 
 -- | The safe account data required by authenticated page surfaces. Password

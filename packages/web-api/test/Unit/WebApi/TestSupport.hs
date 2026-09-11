@@ -644,12 +644,12 @@ enrollmentSessionStoreFor enrollmentAccountId =
 isUnavailable :: Text -> AccountStoreError -> Bool
 isUnavailable expectedError = \case
   AccountStoreUnavailable actualError -> actualError == expectedError
-  AccountStoreCorruptData _ -> False
+  _ -> False
 
 isCorrupt :: Text -> AccountStoreError -> Bool
 isCorrupt expectedError = \case
-  AccountStoreUnavailable _ -> False
   AccountStoreCorruptData actualError -> actualError == expectedError
+  _ -> False
 
 assertAccountStoreError :: IO (Either AccountStoreError value) -> (AccountStoreError -> Bool) -> IO ()
 assertAccountStoreError action matchesError = do

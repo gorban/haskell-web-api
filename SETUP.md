@@ -438,6 +438,8 @@ install `account-audit-maintenance` at `0 3 * * *` UTC and the owned 30-day pg_c
 `41 3 * * *`. The job owner is `web_api_audit_scheduler`; the migration owner never schedules on its
 behalf. The setup command does not wait for pg_cron's clock. Another deployment can invoke the same
 no-argument maintenance wrapper from a managed scheduler with its own reviewed operational schedule.
+For the signals, owner queries, and operator responses that must accompany that schedule, see the
+[audit monitoring inventory](examples/postgres-effects/README.md#runtime-monitoring-and-alerting-inventory).
 
 Your runtime `./.env` / `./.env.local` values should keep describing the application's own connection user.
 The future database-backed runtime path should use a minimal-access account there, while migrations should

@@ -78,7 +78,10 @@ commitAcceptedLogin input = do
   workflow <- accountWorkflow
   persisted <- liftIO (saveAccountSessionWithAudit (accountWorkflowSessionAuditStore workflow) opaqueSession activity)
   case persisted of
-    Left storeError -> throwLoginFailure input LoginSessionFailure "AccountSessionAuditStoreError" (sessionAuditStoreErrorMessage storeError)
+    Left storeError ->
+      case requiredAuditFailure storeError of
+        Just auditFailure -> throwRequiredAuditFailure (unavailableLoginResponse input) LoginSessionFailure AccountSessionIssueAudit auditFailure
+        Nothing -> throwLoginFailure input LoginSessionFailure "AccountSessionAuditStoreError" (sessionAuditStoreErrorMessage storeError)
     Right False -> throwLoginFailure input LoginSessionFailure "AccountSessionAuditStoreError" "account session identifier collision"
     Right True ->
       pure
@@ -160,3 +163,10 @@ sessionAuditStoreErrorMessage storeError =
     AccountSessionAuditStoreUnavailable -> "account session audit store unavailable"
     AccountSessionAuditCapacityExceeded -> "account audit partition capacity is exhausted"
     AccountSessionAuditStoreCorruptData -> "account session audit store returned corrupt data"
+
+requiredAuditFailure :: AccountSessionAuditStoreError -> Maybe RequiredAuditFailure
+requiredAuditFailure storeError =
+  case storeError of
+    AccountSessionAuditStoreUnavailable -> Just RequiredAuditUnavailable
+    AccountSessionAuditCapacityExceeded -> Just RequiredAuditCapacityExceeded
+    AccountSessionAuditStoreCorruptData -> Just RequiredAuditCorruptResult

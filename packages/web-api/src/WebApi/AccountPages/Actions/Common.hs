@@ -22,7 +22,10 @@ module WebApi.AccountPages.Actions.Common
     localized,
     actionLocale,
     mfaErrorMessage,
+    RequiredAuditOperation (..),
+    RequiredAuditFailure (..),
     throwClientActionFailure,
+    throwRequiredAuditFailure,
     buildFailureDiagnostics,
     attachClientActionFailure,
     credentialStoreErrorMessage,
@@ -147,6 +150,20 @@ throwClientActionFailure publicResponse code typeName detail =
         appFailureDiagnostics = buildFailureDiagnostics code typeName detail
       }
 
+-- | Decision (AHI-5-DOC, 2026-09-11): required-audit reporting extends the
+-- existing application action-failure interpreter. That boundary already owns
+-- private diagnostics and low-cardinality attributes; a Harch telemetry API
+-- would invert ownership, while a post-commit logger would weaken the atomic
+-- contract. 'RequiredAuditFailure' keeps unrelated account-store failures
+-- from being mislabeled. Explicit logout remains on its best-effort path.
+throwRequiredAuditFailure :: AccountActionResponse -> FailureCode -> RequiredAuditOperation -> RequiredAuditFailure -> AppM AccountActionResponse value
+throwRequiredAuditFailure publicResponse code operation auditFailure =
+  throwClientActionFailure
+    (attachRequiredAuditFailure operation auditFailure publicResponse)
+    code
+    "RequiredAuditFailure"
+    ("required audit append failed: " <> requiredAuditFailureKind auditFailure)
+
 buildFailureDiagnostics :: FailureCode -> Text -> Text -> FailureDiagnostics
 buildFailureDiagnostics code typeName detail =
   FailureDiagnostics
@@ -179,6 +196,66 @@ accountStoreErrorDetail storeError =
   case storeError of
     AccountStoreUnavailable detail -> detail
     AccountStoreCorruptData detail -> detail
+    AccountStoreRequiredAuditUnavailable -> "required audit append failed: unavailable"
+    AccountStoreRequiredAuditCapacityExceeded -> "required audit append failed: capacity-exhausted"
+    AccountStoreRequiredAuditCorruptResult -> "required audit append failed: corrupt-result"
+
+data RequiredAuditOperation
+  = AccountSessionIssueAudit
+  | PendingRegistrationDeliveryAudit
+  | VerificationResendDeliveryAudit
+
+-- | Closed application-only classification for a required audit append. The
+-- generic account lifecycle carries the matching cases in 'AccountStoreError'
+-- so delivery workflows retain their provenance without textual sentinels.
+data RequiredAuditFailure
+  = RequiredAuditUnavailable
+  | RequiredAuditCapacityExceeded
+  | RequiredAuditCorruptResult
+
+requiredAuditOperationName :: RequiredAuditOperation -> Text
+requiredAuditOperationName operation =
+  case operation of
+    AccountSessionIssueAudit -> "account-session-issue"
+    PendingRegistrationDeliveryAudit -> "pending-registration-delivery"
+    VerificationResendDeliveryAudit -> "verification-resend-delivery"
+
+requiredAuditFailureKind :: RequiredAuditFailure -> Text
+requiredAuditFailureKind auditFailure =
+  case auditFailure of
+    RequiredAuditUnavailable -> "unavailable"
+    RequiredAuditCapacityExceeded -> "capacity-exhausted"
+    RequiredAuditCorruptResult -> "corrupt-result"
+
+attachRequiredAuditFailure :: RequiredAuditOperation -> RequiredAuditFailure -> AccountActionResponse -> AccountActionResponse
+attachRequiredAuditFailure operation auditFailure response =
+  response
+    { HarchWeb.clientActionObservabilityAttributes =
+        HarchWeb.clientActionObservabilityAttributes response
+          <> [ Observability.ObservabilityAttribute "app.operational.signal.account.audit.required-append-failed" (Observability.TextAttribute "true"),
+               Observability.ObservabilityAttribute "account.audit.operation" (Observability.TextAttribute (requiredAuditOperationName operation)),
+               Observability.ObservabilityAttribute "account.audit.failure-kind" (Observability.TextAttribute (requiredAuditFailureKind auditFailure))
+             ]
+          <> requiredAuditCapacityExceededSignal auditFailure,
+      HarchWeb.clientActionLogEntries =
+        HarchWeb.clientActionLogEntries response
+          <> ["[account.audit.required-append-failed] audit.operation=" <> requiredAuditOperationName operation <> " audit.failure-kind=" <> requiredAuditFailureKind auditFailure]
+          <> requiredAuditCapacityExceededLog auditFailure
+    }
+
+requiredAuditCapacityExceededSignal :: RequiredAuditFailure -> [Observability.ObservabilityAttribute]
+requiredAuditCapacityExceededSignal auditFailure =
+  case auditFailure of
+    RequiredAuditCapacityExceeded -> [Observability.ObservabilityAttribute "app.operational.signal.audit_capacity_exceeded" (Observability.TextAttribute "true")]
+    RequiredAuditUnavailable -> []
+    RequiredAuditCorruptResult -> []
+
+requiredAuditCapacityExceededLog :: RequiredAuditFailure -> [Text]
+requiredAuditCapacityExceededLog auditFailure =
+  case auditFailure of
+    RequiredAuditCapacityExceeded -> ["[audit_capacity_exceeded] audit.operation=append"]
+    RequiredAuditUnavailable -> []
+    RequiredAuditCorruptResult -> []
 
 mfaStoreErrorMessage :: MfaStoreError -> Text
 mfaStoreErrorMessage storeError =

@@ -148,9 +148,9 @@ verificationResendDeliveryActivity actionRequest claim = do
 verificationResendAuditAsAccountStoreError :: VerificationResendAuditStoreError -> AccountStoreError
 verificationResendAuditAsAccountStoreError auditError =
   case auditError of
-    VerificationResendAuditStoreUnavailable -> AccountStoreUnavailable "verification resend audit store unavailable"
-    VerificationResendAuditCapacityExceeded -> AccountStoreUnavailable "account audit partition capacity is exhausted"
-    VerificationResendAuditStoreCorruptData -> AccountStoreCorruptData "verification resend audit store returned corrupt data"
+    VerificationResendAuditStoreUnavailable -> AccountStoreRequiredAuditUnavailable
+    VerificationResendAuditCapacityExceeded -> AccountStoreRequiredAuditCapacityExceeded
+    VerificationResendAuditStoreCorruptData -> AccountStoreRequiredAuditCorruptResult
 
 interpretProfileResendResult ::
   AccountActionRequest ->
@@ -162,5 +162,8 @@ interpretProfileResendResult actionRequest profile resendResult =
    in case resendResult of
         Right _ -> pure (profileResponse actionRequest Http.status202 (form (localized actionRequest CheckVerificationInbox) False))
         Left (ResendVerificationDeliveryFailed _) -> throwClientActionFailure (profileResponse actionRequest Http.status502 (form (localized actionRequest VerificationDeliveryFailed) True)) ProfileResendDeliveryFailure "EmailDeliveryError" "verification delivery failed"
+        Left (ResendVerificationStoreError AccountStoreRequiredAuditUnavailable) -> throwRequiredAuditFailure (profileResponse actionRequest Http.status503 (form (localized actionRequest ProfileUnavailable) True)) ProfileResendStoreFailure VerificationResendDeliveryAudit RequiredAuditUnavailable
+        Left (ResendVerificationStoreError AccountStoreRequiredAuditCapacityExceeded) -> throwRequiredAuditFailure (profileResponse actionRequest Http.status503 (form (localized actionRequest ProfileUnavailable) True)) ProfileResendStoreFailure VerificationResendDeliveryAudit RequiredAuditCapacityExceeded
+        Left (ResendVerificationStoreError AccountStoreRequiredAuditCorruptResult) -> throwRequiredAuditFailure (profileResponse actionRequest Http.status503 (form (localized actionRequest ProfileUnavailable) True)) ProfileResendStoreFailure VerificationResendDeliveryAudit RequiredAuditCorruptResult
         Left (ResendVerificationStoreError storeError) -> throwClientActionFailure (profileResponse actionRequest Http.status503 (form (localized actionRequest ProfileUnavailable) True)) ProfileResendStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
         Left ResendVerificationClockOverflow -> throwClientActionFailure (profileResponse actionRequest Http.status503 (form (localized actionRequest ProfileUnavailable) True)) ProfileResendClockFailure "ClockOverflow" "verification expiry overflowed"
