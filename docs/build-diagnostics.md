@@ -78,6 +78,17 @@ application regressions; adapt classifier fixtures to reject the formerly allowe
 warnings. This does not retire the HTTP2 pin, Warp peer hooks, or findings in
 other dependencies.
 
+For Primitive, track [#447](https://github.com/haskell/primitive/issues/447)
+(test-suite `TypeInType` replacement) and the already merged
+[#434](https://github.com/haskell/primitive/pull/434) (library deprecation-warning
+handling). No Primitive patch or warning exception is shipped here. After a
+public release includes the relevant changes, refresh its freeze entry, run
+unpatched `test-qc` with `-Werror` against the selected library dependencies,
+and rerun the full local/CI gates. The isolated experimental pragma patch then
+becomes unnecessary; retain its regression evidence and all upstream test cases.
+PR #434 suppresses warnings within deprecated compatibility wrappers; #447 does
+not change that runtime implementation or establish a runtime bug fix.
+
 ## Documented GHC HPC deprecation
 
 The same GHC 9.14.1 coverage mode can run instrumented custom-Setup and source-preprocessor

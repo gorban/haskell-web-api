@@ -9,6 +9,11 @@
 # the duplicate-orphan patch and warning allowances after both upstream suites
 # pass unpatched with -Werror against the runtime dependency plan. Keep the
 # suite checks and application regressions; run the full gates before retirement.
+# Also track https://github.com/haskell/primitive/issues/447 for Primitive's
+# upstream test pragma fix. No Primitive patch or warning allowance is shipped
+# here. After a fixed public release, refresh its freeze entry and run its
+# unpatched test-qc with -Werror plus the full gates; retain all test cases.
+# Primitive's separate library-warning handling is upstream PR #434, not #447.
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
