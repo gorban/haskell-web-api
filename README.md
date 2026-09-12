@@ -406,14 +406,16 @@ To upgrade dependencies in a dedicated change:
    constraints and regenerate with an explicit index timestamp and the selected
    version constraints. Inspect transitive versions and flags as well as direct
    dependencies. Do not hand-label an untested plan as a passing baseline.
-3. When changing TLS, Serialise, Cborg, HTTP2, or time-manager, run
-   `tools/test-tls-compatibility-stack.sh`. It tests released Cborg and Serialise
-   source in an isolated store, temporarily patches only Serialise's duplicate
-   test orphan, cleans that store, and verifies the runtime plan still uses
-   Hackage tarballs. Do not copy that patch into a runtime dependency.
-   For retirement of the Serialise/Cborg workarounds after a release containing
-   [PR #385](https://github.com/well-typed/cborg/pull/385), follow the
-   [cleanup criteria](docs/build-diagnostics.md#exact-ghc-914-tls-compatibility-warnings).
+3. When changing TLS, Serialise, Cborg, Primitive, HTTP2, or time-manager, run
+   `tools/test-tls-compatibility-stack.sh`. It tests released Cborg, Serialise,
+   and Primitive source in an isolated store. It temporarily patches Serialise's
+   duplicate test orphan and Primitive's released strict-test compatibility
+   source; it then cleans that store and verifies the runtime plan still uses
+   unmodified Hackage tarballs. Do not copy either patch into a runtime dependency.
+   For retirement after public releases contain [Cborg PR #385](https://github.com/well-typed/cborg/pull/385),
+   [Primitive PR #434](https://github.com/haskell/primitive/pull/434), and the
+   [Primitive #447](https://github.com/haskell/primitive/issues/447) fix, follow
+   the [cleanup criteria](docs/build-diagnostics.md#exact-ghc-914-tls-compatibility-warnings).
    Validate changed dependencies from a fresh Cabal store and capture the build
    output for `tools/check-build-diagnostics.sh`; an existing store can hide warnings
    by skipping compilation. Run the complete local gate sequence in

@@ -866,15 +866,19 @@ warning/CI gates pass. This does not retire the separate Serialise/Cborg
 exceptions or Warp accepted-peer hooks. [HTTP2 #169](https://github.com/kazu-yamamoto/http2/issues/169)
 explains why lowering the manager bound on newer HTTP2 is not sufficient.
 
-`tools/test-tls-compatibility-stack.sh` downloads only the released Cborg and
-Serialise source packages into an isolated Cabal directory, runs their suites,
-and then deletes that directory. It temporarily removes the duplicate primitive
-`Vector` QuickCheck orphan from Serialise's *test source* because every released
-`quickcheck-instances` version accepted by Serialise already provides it. The
-script asserts that the repository's runtime dry-run plan still selects the
-unmodified `serialise-0.2.6.1` Hackage tarball. It is the only caller allowed to
-use the diagnostic gate's package-version-specific GHC 9.14 compatibility mode;
-all warnings in the repository optimized and coverage gates remain fatal. This
+`tools/test-tls-compatibility-stack.sh` downloads only the released Cborg,
+Serialise, and Primitive source packages into an isolated Cabal directory, runs
+their suites, and then deletes that directory. It temporarily removes the duplicate
+primitive `Vector` QuickCheck orphan from Serialise's *test source* because every
+released `quickcheck-instances` version accepted by Serialise already provides it.
+For Primitive's test suite only, it replaces the deprecated `TypeInType` pragma
+with `DataKinds` and `PolyKinds`, and applies upstream PR #434's module-local
+deprecated-wrapper handling to its three affected library headers. `test-qc` then
+runs with `-Werror`; no Primitive warning is accepted by the diagnostic gate. The
+script asserts that the repository's runtime dry-run plan still selects unmodified
+Hackage tarballs for `cborg`, `serialise`, and `primitive`. It is the only caller
+allowed to use the diagnostic gate's package-version-specific GHC 9.14 compatibility
+mode; all warnings in the repository optimized and coverage gates remain fatal. This
 makes the exception observable and removable when upstream releases correct their
 bounds and warnings.
 

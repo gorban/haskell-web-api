@@ -78,16 +78,21 @@ application regressions; adapt classifier fixtures to reject the formerly allowe
 warnings. This does not retire the HTTP2 pin, Warp peer hooks, or findings in
 other dependencies.
 
-For Primitive, track [#447](https://github.com/haskell/primitive/issues/447)
-(test-suite `TypeInType` replacement) and the already merged
-[#434](https://github.com/haskell/primitive/pull/434) (library deprecation-warning
-handling). No Primitive patch or warning exception is shipped here. After a
-public release includes the relevant changes, refresh its freeze entry, run
+The frozen plan's public `primitive-0.9.1.0` library remains unmodified. Its
+released `test-qc` source is verified only in the TLS compatibility script's
+disposable source tree. That tree applies [#447](https://github.com/haskell/primitive/issues/447)'s
+`TypeInType` replacement, then applies [#434](https://github.com/haskell/primitive/pull/434)'s
+module-local deprecation setting to the three deprecated compatibility wrappers.
+`test-qc` runs with `-Werror`; the diagnostic gate receives no Primitive warning
+allowance. The script deletes its isolated Cabal store and proves the repository
+runtime dry-run still chooses the public Hackage `primitive` tarball.
+
+After a public release includes both changes, refresh the freeze entry, run
 unpatched `test-qc` with `-Werror` against the selected library dependencies,
-and rerun the full local/CI gates. The isolated experimental pragma patch then
-becomes unnecessary; retain its regression evidence and all upstream test cases.
-PR #434 suppresses warnings within deprecated compatibility wrappers; #447 does
-not change that runtime implementation or establish a runtime bug fix.
+and rerun the full local/CI gates. Remove the temporary patch but retain its
+regression evidence and all upstream test cases. PR #434 scopes compatibility
+handling to deprecated wrappers; #447 changes test compilation only and does
+not establish a runtime bug fix.
 
 ## Documented GHC HPC deprecation
 
