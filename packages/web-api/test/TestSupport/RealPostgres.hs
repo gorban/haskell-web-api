@@ -27,6 +27,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import System.Process (callProcess, readProcess)
 import Text.Read (readMaybe)
 import WebApi.Config (AppEnvironmentConfig (..), DatabaseConfig (..), DatabaseSslMode (DatabaseSslVerifyFull), DatabaseTransportSecurity (DatabaseTransportSsl), defaultAppEnvironmentConfig)
+import WebApi.Postgres.Testing (runRuntimeScalarQuery)
 
 -- | The AHI-5 test image has PostgreSQL 17 and the reviewed pg_cron package.
 --
@@ -281,6 +282,12 @@ ensureDefaultPostgresAvailable =
 -- prove bad-CA, hostname-mismatch, and TLS-disabled failures through libpq.
 -- The container runtime assigns loopback ports, so the fixture never releases
 -- a locally chosen port before the listener owns it.
+--
+-- @pg_isready@ establishes container-side server readiness, but not that the
+-- published host endpoint has completed its TLS startup.  Before returning a
+-- configuration, this fixture therefore proves the exact @verify-full@ path
+-- the test relies on.  A connected non-TLS result remains an immediate test
+-- failure rather than a retried success.
 withPostgresTlsFixtures :: (DatabaseConfig -> DatabaseConfig -> DatabaseConfig -> DatabaseConfig -> IO value) -> IO value
 withPostgresTlsFixtures action = do
   containerRuntime <- requireContainerRuntime
@@ -363,7 +370,10 @@ withPostgresTlsFixtures action = do
           startPlain
           waitForPostgres containerRuntime tlsContainerName
           waitForPostgres containerRuntime plainContainerName
-          (,) <$> publishedLoopbackPort containerRuntime tlsContainerName <*> publishedLoopbackPort containerRuntime plainContainerName
+          tlsPort <- publishedLoopbackPort containerRuntime tlsContainerName
+          plainPort <- publishedLoopbackPort containerRuntime plainContainerName
+          waitForVerifiedTls (fixtureConfig tlsPort (certificateDirectory <> "/root.crt"))
+          pure (tlsPort, plainPort)
     bracket
       (acquire `onException` (stopContainer plainContainerName >> stopContainer tlsContainerName))
       (const (stopContainer plainContainerName >> stopContainer tlsContainerName))
@@ -392,6 +402,20 @@ waitForPostgres containerRuntime containerName = go (30 :: Int)
         Left _
           | attempts > 0 -> threadDelay 1000000 >> go (attempts - 1)
           | otherwise -> ioError (userError "PostgreSQL TLS fixture did not become ready")
+
+waitForVerifiedTls :: DatabaseConfig -> IO ()
+waitForVerifiedTls databaseConfig = go (30 :: Int)
+  where
+    go attempts = do
+      result <- runRuntimeScalarQuery databaseConfig "SELECT ssl::text FROM pg_stat_ssl WHERE pid = pg_backend_pid();"
+      case result of
+        Right "true" -> pure ()
+        Right tlsStatus ->
+          ioError (userError ("PostgreSQL TLS fixture connected without TLS: " <> Text.unpack tlsStatus))
+        Left connectionFailure
+          | attempts > 0 -> threadDelay 1000000 >> go (attempts - 1)
+          | otherwise ->
+              ioError (userError ("PostgreSQL TLS fixture did not accept verify-full connections: " <> Text.unpack connectionFailure))
 
 publishedLoopbackPort :: FilePath -> String -> IO Int
 publishedLoopbackPort containerRuntime containerName = do
