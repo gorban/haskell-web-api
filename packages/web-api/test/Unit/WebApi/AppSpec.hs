@@ -2,7 +2,7 @@
 
 {-# SPEC #-}
 
-import Control.Concurrent (forkIO, killThread, readMVar, threadDelay)
+import Control.Concurrent (forkIO, killThread, newEmptyMVar, putMVar, readMVar, threadDelay)
 import Control.Exception (IOException, SomeException, bracket, displayException, throwIO, try)
 import Control.Monad (forM_)
 import Data.ByteString qualified as ByteString
@@ -34,7 +34,7 @@ import WebApi.AccountJwt (AccountJwtIssuer (..), AccountJwtRawConfiguration (..)
 import WebApi.ActivityAudit (AccountActivity (..), ActivityAuditStore (..), ActivityAuditStoreError (ActivityAuditUnavailable), activityIdFromDatabase)
 import WebApi.Api.Endpoints (noApiRequestFields)
 import WebApi.App (buildAppWithDatabase, buildAppWithDatabaseAndAccountWorkflow, buildAppWithDatabaseAndAccountWorkflowAndSecurity, buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwtRuntime, buildRuntimeAppWithAccountJwt, buildRuntimeAppWithDatabaseBuilder, otlpExportFailureMessage, runWithConfig, unavailableAccountWorkflow)
-import WebApi.App.Observability (requestObservabilityLogContext, runOtlpExportAction)
+import WebApi.App.Observability (requestObservabilityLogContext, runOtlpExportAction, runtimeRequestObservabilityReporterWithLog)
 import WebApi.AppEffect (AccountWorkflow (accountWorkflowActivityAuditStore, accountWorkflowCredentialStore, accountWorkflowEmailDelivery, accountWorkflowJwtIssuer, accountWorkflowLoginAttemptStore, accountWorkflowPasswordWorkGate, accountWorkflowSessionStore, accountWorkflowStore))
 import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), AppMode (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), TlsCertificateSource (..), TlsConfig (..), databasePoolCapacity, defaultAppConfig, defaultAppEnvironmentConfig, defaultTlsPolicy)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), PageRepository (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed, defaultPageRepository)
@@ -1248,6 +1248,62 @@ spec = do
           readMVar capturedRequestReference
         requestMethod `shouldBe` "POST"
         requestPath `shouldBe` "/v1/traces"
+
+    it "joins a rejected runtime OTLP export diagnostic to its real WAI response ID" $
+      withOtlpCaptureServer Http.serviceUnavailable503 "{\"error\":\"collector unavailable\"}" $ \collectorUrl capturedRequestReference -> do
+        reportedLogReference <- newEmptyMVar
+        let runtimeAppConfig =
+              defaultAppConfig
+                { observability =
+                    (observability defaultAppConfig)
+                      { tracingExporter =
+                          Just
+                            OtlpExporter
+                              { otlpEndpoint = collectorUrl,
+                                otlpHeaders = []
+                              }
+                      }
+                }
+            runtimeApplication =
+              ( buildAppWithDatabase
+                  runtimeAppConfig
+                  defaultPageRepository
+              )
+                { HarchWeb.reportRequestObservability =
+                    runtimeRequestObservabilityReporterWithLog
+                      (putMVar reportedLogReference)
+                      Test
+                      runtimeAppConfig
+                }
+        response <-
+          performWaiRequest
+            (HarchWeb.toWaiApplication runtimeApplication)
+            (waiRequest ["api", "status"])
+        responseRequestId <-
+          case lookup "X-Request-ID" (Wai.responseHeaders response) of
+            Nothing -> expectationFailure "OTLP-failed request lacked X-Request-ID" >> pure Text.empty
+            Just requestId ->
+              case TextEncoding.decodeUtf8' requestId of
+                Left failure -> expectationFailure (show failure) >> pure Text.empty
+                Right requestIdText -> do
+                  HarchWeb.mkRequestId requestIdText `shouldSatisfy` isJust
+                  pure requestIdText
+        CapturedOtlpRequest
+          { capturedOtlpMethod = requestMethod,
+            capturedOtlpPath = requestPath,
+            capturedOtlpBody = requestBody
+          } <-
+          readMVar capturedRequestReference
+        reportedLog <- readMVar reportedLogReference
+        expectAll
+          ( (Wai.responseStatus response `shouldBe` Http.status200)
+              :| [ requestMethod `shouldBe` "POST",
+                   requestPath `shouldBe` "/v1/traces",
+                   TextEncoding.decodeUtf8 requestBody
+                     `shouldSatisfy` Text.isInfixOf ("\"key\":\"harch.request.id\",\"value\":{\"stringValue\":\"" <> responseRequestId <> "\"}"),
+                   reportedLog `shouldBe` ("request.id=" <> responseRequestId <> " Failed to export request observability to OTLP: OTLP collector rejected export with status 503")
+                 ]
+          )
 
     it "redacts configured OTLP headers and endpoint queries from transport-failure log messages" $
       withUnusedTcpEndpoint $ \unusedEndpoint -> do

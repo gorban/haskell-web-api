@@ -7,6 +7,7 @@ module WebApi.App.Observability
     runtimeApplicationLogReporter,
     runtimeConnectionObservabilityReporter,
     runtimeRequestObservabilityReporter,
+    runtimeRequestObservabilityReporterWithLog,
   )
 where
 
@@ -27,12 +28,30 @@ import System.IO.Unsafe (unsafePerformIO)
 import WebApi.Config (AppConfig, AppMode (..), observability)
 
 runtimeRequestObservabilityReporter :: AppMode -> AppConfig -> Observability.RequestObservability -> IO ()
-runtimeRequestObservabilityReporter mode config requestObservability =
+runtimeRequestObservabilityReporter =
+  runtimeRequestObservabilityReporterWithLog runtimeApplicationLogReporter
+
+-- | Report a runtime request through the ordinary OTLP queue while retaining
+-- the application's selected diagnostic sink for an asynchronous export
+-- failure.  The queue item carries that sink because its worker is detached
+-- from the request and cannot recover it safely from ambient process state.
+-- Production uses 'runtimeApplicationLogReporter'; this explicit dependency
+-- also lets the real WAI/request/collector path prove its correlation join.
+runtimeRequestObservabilityReporterWithLog ::
+  (Text.Text -> IO ()) ->
+  AppMode ->
+  AppConfig ->
+  Observability.RequestObservability ->
+  IO ()
+runtimeRequestObservabilityReporterWithLog reportLog mode config requestObservability =
   case requestObservabilityLogContext requestObservability of
     requestLogContextValue ->
       runtimeObservabilityReporter
-        mode
-        config
+        RuntimeObservabilityDependencies
+          { runtimeObservabilityReportLog = reportLog,
+            runtimeObservabilityMode = mode,
+            runtimeObservabilityConfig = config
+          }
         requestLogContextValue
         "request observability"
         (HarchWeb.exportRequestObservabilityToOtlp otlpHttpManager "web-api")
@@ -41,8 +60,11 @@ runtimeRequestObservabilityReporter mode config requestObservability =
 runtimeConnectionObservabilityReporter :: AppMode -> AppConfig -> Observability.ConnectionObservability -> IO ()
 runtimeConnectionObservabilityReporter mode config =
   runtimeObservabilityReporter
-    mode
-    config
+    RuntimeObservabilityDependencies
+      { runtimeObservabilityReportLog = runtimeApplicationLogReporter,
+        runtimeObservabilityMode = mode,
+        runtimeObservabilityConfig = config
+      }
     Nothing
     "connection observability"
     (HarchWeb.exportConnectionObservabilityToOtlp otlpHttpManager "web-api")
@@ -53,16 +75,21 @@ runtimeConnectionObservabilityReporter mode config =
 -- and Test (where CI/local debugging value outweighs the exposure), but
 -- suppressed in Production, where it would otherwise print PII for every
 -- real request forever with no way to turn it off.
+data RuntimeObservabilityDependencies = RuntimeObservabilityDependencies
+  { runtimeObservabilityReportLog :: Text.Text -> IO (),
+    runtimeObservabilityMode :: AppMode,
+    runtimeObservabilityConfig :: AppConfig
+  }
+
 runtimeObservabilityReporter ::
   (Show observabilityValue) =>
-  AppMode ->
-  AppConfig ->
+  RuntimeObservabilityDependencies ->
   Maybe Text.Text ->
   Text.Text ->
   (HarchWeb.OtlpExporter -> observabilityValue -> IO (Either HarchWeb.OtlpExportFailure ())) ->
   observabilityValue ->
   IO ()
-runtimeObservabilityReporter mode config requestLogContextValue observabilityKind exportObservability observabilityValue = do
+runtimeObservabilityReporter dependencies requestLogContextValue observabilityKind exportObservability observabilityValue = do
   -- 'unless's own no-op branch (not a local @pure ()@) is deliberate: a
   -- bare @()@ literal here is a lazy value nothing downstream forces, the
   -- same "genuinely never scrutinized" HPC gap this codebase has hit
@@ -70,9 +97,15 @@ runtimeObservabilityReporter mode config requestLogContextValue observabilityKin
   -- Delegating the no-op to 'Control.Monad.unless' keeps that triviality
   -- inside @base@, outside this project's own coverage boundary, rather
   -- than adding a forced tick for a value with nothing to assert about.
-  unless (mode == Production) (TextIO.hPutStrLn stderr ("TRACE " <> Text.pack (show observabilityValue)))
-  forM_ (maybe [] pure (HarchWeb.tracingExporter (observability config))) $ \exporter ->
-    enqueueOtlpExport requestLogContextValue observabilityKind (exportObservability exporter observabilityValue)
+  unless (runtimeObservabilityMode dependencies == Production) (TextIO.hPutStrLn stderr ("TRACE " <> Text.pack (show observabilityValue)))
+  forM_ (maybe [] pure (HarchWeb.tracingExporter (observability (runtimeObservabilityConfig dependencies)))) $ \exporter ->
+    enqueueOtlpExport
+      OtlpExportWork
+        { otlpExportReportLog = runtimeObservabilityReportLog dependencies,
+          otlpExportRequestLogContext = requestLogContextValue,
+          otlpExportKind = observabilityKind,
+          otlpExportAction = exportObservability exporter observabilityValue
+        }
 
 -- | Decision record (AU, updated BZ 2026-08-21): the request-handling thread
 -- must never block on network I/O to the OTLP collector, so
@@ -97,20 +130,32 @@ runtimeObservabilityReporter mode config requestLogContextValue observabilityKin
 -- this queue already lives, rather than becoming a second framework-owned
 -- global. See @docs/design-guidance.md@'s "Follow-up decision — BZ" for
 -- the full record.
-enqueueOtlpExport :: Maybe Text.Text -> Text.Text -> IO (Either HarchWeb.OtlpExportFailure ()) -> IO ()
-enqueueOtlpExport requestLogContextValue observabilityKind exportAction = do
+data OtlpExportWork = OtlpExportWork
+  { otlpExportReportLog :: Text.Text -> IO (),
+    otlpExportRequestLogContext :: Maybe Text.Text,
+    otlpExportKind :: Text.Text,
+    otlpExportAction :: IO (Either HarchWeb.OtlpExportFailure ())
+  }
+
+enqueueOtlpExport :: OtlpExportWork -> IO ()
+enqueueOtlpExport exportWork = do
   enqueued <- atomically $ do
     full <- isFullTBQueue otlpExportQueue
-    unless full (writeTBQueue otlpExportQueue (requestLogContextValue, observabilityKind, exportAction))
+    unless full (writeTBQueue otlpExportQueue exportWork)
     pure (not full)
   unless enqueued $ do
     droppedTotal <- atomicModifyIORef' otlpExportDroppedCount (\count -> (count + 1, count + 1))
-    runtimeApplicationLogReporter (withRequestLogContext requestLogContextValue (otlpExportQueueFullMessage observabilityKind droppedTotal))
+    otlpExportReportLog
+      exportWork
+      ( withRequestLogContext
+          (otlpExportRequestLogContext exportWork)
+          (otlpExportQueueFullMessage (otlpExportKind exportWork) droppedTotal)
+      )
 
 otlpExportQueueCapacity :: Natural
 otlpExportQueueCapacity = 256
 
-otlpExportQueue :: TBQueue (Maybe Text.Text, Text.Text, IO (Either HarchWeb.OtlpExportFailure ()))
+otlpExportQueue :: TBQueue OtlpExportWork
 {-# NOINLINE otlpExportQueue #-}
 otlpExportQueue =
   unsafePerformIO $ do
@@ -128,10 +173,14 @@ otlpHttpManager :: HttpClient.Manager
 otlpHttpManager =
   unsafePerformIO HarchWeb.newOtlpHttpManager
 
-otlpExportWorker :: TBQueue (Maybe Text.Text, Text.Text, IO (Either HarchWeb.OtlpExportFailure ())) -> IO ()
+otlpExportWorker :: TBQueue OtlpExportWork -> IO ()
 otlpExportWorker queue = forever $ do
-  (requestLogContextValue, observabilityKind, exportAction) <- atomically (readTBQueue queue)
-  runOtlpExportAction runtimeApplicationLogReporter requestLogContextValue observabilityKind exportAction
+  exportWork <- atomically (readTBQueue queue)
+  runOtlpExportAction
+    (otlpExportReportLog exportWork)
+    (otlpExportRequestLogContext exportWork)
+    (otlpExportKind exportWork)
+    (otlpExportAction exportWork)
 
 -- | Run an OTLP action off the request path, turning both the closed adapter
 -- failure result and any unexpected I/O exception into a payload-free log
