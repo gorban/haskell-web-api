@@ -53,7 +53,7 @@ executable multipart-upload-example
   build-depends:
     base ^>=4.22.0.0,
     multipart-upload-example ^>=0.1.0.0,
-    warp ^>=3.4.12,
+    warp ^>=3.4.15,
 
 test-suite multipart-upload-example-tests
   import: common

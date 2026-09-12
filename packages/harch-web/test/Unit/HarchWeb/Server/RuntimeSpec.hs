@@ -19,7 +19,7 @@ import Data.Maybe (isNothing)
 import Data.Text ()
 import Data.Text qualified as Text (Text, isInfixOf, isPrefixOf, pack, unpack)
 import Data.Text.Encoding qualified as TextEncoding ()
-import HarchWeb (AcmeChallengeStore (AcmeChallengeStore), AcmeConfig (AcmeConfig, acmeCertbotConfig, acmeCertificateDirectory, acmeContactEmails, acmeDirectoryUrl, acmeDomains, acmeHttp01Port), Application (applicationRequestPolicy, reportApplicationLog, reportConnectionObservability, reportRequestObservability, requestContextFromRequest), CertbotConfig (CertbotConfig, certbotArguments, certbotExecutable), ListenerConfig (ListenerConfig, listenerAcme, listenerHost, listenerPort, listenerScheme, listenerTls), ListenerScheme (Http, Https), ManualTlsBindPlan, ManualTlsCertificateFiles (ManualTlsCertificateFiles, certificateFile, privateKeyFile), RequestPolicyConfig (forwardedHeaderTrust), TlsCertificateSource (AcmeCertificateSource, ManualCertificateFiles), TlsCipherSuite (TlsEcdheEcdsaAes256CbcSha), TlsConfig (TlsConfig, certificateSource, tlsPolicy), TlsPolicy (TlsPolicy, tlsAllowedVersions, tlsCipherSuites), TlsProtocolVersion (Tls10), acmeChallengeResponseForRequest, defaultTlsPolicy, newCertbotWebrootStore, prepareCertbotManualTlsBindPlan, runServer, runServerWithWaiMiddleware, tlsCipherSuiteValue, validAcmeHttp01ChallengeToken, waitForShutdownSignalWith)
+import HarchWeb (AcmeChallengeStore (AcmeChallengeStore), AcmeConfig (AcmeConfig, acmeCertbotConfig, acmeCertificateDirectory, acmeContactEmails, acmeDirectoryUrl, acmeDomains, acmeHttp01Port), Application (applicationRequestPolicy, reportApplicationLog, reportConnectionObservability, reportRequestObservability, requestContextFromRequest), CertbotConfig (CertbotConfig, certbotArguments, certbotExecutable), ListenerConfig (ListenerConfig, listenerAcme, listenerHost, listenerPort, listenerScheme, listenerTls), ListenerScheme (Http, Https), ManualTlsBindPlan, ManualTlsCertificateFiles (ManualTlsCertificateFiles, certificateFile, privateKeyFile), RequestPolicyConfig (forwardedHeaderTrust), TlsCertificateSource (AcmeCertificateSource, ManualCertificateFiles), TlsConfig (TlsConfig, certificateSource, tlsPolicy), acmeChallengeResponseForRequest, defaultTlsPolicy, newCertbotWebrootStore, prepareCertbotManualTlsBindPlan, runServer, runServerWithWaiMiddleware, validAcmeHttp01ChallengeToken, waitForShutdownSignalWith)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -255,74 +255,57 @@ spec = do
             hClose outputHandle
             readFile outputPath `shouldReturn` ("HTTPS Server listening at https://127.0.0.1:" <> show unusedPort <> "\n")
 
-    it "accepts TLS 1.2/1.3 with modern suites, rejects legacy default attempts, and permits an explicit compatible legacy policy" $
+    it "accepts TLS 1.2/1.3 with modern suites and rejects TLS 1.0/1.1 attempts" $
       withUnusedLoopbackPort $ \modernPort ->
-        withUnusedLoopbackPort $ \legacyPort ->
-          withManualTlsFiles $ \certificatePath privateKeyPath ->
-            withSystemTempFile "harch-web-tls-policy-output.txt" $ \_ outputHandle -> do
-              modernCompletionReference <- newIORef Nothing
-              let manualTlsListener port tlsPolicy =
-                    ListenerConfig
-                      { listenerHost = "127.0.0.1",
-                        listenerPort = port,
-                        listenerScheme = Https,
-                        listenerTls =
-                          Just
-                            TlsConfig
-                              { certificateSource =
-                                  ManualCertificateFiles
-                                    ManualTlsCertificateFiles
-                                      { certificateFile = certificatePath,
-                                        privateKeyFile = privateKeyPath
-                                      },
-                                tlsPolicy = tlsPolicy
-                              },
-                        listenerAcme = Nothing
-                      }
-                  legacyCipher = tlsCipherSuiteValue TlsEcdheEcdsaAes256CbcSha
-                  legacyPolicy =
-                    TlsPolicy
-                      { tlsAllowedVersions = Tls10 :| [],
-                        tlsCipherSuites = TlsEcdheEcdsaAes256CbcSha :| []
-                      }
-              modernServerThreadId <- forkIO $ do
-                result <-
-                  try
-                    ( runServer
-                        outputHandle
-                        ( serverConfigWithListeners
-                            [ manualTlsListener modernPort defaultTlsPolicy,
-                              manualTlsListener legacyPort legacyPolicy
-                            ]
-                        )
-                        sampleApplication
-                    ) ::
-                    IO (Either SomeException ())
-                writeIORef modernCompletionReference (Just result)
-              _ <- waitForHttpsServerResponse modernCompletionReference modernPort "/known"
-              tls12Result <- attemptLoopbackTlsHandshake modernPort [TLS.TLS12] TLSCipher.ciphersuite_default
-              tls13Result <- attemptLoopbackTlsHandshake modernPort [TLS.TLS13] TLSCipher.ciphersuite_default
-              tls10Result <- attemptLoopbackTlsHandshake modernPort [TLS.TLS10] [legacyCipher]
-              tls11Result <- attemptLoopbackTlsHandshake modernPort [TLS.TLS11] [legacyCipher]
-              tls12CbcResult <-
-                attemptLoopbackTlsHandshake
-                  modernPort
-                  [TLS.TLS12]
-                  [legacyCipher]
-              expectAll
-                ( (tls12Result `shouldSatisfy` isRight)
-                    :| [ tls13Result `shouldSatisfy` isRight,
-                         tls10Result `shouldSatisfy` isLeft,
-                         tls11Result `shouldSatisfy` isLeft,
-                         tls12CbcResult `shouldSatisfy` isLeft
-                       ]
-                )
-              legacyTls10Result <- attemptLoopbackTlsHandshake legacyPort [TLS.TLS10] [legacyCipher]
-              legacyTls10Result `shouldSatisfy` isRight
-              modernCompletionResult <- readIORef modernCompletionReference
-              modernCompletionResult `shouldSatisfy` isNothing
-              killThread modernServerThreadId
-              waitForServerExit modernCompletionReference
+        withManualTlsFiles $ \certificatePath privateKeyPath ->
+          withSystemTempFile "harch-web-tls-policy-output.txt" $ \_ outputHandle -> do
+            modernCompletionReference <- newIORef Nothing
+            let manualTlsListener port tlsPolicy =
+                  ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = port,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                ManualCertificateFiles
+                                  ManualTlsCertificateFiles
+                                    { certificateFile = certificatePath,
+                                      privateKeyFile = privateKeyPath
+                                    },
+                              tlsPolicy = tlsPolicy
+                            },
+                      listenerAcme = Nothing
+                    }
+            modernServerThreadId <- forkIO $ do
+              result <-
+                try
+                  ( runServer
+                      outputHandle
+                      ( serverConfigWithListeners
+                          [manualTlsListener modernPort defaultTlsPolicy]
+                      )
+                      sampleApplication
+                  ) ::
+                  IO (Either SomeException ())
+              writeIORef modernCompletionReference (Just result)
+            _ <- waitForHttpsServerResponse modernCompletionReference modernPort "/known"
+            tls12Result <- attemptLoopbackTlsHandshake modernPort [TLS.TLS12] TLSCipher.ciphersuite_default
+            tls13Result <- attemptLoopbackTlsHandshake modernPort [TLS.TLS13] TLSCipher.ciphersuite_default
+            tls10Result <- attemptLoopbackTlsHandshake modernPort [TLS.TLS10] TLSCipher.ciphersuite_default
+            tls11Result <- attemptLoopbackTlsHandshake modernPort [TLS.TLS11] TLSCipher.ciphersuite_default
+            expectAll
+              ( (tls12Result `shouldSatisfy` isRight)
+                  :| [ tls13Result `shouldSatisfy` isRight,
+                       tls10Result `shouldSatisfy` isLeft,
+                       tls11Result `shouldSatisfy` isLeft
+                     ]
+              )
+            modernCompletionResult <- readIORef modernCompletionReference
+            modernCompletionResult `shouldSatisfy` isNothing
+            killThread modernServerThreadId
+            waitForServerExit modernCompletionReference
 
     it "reports plaintext connections to an HTTPS listener as connection observability with peer addresses" $
       withUnusedLoopbackPort $ \unusedPort ->
@@ -430,6 +413,9 @@ spec = do
             killThread serverThreadId
             waitForServerExit completionReference
 
+    -- Warp's exception callback has no request before TLS completes.  Keep the
+    -- two loopback peers because a later accepted socket previously supplied
+    -- the recorded address for an earlier TLS failure (DT, 2026-09-12).
     it "keeps sequential and concurrent pre-TLS failures attached to each accepted TCP peer" $
       withUnusedLoopbackPort $ \unusedPort ->
         withManualTlsFiles $ \certificatePath privateKeyPath ->

@@ -136,7 +136,7 @@ spec = do
                 ]
             }
 
-    it "accepts an explicit legacy protocol and compatible cipher override" $ do
+    it "accepts an explicit TLS 1.2 protocol and compatible cipher override" $ do
       let parsedConfig =
             parseRuntimeAppConfig
               [ ("APP_TITLE_PREFIX", "runtime-test"),
@@ -146,8 +146,8 @@ spec = do
                 ("LISTENER_0_TLS_SOURCE", "manual"),
                 ("LISTENER_0_TLS_CERTIFICATE_FILE", "cert.pem"),
                 ("LISTENER_0_TLS_PRIVATE_KEY_FILE", "key.pem"),
-                ("LISTENER_0_TLS_ALLOWED_VERSIONS", "1.0,1.2"),
-                ("LISTENER_0_TLS_CIPHER_SUITES", "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384")
+                ("LISTENER_0_TLS_ALLOWED_VERSIONS", "1.2"),
+                ("LISTENER_0_TLS_CIPHER_SUITES", "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384")
               ]
               []
               []
@@ -164,7 +164,7 @@ spec = do
                         Just
                           TlsConfig
                             { certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"},
-                              tlsPolicy = TlsPolicy {tlsAllowedVersions = Tls10 :| [Tls12], tlsCipherSuites = TlsEcdheRsaAes256CbcSha :| [TlsEcdheRsaAes256GcmSha384]}
+                              tlsPolicy = TlsPolicy {tlsAllowedVersions = Tls12 :| [], tlsCipherSuites = TlsEcdheRsaAes256GcmSha384 :| []}
                             },
                       listenerAcme = Nothing
                     }
@@ -183,19 +183,7 @@ spec = do
               ("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", TlsEcdheRsaAes128GcmSha256),
               ("TLS_DHE_RSA_WITH_AES_256_GCM_SHA384", TlsDheRsaAes256GcmSha384),
               ("TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256", TlsDheRsaChacha20Poly1305Sha256),
-              ("TLS_DHE_RSA_WITH_AES_256_CCM", TlsDheRsaAes256CcmSha256),
               ("TLS_DHE_RSA_WITH_AES_128_GCM_SHA256", TlsDheRsaAes128GcmSha256),
-              ("TLS_DHE_RSA_WITH_AES_128_CCM", TlsDheRsaAes128CcmSha256),
-              ("TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384", TlsEcdheEcdsaAes256CbcSha384),
-              ("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384", TlsEcdheRsaAes256CbcSha384),
-              ("TLS_DHE_RSA_WITH_AES_256_CBC_SHA256", TlsDheRsaAes256CbcSha256),
-              ("TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA", TlsEcdheEcdsaAes256CbcSha),
-              ("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA", TlsEcdheRsaAes256CbcSha),
-              ("TLS_DHE_RSA_WITH_AES_256_CBC_SHA", TlsDheRsaAes256CbcSha),
-              ("TLS_RSA_WITH_AES_256_GCM_SHA384", TlsRsaAes256GcmSha384),
-              ("TLS_RSA_WITH_AES_256_CCM", TlsRsaAes256CcmSha256),
-              ("TLS_RSA_WITH_AES_256_CBC_SHA256", TlsRsaAes256CbcSha256),
-              ("TLS_RSA_WITH_AES_256_CBC_SHA", TlsRsaAes256CbcSha),
               ("TLS_AES_256_GCM_SHA384", Tls13Aes256GcmSha384),
               ("TLS_CHACHA20_POLY1305_SHA256", Tls13Chacha20Poly1305Sha256),
               ("TLS_AES_128_GCM_SHA256", Tls13Aes128GcmSha256),
@@ -209,20 +197,20 @@ spec = do
               ("LISTENER_0_TLS_SOURCE", "manual"),
               ("LISTENER_0_TLS_CERTIFICATE_FILE", "cert.pem"),
               ("LISTENER_0_TLS_PRIVATE_KEY_FILE", "key.pem"),
-              ("LISTENER_0_TLS_ALLOWED_VERSIONS", "1.0,1.1,1.2,1.3"),
+              ("LISTENER_0_TLS_ALLOWED_VERSIONS", "1.2,1.3"),
               ("LISTENER_0_TLS_CIPHER_SUITES", Text.intercalate "," (map fst configuredCipherSuites))
             ]
           listenerWithoutTlsPolicy = take 7 listener
           incompatibleTlsVersion cipherSuite =
             case cipherSuite of
-              Tls13Aes256GcmSha384 -> "1.0"
-              Tls13Chacha20Poly1305Sha256 -> "1.0"
-              Tls13Aes128GcmSha256 -> "1.0"
-              Tls13Aes128CcmSha256 -> "1.0"
+              Tls13Aes256GcmSha384 -> "1.2"
+              Tls13Chacha20Poly1305Sha256 -> "1.2"
+              Tls13Aes128GcmSha256 -> "1.2"
+              Tls13Aes128CcmSha256 -> "1.2"
               _ -> "1.3"
       case parseRuntimeAppConfig listener [] [] of
         Right AppConfig {listenerConfigs = [ListenerConfig {listenerTls = Just TlsConfig {tlsPolicy = parsedPolicy}}]} -> do
-          tlsAllowedVersions parsedPolicy `shouldBe` Tls10 :| [Tls11, Tls12, Tls13]
+          tlsAllowedVersions parsedPolicy `shouldBe` Tls12 :| [Tls13]
           toList (tlsCipherSuites parsedPolicy) `shouldBe` map snd configuredCipherSuites
           forM_ configuredCipherSuites $ \(identifier, cipherSuite) -> do
             let allowedVersions = incompatibleTlsVersion cipherSuite
@@ -254,8 +242,8 @@ spec = do
                parseRuntimeAppConfig (listener <> [("LISTENER_0_TLS_CIPHER_SUITES", "")]) [] [] `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_CIPHER_SUITES" ""),
                parseRuntimeAppConfig (listener <> [("LISTENER_0_TLS_CIPHER_SUITES", "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384")]) [] [] `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_CIPHER_SUITES" "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"),
                parseRuntimeAppConfig (listener <> [("LISTENER_0_TLS_CIPHER_SUITES", "TLS_FAKE")]) [] [] `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_CIPHER_SUITES" "TLS_FAKE"),
-               parseRuntimeAppConfig (listener <> [("LISTENER_0_TLS_ALLOWED_VERSIONS", "1.0"), ("LISTENER_0_TLS_CIPHER_SUITES", "TLS_AES_256_GCM_SHA384,TLS_CHACHA20_POLY1305_SHA256")]) [] [] `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_CIPHER_SUITES" "TLS_AES_256_GCM_SHA384,TLS_CHACHA20_POLY1305_SHA256"),
-               parseRuntimeAppConfig (listener <> [("LISTENER_0_TLS_ALLOWED_VERSIONS", "1.0"), ("LISTENER_0_TLS_CIPHER_SUITES", "TLS_AES_256_GCM_SHA384")]) [] [] `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_CIPHER_SUITES" "TLS_AES_256_GCM_SHA384")
+               parseRuntimeAppConfig (listener <> [("LISTENER_0_TLS_ALLOWED_VERSIONS", "1.2"), ("LISTENER_0_TLS_CIPHER_SUITES", "TLS_AES_256_GCM_SHA384,TLS_CHACHA20_POLY1305_SHA256")]) [] [] `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_CIPHER_SUITES" "TLS_AES_256_GCM_SHA384,TLS_CHACHA20_POLY1305_SHA256"),
+               parseRuntimeAppConfig (listener <> [("LISTENER_0_TLS_ALLOWED_VERSIONS", "1.2"), ("LISTENER_0_TLS_CIPHER_SUITES", "TLS_AES_256_GCM_SHA384")]) [] [] `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_CIPHER_SUITES" "TLS_AES_256_GCM_SHA384")
              ]
       let serverConfig = HarchWeb.toServerConfig defaultAppConfig
       HarchWeb.listenerConfigs serverConfig `shouldBe` listenerConfigs defaultAppConfig

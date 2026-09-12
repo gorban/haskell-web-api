@@ -52,6 +52,20 @@ warnings such as missing libraries, unresolved symbols, duplicate definitions, o
 linkage. GHC's optimized build also uses `-Werror`, but the coverage build needs this additional
 gate because it is compiled with coverage instrumentation.
 
+## Exact GHC 9.14 TLS compatibility warnings
+
+The frozen TLS 2.4.3 plan reaches released `cborg-0.2.10.0` and
+`serialise-0.2.6.1`, whose Cabal upper bounds predate `base-4.22`. The optimized
+and coverage wrappers admit exactly five GHC 9.14 warning headers from those two
+source packages: Cborg's two redundant short-`ByteString` imports and `Typeable`
+derivation, and Serialise's deprecated mutable-byte-array call and redundant
+pattern. `tools/test-tls-compatibility-stack.sh` runs both released suites and
+proves the runtime plan uses the unmodified Hackage Serialise tarball.
+
+This is an exact-header exception, not a package-wide warning exemption. The
+diagnostic fixture rejects any changed or additional warning in those source
+paths, and every warning outside those five headers remains fatal.
+
 ## Documented GHC HPC deprecation
 
 The same GHC 9.14.1 coverage mode can run instrumented custom-Setup and source-preprocessor

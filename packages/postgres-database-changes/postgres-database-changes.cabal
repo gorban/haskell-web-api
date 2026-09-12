@@ -36,7 +36,7 @@ library
     base ^>=4.22.0.0,
     bytestring ^>=0.12.2.0,
     core ^>=0.1.2.0,
-    crypton ^>=1.0.6,
+    crypton ^>=1.1.5,
     mtl ^>=2.3.1,
     postgresql-libpq ^>=0.11.0.0,
     text ^>=2.1.3,

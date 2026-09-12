@@ -149,23 +149,30 @@ jobs:
           path: |
             ~/.cabal/bin
             ~/.cabal/store
-          key: ${{ runner.os }}-ghc-9.14.1-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
+          key: ${{ runner.os }}-ghc-9.14.1-cabal-${{ hashFiles('**/*.cabal', 'cabal.project', 'cabal.project.freeze') }}
 
-      - name: Install test tools
-        if: steps.cabal_cache.outcome == 'success' && steps.cabal_cache.outputs.cache-hit != 'true'
-        id: install_test_tools
+      - name: Resolve frozen dependencies
+        if: steps.cabal_cache.outcome == 'success'
+        id: frozen_dependencies
         run: |
+          test -s cabal.project.freeze
           cabal update
-          cabal install --ignore-project hspec-discover
+          cabal build all --dry-run
 
       - name: Check package manifests
-        if: steps.install_test_tools.outcome == 'success' || steps.install_test_tools.outcome == 'skipped'
+        if: steps.frozen_dependencies.outcome == 'success'
         id: cabal_check
         run: |
           tools/check-cabal-packages.sh
 
-      - name: Check executable-file metadata
+      - name: Verify released TLS compatibility stack
         if: steps.cabal_check.outcome == 'success'
+        id: tls_compatibility
+        run: |
+          tools/test-tls-compatibility-stack.sh
+
+      - name: Check executable-file metadata
+        if: steps.tls_compatibility.outcome == 'success'
         id: executable_file_metadata
         run: |
           tools/test-check-executable-file-metadata.sh
@@ -260,6 +267,27 @@ jobs:
         id: run_tests_skip_unit
         run: |
           tools/run-integration-and-e2e-check.sh
+
+      - name: Prepare tested source packages
+        if: steps.run_tests_skip_unit.outcome == 'success' && steps.vscode_ormolu_formatter_checks.outcome == 'success'
+        id: source_packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code HEAD
+          mkdir -p dist-newstyle/release/packages
+          cabal sdist all --output-directory=dist-newstyle/release/packages
+          cp cabal.project.freeze dist-newstyle/release/
+          git rev-parse HEAD > dist-newstyle/release/COMMIT
+          git archive --format=tar.gz --output=dist-newstyle/release/repository.tar.gz HEAD
+
+      - name: Upload tested source packages and dependency provenance
+        if: steps.source_packages.outcome == 'success'
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: tested-source-packages
+          path: dist-newstyle/release/
+          if-no-files-found: error
 
       - name: Upload Playwright failure artifacts
         if: failure() && steps.run_tests_skip_unit.outcome == 'failure'

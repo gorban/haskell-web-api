@@ -4,6 +4,10 @@ Start with a runnable application, then add one concern at a time. The labels de
 this repository today; snippets that show future API direction are kept in the explicitly labeled
 design guide.
 
+Run Cabal commands from the repository root to use the shared reviewed freeze file.
+See [dependency upgrades and release provenance](../README.md#reproducible-builds-and-dependency-upgrades)
+before changing example dependencies or distributing an example build.
+
 ## Executable and testable examples
 
 These are Cabal packages with source and tests. The command column says whether

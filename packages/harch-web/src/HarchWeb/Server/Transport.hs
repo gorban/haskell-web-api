@@ -342,6 +342,12 @@ startWarpRuntimeServerOnSocket runServerOnSocket = do
   _ <- waitForRuntimeServerStartup startupSignal
   pure threadId
 
+-- | Records a peer at accept time and transfers it to the worker before TLS
+-- begins.  Warp's exception callback has no WAI request during a failed TLS
+-- handshake and, on both the previous and current WarpTLS releases, does not
+-- reliably carry that peer.  The paired accept/fork hooks keep a pre-TLS
+-- connection event attached to its own socket; the sequential and concurrent
+-- loopback regression covers the former cross-connection attribution defect.
 runtimeServerSettings :: RuntimeTlsListenerDependencies -> Warp.Settings
 runtimeServerSettings listenerDependencies =
   Warp.setPort (endpointPort endpoint)

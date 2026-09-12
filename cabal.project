@@ -20,6 +20,18 @@ optimization: 2
 tests: True
 debug-info: True
 
+-- TLS 2.4 requires serialise-0.2.6.1, whose released metadata predates the
+-- GHC 9.14 boot-library versions.  These are the smallest upper-bound
+-- exceptions that resolve its released source on base-4.22.  The dependency
+-- verification script records the upstream warnings and runs the released
+-- serialise and cborg suites before this plan may be refreshed.
+allow-newer:
+  serialise:base,
+  serialise:containers,
+  serialise:time,
+  cborg:base,
+  cborg:containers
+
 -- We do not need to capture coverage from third party packages (also, it fails if we try)
 package hspec-expectations-match
   coverage: False

@@ -826,6 +826,59 @@ follow-up in the Guidance column. Never let a status-table row imply a wider cap
 shipped; a missing follow-up reference next to a partial `Implemented` is itself a defect in this
 table, fixed the same way any other stale documentation is fixed.
 
+### Decision record — frozen repository and release dependencies (CI fix, 2026-09-11)
+
+**Decision: extend Cabal's existing project configuration with a committed freeze
+file, rather than make CI's dependency cache an implicit version-selection policy.**
+The user approved a freeze file covering CI, containers, and package releases.
+Exact versions and flags plus the freeze file's index timestamp identify the reviewed
+Haskell dependencies and metadata revisions. CI includes the freeze file in its cache
+key and resolves on both cache hits and misses. Docker copies the same file before its dependency layer
+and retains it in both runtime images. Source release artifacts carry the exact
+repository archive, package tarballs, commit, and freeze file. The root README owns
+the upgrade procedure; library consumers retain ordinary published dependency bounds.
+
+This is a build/release ownership decision, with no Harch public API change. The
+matcher test suite now declares its existing `hspec-discover` tool dependency, so
+the frozen plan owns that tool instead of an independent global installation.
+It does not freeze OS packages or claim bit-for-bit binary reproducibility.
+
+**Follow-up decision — verified TLS compatibility exception (2026-09-12): use
+the current public TLS/Warp releases, with the smallest source-compatible bound
+exceptions and an executable proof of their limits.** The warning-clean TLS-1.x
+route cannot select a current public Warp: WarpTLS 3.4.7 requires Warp below
+3.4.13, and the available Warp 3.4.12 release has GHC 9.14 diagnostics. Current
+WarpTLS 3.4.14 accepts Warp 3.4.15 but requires TLS 2.x. TLS 2.4.3 reaches
+`serialise-0.2.6.1` and `cborg-0.2.10.0`, whose released bounds predate GHC
+9.14.1's `base-4.22`.
+
+The project therefore permits only the five `allow-newer` pairs in
+`cabal.project`: `serialise` with `base`, `containers`, and `time`, and `cborg`
+with `base` and `containers`. This is not a general resolver override. The frozen
+plan fixes TLS 2.4.3, Warp 3.4.15, WarpTLS 3.4.14, HTTP2 5.4.0, and
+time-manager 0.2.4. HTTP2 5.4.4 calls the now-no-op `killManager`, leaving
+`freeSimpleConfig` callbacks alive; the public HTTP2 lifecycle regression proves
+that the pinned pair cancels an owned callback.
+
+`tools/test-tls-compatibility-stack.sh` downloads only the released Cborg and
+Serialise source packages into an isolated Cabal directory, runs their suites,
+and then deletes that directory. It temporarily removes the duplicate primitive
+`Vector` QuickCheck orphan from Serialise's *test source* because every released
+`quickcheck-instances` version accepted by Serialise already provides it. The
+script asserts that the repository's runtime dry-run plan still selects the
+unmodified `serialise-0.2.6.1` Hackage tarball. It is the only caller allowed to
+use the diagnostic gate's package-version-specific GHC 9.14 compatibility mode;
+all warnings in the repository optimized and coverage gates remain fatal. This
+makes the exception observable and removable when upstream releases correct their
+bounds and warnings.
+
+TLS 2.4 also removed the former legacy cipher inventory. Harch now represents
+only TLS 1.2 and 1.3, rather than accepting an older protocol configuration that
+cannot negotiate. The existing accepted-peer `setAccept`/`setFork` hook remains:
+the current WarpTLS release still cannot reliably identify a peer in a pre-TLS
+exception callback. Its sequential and concurrent loopback regression keeps the
+historical cross-socket attribution defect covered.
+
 ## Landed conventions
 
 ### Complete SSR is the baseline

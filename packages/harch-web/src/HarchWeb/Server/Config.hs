@@ -132,13 +132,12 @@ data TlsCredentialSourceKind
 
 -- | A closed TLS protocol identifier accepted by listener configuration.
 --
--- TLS 1.0 and 1.1 exist only as explicit compatibility choices.  The default
--- policy is TLS 1.2/1.3; callers selecting older protocols must also select a
--- cipher suite that can negotiate with each selected version.
+-- TLS 2.4's maintained strong-suite inventory supports TLS 1.2 and 1.3.  The
+-- older protocol constructors were removed instead of leaving configurations
+-- that can never negotiate: this makes the version/suite policy representable
+-- by the installed transport library (DT, 2026-09-12).
 data TlsProtocolVersion
-  = Tls10
-  | Tls11
-  | Tls12
+  = Tls12
   | Tls13
 
 -- | The installed @tls@ package's supported strong cipher-suite inventory.
@@ -158,19 +157,7 @@ data TlsCipherSuite
   | TlsEcdheRsaAes128GcmSha256
   | TlsDheRsaAes256GcmSha384
   | TlsDheRsaChacha20Poly1305Sha256
-  | TlsDheRsaAes256CcmSha256
   | TlsDheRsaAes128GcmSha256
-  | TlsDheRsaAes128CcmSha256
-  | TlsEcdheEcdsaAes256CbcSha384
-  | TlsEcdheRsaAes256CbcSha384
-  | TlsDheRsaAes256CbcSha256
-  | TlsEcdheEcdsaAes256CbcSha
-  | TlsEcdheRsaAes256CbcSha
-  | TlsDheRsaAes256CbcSha
-  | TlsRsaAes256GcmSha384
-  | TlsRsaAes256CcmSha256
-  | TlsRsaAes256CbcSha256
-  | TlsRsaAes256CbcSha
   | Tls13Aes256GcmSha384
   | Tls13Chacha20Poly1305Sha256
   | Tls13Aes128GcmSha256
@@ -200,8 +187,6 @@ instance Show TlsProtocolVersion where
   showsPrec _ tlsProtocolVersion =
     showString $
       case tlsProtocolVersion of
-        Tls10 -> "Tls10"
-        Tls11 -> "Tls11"
         Tls12 -> "Tls12"
         Tls13 -> "Tls13"
 
@@ -223,19 +208,7 @@ instance Show TlsCipherSuite where
         TlsEcdheRsaAes128GcmSha256 -> "TlsEcdheRsaAes128GcmSha256"
         TlsDheRsaAes256GcmSha384 -> "TlsDheRsaAes256GcmSha384"
         TlsDheRsaChacha20Poly1305Sha256 -> "TlsDheRsaChacha20Poly1305Sha256"
-        TlsDheRsaAes256CcmSha256 -> "TlsDheRsaAes256CcmSha256"
         TlsDheRsaAes128GcmSha256 -> "TlsDheRsaAes128GcmSha256"
-        TlsDheRsaAes128CcmSha256 -> "TlsDheRsaAes128CcmSha256"
-        TlsEcdheEcdsaAes256CbcSha384 -> "TlsEcdheEcdsaAes256CbcSha384"
-        TlsEcdheRsaAes256CbcSha384 -> "TlsEcdheRsaAes256CbcSha384"
-        TlsDheRsaAes256CbcSha256 -> "TlsDheRsaAes256CbcSha256"
-        TlsEcdheEcdsaAes256CbcSha -> "TlsEcdheEcdsaAes256CbcSha"
-        TlsEcdheRsaAes256CbcSha -> "TlsEcdheRsaAes256CbcSha"
-        TlsDheRsaAes256CbcSha -> "TlsDheRsaAes256CbcSha"
-        TlsRsaAes256GcmSha384 -> "TlsRsaAes256GcmSha384"
-        TlsRsaAes256CcmSha256 -> "TlsRsaAes256CcmSha256"
-        TlsRsaAes256CbcSha256 -> "TlsRsaAes256CbcSha256"
-        TlsRsaAes256CbcSha -> "TlsRsaAes256CbcSha"
         Tls13Aes256GcmSha384 -> "Tls13Aes256GcmSha384"
         Tls13Chacha20Poly1305Sha256 -> "Tls13Chacha20Poly1305Sha256"
         Tls13Aes128GcmSha256 -> "Tls13Aes128GcmSha256"
@@ -277,41 +250,27 @@ defaultTlsPolicy =
 tlsProtocolVersionValue :: TlsProtocolVersion -> TLS.Version
 tlsProtocolVersionValue tlsProtocolVersion =
   case tlsProtocolVersion of
-    Tls10 -> TLS.TLS10
-    Tls11 -> TLS.TLS11
     Tls12 -> TLS.TLS12
     Tls13 -> TLS.TLS13
 
 tlsCipherSuiteValue :: TlsCipherSuite -> TLS.Cipher
 tlsCipherSuiteValue tlsCipherSuite =
   case tlsCipherSuite of
-    TlsEcdheEcdsaAes256GcmSha384 -> TLSExtra.cipher_ECDHE_ECDSA_AES256GCM_SHA384
-    TlsEcdheEcdsaChacha20Poly1305Sha256 -> TLSExtra.cipher_ECDHE_ECDSA_CHACHA20POLY1305_SHA256
-    TlsEcdheEcdsaAes256CcmSha256 -> TLSExtra.cipher_ECDHE_ECDSA_AES256CCM_SHA256
-    TlsEcdheEcdsaAes128GcmSha256 -> TLSExtra.cipher_ECDHE_ECDSA_AES128GCM_SHA256
-    TlsEcdheEcdsaAes128CcmSha256 -> TLSExtra.cipher_ECDHE_ECDSA_AES128CCM_SHA256
-    TlsEcdheRsaAes256GcmSha384 -> TLSExtra.cipher_ECDHE_RSA_AES256GCM_SHA384
-    TlsEcdheRsaChacha20Poly1305Sha256 -> TLSExtra.cipher_ECDHE_RSA_CHACHA20POLY1305_SHA256
-    TlsEcdheRsaAes128GcmSha256 -> TLSExtra.cipher_ECDHE_RSA_AES128GCM_SHA256
-    TlsDheRsaAes256GcmSha384 -> TLSExtra.cipher_DHE_RSA_AES256GCM_SHA384
-    TlsDheRsaChacha20Poly1305Sha256 -> TLSExtra.cipher_DHE_RSA_CHACHA20POLY1305_SHA256
-    TlsDheRsaAes256CcmSha256 -> TLSExtra.cipher_DHE_RSA_AES256CCM_SHA256
-    TlsDheRsaAes128GcmSha256 -> TLSExtra.cipher_DHE_RSA_AES128GCM_SHA256
-    TlsDheRsaAes128CcmSha256 -> TLSExtra.cipher_DHE_RSA_AES128CCM_SHA256
-    TlsEcdheEcdsaAes256CbcSha384 -> TLSExtra.cipher_ECDHE_ECDSA_AES256CBC_SHA384
-    TlsEcdheRsaAes256CbcSha384 -> TLSExtra.cipher_ECDHE_RSA_AES256CBC_SHA384
-    TlsDheRsaAes256CbcSha256 -> TLSExtra.cipher_DHE_RSA_AES256_SHA256
-    TlsEcdheEcdsaAes256CbcSha -> TLSExtra.cipher_ECDHE_ECDSA_AES256CBC_SHA
-    TlsEcdheRsaAes256CbcSha -> TLSExtra.cipher_ECDHE_RSA_AES256CBC_SHA
-    TlsDheRsaAes256CbcSha -> TLSExtra.cipher_DHE_RSA_AES256_SHA1
-    TlsRsaAes256GcmSha384 -> TLSExtra.cipher_AES256GCM_SHA384
-    TlsRsaAes256CcmSha256 -> TLSExtra.cipher_AES256CCM_SHA256
-    TlsRsaAes256CbcSha256 -> TLSExtra.cipher_AES256_SHA256
-    TlsRsaAes256CbcSha -> TLSExtra.cipher_AES256_SHA1
-    Tls13Aes256GcmSha384 -> TLSExtra.cipher_TLS13_AES256GCM_SHA384
-    Tls13Chacha20Poly1305Sha256 -> TLSExtra.cipher_TLS13_CHACHA20POLY1305_SHA256
-    Tls13Aes128GcmSha256 -> TLSExtra.cipher_TLS13_AES128GCM_SHA256
-    Tls13Aes128CcmSha256 -> TLSExtra.cipher_TLS13_AES128CCM_SHA256
+    TlsEcdheEcdsaAes256GcmSha384 -> TLSExtra.cipher_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+    TlsEcdheEcdsaChacha20Poly1305Sha256 -> TLSExtra.cipher_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+    TlsEcdheEcdsaAes256CcmSha256 -> TLSExtra.cipher_ECDHE_ECDSA_WITH_AES_256_CCM
+    TlsEcdheEcdsaAes128GcmSha256 -> TLSExtra.cipher_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+    TlsEcdheEcdsaAes128CcmSha256 -> TLSExtra.cipher_ECDHE_ECDSA_WITH_AES_128_CCM
+    TlsEcdheRsaAes256GcmSha384 -> TLSExtra.cipher_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+    TlsEcdheRsaChacha20Poly1305Sha256 -> TLSExtra.cipher_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+    TlsEcdheRsaAes128GcmSha256 -> TLSExtra.cipher_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+    TlsDheRsaAes256GcmSha384 -> TLSExtra.cipher_DHE_RSA_WITH_AES_256_GCM_SHA384
+    TlsDheRsaChacha20Poly1305Sha256 -> TLSExtra.cipher_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+    TlsDheRsaAes128GcmSha256 -> TLSExtra.cipher_DHE_RSA_WITH_AES_128_GCM_SHA256
+    Tls13Aes256GcmSha384 -> TLSExtra.cipher13_AES_256_GCM_SHA384
+    Tls13Chacha20Poly1305Sha256 -> TLSExtra.cipher13_CHACHA20_POLY1305_SHA256
+    Tls13Aes128GcmSha256 -> TLSExtra.cipher13_AES_128_GCM_SHA256
+    Tls13Aes128CcmSha256 -> TLSExtra.cipher13_AES_128_CCM_SHA256
 
 -- | Parse the IANA spelling used by @LISTENER_<n>_TLS_CIPHER_SUITES@.
 tlsCipherSuiteFromIdentifier :: Text -> Maybe TlsCipherSuite
@@ -330,19 +289,7 @@ tlsCipherSuiteIdentifiers =
     ("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", TlsEcdheRsaAes128GcmSha256),
     ("TLS_DHE_RSA_WITH_AES_256_GCM_SHA384", TlsDheRsaAes256GcmSha384),
     ("TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256", TlsDheRsaChacha20Poly1305Sha256),
-    ("TLS_DHE_RSA_WITH_AES_256_CCM", TlsDheRsaAes256CcmSha256),
     ("TLS_DHE_RSA_WITH_AES_128_GCM_SHA256", TlsDheRsaAes128GcmSha256),
-    ("TLS_DHE_RSA_WITH_AES_128_CCM", TlsDheRsaAes128CcmSha256),
-    ("TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384", TlsEcdheEcdsaAes256CbcSha384),
-    ("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384", TlsEcdheRsaAes256CbcSha384),
-    ("TLS_DHE_RSA_WITH_AES_256_CBC_SHA256", TlsDheRsaAes256CbcSha256),
-    ("TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA", TlsEcdheEcdsaAes256CbcSha),
-    ("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA", TlsEcdheRsaAes256CbcSha),
-    ("TLS_DHE_RSA_WITH_AES_256_CBC_SHA", TlsDheRsaAes256CbcSha),
-    ("TLS_RSA_WITH_AES_256_GCM_SHA384", TlsRsaAes256GcmSha384),
-    ("TLS_RSA_WITH_AES_256_CCM", TlsRsaAes256CcmSha256),
-    ("TLS_RSA_WITH_AES_256_CBC_SHA256", TlsRsaAes256CbcSha256),
-    ("TLS_RSA_WITH_AES_256_CBC_SHA", TlsRsaAes256CbcSha),
     ("TLS_AES_256_GCM_SHA384", Tls13Aes256GcmSha384),
     ("TLS_CHACHA20_POLY1305_SHA256", Tls13Chacha20Poly1305Sha256),
     ("TLS_AES_128_GCM_SHA256", Tls13Aes128GcmSha256),

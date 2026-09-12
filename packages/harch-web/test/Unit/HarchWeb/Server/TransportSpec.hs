@@ -82,15 +82,15 @@ spec = do
           fmap WarpTLS.tlsAllowedVersions maybeSettings `shouldBe` Just [TLS.TLS12, TLS.TLS13]
           fmap (map show . WarpTLS.tlsCiphers) maybeSettings
             `shouldBe` Just
-              [ "ECDHE-ECDSA-AES256GCM-SHA384",
-                "ECDHE-ECDSA-CHACHA20POLY1305-SHA256",
-                "ECDHE-ECDSA-AES128GCM-SHA256",
-                "ECDHE-RSA-AES256GCM-SHA384",
-                "ECDHE-RSA-CHACHA20POLY1305-SHA256",
-                "ECDHE-RSA-AES128GCM-SHA256",
-                "AES256GCM-SHA384",
-                "CHACHA20POLY1305-SHA256",
-                "AES128GCM-SHA256"
+              [ "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+                "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+                "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+                "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+                "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+                "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+                "TLS_AES_256_GCM_SHA384",
+                "TLS_CHACHA20_POLY1305_SHA256",
+                "TLS_AES_128_GCM_SHA256"
               ]
 
     it "closes the listener socket when TLS startup throws before the server thread starts" $

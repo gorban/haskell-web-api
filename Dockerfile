@@ -59,17 +59,12 @@ ghcup install cabal 3.16.1.0 --set
 ghc --version
 cabal --version
 
-# Install hspec-discover globally (before project context exists)
-# GHC needs this executable during test compilation
-# Use --install-method=copy to avoid symlink issues in Docker
-cabal update
-cabal install hspec-discover --install-method=copy --overwrite-policy=always
 EOF
 
 WORKDIR /app
 
 # Copy cabal files first for better layer caching
-COPY cabal.project ./
+COPY cabal.project cabal.project.freeze ./
 COPY examples/catalog-domain/catalog-domain.cabal examples/catalog-domain/
 COPY examples/composed-domains/composed-domains.cabal examples/composed-domains/
 COPY examples/custom-api/custom-api.cabal examples/custom-api/
@@ -206,6 +201,7 @@ WORKDIR /app
 
 # Copy the compiled binary from build stage
 COPY --from=build-and-test --chown=app:app /app/haskell-web-api-bin /app/haskell-web-api
+COPY --from=build-and-test --chown=app:app /app/cabal.project.freeze /app/cabal.project.freeze
 
 # Copy the app's bundled public assets so runtime images keep the same asset layout
 # as the repository even before runtime config is expanded further.
@@ -255,6 +251,7 @@ EOF
 WORKDIR /app
 
 COPY --from=release-build --chown=app:app /app/haskell-web-api-bin /app/haskell-web-api
+COPY --from=release-build --chown=app:app /app/cabal.project.freeze /app/cabal.project.freeze
 COPY --from=release-build --chown=app:app /app/packages/web-api/public /app/public
 
 RUN <<EOF

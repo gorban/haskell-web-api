@@ -355,6 +355,86 @@ The main packages are:
 
 The project targets Linux and macOS directly. On Windows, use WSL2 or Docker with Linux containers.
 
+### Reproducible builds and dependency upgrades
+
+Build from the repository root with GHC **9.14.1** and cabal-install **3.16.1.0**.
+The committed [`cabal.project.freeze`](cabal.project.freeze) records exact Haskell
+dependency versions, solver flags, and a Hackage index timestamp (including package
+metadata revisions). Cabal reads it automatically alongside `cabal.project`. Keep
+dependency, repository, and index overrides out of `cabal.project.local` for
+CI-equivalent or release builds.
+
+`cabal update` refreshes the local index without upgrading the frozen plan. CI requires
+the freeze file, resolves it on cache hits as well as misses, and includes it in the
+Cabal cache key. Test build tools, including `hspec-discover`, belong to that plan.
+Separately installed formatter tools retain the versions pinned by
+`.github/scripts/install-formatting-tools.sh`.
+
+Both Docker build paths copy the freeze file before resolving dependencies; both
+runtime images retain it at `/app/cabal.project.freeze`. This pins Haskell dependency
+selection, not Debian packages, container base-image digests, or bit-for-bit binaries.
+Other operating systems require their own validation; this file records the Linux
+CI plan, not a promise that every platform resolves identically.
+
+To upgrade dependencies in a dedicated change:
+
+1. Start from a clean checkout. Review the intended packages' release notes and any
+   required `.cabal` bound changes, especially TLS, protocol, or public-type changes.
+   Respect the complete dependency graph's published bounds. The only current
+   exception is the five-pair TLS compatibility list in `cabal.project`; it exists
+   because released Serialise and Cborg bounds predate GHC 9.14's `base-4.22`.
+   Do not add to it, use `allow-older`, or select older metadata to evade an
+   incompatibility. A proposed new exception needs an explicit compatibility
+   decision and an executable source-package proof.
+2. Refresh Hackage, back up the current freeze file outside the repository, then
+   resolve a candidate with the freeze constraints temporarily removed:
+
+   ```sh
+   cabal update
+   dependency_backup="$(mktemp)"
+   cp cabal.project.freeze "$dependency_backup"
+   rm cabal.project.freeze
+   if ! cabal freeze --index-state=HEAD; then
+     cp "$dependency_backup" cabal.project.freeze
+     exit 1
+   fi
+   git diff -- cabal.project.freeze
+   cabal build all --dry-run
+   ```
+
+   This updates the whole plan. For a focused upgrade, retain the other reviewed
+   constraints and regenerate with an explicit index timestamp and the selected
+   version constraints. Inspect transitive versions and flags as well as direct
+   dependencies. Do not hand-label an untested plan as a passing baseline.
+3. When changing TLS, Serialise, Cborg, HTTP2, or time-manager, run
+   `tools/test-tls-compatibility-stack.sh`. It tests released Cborg and Serialise
+   source in an isolated store, temporarily patches only Serialise's duplicate
+   test orphan, cleans that store, and verifies the runtime plan still uses
+   Hackage tarballs. Do not copy that patch into a runtime dependency.
+   Validate changed dependencies from a fresh Cabal store and capture the build
+   output for `tools/check-build-diagnostics.sh`; an existing store can hide warnings
+   by skipping compilation. Run the complete local gate sequence in
+   [AGENTS.md](AGENTS.md#ci-equivalent-checks), including 100% coverage and browser
+   tests, with the candidate plan. Fix warnings instead of adding exemptions; the
+   compatibility script is the sole package-version-specific GHC 9.14 exception.
+4. Commit the reviewed manifest/freeze changes and any required adaptations together.
+   Before release, require successful CI for that exact full commit SHA, including
+   the PR's required checks. Keep an unrelated fixture fix in a separate commit.
+
+CI creates a `tested-source-packages` artifact only after the build, coverage,
+formatting, and browser gates pass. It contains `packages/*.tar.gz` from `cabal sdist`,
+the freeze file, `COMMIT`, and `repository.tar.gz` with the complete source and frozen
+project. For a package release, publish those tested package tarballs and retain the
+matching artifact as build provenance. For a container release, build the chosen
+Docker target from that exact repository archive or commit, retaining its freeze file.
+There is currently no automatic Hackage or container-registry publishing workflow.
+
+Hackage source packages expose their declared library dependency bounds; a consuming
+application does **not** inherit this repository's freeze file. To reproduce our
+build, unpack `repository.tar.gz` and run Cabal there. Do not tighten public library
+bounds to exact transitive versions merely to reproduce a repository build. See
+[Cabal's freeze documentation](https://cabal.readthedocs.io/en/stable/cabal-commands.html#cabal-freeze).
+
 ## Find a real example
 
 The map below distinguishes a reusable capability from the application or

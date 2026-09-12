@@ -27,6 +27,29 @@ expect_success() {
   fi
 }
 
+expect_scoped_tls_compatibility_success() {
+  local description="$1"
+  local fixture="$2"
+  local diagnostic_output
+
+  if diagnostic_output="$("$diagnostic_gate" --allow-ghc-9-14-tls-compatibility-stack=cborg-0.2.10.0 "$fixture" 2>&1)"; then
+    case "$diagnostic_output" in
+      *'Exact GHC 9.14 TLS compatibility-stack warning(s) accepted.'*)
+        printf 'PASS: accepts scoped TLS compatibility warnings for %s\n' "$description"
+        ;;
+      *)
+        printf 'FAIL: diagnostic gate did not identify the scoped TLS compatibility warning for %s\n' "$description" >&2
+        printf '%s\n' "$diagnostic_output" >&2
+        exit 1
+        ;;
+    esac
+  else
+    printf 'FAIL: diagnostic gate unexpectedly rejected scoped TLS compatibility warnings for %s\n' "$description" >&2
+    printf '%s\n' "$diagnostic_output" >&2
+    exit 1
+  fi
+}
+
 expect_failure() {
   local description="$1"
   local fixture="$2"
@@ -51,6 +74,8 @@ near_match_linker_warning_fixture="$fixture_directory/near-match-linker-warning.
 wrong_linker_path_fixture="$fixture_directory/wrong-linker-path.log"
 unrecognized_deprecation_fixture="$fixture_directory/unrecognized-deprecation.log"
 uppercase_warning_fixture="$fixture_directory/uppercase-warning.log"
+tls_compatibility_warning_fixture="$fixture_directory/tls-compatibility-warning.log"
+unknown_tls_compatibility_warning_fixture="$fixture_directory/unknown-tls-compatibility-warning.log"
 
 : > "$clean_fixture"
 printf '%s\n' "/usr/bin/ld.bfd: warning: type and size of dynamic symbol \`harchzmwebzm0zi1zi2zi0zminplace_HarchWebziEmail_smtpServerHost_closure' are not defined" > "$dynamic_link_warning_fixture"
@@ -69,6 +94,8 @@ printf '%s\n' "/usr/bin/ld.bfd: warning: type and size of dynamic symbol \`harch
 printf '%s\n' "/usr/local/bin/ld.bfd: warning: type and size of dynamic symbol \`harchzmwebzm0zi1zi2zi0zminplace_HarchWebziEmail_smtpServerHost_closure' are not defined" > "$wrong_linker_path_fixture"
 printf '%s\n' 'Deprecation warning:' 'An unrecognised deprecation must not be ignored.' > "$unrecognized_deprecation_fixture"
 printf '%s\n' '/usr/bin/ld.bfd: WARNING: libmissing.so, needed by app, not found' > "$uppercase_warning_fixture"
+printf '%s\n' 'src/Codec/CBOR/Read.hs:90:23: warning: [GHC-90584] [-Wderiving-typeable]' > "$tls_compatibility_warning_fixture"
+printf '%s\n' 'src/Codec/CBOR/NewWarning.hs:1:1: warning: [GHC-90177] A new compatibility warning' > "$unknown_tls_compatibility_warning_fixture"
 
 expect_success 'a clean build log' "$clean_fixture"
 expect_success \
@@ -86,5 +113,8 @@ expect_failure 'a closure warning without the generated closure suffix' "$near_m
 expect_failure 'a dynamic-link warning from an unapproved linker path' "$wrong_linker_path_fixture"
 expect_failure 'an unrecognised deprecation warning' "$unrecognized_deprecation_fixture"
 expect_failure 'an all-caps WARNING linker diagnostic' "$uppercase_warning_fixture"
+expect_failure 'a TLS compatibility warning without its narrow gate mode' "$tls_compatibility_warning_fixture"
+expect_scoped_tls_compatibility_success 'the explicit upstream compatibility test command' "$tls_compatibility_warning_fixture"
+expect_failure 'an unrecorded warning in the TLS compatibility stack' "$unknown_tls_compatibility_warning_fixture"
 
 printf '%s\n' 'Build diagnostic gate fixture checks passed.'

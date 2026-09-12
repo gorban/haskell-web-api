@@ -35,6 +35,9 @@ if [[ -z "$dependency_line" ]]; then
 fi
 
 missing_inputs=()
+if ! sed -n "1,${dependency_line}p" "$dockerfile" | grep -Fxq 'COPY cabal.project cabal.project.freeze ./'; then
+  missing_inputs+=('cabal.project.freeze (before dependency resolution)')
+fi
 for package_directory in "${package_directories[@]}"; do
   mapfile -t cabal_files < <(find "$repo_root/$package_directory" -maxdepth 1 -name '*.cabal' -type f -printf '%P\n' | sort)
   if [[ "${#cabal_files[@]}" -ne 1 ]]; then
@@ -99,6 +102,16 @@ fi
 
 if grep -Eq '^FROM alpine:' "$dockerfile"; then
   printf '%s\n' 'Runtime stages must share the builder Debian ABI; Alpine is unsupported.' >&2
+  exit 1
+fi
+
+if [[ "$(grep -Ec '^COPY --from=(build-and-test|release-build) --chown=app:app /app/cabal.project.freeze /app/cabal.project.freeze$' "$dockerfile")" -ne 2 ]]; then
+  printf '%s\n' 'Both runtime images must retain their build freeze file.' >&2
+  exit 1
+fi
+
+if grep -Eq '^cabal install .*hspec-discover' "$dockerfile"; then
+  printf '%s\n' 'Docker test tools must come from the frozen project plan.' >&2
   exit 1
 fi
 

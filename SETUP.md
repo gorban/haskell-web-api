@@ -3,6 +3,10 @@
 This guide provides detailed instructions for setting up a Haskell development environment on MacOS and
 Linux (e.g. Ubuntu or Fedora).
 
+Repository, CI, and container builds use the committed `cabal.project.freeze`.
+Follow the [dependency upgrade and release procedure](README.md#reproducible-builds-and-dependency-upgrades)
+when changing packages; `cabal update` alone does not upgrade the reviewed plan.
+
 For Windows, see deprecation in [changelog v0.1.0.1](CHANGELOG.md#v0101).
 
 ## GHCup Prerequisites

@@ -60,40 +60,28 @@ spec = do
               ("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", TlsEcdheRsaAes128GcmSha256),
               ("TLS_DHE_RSA_WITH_AES_256_GCM_SHA384", TlsDheRsaAes256GcmSha384),
               ("TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256", TlsDheRsaChacha20Poly1305Sha256),
-              ("TLS_DHE_RSA_WITH_AES_256_CCM", TlsDheRsaAes256CcmSha256),
               ("TLS_DHE_RSA_WITH_AES_128_GCM_SHA256", TlsDheRsaAes128GcmSha256),
-              ("TLS_DHE_RSA_WITH_AES_128_CCM", TlsDheRsaAes128CcmSha256),
-              ("TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384", TlsEcdheEcdsaAes256CbcSha384),
-              ("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384", TlsEcdheRsaAes256CbcSha384),
-              ("TLS_DHE_RSA_WITH_AES_256_CBC_SHA256", TlsDheRsaAes256CbcSha256),
-              ("TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA", TlsEcdheEcdsaAes256CbcSha),
-              ("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA", TlsEcdheRsaAes256CbcSha),
-              ("TLS_DHE_RSA_WITH_AES_256_CBC_SHA", TlsDheRsaAes256CbcSha),
-              ("TLS_RSA_WITH_AES_256_GCM_SHA384", TlsRsaAes256GcmSha384),
-              ("TLS_RSA_WITH_AES_256_CCM", TlsRsaAes256CcmSha256),
-              ("TLS_RSA_WITH_AES_256_CBC_SHA256", TlsRsaAes256CbcSha256),
-              ("TLS_RSA_WITH_AES_256_CBC_SHA", TlsRsaAes256CbcSha),
               ("TLS_AES_256_GCM_SHA384", Tls13Aes256GcmSha384),
               ("TLS_CHACHA20_POLY1305_SHA256", Tls13Chacha20Poly1305Sha256),
               ("TLS_AES_128_GCM_SHA256", Tls13Aes128GcmSha256),
               ("TLS_AES_128_CCM_SHA256", Tls13Aes128CcmSha256)
             ]
-          supportedVersions = [Tls10, Tls11, Tls12, Tls13]
+          supportedVersions = [Tls12, Tls13]
       forM_ supportedCipherSuites $ \(identifier, cipherSuite) -> do
         tlsCipherSuiteFromIdentifier identifier `shouldBe` Just cipherSuite
         any (\tlsVersion -> TLS.cipherAllowedForVersion (tlsProtocolVersionValue tlsVersion) (tlsCipherSuiteValue cipherSuite)) supportedVersions `shouldBe` True
-      show supportedVersions `shouldBe` "[Tls10,Tls11,Tls12,Tls13]"
-      show Tls10 `shouldBe` "Tls10"
+      show supportedVersions `shouldBe` "[Tls12,Tls13]"
+      show Tls12 `shouldBe` "Tls12"
       show (map snd supportedCipherSuites) `shouldContain` "Tls13Aes128CcmSha256"
       show Tls13Aes128CcmSha256 `shouldBe` "Tls13Aes128CcmSha256"
-      Tls10 `shouldNotBe` Tls11
-      TlsEcdheRsaAes256CbcSha `shouldNotBe` Tls13Aes256GcmSha384
-      tlsPolicySupports (TlsPolicy {tlsAllowedVersions = Tls10 :| [], tlsCipherSuites = TlsEcdheRsaAes256CbcSha :| []}) `shouldBe` True
-      tlsPolicySupports (TlsPolicy {tlsAllowedVersions = Tls10 :| [], tlsCipherSuites = Tls13Aes256GcmSha384 :| []}) `shouldBe` False
-      let legacyTlsPolicy = TlsPolicy {tlsAllowedVersions = Tls10 :| [], tlsCipherSuites = TlsEcdheRsaAes256CbcSha :| []}
-      legacyTlsPolicy `shouldNotBe` TlsPolicy {tlsAllowedVersions = Tls13 :| [], tlsCipherSuites = Tls13Aes256GcmSha384 :| []}
-      show legacyTlsPolicy `shouldContain` "TlsEcdheRsaAes256CbcSha"
-      show [legacyTlsPolicy] `shouldContain` "TlsEcdheRsaAes256CbcSha"
+      Tls12 `shouldNotBe` Tls13
+      TlsEcdheRsaAes256GcmSha384 `shouldNotBe` Tls13Aes256GcmSha384
+      tlsPolicySupports (TlsPolicy {tlsAllowedVersions = Tls12 :| [], tlsCipherSuites = TlsEcdheRsaAes256GcmSha384 :| []}) `shouldBe` True
+      tlsPolicySupports (TlsPolicy {tlsAllowedVersions = Tls12 :| [], tlsCipherSuites = Tls13Aes256GcmSha384 :| []}) `shouldBe` False
+      let tls12Policy = TlsPolicy {tlsAllowedVersions = Tls12 :| [], tlsCipherSuites = TlsEcdheRsaAes256GcmSha384 :| []}
+      tls12Policy `shouldNotBe` TlsPolicy {tlsAllowedVersions = Tls13 :| [], tlsCipherSuites = Tls13Aes256GcmSha384 :| []}
+      show tls12Policy `shouldContain` "TlsEcdheRsaAes256GcmSha384"
+      show [tls12Policy] `shouldContain` "TlsEcdheRsaAes256GcmSha384"
 
   describe "shared config coverage" $ do
     it "reads exported selectors from the shared server config records" $ do

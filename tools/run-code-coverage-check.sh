@@ -17,7 +17,10 @@ coverage_exit=$?
 set -e
 
 cat "$coverage_log"
-"$repo_root/tools/check-build-diagnostics.sh" "$coverage_log"
+"$repo_root/tools/check-build-diagnostics.sh" \
+  --allow-ghc-9-14-tls-compatibility-stack=cborg-0.2.10.0 \
+  --allow-ghc-9-14-tls-compatibility-stack=serialise-0.2.6.1 \
+  "$coverage_log"
 
 if [ "$coverage_exit" != 0 ]; then
   exit "$coverage_exit"
