@@ -348,6 +348,13 @@ startWarpRuntimeServerOnSocket runServerOnSocket = do
 -- reliably carry that peer.  The paired accept/fork hooks keep a pre-TLS
 -- connection event attached to its own socket; the sequential and concurrent
 -- loopback regression covers the former cross-connection attribution defect.
+--
+-- Track <https://github.com/yesodweb/wai/issues/1113>.  Once a public release
+-- supplies the accepted peer for pre-request exceptions, wire that context into
+-- our reporter and remove the paired hooks and their address tracker only after
+-- the sequential/concurrent plaintext and premature-close regressions pass.
+-- Keep those behavioral regressions after migration; adapt hook-specific tests
+-- to the replacement boundary without losing ownership or cleanup coverage.
 runtimeServerSettings :: RuntimeTlsListenerDependencies -> Warp.Settings
 runtimeServerSettings listenerDependencies =
   Warp.setPort (endpointPort endpoint)

@@ -2869,6 +2869,14 @@ Warp, pinning an unreleased revision, or changing TLS/HTTP2 ownership. Real dist
 sequential, concurrent, plaintext-on-TLS, premature-close, and asynchronous-worker regressions
 prove the peer attributes remain tied to their accepted TCP connection.
 
+Track [WAI #1113](https://github.com/yesodweb/wai/issues/1113) for accepted-peer
+context on pre-request exceptions. Once a public release provides that context,
+adapt the connection reporter and remove the paired hooks/address tracker only
+after the distinct-peer plaintext and premature-close regressions and full gates
+pass. Keep the behavioral regressions permanently; adapt hook-specific ownership
+and cleanup checks to the replacement boundary. This does not retire HTTP2
+lifecycle coverage or the independent dependency compatibility workarounds.
+
 ### Decision record — PR-SEC1: cancellation-safe multipart ownership handoffs (2026-08-28)
 
 **Decision: extend `HarchWeb.Api.Multipart`'s existing scoped-upload lifecycle with masked

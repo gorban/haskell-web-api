@@ -66,6 +66,9 @@ spec = do
       installedHandlerCount <- readIORef installedCount
       installedHandlerCount `shouldBe` 4
 
+  -- Workaround boundary for <https://github.com/yesodweb/wai/issues/1113>.
+  -- On migration, adapt these ownership/cleanup checks to the replacement API;
+  -- issue closure alone is not a reason to discard their behavioral coverage.
   describe "the Warp accepted-peer handoff" $ do
     it "fails closed for a missing worker handoff" $ do
       tracker <- newActiveConnectionAddresses
@@ -416,6 +419,11 @@ spec = do
     -- Warp's exception callback has no request before TLS completes.  Keep the
     -- two loopback peers because a later accepted socket previously supplied
     -- the recorded address for an earlier TLS failure (DT, 2026-09-12).
+    -- Regression for <https://github.com/yesodweb/wai/issues/1113>: before a
+    -- Request exists, Warp's exception hook lacks the accepted peer.  Our old
+    -- onOpen/fork bridge could attribute a failure to a different connection.
+    -- Keep this test when a released peer-aware API replaces our accept/fork
+    -- workaround: both loopback peers and both failure kinds must stay covered.
     it "keeps sequential and concurrent pre-TLS failures attached to each accepted TCP peer" $
       withUnusedLoopbackPort $ \unusedPort ->
         withManualTlsFiles $ \certificatePath privateKeyPath ->
