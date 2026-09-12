@@ -40,6 +40,10 @@ is_documented_hpc_deprecation_warning() {
     && [ "${log_lines[index + 4]:-}" = 'More information can be found in the accepted GHC proposal 612.' ]
 }
 
+# Track https://github.com/well-typed/cborg/pull/385 plus the fixes on master.
+# After fixed public releases pass fresh strict builds and the full gates,
+# remove these five allowances and their optimized/coverage/verifier callers.
+# Adapt classifier tests to reject the formerly accepted warnings; keep coverage.
 is_documented_tls_compatibility_warning() {
   local line="$1"
   local package_name

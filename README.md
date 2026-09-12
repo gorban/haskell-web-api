@@ -411,6 +411,9 @@ To upgrade dependencies in a dedicated change:
    source in an isolated store, temporarily patches only Serialise's duplicate
    test orphan, cleans that store, and verifies the runtime plan still uses
    Hackage tarballs. Do not copy that patch into a runtime dependency.
+   For retirement of the Serialise/Cborg workarounds after a release containing
+   [PR #385](https://github.com/well-typed/cborg/pull/385), follow the
+   [cleanup criteria](docs/build-diagnostics.md#exact-ghc-914-tls-compatibility-warnings).
    Validate changed dependencies from a fresh Cabal store and capture the build
    output for `tools/check-build-diagnostics.sh`; an existing store can hide warnings
    by skipping compilation. Run the complete local gate sequence in

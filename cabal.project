@@ -34,6 +34,10 @@ debug-info: True
 -- exceptions that resolve its released source on base-4.22.  The dependency
 -- verification script records the upstream warnings and runs the released
 -- serialise and cborg suites before this plan may be refreshed.
+-- Track https://github.com/well-typed/cborg/pull/385 and the fixes on master.
+-- After public releases include them, refresh the freeze, remove these five
+-- exceptions, and verify upstream suites plus our TLS/runtime and full gates.
+-- Keep the regression tests; see docs/build-diagnostics.md for warning/patch cleanup.
 allow-newer:
   serialise:base,
   serialise:containers,

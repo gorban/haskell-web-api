@@ -66,6 +66,18 @@ This is an exact-header exception, not a package-wide warning exemption. The
 diagnostic fixture rejects any changed or additional warning in those source
 paths, and every warning outside those five headers remains fatal.
 
+Track [Cborg PR #385](https://github.com/well-typed/cborg/pull/385) together with
+fixes already on master. The tested proposed merge passes both upstream suites
+with `-Werror` and our server-runtime regressions without these package exceptions
+or the duplicate-orphan patch. Once public releases include those changes,
+refresh the freeze and verifier versions; remove the five bounds exceptions,
+obsolete verifier overrides/test patch, and five warning allowances plus their
+callers. Require fresh strict upstream builds against the runtime dependency
+plan and the full local/CI gates before retirement. Preserve upstream tests and
+application regressions; adapt classifier fixtures to reject the formerly allowed
+warnings. This does not retire the HTTP2 pin, Warp peer hooks, or findings in
+other dependencies.
+
 ## Documented GHC HPC deprecation
 
 The same GHC 9.14.1 coverage mode can run instrumented custom-Setup and source-preprocessor

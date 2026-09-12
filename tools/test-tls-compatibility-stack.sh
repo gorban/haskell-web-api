@@ -4,6 +4,11 @@
 # bounded base-4.22 exceptions.  This deliberately uses an isolated CABAL_DIR:
 # the temporary Serialise test-source patch cannot supply, or leave behind, a
 # runtime dependency for this repository's frozen Hackage plan.
+# Track https://github.com/well-typed/cborg/pull/385 plus the fixes on master.
+# Once fixed public releases are pinned, remove obsolete bound/flag overrides,
+# the duplicate-orphan patch and warning allowances after both upstream suites
+# pass unpatched with -Werror against the runtime dependency plan. Keep the
+# suite checks and application regressions; run the full gates before retirement.
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
@@ -72,10 +77,11 @@ package serialise
   tests: True
 EOF
 
-# quickcheck-instances has supplied this Vector instance throughout the range
-# accepted by released Serialise.  Remove only Serialise's duplicate orphan in
-# its temporary test tree; the released library source and repository runtime
-# plan remain unmodified.
+# quickcheck-instances supplies this Vector instance starting with 0.3.32.
+# Remove only Serialise's duplicate orphan in this temporary test tree; the
+# primitive-vector test cases remain. Retire this patch with a fixed public
+# release (https://github.com/well-typed/cborg/pull/385 and master), not the tests.
+# The released library source and repository runtime plan remain unmodified.
 perl -0pi -e '
   s/import qualified Data\.Vector\.Primitive      as Vector\.Primitive\n//;
   s/instance \(Vector\.Primitive\.Prim a, Arbitrary a\n         \) => Arbitrary \(Vector\.Primitive\.Vector a\) where\n    arbitrary = Vector\.Primitive\.fromList <\$> arbitrary\n\n//;
