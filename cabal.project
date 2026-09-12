@@ -20,6 +20,15 @@ optimization: 2
 tests: True
 debug-info: True
 
+-- HTTP2 cleanup workaround: cabal.project.freeze pins http2-5.4.0 with
+-- time-manager-0.2.4. Track https://github.com/kazu-yamamoto/http2/issues/175.
+-- Once a public release restores callback cleanup, upgrade both packages in
+-- the freeze, keep Http2LifecycleSpec passing, and run the full warning/CI gates
+-- before retiring this note. Removing killManager alone is not a cleanup fix;
+-- lowering the manager bound on newer HTTP2 also hits the withHandle API change
+-- documented in https://github.com/kazu-yamamoto/http2/issues/169.
+-- This workaround is separate from the Serialise/Cborg exceptions below.
+
 -- TLS 2.4 requires serialise-0.2.6.1, whose released metadata predates the
 -- GHC 9.14 boot-library versions.  These are the smallest upper-bound
 -- exceptions that resolve its released source on base-4.22.  The dependency

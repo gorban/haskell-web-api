@@ -13,6 +13,13 @@ import System.TimeManager qualified as TimeManager
 -- pair preserves the release-time lifecycle contract.  Keep this test at the
 -- public HTTP2 boundary so a future upgrade cannot silently give that cleanup
 -- guarantee up again (DT, 2026-09-12).
+--
+-- Track <https://github.com/kazu-yamamoto/http2/issues/175>.  When a released
+-- fix restores cleanup, upgrade the HTTP2/time-manager pair in the freeze and
+-- retain this regression.  Retire the pin-workaround note only after this test
+-- and the full warning/CI gates pass; deleting the deprecated call alone does
+-- not restore cancellation.  The Serialise/Cborg bound and warning exceptions
+-- and the Warp accepted-peer hooks address separate issues.
 spec =
   describe "HTTP2 simple configuration lifecycle" $
     it "cancels timeout callbacks when freeSimpleConfig releases its manager" $

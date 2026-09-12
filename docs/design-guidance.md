@@ -858,7 +858,13 @@ with `base` and `containers`. This is not a general resolver override. The froze
 plan fixes TLS 2.4.3, Warp 3.4.15, WarpTLS 3.4.14, HTTP2 5.4.0, and
 time-manager 0.2.4. HTTP2 5.4.4 calls the now-no-op `killManager`, leaving
 `freeSimpleConfig` callbacks alive; the public HTTP2 lifecycle regression proves
-that the pinned pair cancels an owned callback.
+that the pinned pair cancels an owned callback. Track
+[HTTP2 #175](https://github.com/kazu-yamamoto/http2/issues/175) for a released
+cleanup fix. Upgrade both frozen versions together and retain the lifecycle
+regression; retire the pin-workaround note only after the lifecycle and full
+warning/CI gates pass. This does not retire the separate Serialise/Cborg
+exceptions or Warp accepted-peer hooks. [HTTP2 #169](https://github.com/kazu-yamamoto/http2/issues/169)
+explains why lowering the manager bound on newer HTTP2 is not sufficient.
 
 `tools/test-tls-compatibility-stack.sh` downloads only the released Cborg and
 Serialise source packages into an isolated Cabal directory, runs their suites,
