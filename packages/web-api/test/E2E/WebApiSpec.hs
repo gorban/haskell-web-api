@@ -711,6 +711,7 @@ spec =
                   attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
                   inputValue identifierField `shouldEqual` ""
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                liftScenarioIO $ readIORef deliveryCountReference >>= (`shouldBe` 0)
                 fill identifierField "person@example.test"
                 fill passwordField "incorrect password"
                 fill authenticatorCodeField reauthenticationTotpCode

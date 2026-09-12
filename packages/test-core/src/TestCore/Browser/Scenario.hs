@@ -25,6 +25,7 @@ module TestCore.Browser.Scenario
     fill,
     historyBack,
     historyForward,
+    liftScenarioIO,
     paste,
     press,
     releaseRequestsMatching,
@@ -86,6 +87,12 @@ newtype BrowserScenario a = BrowserScenario
 askSession :: BrowserScenario BrowserSession
 askSession = BrowserScenario ask
 
+-- | Run a fixture-owned effect at an explicit point in a browser scenario.
+--
+-- This is for assertions about server-side effects of the real browser
+-- interaction, such as proving that a pre-handler rejection performed no
+-- mutation before recovery.  It does not expose browser protocol state or
+-- create a second browser-control path.
 liftScenarioIO :: IO a -> BrowserScenario a
 liftScenarioIO = BrowserScenario . liftIO
 
