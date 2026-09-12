@@ -82,132 +82,130 @@ spec = do
               )
 
     it "defaults plain HTTP traffic to HTTPS redirects when both HTTP and manual TLS listeners are configured" $ withTestAccountJwtFixture $ \_ jwtConfigLines ->
-      withUnusedLoopbackPort $ \httpPort ->
-        withUnusedLoopbackPort $ \httpsPort ->
-          withManualTlsFiles $ \certificatePath privateKeyPath ->
-            withSystemTempDirectory "haskell-web-api-https-redirect" $ \workingDirectory -> do
-              writeFile
-                (workingDirectory <> "/.env")
-                ( unlines
-                    ( [ "LISTENER_0_HOST=127.0.0.1",
-                        "LISTENER_0_PORT=" <> show httpPort,
-                        "LISTENER_0_SCHEME=http",
-                        "LISTENER_1_HOST=127.0.0.1",
-                        "LISTENER_1_PORT=" <> show httpsPort,
-                        "LISTENER_1_SCHEME=https",
-                        "LISTENER_1_TLS_SOURCE=manual",
-                        "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
-                        "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath,
-                        "DATABASE_PASSWORD=web_api",
-                        "SMTP_PASSWORD=password",
-                        "TOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-                        "CSRF_SIGNING_ACTIVE_KEY_ID=development-v1",
-                        "CSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-                      ]
-                        <> jwtConfigLines
-                    )
+      withDistinctUnusedLoopbackPorts $ \httpPort httpsPort ->
+        withManualTlsFiles $ \certificatePath privateKeyPath ->
+          withSystemTempDirectory "haskell-web-api-https-redirect" $ \workingDirectory -> do
+            writeFile
+              (workingDirectory <> "/.env")
+              ( unlines
+                  ( [ "LISTENER_0_HOST=127.0.0.1",
+                      "LISTENER_0_PORT=" <> show httpPort,
+                      "LISTENER_0_SCHEME=http",
+                      "LISTENER_1_HOST=127.0.0.1",
+                      "LISTENER_1_PORT=" <> show httpsPort,
+                      "LISTENER_1_SCHEME=https",
+                      "LISTENER_1_TLS_SOURCE=manual",
+                      "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
+                      "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath,
+                      "DATABASE_PASSWORD=web_api",
+                      "SMTP_PASSWORD=password",
+                      "TOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                      "CSRF_SIGNING_ACTIVE_KEY_ID=development-v1",
+                      "CSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                    ]
+                      <> jwtConfigLines
+                  )
+              )
+            webApiExecutable <- testBuildToolPath "haskell-web-api"
+            withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
+              (_, _, _, processHandle) <-
+                createProcess
+                  ( (proc webApiExecutable [])
+                      { cwd = Just workingDirectory,
+                        std_out = UseHandle outputHandle
+                      }
+                  )
+              (redirectHeaders, httpsResponseText, runningExitCode) <-
+                ( do
+                    readyRedirectHeaders <- waitForProcessHttpHeaders processHandle httpPort "/api/status"
+                    readyHttpsResponse <- waitForProcessTrustedHttpsResponse processHandle certificatePath httpsPort "/api/status"
+                    stillRunningExitCode <- getProcessExitCode processHandle
+                    pure (readyRedirectHeaders, readyHttpsResponse, stillRunningExitCode)
                 )
-              webApiExecutable <- testBuildToolPath "haskell-web-api"
-              withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
-                (_, _, _, processHandle) <-
-                  createProcess
-                    ( (proc webApiExecutable [])
-                        { cwd = Just workingDirectory,
-                          std_out = UseHandle outputHandle
-                        }
-                    )
-                (redirectHeaders, httpsResponseText, runningExitCode) <-
-                  ( do
-                      readyRedirectHeaders <- waitForProcessHttpHeaders processHandle httpPort "/api/status"
-                      readyHttpsResponse <- waitForProcessTrustedHttpsResponse processHandle certificatePath httpsPort "/api/status"
-                      stillRunningExitCode <- getProcessExitCode processHandle
-                      pure (readyRedirectHeaders, readyHttpsResponse, stillRunningExitCode)
-                  )
-                    `finally` do
-                      terminateProcess processHandle
-                      _ <- waitForProcess processHandle
-                      hClose outputHandle
-                output <- readFile outputPath
-                expectAll
-                  ( (redirectHeaders `shouldContain` "308 Permanent Redirect")
-                      :| [ redirectHeaders `shouldContain` ("Location: https://127.0.0.1:" <> show httpsPort <> "/api/status"),
-                           httpsResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}",
-                           runningExitCode `shouldBe` Nothing,
-                           output
-                             `shouldBe` unlines
-                               [ "Loaded config file: ./.env",
-                                 "Config file missing: ./.env.local",
-                                 "Parsed listener config: http://127.0.0.1:" <> show httpPort,
-                                 "Parsed listener config: https://127.0.0.1:" <> show httpsPort,
-                                 "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
-                                 "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
-                               ]
-                         ]
-                  )
+                  `finally` do
+                    terminateProcess processHandle
+                    _ <- waitForProcess processHandle
+                    hClose outputHandle
+              output <- readFile outputPath
+              expectAll
+                ( (redirectHeaders `shouldContain` "308 Permanent Redirect")
+                    :| [ redirectHeaders `shouldContain` ("Location: https://127.0.0.1:" <> show httpsPort <> "/api/status"),
+                         httpsResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}",
+                         runningExitCode `shouldBe` Nothing,
+                         output
+                           `shouldBe` unlines
+                             [ "Loaded config file: ./.env",
+                               "Config file missing: ./.env.local",
+                               "Parsed listener config: http://127.0.0.1:" <> show httpPort,
+                               "Parsed listener config: https://127.0.0.1:" <> show httpsPort,
+                               "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
+                               "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
+                             ]
+                       ]
+                )
 
     it "lets REDIRECT_HTTP_TO_HTTPS=false keep both HTTP and HTTPS listeners serving traffic" $ withTestAccountJwtFixture $ \_ jwtConfigLines ->
-      withUnusedLoopbackPort $ \httpPort ->
-        withUnusedLoopbackPort $ \httpsPort ->
-          withManualTlsFiles $ \certificatePath privateKeyPath ->
-            withSystemTempDirectory "haskell-web-api-dual-listener" $ \workingDirectory -> do
-              writeFile
-                (workingDirectory <> "/.env")
-                ( unlines
-                    ( [ "LISTENER_0_HOST=127.0.0.1",
-                        "LISTENER_0_PORT=" <> show httpPort,
-                        "LISTENER_0_SCHEME=http",
-                        "LISTENER_1_HOST=127.0.0.1",
-                        "LISTENER_1_PORT=" <> show httpsPort,
-                        "LISTENER_1_SCHEME=https",
-                        "LISTENER_1_TLS_SOURCE=manual",
-                        "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
-                        "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath,
-                        "REDIRECT_HTTP_TO_HTTPS=false",
-                        "DATABASE_PASSWORD=web_api",
-                        "SMTP_PASSWORD=password",
-                        "TOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-                        "CSRF_SIGNING_ACTIVE_KEY_ID=development-v1",
-                        "CSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-                      ]
-                        <> jwtConfigLines
-                    )
+      withDistinctUnusedLoopbackPorts $ \httpPort httpsPort ->
+        withManualTlsFiles $ \certificatePath privateKeyPath ->
+          withSystemTempDirectory "haskell-web-api-dual-listener" $ \workingDirectory -> do
+            writeFile
+              (workingDirectory <> "/.env")
+              ( unlines
+                  ( [ "LISTENER_0_HOST=127.0.0.1",
+                      "LISTENER_0_PORT=" <> show httpPort,
+                      "LISTENER_0_SCHEME=http",
+                      "LISTENER_1_HOST=127.0.0.1",
+                      "LISTENER_1_PORT=" <> show httpsPort,
+                      "LISTENER_1_SCHEME=https",
+                      "LISTENER_1_TLS_SOURCE=manual",
+                      "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
+                      "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath,
+                      "REDIRECT_HTTP_TO_HTTPS=false",
+                      "DATABASE_PASSWORD=web_api",
+                      "SMTP_PASSWORD=password",
+                      "TOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                      "CSRF_SIGNING_ACTIVE_KEY_ID=development-v1",
+                      "CSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                    ]
+                      <> jwtConfigLines
+                  )
+              )
+            webApiExecutable <- testBuildToolPath "haskell-web-api"
+            withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
+              (_, _, _, processHandle) <-
+                createProcess
+                  ( (proc webApiExecutable [])
+                      { cwd = Just workingDirectory,
+                        std_out = UseHandle outputHandle
+                      }
+                  )
+              (httpResponseText, httpsResponseText, runningExitCode) <-
+                ( do
+                    readyHttpResponse <- waitForProcessResponse processHandle httpPort "/api/status"
+                    readyHttpsResponse <- waitForProcessTrustedHttpsResponse processHandle certificatePath httpsPort "/api/status"
+                    stillRunningExitCode <- getProcessExitCode processHandle
+                    pure (readyHttpResponse, readyHttpsResponse, stillRunningExitCode)
                 )
-              webApiExecutable <- testBuildToolPath "haskell-web-api"
-              withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
-                (_, _, _, processHandle) <-
-                  createProcess
-                    ( (proc webApiExecutable [])
-                        { cwd = Just workingDirectory,
-                          std_out = UseHandle outputHandle
-                        }
-                    )
-                (httpResponseText, httpsResponseText, runningExitCode) <-
-                  ( do
-                      readyHttpResponse <- waitForProcessResponse processHandle httpPort "/api/status"
-                      readyHttpsResponse <- waitForProcessTrustedHttpsResponse processHandle certificatePath httpsPort "/api/status"
-                      stillRunningExitCode <- getProcessExitCode processHandle
-                      pure (readyHttpResponse, readyHttpsResponse, stillRunningExitCode)
-                  )
-                    `finally` do
-                      terminateProcess processHandle
-                      _ <- waitForProcess processHandle
-                      hClose outputHandle
-                output <- readFile outputPath
-                expectAll
-                  ( (httpResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}")
-                      :| [ httpsResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}",
-                           runningExitCode `shouldBe` Nothing,
-                           output
-                             `shouldBe` unlines
-                               [ "Loaded config file: ./.env",
-                                 "Config file missing: ./.env.local",
-                                 "Parsed listener config: http://127.0.0.1:" <> show httpPort,
-                                 "Parsed listener config: https://127.0.0.1:" <> show httpsPort,
-                                 "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
-                                 "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
-                               ]
-                         ]
-                  )
+                  `finally` do
+                    terminateProcess processHandle
+                    _ <- waitForProcess processHandle
+                    hClose outputHandle
+              output <- readFile outputPath
+              expectAll
+                ( (httpResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}")
+                    :| [ httpsResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}",
+                         runningExitCode `shouldBe` Nothing,
+                         output
+                           `shouldBe` unlines
+                             [ "Loaded config file: ./.env",
+                               "Config file missing: ./.env.local",
+                               "Parsed listener config: http://127.0.0.1:" <> show httpPort,
+                               "Parsed listener config: https://127.0.0.1:" <> show httpsPort,
+                               "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
+                               "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
+                             ]
+                       ]
+                )
 
   describe "database integration" $ do
     it
@@ -673,6 +671,25 @@ withUnusedLoopbackPort action = do
     _ ->
       close reservedSocket
         >> error "expected IPv4 loopback reservation socket"
+
+-- | Reserve two loopback ports concurrently so the kernel cannot hand the
+-- same ephemeral port to both listeners.  Release both immediately before
+-- starting the child process, which is the shortest practical hand-off for
+-- the real multi-listener integration test.
+withDistinctUnusedLoopbackPorts :: (Int -> Int -> IO a) -> IO a
+withDistinctUnusedLoopbackPorts action = do
+  firstSocket <- socket AF_INET Stream defaultProtocol
+  secondSocket <- socket AF_INET Stream defaultProtocol
+  bind firstSocket (SockAddrInet 0 (tupleToHostAddress (127, 0, 0, 1)))
+  bind secondSocket (SockAddrInet 0 (tupleToHostAddress (127, 0, 0, 1)))
+  firstAddress <- getSocketName firstSocket
+  secondAddress <- getSocketName secondSocket
+  close firstSocket
+  close secondSocket
+  case (firstAddress, secondAddress) of
+    (SockAddrInet firstPort _, SockAddrInet secondPort _)
+      | firstPort /= secondPort -> action (fromIntegral firstPort) (fromIntegral secondPort)
+    _ -> error "expected distinct IPv4 loopback reservation sockets"
 
 waitForProcessResponse :: ProcessHandle -> Int -> Text.Text -> IO Text.Text
 waitForProcessResponse processHandle port path =
