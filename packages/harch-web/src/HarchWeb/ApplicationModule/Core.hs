@@ -18,15 +18,17 @@ where
 
 import Data.List.NonEmpty (NonEmpty)
 import Data.Text qualified as Text
-import HarchWeb.Action (ActionCodec, actionEndpointMetadata, actionEndpointTarget, decodeAction)
+import HarchWeb.Action (ActionCodec, actionEndpointMetadata, actionEndpointTarget, declaredActionEndpointMetadata, decodeAction)
 import HarchWeb.EndpointSecurity
   ( ApplicationSecurity (..),
+    AuthenticationProfileResolutionError,
     EndpointGuard,
+    validateAuthenticationProfileRequirements,
   )
 import HarchWeb.Routing (RouteCodec)
 import HarchWeb.SecurityEvent (ModuleName)
 import HarchWeb.Server.Response (ClientActionRequest (..), ClientActionResult)
-import HarchWeb.Site (RouteDefinition, Site (..))
+import HarchWeb.Site (RouteDefinition (routeMetadata), Site (..))
 import HarchWeb.Site qualified as Site
 
 -- | A reusable application module. It deliberately omits listener/runtime,
@@ -75,6 +77,8 @@ inheritApplicationModuleGuards rootSecurity applicationModule =
     AuthenticationDisabled rootGuards -> AuthenticationDisabled (rootGuards <> moduleGuards applicationModule)
     AuthenticationEnabled beforeGuards authentication afterGuards ->
       AuthenticationEnabled beforeGuards authentication (afterGuards <> moduleGuards applicationModule)
+    AuthenticationProfiles beforeGuards profiles defaultProfile afterGuards ->
+      AuthenticationProfiles beforeGuards profiles defaultProfile (afterGuards <> moduleGuards applicationModule)
 
 -- | Install one already-composed module in the existing server-owning root.
 -- The root keeps its deployment, request, shell, and reporting policy; only
@@ -109,32 +113,50 @@ applicationModuleSite ::
   ApplicationModule route actionTarget action context authorization ->
   Site route action context authorization
 applicationModuleSite siteName defaultContext rootSecurity applicationModule =
-  attachApplicationModuleFeatures
-    applicationModule
-    ( Site.apiOnlySite
-        siteName
-        defaultContext
-        (moduleRouteCodec applicationModule)
-        rootSecurity
-        (moduleEndpoints applicationModule)
-    )
+  requiredModuleConfiguration (validateApplicationModuleProfiles rootSecurity applicationModule) `seq`
+    attachApplicationModuleFeatures
+      applicationModule
+      ( Site.apiOnlySite
+          siteName
+          defaultContext
+          (moduleRouteCodec applicationModule)
+          rootSecurity
+          (moduleEndpoints applicationModule)
+      )
 
 attachApplicationModuleFeatures ::
   ApplicationModule route actionTarget action context authorization ->
   Site route action context authorization ->
   Site route action context authorization
 attachApplicationModuleFeatures applicationModule site =
-  site
-    { siteClientActionEndpointMetadata = \methodValue pathValue requestContext ->
-        actionEndpointMetadata (moduleActionCodec applicationModule) requestContext methodValue pathValue,
-      siteClientActionRoute = \methodValue pathValue requestContext -> do
-        actionTarget <- actionEndpointTarget (moduleActionCodec applicationModule) requestContext methodValue pathValue
-        moduleActionRoute applicationModule requestContext actionTarget,
-      siteDecodeClientAction = decodeAction (moduleActionCodec applicationModule),
-      siteHandleClientAction = moduleHandleAction applicationModule,
-      siteRouteModuleChain = Just (moduleRouteMountChain applicationModule),
-      siteSecurity = inheritApplicationModuleGuards (siteSecurity site) applicationModule
-    }
+  requiredModuleConfiguration (validateApplicationModuleProfiles (siteSecurity site) applicationModule) `seq`
+    site
+      { siteClientActionEndpointMetadata = \methodValue pathValue requestContext ->
+          actionEndpointMetadata (moduleActionCodec applicationModule) requestContext methodValue pathValue,
+        siteClientActionRoute = \methodValue pathValue requestContext -> do
+          actionTarget <- actionEndpointTarget (moduleActionCodec applicationModule) requestContext methodValue pathValue
+          moduleActionRoute applicationModule requestContext actionTarget,
+        siteDecodeClientAction = decodeAction (moduleActionCodec applicationModule),
+        siteHandleClientAction = moduleHandleAction applicationModule,
+        siteRouteModuleChain = Just (moduleRouteMountChain applicationModule),
+        siteSecurity = inheritApplicationModuleGuards (siteSecurity site) applicationModule
+      }
+
+-- | Validate every route and action declaration known to a module before it
+-- joins a root. This is the construction boundary for scoped profiles: a
+-- protected declaration with no enabled resolved profile cannot become a
+-- request-time anonymous fallback. The root remains responsible for any
+-- independently declared route families it installs beside this module.
+validateApplicationModuleProfiles :: ApplicationSecurity route context authorization -> ApplicationModule route actionTarget action context authorization -> Either AuthenticationProfileResolutionError ()
+validateApplicationModuleProfiles security applicationModule =
+  case security of
+    AuthenticationProfiles {} ->
+      validateAuthenticationProfileRequirements
+        security
+        ( fmap (routeMetadata . moduleEndpoints applicationModule) (moduleDeclaredRoutes applicationModule)
+            <> declaredActionEndpointMetadata (moduleActionCodec applicationModule)
+        )
+    _ -> Right ()
 
 -- | Resolve a declaration-time construction result. A composition root uses
 -- this only for literals and fixed module declarations it owns; failure is an

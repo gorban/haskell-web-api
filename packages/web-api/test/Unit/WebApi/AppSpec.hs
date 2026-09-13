@@ -70,6 +70,7 @@ spec = do
       case HarchWeb.applicationSecurity application of
         HarchWeb.AuthenticationDisabled guards -> length guards `shouldBe` 0
         HarchWeb.AuthenticationEnabled {} -> expectationFailure "expected the explicitly supplied disabled security policy"
+        HarchWeb.AuthenticationProfiles {} -> expectationFailure "expected the explicitly supplied disabled security policy"
       expectedResponse <- selectResponse defaultAppConfig secondRequest
       actualResponse <- HarchWeb.renderResponse application secondRequest
       assertRenderedPageResult expectedResponse actualResponse

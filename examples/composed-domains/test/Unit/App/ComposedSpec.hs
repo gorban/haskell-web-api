@@ -35,7 +35,7 @@ import HarchWeb.EndpointMetadata
     routeTemplateText,
   )
 import HarchWeb.EndpointSecurity
-  ( ApplicationSecurity (AuthenticationDisabled, AuthenticationEnabled),
+  ( ApplicationSecurity (AuthenticationDisabled, AuthenticationEnabled, AuthenticationProfiles),
     AuthenticationGuard (..),
     EndpointDispatchKind (EndpointMatched, EndpointOptions),
     EndpointGuard (..),
@@ -513,6 +513,7 @@ spec = describe "Unit.App.Composed" $ do
       AuthenticationDisabled [] -> pure ()
       AuthenticationDisabled _ -> expectationFailure "expected no additional public guards"
       AuthenticationEnabled {} -> expectationFailure "expected the supplied public security policy"
+      AuthenticationProfiles {} -> expectationFailure "expected the supplied public security policy"
 
   it "places durable admission before account authentication without weakening the public route matrix" $ do
     let admissionPrincipalId = requiredCsrf "admission principal id" (mkAdmissionPrincipalId "beta-operator")

@@ -3358,6 +3358,30 @@ page-route callback. `staticAssetRouteDefinition` is layered on the same
 operation, keeping the ordinary route-table path and the composed adapter
 semantically identical.
 
+### Decision record — AHI-4D slice 1: scoped profile selection (2026-09-12)
+
+**Decision: extend endpoint metadata, typed module mounts, and the existing
+post-match authentication rail with root-owned named profiles.** An endpoint
+may name a validated profile identity; otherwise a mount supplies its family
+selection, and otherwise the application default applies. The root alone
+owns the profile registry and the guards it contains. A mounted package can
+therefore request a profile without receiving keys, stores, raw credentials,
+or a way to install WAI middleware.
+
+The registry permits an explicitly anonymous default alongside named enabled
+profiles. Anonymous selection is non-terminal: a protected descendant must
+select an enabled profile, and construction validation rejects both an unknown
+selection and any protected declaration that still resolves to anonymous.
+The request executor repeats this failure-closed check before it runs a guard
+as protection against an improperly assembled low-level application value.
+
+This extends the one selected-owner/post-match guard pipeline: route matching,
+HEAD/OPTIONS/405 behavior, action admission, body reading, and response
+rendering keep their existing owners. The follow-up AHI-4D slices add concrete
+cookie/bearer extraction, CSRF transport selection, OAuth, and durable
+API-client establishment to the selected guard; this slice supplies only
+profile precedence and capability injection.
+
 ### Decision record — AHI-4C: bounded page-security and JWT-claim rails (2026-09-04)
 
 **Decision: preserve the existing one-page-rendering and one-JWT-verification

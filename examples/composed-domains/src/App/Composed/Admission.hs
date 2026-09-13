@@ -170,6 +170,8 @@ applyAdmissionPolicy policy applicationSecurity =
         AuthenticationDisabled _ -> Left AdmissionRequiresConfiguredAuthentication
         AuthenticationEnabled beforeGuards accountAuthentication afterGuards ->
           Right (AuthenticationEnabled (admissionGuard config : beforeGuards) accountAuthentication afterGuards)
+        AuthenticationProfiles beforeGuards profiles defaultProfile afterGuards ->
+          Right (AuthenticationProfiles (admissionGuard config : beforeGuards) profiles defaultProfile afterGuards)
 
 admissionRequirement :: RootRoute -> AdmissionRequirement
 admissionRequirement (Localized _ localRoute) =

@@ -7,6 +7,7 @@ import Control.Exception (ErrorCall (..), evaluate, try)
 import Control.Monad (forM_)
 import Data.ByteString.Char8 qualified as ByteString
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import Data.List (isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (isNothing)
 import Data.Text (Text)
@@ -177,6 +178,45 @@ spec =
           guardResult `shouldBe` ContinueEndpoint 42
           readIORef guardContext `shouldReturn` Just "tenant-42"
         _ -> expectationFailure "expected exactly one mounted guard"
+
+    it "applies a mount profile unless a child endpoint selected a more specific profile" $ do
+      let mountProfile = requiredAuthenticationProfileNameOrDie "api"
+          endpointProfile = requiredAuthenticationProfileNameOrDie "webhook"
+          childModule =
+            (buildChildModule (error "action context is not used") (error "guard context is not used"))
+              { moduleEndpoints =
+                  \childRoute ->
+                    (childDefinition childRoute)
+                      { routeMetadata = withAuthenticationProfile endpointProfile (routeMetadata (childDefinition childRoute))
+                      }
+              }
+      inheritedModule <- requireMountedModule (testModuleMount {mountedAuthenticationProfile = Just mountProfile}) (buildChildModule (error "action context is not used") (error "guard context is not used"))
+      overriddenModule <- requireMountedModule (testModuleMount {mountedAuthenticationProfile = Just mountProfile}) childModule
+      endpointAuthenticationProfile (routeMetadata (moduleEndpoints inheritedModule (CatalogRoute ChildItemRoute))) `shouldBe` Just mountProfile
+      endpointAuthenticationProfile (routeMetadata (moduleEndpoints overriddenModule (CatalogRoute ChildItemRoute))) `shouldBe` Just endpointProfile
+
+    it "rejects a protected module declaration whose resolved profile is anonymous" $ do
+      let publicProfile = requiredAuthenticationProfileNameOrDie "public"
+          configuredSecurity =
+            mkAuthenticationProfiles
+              []
+              (mkAuthenticationProfile publicProfile Nothing :| [])
+              publicProfile
+              []
+      security <-
+        case configuredSecurity of
+          Left configurationError -> expectationFailure (show configurationError) >> fail "could not construct profile registry"
+          Right profileSecurity -> pure profileSecurity
+      evaluate
+        ( applicationModuleSite
+            "profiled"
+            "tenant"
+            security
+            (buildChildModule (error "action context is not used") (error "guard context is not used"))
+            `seq` ()
+        )
+        `shouldThrow` \case
+          ErrorCall message -> "ProtectedEndpointWithoutAuthenticationProfile" `isInfixOf` message
 
     it "rejects endpoint identities made invalid by a mount namespace" $ do
       actionContext <- newIORef Nothing
@@ -471,6 +511,7 @@ spec =
           runEndpointGuardPipeline guards endpointRequest `shouldReturn` ContinueEndpoint "tenant"
           readIORef guardOrder `shouldReturn` ["public-root", "child"]
         AuthenticationEnabled {} -> expectationFailure "expected public root security"
+        AuthenticationProfiles {} -> expectationFailure "expected public root security"
       writeIORef guardOrder []
       case inheritApplicationModuleGuards (AuthenticationEnabled [recordGuard "before"] authentication [recordGuard "after"]) childModule of
         AuthenticationEnabled beforeGuards configuredAuthentication afterGuards -> do
@@ -478,6 +519,7 @@ spec =
           runEndpointGuardPipeline enabledGuards endpointRequest `shouldReturn` ContinueEndpoint "tenant"
           readIORef guardOrder `shouldReturn` ["before", "authentication", "after", "child"]
         AuthenticationDisabled {} -> expectationFailure "expected enabled root security"
+        AuthenticationProfiles {} -> expectationFailure "expected enabled root security"
 
     it "keeps one module executable through root composition and rejects duplicate module identities" $ do
       actionContext <- newIORef Nothing
@@ -546,9 +588,11 @@ spec =
       case Site.siteSecurity directModuleSite of
         AuthenticationDisabled guards -> length guards `shouldBe` 1
         AuthenticationEnabled {} -> expectationFailure "expected the direct public root security to stay public"
+        AuthenticationProfiles {} -> expectationFailure "expected the direct public root security to stay public"
       case Site.siteSecurity installedSite of
         AuthenticationDisabled guards -> length guards `shouldBe` 1
         AuthenticationEnabled {} -> expectationFailure "expected the public root security to stay public"
+        AuthenticationProfiles {} -> expectationFailure "expected the public root security to stay public"
       actionResult <-
         moduleHandleAction
           rootModule
@@ -815,7 +859,8 @@ testModuleMount =
               ParentOtherAction -> Nothing
           },
       mountedContext = ContextProjection (\parentContext -> "tenant-" <> showText parentContext),
-      mountedAuthorization = AuthorizationProjection (\ChildCanSave -> ParentCanSave)
+      mountedAuthorization = AuthorizationProjection (\ChildCanSave -> ParentCanSave),
+      mountedAuthenticationProfile = Nothing
     }
 
 buildChildModule :: IORef (Maybe Text) -> IORef (Maybe Text) -> ApplicationModule ChildRoute ChildActionTarget ChildAction Text ChildAuthorization

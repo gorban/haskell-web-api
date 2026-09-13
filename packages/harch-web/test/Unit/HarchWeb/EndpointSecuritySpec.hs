@@ -29,7 +29,10 @@ spec = do
                  mkRouteTemplate "" `shouldBe` Left EmptyRouteTemplate,
                  mkRouteTemplate ("/" <> Text.replicate 256 "a") `shouldBe` Left RouteTemplateTooLong,
                  mkRouteTemplate "/orders?customer=42" `shouldBe` Left InvalidRouteTemplate,
-                 mkRouteTemplate "orders" `shouldBe` Left InvalidRouteTemplate
+                 mkRouteTemplate "orders" `shouldBe` Left InvalidRouteTemplate,
+                 mkAuthenticationProfileName "" `shouldBe` Left EmptyAuthenticationProfileName,
+                 mkAuthenticationProfileName (Text.replicate 129 "a") `shouldBe` Left AuthenticationProfileNameTooLong,
+                 mkAuthenticationProfileName "api/v1" `shouldBe` Left InvalidAuthenticationProfileName
                ]
         )
 
@@ -42,12 +45,17 @@ spec = do
       evaluate (requiredRouteTemplateOrDie "/orders?customer=42" `seq` ())
         `shouldThrow` \case
           ErrorCall message -> "invalid route template" `isInfixOf` message && "InvalidRouteTemplate" `isInfixOf` message
+      evaluate (requiredAuthenticationProfileNameOrDie "api/v1" `seq` ())
+        `shouldThrow` \case
+          ErrorCall message -> "invalid authentication profile name" `isInfixOf` message && "InvalidAuthenticationProfileName" `isInfixOf` message
 
     it "keeps declared metadata typed and inspectable without request values" $ do
       let endpointNameValue = requiredEndpointName "orders.order-detail"
           routeTemplateValue = requiredRouteTemplate "/{locale}/orders/{orderId}"
           otherEndpointName = requiredEndpointName "orders.order-list"
           otherRouteTemplate = requiredRouteTemplate "/{locale}/orders"
+          profileNameValue = requiredAuthenticationProfileNameOrDie "api"
+          otherProfileName = requiredAuthenticationProfileNameOrDie "webhook"
           metadata :: EndpointMetadata EndpointSecurityPolicy
           metadata = mkEndpointMetadata endpointNameValue routeTemplateValue HtmlEndpoint AllowUnauthenticated
           otherMetadata = mkEndpointMetadata otherEndpointName otherRouteTemplate ApiEndpoint RequireAuthenticated
@@ -81,6 +89,15 @@ spec = do
                  min routeTemplateValue otherRouteTemplate `shouldBe` otherRouteTemplate,
                  hasDerivedContract [endpointNameValue, otherEndpointName] `shouldBe` True,
                  hasDerivedContract [routeTemplateValue, otherRouteTemplate] `shouldBe` True,
+                 hasDerivedContract [profileNameValue, otherProfileName] `shouldBe` True,
+                 authenticationProfileNameText profileNameValue `shouldBe` "api",
+                 compare profileNameValue otherProfileName `shouldBe` LT,
+                 profileNameValue < otherProfileName `shouldBe` True,
+                 profileNameValue <= profileNameValue `shouldBe` True,
+                 otherProfileName > profileNameValue `shouldBe` True,
+                 otherProfileName >= otherProfileName `shouldBe` True,
+                 max profileNameValue otherProfileName `shouldBe` otherProfileName,
+                 min profileNameValue otherProfileName `shouldBe` profileNameValue,
                  hasDerivedContract protocols `shouldBe` True,
                  hasDerivedContract requirements `shouldBe` True,
                  hasDerivedContract errors `shouldBe` True,
@@ -145,6 +162,106 @@ spec = do
                ]
         )
 
+    it "resolves a protected descendant through an enabled profile beneath an anonymous default" $ do
+      let publicProfile = requiredAuthenticationProfileNameOrDie "public"
+          apiProfile = requiredAuthenticationProfileNameOrDie "api"
+          authenticated = AuthenticationGuard (const (pure (ContinueEndpoint defaultContext)))
+          profiles =
+            mkAuthenticationProfiles
+              []
+              (mkAuthenticationProfile publicProfile Nothing :| [mkAuthenticationProfile apiProfile (Just authenticated)])
+              publicProfile
+              []
+          publicEndpoint = mkEndpointMetadata (requiredEndpointName "test.public") (requiredRouteTemplate "/public") ApiEndpoint AllowUnauthenticated
+          protectedEndpoint = withAuthenticationProfile apiProfile (mkEndpointMetadata (requiredEndpointName "test.api") (requiredRouteTemplate "/api") ApiEndpoint RequireAuthenticated)
+      security <-
+        case profiles of
+          Left configurationError -> expectationFailure (show configurationError) >> fail "could not construct profile registry"
+          Right configuredSecurity -> pure configuredSecurity
+      let resolvedPublic = resolveAuthenticationProfile security publicEndpoint
+          resolvedProtected = resolveAuthenticationProfile security protectedEndpoint
+      expectAll
+        ( (either (const False) isNothing resolvedPublic `shouldBe` True)
+            :| [ either (const True) isNothing resolvedProtected `shouldBe` False,
+                 validateAuthenticationProfileRequirements security [publicEndpoint, protectedEndpoint] `shouldBe` Right (),
+                 validateAuthenticationProfileRequirements security [publicEndpoint {endpointAccess = RequireAuthenticated}]
+                   `shouldBe` Left (ProtectedEndpointWithoutAuthenticationProfile (requiredEndpointName "test.public")),
+                 validateAuthenticationProfileRequirements security [withAuthenticationProfile (requiredAuthenticationProfileNameOrDie "missing") protectedEndpoint]
+                   `shouldBe` Left (UnknownAuthenticationProfile (requiredAuthenticationProfileNameOrDie "missing"))
+               ]
+        )
+
+    it "keeps profile registries in the existing security-phase API without accepting legacy overrides" $ do
+      let publicProfile = requiredAuthenticationProfileNameOrDie "public"
+          apiProfile = requiredAuthenticationProfileNameOrDie "api"
+          missingProfile = requiredAuthenticationProfileNameOrDie "missing"
+          preGuard = EndpointGuard (const (pure (ContinueEndpoint defaultContext)))
+          authenticate = AuthenticationGuard (const (pure (ContinueEndpoint defaultContext)))
+          postGuard = EndpointGuard (const (pure (ContinueEndpoint defaultContext)))
+          configuredProfiles =
+            mkAuthenticationProfiles
+              [preGuard]
+              (mkAuthenticationProfile publicProfile Nothing :| [mkAuthenticationProfile apiProfile (Just authenticate)])
+              publicProfile
+              [postGuard]
+          legacyDisabled = AuthenticationDisabled []
+          legacyEnabled = AuthenticationEnabled [] authenticate []
+          publicEndpoint = mkEndpointMetadata (requiredEndpointName "test.public") (requiredRouteTemplate "/public") ApiEndpoint AllowUnauthenticated
+          authorizedPublicEndpoint = publicEndpoint {endpointAccess = RequireAuthorized ReadData}
+          authorizedApiEndpoint = withAuthenticationProfile apiProfile (mkEndpointMetadata (requiredEndpointName "test.api-admin") (requiredRouteTemplate "/api-admin") ApiEndpoint (RequireAuthorized ReadData))
+      security <-
+        case configuredProfiles of
+          Left configurationError -> expectationFailure (show configurationError) >> fail "could not construct profile registry"
+          Right configuredSecurity -> pure configuredSecurity
+      expectAll
+        ( (length (unauthenticatedApplicationGuards security) `shouldBe` 0)
+            :| [ length (beforeAuthenticationGuards security) `shouldBe` 1,
+                 isNothing (authenticationGuard security) `shouldBe` True,
+                 length (afterAuthenticationGuards security) `shouldBe` 1,
+                 profileResolutionError (resolveAuthenticationProfile legacyDisabled (withAuthenticationProfile missingProfile publicEndpoint))
+                   `shouldBe` Just (UnknownAuthenticationProfile missingProfile),
+                 profileResolutionError (resolveAuthenticationProfile legacyEnabled (withAuthenticationProfile missingProfile publicEndpoint))
+                   `shouldBe` Just (UnknownAuthenticationProfile missingProfile),
+                 profileRequirementsAreValid security [publicEndpoint],
+                 profileRequirementsAreValid security [authorizedApiEndpoint],
+                 profileResolutionError
+                   ( validateAuthenticationProfileRequirements
+                       security
+                       [ publicEndpoint,
+                         withAuthenticationProfile missingProfile authorizedApiEndpoint
+                       ]
+                   )
+                   `shouldBe` Just (UnknownAuthenticationProfile missingProfile),
+                 profileResolutionError (validateAuthenticationProfileRequirements security [authorizedPublicEndpoint])
+                   `shouldBe` Just (ProtectedEndpointWithoutAuthenticationProfile (requiredEndpointName "test.public")),
+                 hasDerivedContract
+                   [ DuplicateAuthenticationProfile publicProfile,
+                     MissingDefaultAuthenticationProfile apiProfile
+                   ]
+                   `shouldBe` True,
+                 hasDerivedContract
+                   [ UnknownAuthenticationProfile missingProfile,
+                     ProtectedEndpointWithoutAuthenticationProfile (requiredEndpointName "test.protected")
+                   ]
+                   `shouldBe` True
+               ]
+        )
+
+    it "rejects duplicate registries and defaults that are not configured" $ do
+      let publicProfile = requiredAuthenticationProfileNameOrDie "public"
+          otherProfile = requiredAuthenticationProfileNameOrDie "other"
+          duplicate = mkAuthenticationProfile publicProfile Nothing
+      expectAll
+        ( ( profileConfigurationError (mkAuthenticationProfiles [] (duplicate :| [duplicate]) publicProfile [])
+              `shouldBe` Just (DuplicateAuthenticationProfile publicProfile)
+          )
+            :| [ profileConfigurationError (mkAuthenticationProfiles [] (duplicate :| []) otherProfile [])
+                   `shouldBe` Just (MissingDefaultAuthenticationProfile otherProfile),
+                 mkAuthenticationProfileName "api/v1" `shouldBe` Left InvalidAuthenticationProfileName,
+                 authenticationProfileNameText publicProfile `shouldBe` "public"
+               ]
+        )
+
 requiredEndpointName :: Text.Text -> EndpointName
 requiredEndpointName endpointNameValue =
   case mkEndpointName endpointNameValue of
@@ -183,6 +300,18 @@ requiredAuthenticationGuard maybeGuard =
   case maybeGuard of
     Just guard -> guard
     Nothing -> error "expected configured authentication guard"
+
+profileConfigurationError :: Either AuthenticationProfileConfigurationError value -> Maybe AuthenticationProfileConfigurationError
+profileConfigurationError = either Just (const Nothing)
+
+profileResolutionError :: Either AuthenticationProfileResolutionError value -> Maybe AuthenticationProfileResolutionError
+profileResolutionError = either Just (const Nothing)
+
+profileRequirementsAreValid :: ApplicationSecurity TestRoute TestContext EndpointSecurityPolicy -> [EndpointMetadata EndpointSecurityPolicy] -> Expectation
+profileRequirementsAreValid security metadata =
+  case validateAuthenticationProfileRequirements security metadata of
+    Right unit -> evaluate unit
+    Left resolutionError -> expectationFailure (show resolutionError)
 
 hasDerivedContract :: (Eq value, Show value) => [value] -> Bool
 hasDerivedContract values =

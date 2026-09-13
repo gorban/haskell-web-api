@@ -24,6 +24,7 @@ import HarchWeb.ApplicationModule.Core (ApplicationModule (..))
 import HarchWeb.Document (Page (..))
 import HarchWeb.EndpointMetadata
   ( AccessRequirement (..),
+    AuthenticationProfileName,
     EndpointMetadata (..),
     EndpointMetadataError,
     endpointNameText,
@@ -31,6 +32,7 @@ import HarchWeb.EndpointMetadata
     mkEndpointName,
     mkRouteTemplate,
     routeTemplateText,
+    withAuthenticationProfile,
   )
 import HarchWeb.EndpointSecurity
   ( EndpointGuard (..),
@@ -97,13 +99,16 @@ data RouteMount parent child = RouteMount
   }
 
 -- | All typed mappings required to adapt a child application module to a
--- parent route/action/context/policy algebra.  This value intentionally has
--- no authentication or listener field: those capabilities remain root-owned.
+-- parent route/action/context/policy algebra. The optional profile name is a
+-- mount-family selection only: root composition owns the corresponding guard
+-- and deployment capabilities, while a child's explicit endpoint selection
+-- remains more specific.
 data ModuleMount parentRoute parentTarget parentAction parentContext parentAuthorization childRoute childTarget childAction childContext childAuthorization = ModuleMount
   { mountedRoutes :: RouteMount parentRoute childRoute,
     mountedActions :: ActionMount parentTarget parentAction childTarget childAction,
     mountedContext :: ContextProjection parentContext childContext,
-    mountedAuthorization :: AuthorizationProjection parentAuthorization childAuthorization
+    mountedAuthorization :: AuthorizationProjection parentAuthorization childAuthorization,
+    mountedAuthenticationProfile :: Maybe AuthenticationProfileName
   }
 
 -- | Construction failures while adapting a child module's declared endpoint
@@ -128,7 +133,7 @@ mountApplicationModule moduleMount childModule = do
       contextProjection = mountedContext moduleMount
       authorizationProjection = mountedAuthorization moduleMount
       actionMount = mountedActions moduleMount
-  let metadataMapper = mountedMetadataMapper routeMount authorizationProjection
+  let metadataMapper = mountedMetadataMapper routeMount authorizationProjection (mountedAuthenticationProfile moduleMount)
   traverse_ (metadataMapper . routeMetadata . moduleEndpoints childModule) (moduleDeclaredRoutes childModule)
   mountedActionCodec <-
     either (Left . InvalidMountedActionCodec) Right $
@@ -182,19 +187,23 @@ mountApplicationModule moduleMount childModule = do
 mountedMetadataMapper ::
   RouteMount parentRoute childRoute ->
   AuthorizationProjection parentAuthorization childAuthorization ->
+  Maybe AuthenticationProfileName ->
   EndpointMetadata childAuthorization ->
   Either ModuleMountError (EndpointMetadata parentAuthorization)
-mountedMetadataMapper routeMount (AuthorizationProjection projectAuthorization) metadata =
+mountedMetadataMapper routeMount (AuthorizationProjection projectAuthorization) mountedProfile metadata =
   let mountNamePrefix = moduleNameText (routeMountName routeMount)
       mountPath = safeUrlText (encodeRouteLocation (RouteLocation (NonEmpty.toList (routeMountPrefix routeMount)) []))
    in case (mkEndpointName (mountNamePrefix <> "." <> endpointNameText (endpointName metadata)), mkRouteTemplate (mountPath <> childSuffix (routeTemplateText (endpointRouteTemplate metadata)))) of
         (Right mountedName, Right mountedTemplate) ->
           Right
-            ( mkEndpointMetadata
-                mountedName
-                mountedTemplate
-                (endpointProtocol metadata)
-                (mapAccessRequirement projectAuthorization (endpointAccess metadata))
+            ( applyMountedProfile
+                mountedProfile
+                ( mkEndpointMetadata
+                    mountedName
+                    mountedTemplate
+                    (endpointProtocol metadata)
+                    (mapAccessRequirement projectAuthorization (endpointAccess metadata))
+                )
             )
         (Left endpointError, _) -> Left (InvalidMountedEndpointMetadata endpointError)
         (_, Left routeError) -> Left (InvalidMountedEndpointMetadata routeError)
@@ -202,6 +211,11 @@ mountedMetadataMapper routeMount (AuthorizationProjection projectAuthorization) 
     childSuffix childTemplate
       | childTemplate == "/" = Text.empty
       | otherwise = childTemplate
+
+    applyMountedProfile profile mappedMetadata =
+      case endpointAuthenticationProfile metadata of
+        Just endpointProfile -> withAuthenticationProfile endpointProfile mappedMetadata
+        Nothing -> maybe mappedMetadata (`withAuthenticationProfile` mappedMetadata) profile
 
 mapAccessRequirement ::
   (childAuthorization -> parentAuthorization) ->

@@ -51,7 +51,8 @@ catalogModuleMount =
               _ -> Nothing
           },
       mountedContext = ContextProjection catalogContext,
-      mountedAuthorization = AuthorizationProjection catalogAuthorization
+      mountedAuthorization = AuthorizationProjection catalogAuthorization,
+      mountedAuthenticationProfile = Nothing
     }
 
 ordersModuleMount :: ModuleMount LocalizedRoute RootActionTarget RootAction ComposedContext RootAuthorization OrdersRoute OrdersActionTarget OrdersAction OrdersContext OrdersPolicy
@@ -78,7 +79,8 @@ ordersModuleMount =
               _ -> Nothing
           },
       mountedContext = ContextProjection ordersContext,
-      mountedAuthorization = AuthorizationProjection ordersAuthorization
+      mountedAuthorization = AuthorizationProjection ordersAuthorization,
+      mountedAuthenticationProfile = Nothing
     }
 
 catalogContext :: ComposedContext -> CatalogContext

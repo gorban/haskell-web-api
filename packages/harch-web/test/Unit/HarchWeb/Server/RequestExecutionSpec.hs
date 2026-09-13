@@ -284,6 +284,40 @@ spec =
                ]
         )
 
+    it "runs the enabled profile selected by a protected endpoint beneath an anonymous default" $ do
+      guardRuns <- newIORef (0 :: Int)
+      let publicProfile = HarchWeb.requiredAuthenticationProfileNameOrDie "public"
+          apiProfile = HarchWeb.requiredAuthenticationProfileNameOrDie "api"
+          configuredSecurity =
+            fromRight
+              (error "invalid profile test declaration")
+              ( HarchWeb.mkAuthenticationProfiles
+                  []
+                  ( HarchWeb.mkAuthenticationProfile publicProfile Nothing
+                      :| [ HarchWeb.mkAuthenticationProfile
+                             apiProfile
+                             ( Just
+                                 ( HarchWeb.AuthenticationGuard $ \request -> do
+                                     modifyIORef' guardRuns (+ 1)
+                                     pure (HarchWeb.ContinueEndpoint (requestContext (HarchWeb.endpointRouteRequest request)))
+                                 )
+                             )
+                         ]
+                  )
+                  publicProfile
+                  []
+              )
+          profiledApplication =
+            sampleApplication
+              { HarchWeb.applicationSecurity = configuredSecurity,
+                HarchWeb.routeEndpointMetadata = const (HarchWeb.withAuthenticationProfile apiProfile protectedEndpointMetadata)
+              }
+      response <- performWaiRequest (toWaiApplication profiledApplication) (waiRequest ["known"])
+      expectAll
+        ( (Wai.responseStatus response `shouldBe` Http.status200)
+            :| [readIORef guardRuns `shouldReturn` 1]
+        )
+
     it "passes every selected route protocol form to an enabled endpoint guard" $ do
       observedDispatchKinds <- newIORef []
       let guardedApplication =

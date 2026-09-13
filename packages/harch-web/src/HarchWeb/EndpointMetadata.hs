@@ -5,18 +5,23 @@
 -- carry the same metadata without making action decoding depend on guards.
 module HarchWeb.EndpointMetadata
   ( AccessRequirement (..),
+    AuthenticationProfileName,
     EndpointMetadata (..),
     EndpointMetadataError (..),
     EndpointName,
     EndpointProtocol (..),
     RouteTemplate,
+    authenticationProfileNameText,
     endpointNameText,
+    mkAuthenticationProfileName,
     mkEndpointMetadata,
     mkEndpointName,
     mkRouteTemplate,
+    requiredAuthenticationProfileNameOrDie,
     requiredEndpointNameOrDie,
     requiredRouteTemplateOrDie,
     routeTemplateText,
+    withAuthenticationProfile,
   )
 where
 
@@ -43,6 +48,15 @@ newtype EndpointName = EndpointName Text
 endpointNameText :: EndpointName -> Text
 endpointNameText (EndpointName value) = value
 
+-- | A construction-owned name for one configured authentication profile.
+-- Endpoint declarations may select a profile; an absent value inherits the
+-- mounted family or application selection. Request text never creates it.
+newtype AuthenticationProfileName = AuthenticationProfileName Text
+  deriving (Eq, Ord, Show)
+
+authenticationProfileNameText :: AuthenticationProfileName -> Text
+authenticationProfileNameText (AuthenticationProfileName value) = value
+
 newtype RouteTemplate = RouteTemplate Text
   deriving (Eq, Ord, Show)
 
@@ -56,6 +70,9 @@ data EndpointMetadataError
   | EmptyRouteTemplate
   | RouteTemplateTooLong
   | InvalidRouteTemplate
+  | EmptyAuthenticationProfileName
+  | AuthenticationProfileNameTooLong
+  | InvalidAuthenticationProfileName
   deriving (Eq, Show)
 
 mkEndpointName :: Text -> Either EndpointMetadataError EndpointName
@@ -64,9 +81,23 @@ mkEndpointName value
   | Text.length value > 128 = Left EndpointNameTooLong
   | Text.all endpointNameCharacter value = Right (EndpointName value)
   | otherwise = Left InvalidEndpointName
-  where
-    endpointNameCharacter character =
-      isAsciiLower character || isDigit character || character == '.' || character == '-'
+
+mkAuthenticationProfileName :: Text -> Either EndpointMetadataError AuthenticationProfileName
+mkAuthenticationProfileName value
+  | Text.null value = Left EmptyAuthenticationProfileName
+  | Text.length value > 128 = Left AuthenticationProfileNameTooLong
+  | Text.all endpointNameCharacter value = Right (AuthenticationProfileName value)
+  | otherwise = Left InvalidAuthenticationProfileName
+
+requiredAuthenticationProfileNameOrDie :: Text -> AuthenticationProfileName
+requiredAuthenticationProfileNameOrDie value =
+  case mkAuthenticationProfileName value of
+    Right profileName -> profileName
+    Left metadataError -> error ("HarchWeb.EndpointMetadata: invalid authentication profile name " <> show value <> ": " <> show metadataError)
+
+endpointNameCharacter :: Char -> Bool
+endpointNameCharacter character =
+  isAsciiLower character || isDigit character || character == '.' || character == '-'
 
 -- | Construct an endpoint name for a program-owned static declaration.
 --
@@ -109,9 +140,19 @@ data EndpointMetadata authorization = EndpointMetadata
   { endpointName :: EndpointName,
     endpointRouteTemplate :: RouteTemplate,
     endpointProtocol :: EndpointProtocol,
-    endpointAccess :: AccessRequirement authorization
+    endpointAccess :: AccessRequirement authorization,
+    -- | An endpoint-specific profile choice. 'Nothing' inherits the mounted
+    -- family choice, then the application default.
+    endpointAuthenticationProfile :: Maybe AuthenticationProfileName
   }
   deriving (Eq, Show)
 
 mkEndpointMetadata :: EndpointName -> RouteTemplate -> EndpointProtocol -> AccessRequirement authorization -> EndpointMetadata authorization
-mkEndpointMetadata = EndpointMetadata
+mkEndpointMetadata endpointNameValue routeTemplateValue protocol access =
+  EndpointMetadata endpointNameValue routeTemplateValue protocol access Nothing
+
+-- | Select a root-configured authentication profile for this endpoint. The
+-- declaration can name a profile but cannot receive its keys, stores, or
+-- authentication guard.
+withAuthenticationProfile :: AuthenticationProfileName -> EndpointMetadata authorization -> EndpointMetadata authorization
+withAuthenticationProfile profileName metadata = metadata {endpointAuthenticationProfile = Just profileName}

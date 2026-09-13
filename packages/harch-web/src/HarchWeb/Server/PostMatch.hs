@@ -37,6 +37,7 @@ import HarchWeb.EndpointSecurity
     EndpointGuardResult (..),
     EndpointMetadata (endpointAccess, endpointName, endpointRouteTemplate),
     EndpointRequest (..),
+    resolveAuthenticationProfile,
     runEndpointGuardPipeline,
   )
 import HarchWeb.RequestId (RequestId, requestIdText)
@@ -109,15 +110,17 @@ runPostMatchGuards webApplication requestId request requestPath routeDispatch mi
                     endpointSecurityEventSink = fmap (securityEventSink selectedMetadata observedRouteRequest) (applicationSecurityEventRoot webApplication),
                     endpointDispatchKind = if isAction then EndpointClientAction else routeDispatchKind
                   }
-           in case applicationSecurity webApplication of
-                AuthenticationDisabled _ ->
+           in case resolveAuthenticationProfile (applicationSecurity webApplication) selectedMetadata of
+                Left _ -> pure (HaltPostMatch (NonPageBodyResponse (disabledSecurityResponse requestId)))
+                Right Nothing ->
                   case endpointAccess (endpointMetadata endpointRequest) of
-                    AllowUnauthenticated -> runGuards endpointRequest
+                    AllowUnauthenticated -> runGuards [] endpointRequest
                     _ -> pure (HaltPostMatch (NonPageBodyResponse (disabledSecurityResponse requestId)))
-                _ -> runGuards endpointRequest
-    runGuards endpointRequest =
+                Right (Just selectedAuthentication) ->
+                  runGuards [EndpointGuard (runAuthenticationGuard selectedAuthentication)] endpointRequest
+    runGuards selectedAuthentication endpointRequest =
       toPostMatchGuardResult selectedAdmissionRoute
-        <$> runEndpointGuardPipeline (applicationEndpointGuards (applicationSecurity webApplication)) endpointRequest
+        <$> runEndpointGuardPipeline (applicationEndpointGuards (applicationSecurity webApplication) selectedAuthentication) endpointRequest
     securityEventSink selectedMetadata observedRouteRequest eventRoot =
       case applicationRouteModuleChain webApplication of
         Nothing -> rootSecurityEventSink eventRoot (endpointName selectedMetadata) (endpointRouteTemplate selectedMetadata) (requestContext observedRouteRequest)
@@ -147,10 +150,12 @@ disabledSecurityResponse requestId =
       responseDatabaseOperations = []
     }
 
-applicationEndpointGuards :: ApplicationSecurity route context authorization -> [EndpointGuard route context authorization]
-applicationEndpointGuards = \case
-  AuthenticationDisabled guards -> guards
-  AuthenticationEnabled beforeGuards (AuthenticationGuard runAuthentication) afterGuards -> beforeGuards <> [EndpointGuard runAuthentication] <> afterGuards
+applicationEndpointGuards :: ApplicationSecurity route context authorization -> [EndpointGuard route context authorization] -> [EndpointGuard route context authorization]
+applicationEndpointGuards applicationSecurity selectedAuthentication =
+  case applicationSecurity of
+    AuthenticationDisabled guards -> guards
+    AuthenticationEnabled beforeGuards _ afterGuards -> beforeGuards <> selectedAuthentication <> afterGuards
+    AuthenticationProfiles beforeGuards _ _ afterGuards -> beforeGuards <> selectedAuthentication <> afterGuards
 
 requestMethodText :: Wai.Request -> Text
 requestMethodText = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode . Wai.requestMethod
