@@ -4,6 +4,7 @@
 module WebApi.Route
   ( AppLocale (..),
     AppRequestContext (..),
+    RequestAuthenticationTransport (..),
     AppRoute
       ( Page,
         Api,
@@ -27,6 +28,7 @@ module WebApi.Route
     PageRoute (..),
     RouteMetadata (..),
     RouteSelectionError (..),
+    accountAuthenticationProfileName,
     defaultRequestContext,
     endpointMetadata,
     matchRoute,
@@ -83,9 +85,29 @@ data AppRequestContext = AppRequestContext
     requestPathPrefix :: HarchWeb.PathPrefix,
     requestQueryParameters :: [(Text, Text)],
     requestAccountPrincipal :: Maybe AccountPrincipal,
+    -- | The established account-JWT transport, never raw credential bytes.
+    -- It is set only by the post-match authentication rail and lets the
+    -- action lifecycle choose CSRF from the credential actually accepted.
+    requestAuthenticationTransport :: RequestAuthenticationTransport,
     requestMfaEnrollmentSessionId :: Maybe SessionId
   }
   deriving (Eq, Show)
+
+-- | The source(s) of a successfully established account credential. The
+-- cookie-participating cases remain distinct from bearer-only so an action
+-- cannot suppress CSRF merely because the same JWT was also sent explicitly.
+data RequestAuthenticationTransport
+  = NoRequestAuthentication
+  | AccountJwtFromCookie
+  | AccountJwtFromBearer
+  | AccountJwtFromCookieAndBearer
+  deriving (Eq, Show)
+
+-- | The production account profile owns cookie-or-bearer JWT admission. Only
+-- account-protected declarations select it; public declarations inherit the
+-- public root profile.
+accountAuthenticationProfileName :: HarchWeb.AuthenticationProfileName
+accountAuthenticationProfileName = HarchWeb.requiredAuthenticationProfileNameOrDie "account"
 
 data RouteSelectionError
   = UnsupportedLocalePrefix Text
@@ -218,6 +240,7 @@ defaultRequestContext =
       requestPathPrefix = HarchWeb.emptyPathPrefix,
       requestQueryParameters = [],
       requestAccountPrincipal = Nothing,
+      requestAuthenticationTransport = NoRequestAuthentication,
       requestMfaEnrollmentSessionId = Nothing
     }
 
@@ -439,7 +462,10 @@ endpointMetadata route =
     ApiNotFoundRoute -> api "api.not-found" "/api/404"
   where
     html = declaredMetadata HtmlEndpoint AllowUnauthenticated
-    protectedHtml = declaredMetadata HtmlEndpoint RequireAuthenticated
+    protectedHtml name template =
+      HarchWeb.withAuthenticationProfile
+        accountAuthenticationProfileName
+        (declaredMetadata HtmlEndpoint RequireAuthenticated name template)
     api = declaredMetadata ApiEndpoint AllowUnauthenticated
 
 declaredMetadata :: EndpointProtocol -> AccessRequirement () -> Text -> Text -> EndpointMetadata ()

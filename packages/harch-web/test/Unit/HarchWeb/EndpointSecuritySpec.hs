@@ -191,7 +191,7 @@ spec = do
                ]
         )
 
-    it "keeps profile registries in the existing security-phase API without accepting legacy overrides" $ do
+    it "keeps profile registries in the existing security-phase API while legacy policies retain their configured guard" $ do
       let publicProfile = requiredAuthenticationProfileNameOrDie "public"
           apiProfile = requiredAuthenticationProfileNameOrDie "api"
           missingProfile = requiredAuthenticationProfileNameOrDie "missing"
@@ -218,10 +218,10 @@ spec = do
             :| [ length (beforeAuthenticationGuards security) `shouldBe` 1,
                  isNothing (authenticationGuard security) `shouldBe` True,
                  length (afterAuthenticationGuards security) `shouldBe` 1,
-                 profileResolutionError (resolveAuthenticationProfile legacyDisabled (withAuthenticationProfile missingProfile publicEndpoint))
-                   `shouldBe` Just (UnknownAuthenticationProfile missingProfile),
-                 profileResolutionError (resolveAuthenticationProfile legacyEnabled (withAuthenticationProfile missingProfile publicEndpoint))
-                   `shouldBe` Just (UnknownAuthenticationProfile missingProfile),
+                 either (const False) isNothing (resolveAuthenticationProfile legacyDisabled (withAuthenticationProfile missingProfile publicEndpoint))
+                   `shouldBe` True,
+                 either (const True) isNothing (resolveAuthenticationProfile legacyEnabled (withAuthenticationProfile missingProfile publicEndpoint))
+                   `shouldBe` False,
                  profileRequirementsAreValid security [publicEndpoint],
                  profileRequirementsAreValid security [authorizedApiEndpoint],
                  profileResolutionError

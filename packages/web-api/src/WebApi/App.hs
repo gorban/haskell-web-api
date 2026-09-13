@@ -20,6 +20,14 @@
 -- narrower operation so it cannot commit the session without its required
 -- audit activity. Other selected audit-producing mutations remain AHI-5
 -- follow-up work.
+--
+-- Decision record (AHI-4D slice 2, 2026-09-13): production composition uses
+-- the root-owned public/account profile registry. Only protected account page
+-- and action declarations select the cookie-or-bearer JWT guard. The action
+-- CSRF selector receives that resolved declaration and its established source
+-- fact, so only bearer-only account requests omit CSRF; cookie and dual-source
+-- requests retain it. This extends the existing post-match/action lifecycle
+-- rather than adding a token-specific middleware or route matcher.
 module WebApi.App
   ( buildAppWithDatabase,
     buildAppWithDatabaseAndAccountWorkflow,
@@ -41,6 +49,7 @@ where
 import Control.Applicative ((<|>))
 import Control.Exception (bracket)
 import Data.ByteString qualified as ByteString
+import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.IO qualified as TextIO
@@ -81,6 +90,8 @@ import WebApi.Response (apiNotFoundResponse, renderLocale, selectResponseWithDat
 import WebApi.Route
   ( AppRequestContext (..),
     AppRoute (..),
+    RequestAuthenticationTransport (..),
+    accountAuthenticationProfileName,
     defaultRequestContext,
     endpointMetadata,
     requestContextFromWaiRequest,
@@ -178,54 +189,66 @@ buildAppWithDatabaseAndOptionalReportersAndSecurity ::
   HarchWeb.ApplicationSecurity AppRoute AppRequestContext () ->
   HarchWeb.Application AppRoute AccountAction AppRequestContext ()
 buildAppWithDatabaseAndOptionalReportersAndSecurity config pageRepository !accountWorkflow maybeReporters applicationSecurity =
-  Site.buildSiteApplication
-    ( configureReporters
-        ( ( Site.simpleSite
-              Site.SimpleSiteConfiguration
-                { Site.simpleSiteName = "web-api",
-                  Site.simpleSiteDefaultRequestContext = defaultRequestContext,
-                  Site.simpleSiteRouteCodec = routeCodec,
-                  Site.simpleSiteSecurity = applicationSecurity,
-                  Site.simpleSiteCsrfProtection = accountCsrfProtection accountWorkflow,
-                  Site.simpleSitePageShell = buildAppPageShellConfig config . HarchWeb.pageContext,
-                  Site.simpleSiteNavigationRoutes = appNavigationRoutes,
-                  Site.simpleSiteRouteDefinition = buildAppRouteDefinition config pageRepository accountWorkflow
-                }
+  ( Site.buildSiteApplication
+      ( configureReporters
+          ( ( Site.simpleSite
+                Site.SimpleSiteConfiguration
+                  { Site.simpleSiteName = "web-api",
+                    Site.simpleSiteDefaultRequestContext = defaultRequestContext,
+                    Site.simpleSiteRouteCodec = routeCodec,
+                    Site.simpleSiteSecurity = applicationSecurity,
+                    Site.simpleSiteCsrfProtection = accountCsrfProtection accountWorkflow,
+                    Site.simpleSitePageShell = buildAppPageShellConfig config . HarchWeb.pageContext,
+                    Site.simpleSiteNavigationRoutes = appNavigationRoutes,
+                    Site.simpleSiteRouteDefinition = buildAppRouteDefinition config pageRepository accountWorkflow
+                  }
+            )
+              { Site.siteRequestContextFromRequest =
+                  requestContextFromWaiRequest (requestPolicy config),
+                -- Decision (AHI-5, 2026-09-08): reuse Site's existing
+                -- post-match attribution boundary.  The root derives audit
+                -- route facts from declared metadata and locale, never a URL
+                -- or client-submitted value.
+                Site.siteAttachRouteObservation = \_ metadata requestContext ->
+                  requestContext
+                    { requestRouteObservation =
+                        Just
+                          ( HarchWeb.rootRouteObservation
+                              (HarchWeb.requiredModuleNameOrDie "web-api")
+                              (appRequestLocale (requestLocale requestContext))
+                              (HarchWeb.endpointName metadata)
+                              (HarchWeb.endpointRouteTemplate metadata)
+                          )
+                    },
+                -- Public web traffic never inherits a caller-supplied request
+                -- correlation ID. A production service adapter must establish
+                -- service identity and its separate propagation capability.
+                Site.siteRequestIdIngress = HarchWeb.freshRequestIdIngress,
+                Site.siteStaticAssets = staticAssets config,
+                Site.siteRuntimeAssets = appRuntimeAssets,
+                Site.siteNavigationRuntimePathPrefix = requestPathPrefix,
+                Site.siteRequestPolicy = requestPolicy config,
+                Site.siteDecodeClientAction = decodeAction accountActions,
+                Site.siteClientActionEndpointMetadata = accountActionEndpointMetadata,
+                Site.siteClientActionRoute = accountActionRoute,
+                Site.siteHandleClientAction = fmap (fmap HarchWeb.ClientActionSucceeded) . handleAccountAction accountWorkflow
+              }
           )
-            { Site.siteRequestContextFromRequest =
-                requestContextFromWaiRequest (requestPolicy config),
-              -- Decision (AHI-5, 2026-09-08): reuse Site's existing
-              -- post-match attribution boundary.  The root derives audit
-              -- route facts from declared metadata and locale, never a URL
-              -- or client-submitted value.
-              Site.siteAttachRouteObservation = \_ metadata requestContext ->
-                requestContext
-                  { requestRouteObservation =
-                      Just
-                        ( HarchWeb.rootRouteObservation
-                            (HarchWeb.requiredModuleNameOrDie "web-api")
-                            (appRequestLocale (requestLocale requestContext))
-                            (HarchWeb.endpointName metadata)
-                            (HarchWeb.endpointRouteTemplate metadata)
-                        )
-                  },
-              -- Public web traffic never inherits a caller-supplied request
-              -- correlation ID. A production service adapter must establish
-              -- service identity and its separate propagation capability.
-              Site.siteRequestIdIngress = HarchWeb.freshRequestIdIngress,
-              Site.siteStaticAssets = staticAssets config,
-              Site.siteRuntimeAssets = appRuntimeAssets,
-              Site.siteNavigationRuntimePathPrefix = requestPathPrefix,
-              Site.siteRequestPolicy = requestPolicy config,
-              Site.siteDecodeClientAction = decodeAction accountActions,
-              Site.siteClientActionEndpointMetadata = accountActionEndpointMetadata,
-              Site.siteClientActionRoute = accountActionRoute,
-              Site.siteHandleClientAction = fmap (fmap HarchWeb.ClientActionSucceeded) . handleAccountAction accountWorkflow
-            }
-        )
-    )
+      )
+  )
+    { HarchWeb.clientActionCsrfRequirement = clientActionCsrfRequirementFor
+    }
   where
     appRequestLocale = HarchWeb.locale . renderLocale
+
+    -- A cookie (including the same JWT also supplied as bearer) remains an
+    -- ambient browser credential. Only the source-aware post-match guard can
+    -- establish the bearer-only state that omits the CSRF transport check.
+    clientActionCsrfRequirementFor selectedMetadata requestContext =
+      case (selectedMetadata >>= HarchWeb.endpointAuthenticationProfile, requestAuthenticationTransport requestContext) of
+        (Just profileName, AccountJwtFromBearer)
+          | profileName == accountAuthenticationProfileName -> HarchWeb.ClientActionCsrfNotRequired
+        _ -> HarchWeb.ClientActionCsrfRequired
 
     configureReporters site =
       case maybeReporters of
@@ -311,22 +334,39 @@ buildRuntimeAppWithAccountJwt pool config environmentConfig jwtRuntime =
     (buildRuntimePostgresPageRepository pool)
     accountWorkflow
     (runtimeApplicationReporters environmentConfig config)
-    ( HarchWeb.AuthenticationEnabled
-        []
-        ( HarchWeb.authenticationGuardFromPipeline
-            ( accountJwtAuthenticationPipeline
-                (accountWorkflowSessionStore accountWorkflow)
-                (accountWorkflowClock accountWorkflow)
-                jwtRuntime
-            )
-        )
-        []
-    )
+    (runtimeAuthenticationProfiles accountWorkflow jwtRuntime)
   where
     -- The selected issuer is a strict field of 'AccountWorkflow': construct
     -- the record now so application startup cannot defer that validated
     -- security dependency until the first successful login.
     !accountWorkflow = buildRuntimeAccountWorkflowWithJwtRuntime pool environmentConfig jwtRuntime
+
+-- | The root keeps public operation as its explicit default and gives only
+-- account declarations the JWT guard. The declaration names are statically validated, distinct literals; no request
+-- can select a credential parser by a path or header value.
+runtimeAuthenticationProfiles :: AccountWorkflow -> AccountJwtRuntime -> HarchWeb.ApplicationSecurity AppRoute AppRequestContext ()
+runtimeAuthenticationProfiles accountWorkflow jwtRuntime =
+  HarchWeb.AuthenticationProfiles
+    []
+    ( HarchWeb.mkAuthenticationProfile publicAuthenticationProfileName Nothing
+        :| [ HarchWeb.mkAuthenticationProfile
+               accountAuthenticationProfileName
+               ( Just
+                   ( HarchWeb.authenticationGuardFromPipeline
+                       ( accountJwtAuthenticationPipeline
+                           (accountWorkflowSessionStore accountWorkflow)
+                           (accountWorkflowClock accountWorkflow)
+                           jwtRuntime
+                       )
+                   )
+               )
+           ]
+    )
+    publicAuthenticationProfileName
+    []
+
+publicAuthenticationProfileName :: HarchWeb.AuthenticationProfileName
+publicAuthenticationProfileName = HarchWeb.requiredAuthenticationProfileNameOrDie "public"
 
 -- | Build the runtime workflow from the already startup-validated JWT
 -- runtime. Keeping this composition here means the application and its

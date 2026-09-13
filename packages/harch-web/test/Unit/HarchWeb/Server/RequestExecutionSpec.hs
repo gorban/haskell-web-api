@@ -1081,6 +1081,68 @@ spec =
       readIORef authorizationCalled `shouldReturn` True
       readIORef handlerCalled `shouldReturn` False
 
+    it "selects client-action CSRF from the resolved authentication profile" $ do
+      handlerCalled <- newIORef False
+      let publicProfile = HarchWeb.requiredAuthenticationProfileNameOrDie "public"
+          bearerProfile = HarchWeb.requiredAuthenticationProfileNameOrDie "bearer"
+          configuredSecurity =
+            case HarchWeb.mkAuthenticationProfiles
+              []
+              ( HarchWeb.mkAuthenticationProfile publicProfile Nothing
+                  :| [HarchWeb.mkAuthenticationProfile bearerProfile Nothing]
+              )
+              publicProfile
+              [] of
+              Right security -> security
+              Left configurationError -> error (show configurationError)
+          bearerActionMetadata =
+            HarchWeb.withAuthenticationProfile
+              bearerProfile
+              (HarchWeb.routeEndpointMetadata sampleApplication KnownRoute)
+          actionApplication csrfRequirement =
+            sampleApplication
+              { HarchWeb.applicationSecurity = configuredSecurity,
+                HarchWeb.clientActionCsrfRequirement = csrfRequirement,
+                HarchWeb.clientActionEndpointMetadata = \methodValue pathValue _ ->
+                  if methodValue == "POST" && pathValue == "/known"
+                    then Just bearerActionMetadata
+                    else Nothing,
+                HarchWeb.clientActionRoute = \methodValue pathValue _ ->
+                  if methodValue == "POST" && pathValue == "/known"
+                    then Just KnownRoute
+                    else Nothing,
+                handleClientAction = \_ -> writeIORef handlerCalled True >> pure (Just (ClientActionSucceeded (ClientActionResponse Http.status204 [] Nothing StayOnCurrentRoute noClientStorageCleanup noClientActionFailureDestinations [] [] [])))
+              }
+          bearerOnlyRequirement selectedMetadata _ =
+            case selectedMetadata >>= HarchWeb.endpointAuthenticationProfile of
+              Just profileName | profileName == bearerProfile -> HarchWeb.ClientActionCsrfNotRequired
+              _ -> HarchWeb.ClientActionCsrfRequired
+          requiredRequirement _ _ = HarchWeb.ClientActionCsrfRequired
+          actionRequest actionBodyChunks =
+            Wai.setRequestBodyChunks
+              (nextRequestBodyChunk actionBodyChunks)
+              ( (waiRequest ["known"])
+                  { Wai.requestMethod = "POST",
+                    Wai.requestHeaders =
+                      [ ("X-Harch-Action", "1"),
+                        (Http.hContentType, "application/x-www-form-urlencoded"),
+                        ("Host", "example.test"),
+                        ("Origin", "http://example.test")
+                      ]
+                  }
+              )
+      omittedCsrfBody <- newIORef ["intent=save"]
+      omittedCsrfResponse <- performWaiRequest (toWaiApplication (actionApplication bearerOnlyRequirement)) (actionRequest omittedCsrfBody)
+      Wai.responseStatus omittedCsrfResponse `shouldBe` Http.status204
+      readIORef handlerCalled `shouldReturn` True
+      writeIORef handlerCalled False
+      requiredCsrfBody <- newIORef ["intent=save"]
+      requiredCsrfResponse <- performWaiRequest (toWaiApplication (actionApplication requiredRequirement)) (actionRequest requiredCsrfBody)
+      expectAll
+        ( (Wai.responseStatus requiredCsrfResponse `shouldBe` Http.status403)
+            :| [readIORef handlerCalled `shouldReturn` False]
+        )
+
     it "passes decoded client-action CSRF and idempotency metadata to the application" $ do
       receivedAction <- newIORef (Nothing :: Maybe (ClientActionRequest TestRoute Text TestContext))
       actionBodyChunks <- newIORef ["intent=save&_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]

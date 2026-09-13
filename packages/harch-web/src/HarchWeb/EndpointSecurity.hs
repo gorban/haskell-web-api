@@ -235,10 +235,7 @@ resolveAuthenticationProfile security metadata =
       profile <- maybe (Left (UnknownAuthenticationProfile selectedProfile)) Right (findProfile selectedProfile (NonEmpty.toList profiles))
       pure (authenticationProfileGuard profile)
   where
-    resolveLegacy guard =
-      case endpointAuthenticationProfile metadata of
-        Nothing -> Right guard
-        Just profileName -> Left (UnknownAuthenticationProfile profileName)
+    resolveLegacy = Right
 
 findProfile :: AuthenticationProfileName -> [AuthenticationProfile route context authorization] -> Maybe (AuthenticationProfile route context authorization)
 findProfile _ [] = Nothing

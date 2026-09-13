@@ -19,6 +19,7 @@ import HarchWeb.Api.MediaType (apiUtf8ContentType, htmlMediaType, jsonContentTyp
 import HarchWeb.Api.Negotiation (ApiContentTypeNegotiationResult (..), selectContentTypeRepresentation)
 import HarchWeb.ClientActionFailure (HarchClientFailure (..), failureReference)
 import HarchWeb.Csrf (CsrfPagePreparationFailure (..), CsrfProtection (verifyCsrfToken), CsrfVerification (..), preparePageSecurity)
+import HarchWeb.EndpointSecurity (EndpointMetadata)
 import HarchWeb.RequestId (RequestId)
 import HarchWeb.Routing (RouteRequest (..))
 import HarchWeb.Security (requestScheme)
@@ -29,17 +30,17 @@ import HarchWeb.Server.Response
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 
-clientActionResponse :: Application route action context authorization -> RequestId -> Wai.Request -> Text -> Text -> context -> IO (Response route context)
-clientActionResponse webApplication requestId request requestMethod requestPath routedRequestContext = do
+clientActionResponse :: Application route action context authorization -> RequestId -> Wai.Request -> Text -> Text -> Maybe (EndpointMetadata authorization) -> context -> IO (Response route context)
+clientActionResponse webApplication requestId request requestMethod requestPath selectedEndpointMetadata routedRequestContext = do
   result <- runExceptT $ do
     let requestPolicyConfig = applicationRequestPolicy webApplication
         expectedOrigin =
           (\host -> requestScheme requestPolicyConfig request <> "://" <> host)
             <$> (lookup "Host" (Wai.requestHeaders request) >>= either (const Nothing) Just . TextEncoding.decodeUtf8')
     () <- liftClientActionEither (validateClientActionRequest expectedOrigin request)
+    let csrfRequirement = clientActionCsrfRequirement webApplication selectedEndpointMetadata routedRequestContext
     actionBody <- liftIO (readClientActionBody request)
     actionFields <- liftClientActionEither (actionBody >>= parseClientActionFields)
-    csrfToken <- liftClientActionEither (validateClientActionCsrf request actionFields)
     let actionPayload =
           ClientActionPayload
             { clientActionMethod = requestMethod,
@@ -49,32 +50,41 @@ clientActionResponse webApplication requestId request requestMethod requestPath 
               clientActionIdempotencyKey = requestIdempotencyKey request,
               clientActionPayloadContext = routedRequestContext
             }
-    case decodeClientAction webApplication actionPayload of
-      UnrecognizedClientAction -> pure (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionNotFound))
-      MethodNotAllowedClientAction allowedMethods -> pure (ClientActionBodyResponse (clientActionMethodNotAllowedResponse allowedMethods))
-      MalformedClientAction _ -> pure (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionPayloadMalformed))
-      InvalidClientActionDecoder -> pure (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionDecoderInvalid))
-      DecodedClientAction action ->
-        case clientActionRoute webApplication requestMethod requestPath routedRequestContext of
-          Nothing -> pure (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionNotFound))
-          Just actionRoute -> do
-            let actionRouteRequest = RouteRequest actionRoute routedRequestContext
-                actionRequest =
-                  ClientActionRequest
-                    { clientActionRouteRequest = actionRouteRequest,
-                      clientAction = action,
-                      clientActionRequestIdempotencyKey = requestIdempotencyKey request,
-                      clientActionContext = routedRequestContext
-                    }
-            verification <- liftIO (verifyCsrfToken (csrfProtection webApplication) routedRequestContext csrfToken)
-            case verification of
-              CsrfRejected -> pure (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionCsrfRejected))
-              CsrfVerificationUnavailable -> pure (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionCsrfUnavailable))
-              CsrfVerified -> do
-                maybeActionResult <- liftIO (handleClientAction webApplication actionRequest)
-                liftIO (interpretActionResult actionRouteRequest maybeActionResult)
+    dispatchDecodedAction csrfRequirement actionFields actionPayload
   pure (either (BodyResponse . clientActionProtocolErrorResponse requestId) id result)
   where
+    dispatchDecodedAction csrfRequirement actionFields actionPayload =
+      case decodeClientAction webApplication actionPayload of
+        UnrecognizedClientAction -> pure (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionNotFound))
+        MethodNotAllowedClientAction allowedMethods -> pure (ClientActionBodyResponse (clientActionMethodNotAllowedResponse allowedMethods))
+        MalformedClientAction _ -> pure (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionPayloadMalformed))
+        InvalidClientActionDecoder -> pure (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionDecoderInvalid))
+        DecodedClientAction action ->
+          case csrfRequirement of
+            ClientActionCsrfRequired -> do
+              csrfToken <- liftClientActionEither (validateClientActionCsrf request actionFields)
+              verification <- liftIO (verifyCsrfToken (csrfProtection webApplication) routedRequestContext csrfToken)
+              case verification of
+                CsrfRejected -> pure (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionCsrfRejected))
+                CsrfVerificationUnavailable -> pure (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionCsrfUnavailable))
+                CsrfVerified -> dispatchAction action
+            ClientActionCsrfNotRequired -> dispatchAction action
+      where
+        dispatchAction action =
+          case clientActionRoute webApplication requestMethod requestPath routedRequestContext of
+            Nothing -> pure (BodyResponse (clientActionProtocolErrorResponse requestId ClientActionNotFound))
+            Just actionRoute -> do
+              let actionRouteRequest = RouteRequest actionRoute routedRequestContext
+                  actionRequest =
+                    ClientActionRequest
+                      { clientActionRouteRequest = actionRouteRequest,
+                        clientAction = action,
+                        clientActionRequestIdempotencyKey = requestIdempotencyKey request,
+                        clientActionContext = routedRequestContext
+                      }
+              maybeActionResult <- liftIO (handleClientAction webApplication actionRequest)
+              liftIO (interpretActionResult actionRouteRequest maybeActionResult)
+
     attachFailureDestinations actionResponse =
       actionResponse
         { clientActionFailureDestinations =

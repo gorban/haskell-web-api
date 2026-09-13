@@ -29,7 +29,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import TestCore.Wai (waiRequest)
 import WebApi.AccountJwt
 import WebApi.AccountPrincipal (mkAccountPrincipal)
-import WebApi.Route (AppRequestContext (..), AppRoute (LoginRoute, ProfileRoute), defaultRequestContext)
+import WebApi.Route (AppRequestContext (..), AppRoute (LoginRoute, ProfileRoute), RequestAuthenticationTransport (..), defaultRequestContext)
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (AccountSessionStoreUnavailable))
 
 spec =
@@ -147,11 +147,22 @@ spec =
           )
         admitted <- HarchWeb.runAuthenticationPipeline pipeline endpointRequest
         revoked <- HarchWeb.runAuthenticationPipeline revokedPipeline endpointRequest
+        bearerAdmitted <- HarchWeb.runAuthenticationPipeline pipeline (protectedEndpointRequestHeaders [("Authorization", "Bearer " <> HarchWeb.encodedJwtBytes token)])
+        dualAdmitted <- HarchWeb.runAuthenticationPipeline pipeline (protectedEndpointRequestHeaders [("Cookie", TextEncoding.encodeUtf8 cookie), ("Authorization", "Bearer " <> HarchWeb.encodedJwtBytes token)])
+        conflicting <- HarchWeb.runAuthenticationPipeline pipeline (protectedEndpointRequestHeaders [("Cookie", TextEncoding.encodeUtf8 cookie), ("Authorization", "Bearer another-token")])
         case admitted of
           HarchWeb.ContinueEndpoint requestContext -> do
             requestAccountPrincipal requestContext `shouldBe` Just expectedPrincipal
+            requestAuthenticationTransport requestContext `shouldBe` AccountJwtFromCookie
             show expectedPrincipal `shouldBe` "AccountPrincipal <redacted>"
           HarchWeb.HaltEndpoint response -> expectationFailure ("expected established principal, got " <> show response)
+        case bearerAdmitted of
+          HarchWeb.ContinueEndpoint requestContext -> requestAuthenticationTransport requestContext `shouldBe` AccountJwtFromBearer
+          HarchWeb.HaltEndpoint response -> expectationFailure ("expected bearer principal, got " <> show response)
+        case dualAdmitted of
+          HarchWeb.ContinueEndpoint requestContext -> requestAuthenticationTransport requestContext `shouldBe` AccountJwtFromCookieAndBearer
+          HarchWeb.HaltEndpoint response -> expectationFailure ("expected dual-source principal, got " <> show response)
+        expectLoginRedirect conflicting
         case revoked of
           HarchWeb.HaltEndpoint _ -> pure ()
           HarchWeb.ContinueEndpoint _ -> expectationFailure "revoked durable session must halt a protected endpoint"
@@ -332,11 +343,11 @@ spec =
             )
         let issuedTokens = [missingSubject, uriSubject, invalidAccount, missingSession, invalidSession]
             HarchWeb.AuthenticationProofVerifier verifier = HarchWeb.authenticationProofVerifier pipeline
-        verificationResults <- traverse (verifier . fst) issuedTokens
+        verificationResults <- traverse (verifier . HarchWeb.jwtProofFromCookie . fst) issuedTokens
         mapM_ expectClaimsRejection verificationResults
         results <- traverse (HarchWeb.runAuthenticationPipeline pipeline . protectedEndpointRequest . snd) issuedTokens
         mapM_ expectLoginRedirect results
-        wrongAudienceVerification <- verifier (fst wrongAudience)
+        wrongAudienceVerification <- verifier (HarchWeb.jwtProofFromCookie (fst wrongAudience))
         case wrongAudienceVerification of
           Left _ -> pure ()
           Right _ -> expectationFailure "expected the configured audience check to reject the signed JWT"
@@ -390,11 +401,11 @@ isAccepted result =
     Right _ -> True
     Left _ -> False
 
-establishIssuedPrincipal :: HarchWeb.AuthenticationPipeline AppRoute AppRequestContext () HarchWeb.EncodedJwt verified principal denial -> HarchWeb.EncodedJwt -> IO (Either HarchWeb.PrincipalEstablishmentFailure principal)
+establishIssuedPrincipal :: HarchWeb.AuthenticationPipeline AppRoute AppRequestContext () HarchWeb.JwtProof verified principal denial -> HarchWeb.EncodedJwt -> IO (Either HarchWeb.PrincipalEstablishmentFailure principal)
 establishIssuedPrincipal pipeline token = do
   let HarchWeb.AuthenticationProofVerifier verifyProof = HarchWeb.authenticationProofVerifier pipeline
       HarchWeb.PrincipalEstablisher establishPrincipal = HarchWeb.authenticationPrincipalEstablisher pipeline
-  verification <- verifyProof token
+  verification <- verifyProof (HarchWeb.jwtProofFromCookie token)
   case verification of
     Left failure -> expectationFailure ("expected a valid JWT proof: " <> show failure) >> error "unreachable"
     Right claims -> establishPrincipal claims
@@ -507,8 +518,15 @@ authorizedEndpointRequest = endpointRequestWithAccess (HarchWeb.RequireAuthorize
 
 endpointRequestWithAccess :: HarchWeb.AccessRequirement () -> Text.Text -> HarchWeb.EndpointRequest AppRoute AppRequestContext ()
 endpointRequestWithAccess access cookie =
+  protectedEndpointRequestHeadersFor access [("Cookie", TextEncoding.encodeUtf8 cookie)]
+
+protectedEndpointRequestHeaders :: Http.RequestHeaders -> HarchWeb.EndpointRequest AppRoute AppRequestContext ()
+protectedEndpointRequestHeaders = protectedEndpointRequestHeadersFor HarchWeb.RequireAuthenticated
+
+protectedEndpointRequestHeadersFor :: HarchWeb.AccessRequirement () -> Http.RequestHeaders -> HarchWeb.EndpointRequest AppRoute AppRequestContext ()
+protectedEndpointRequestHeadersFor access headers =
   HarchWeb.EndpointRequest
-    { HarchWeb.endpointWaiRequest = (waiRequest ["profile"]) {Wai.requestHeaders = [("Cookie", TextEncoding.encodeUtf8 cookie)]},
+    { HarchWeb.endpointWaiRequest = (waiRequest ["profile"]) {Wai.requestHeaders = headers},
       HarchWeb.endpointRouteRequest = HarchWeb.RouteRequest ProfileRoute defaultRequestContext,
       HarchWeb.endpointMetadata =
         HarchWeb.mkEndpointMetadata

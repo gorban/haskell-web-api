@@ -37,7 +37,7 @@ import HarchWeb.Action
     textValue,
   )
 import WebApi.AccountPages.Forms (LoginProofChoice (..))
-import WebApi.Route (AppRequestContext, AppRoute (..), renderRoutePath)
+import WebApi.Route (AppRequestContext, AppRoute (..), accountAuthenticationProfileName, renderRoutePath)
 
 data AccountActionTarget
   = RegisterAccountTarget
@@ -171,11 +171,12 @@ completionPolicy target =
 
 accountActionMetadata :: AccountActionTarget -> HarchWeb.EndpointMetadata ()
 accountActionMetadata target =
-  HarchWeb.mkEndpointMetadata
-    (HarchWeb.requiredEndpointNameOrDie name)
-    (HarchWeb.requiredRouteTemplateOrDie template)
-    HarchWeb.ActionEndpoint
-    accessRequirement
+  applyAccountProfile target $
+    HarchWeb.mkEndpointMetadata
+      (HarchWeb.requiredEndpointNameOrDie name)
+      (HarchWeb.requiredRouteTemplateOrDie template)
+      HarchWeb.ActionEndpoint
+      accessRequirement
   where
     (name, template) =
       case target of
@@ -190,6 +191,13 @@ accountActionMetadata target =
         UpdateProfileTarget -> HarchWeb.RequireAuthenticated
         LogoutAccountTarget -> HarchWeb.RequireAuthenticated
         _ -> HarchWeb.AllowUnauthenticated
+
+applyAccountProfile :: AccountActionTarget -> HarchWeb.EndpointMetadata () -> HarchWeb.EndpointMetadata ()
+applyAccountProfile target metadata =
+  case target of
+    UpdateProfileTarget -> HarchWeb.withAuthenticationProfile accountAuthenticationProfileName metadata
+    LogoutAccountTarget -> HarchWeb.withAuthenticationProfile accountAuthenticationProfileName metadata
+    _ -> metadata
 
 -- | The text-field convention is part of the action contract: missing fields
 -- decode to empty text while duplicate and malformed fields still carry their

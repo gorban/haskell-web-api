@@ -272,6 +272,7 @@ buildSiteApplication site =
         renderRequestResponse = renderSiteResponse site,
         decodeClientAction = siteDecodeClientAction site,
         csrfProtection = siteCsrfProtection site,
+        clientActionCsrfRequirement = \_ _ -> HarchWeb.ClientActionCsrfRequired,
         handleClientAction = siteHandleClientAction site,
         pageShell = renderSitePageShell site,
         reportRequestObservability = siteReportRequestObservability site,

@@ -51,6 +51,32 @@ spec = do
                ]
         )
 
+    it "extracts JWT cookie-or-bearer proofs without an ambient fallback" $ do
+      let extractor = cookieOrBearerJwtExtractor (requiredCookieName "__Host-session") (requiredProofMaximumBytes 8)
+          extract headers = extractAuthenticationProof extractor (endpointRequest AllowUnauthenticated headers)
+          extractSource = fmap (fmap jwtProofSource) . extract
+          extractToken = fmap (fmap (encodedJwtBytes . jwtProofEncodedJwt)) . extract
+      expectAll
+        ( (extractSource [] `shouldBe` Right Nothing)
+            :| [ extractSource [("Cookie", "__Host-session=cookie")] `shouldBe` Right (Just JwtProofFromCookie),
+                 extractSource [("Authorization", "Bearer bearer")] `shouldBe` Right (Just JwtProofFromBearer),
+                 extractSource [("Cookie", "__Host-session=same"), ("Authorization", "Bearer same")]
+                   `shouldBe` Right (Just JwtProofFromCookieAndBearer),
+                 extract [("Cookie", "__Host-session=cookie"), ("Authorization", "Bearer bearer")]
+                   `shouldBe` Left ProofConflicting,
+                 extract [("Cookie", "__Host-session=cookie"), ("Authorization", "Basic bearer")]
+                   `shouldBe` Left ProofMalformed,
+                 extract [("Cookie", "__Host-session=cookie; __Host-session=other")]
+                   `shouldBe` Left ProofAmbiguous,
+                 extract [("Authorization", "Bearer one"), ("Authorization", "Bearer two")]
+                   `shouldBe` Left ProofAmbiguous,
+                 extract [("Cookie", "__Host-session=over-eight")]
+                   `shouldBe` Left ProofTooLarge,
+                 fmap (fmap show) (extract [("Authorization", "Bearer secret")]) `shouldBe` Right (Just "JwtProof JwtProofFromBearer <redacted>"),
+                 extractToken [("Authorization", "Bearer bearer")] `shouldBe` Right (Just "bearer")
+               ]
+        )
+
     it "does not silently choose between multiple configured proof sources" $ do
       let present :: AuthenticationProofExtractor TestRoute TestContext (ScopeRequirement Text) Text
           present =
@@ -137,7 +163,7 @@ spec = do
       let proofRejection = mkProofRejection (requiredFailureCode "proof.rejected")
           principalRejection = mkPrincipalRejection (requiredFailureCode "principal.rejected")
           dependency = mkAuthenticationDependency (requiredFailureCode "identity.unavailable")
-          extractionFailures = [ProofMalformed, ProofAmbiguous, ProofTooLarge]
+          extractionFailures = [ProofMalformed, ProofAmbiguous, ProofConflicting, ProofTooLarge]
           verificationFailures = [ProofRejected proofRejection, ProofVerificationUnavailable dependency]
           establishmentFailures = [PrincipalRejected principalRejection, PrincipalEstablishmentUnavailable dependency]
           authenticationFailures =

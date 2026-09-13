@@ -17,8 +17,17 @@
 -- can deliberately join a support-facing error presentation to the finalized
 -- response header without a process-global request value or a response-body
 -- rewriter. Protocol, stream, and raw WAI bodies remain application-owned.
+--
+-- Decision record (AHI-4D slice 2, 2026-09-13): expose client-action CSRF
+-- selection at this existing application boundary using the metadata already
+-- selected by post-match guards and the authenticated context they produced.
+-- Request execution carries that declaration forward without matching again
+-- and decides the transport policy before action-body intake. This permits a
+-- profile to require CSRF for bearer credentials while retaining the secure
+-- site default for unknown or ambient requests.
 module HarchWeb.Server.Application
   ( Application (..),
+    ClientActionCsrfRequirement (..),
     RouteExecutionIdentity,
     RouteExecutionPolicy (..),
     application,
@@ -151,6 +160,13 @@ data Application route action context authorization = Application
     -- client-action verification. Harch owns strict cookie/form transport;
     -- the application-selected capability binds tokens to current state.
     csrfProtection :: CsrfProtection context,
+    -- | Decide whether a decoded client action requires the framework's
+    -- double-submit CSRF transport. This receives the context after the
+    -- single post-match authentication rail has either continued or halted.
+    -- Request execution evaluates it before client-action body intake. Sites default to
+    -- 'ClientActionCsrfRequired'; an API-capable application may omit CSRF
+    -- only for a credential transport it established as explicit bearer.
+    clientActionCsrfRequirement :: Maybe (EndpointMetadata authorization) -> context -> ClientActionCsrfRequirement,
     -- | Interpret a decoded action on the normal response rail or explicitly
     -- select a safe terminal presentation.  The shared dispatcher remains the
     -- sole owner of representation negotiation and page-security preparation.
@@ -160,6 +176,14 @@ data Application route action context authorization = Application
     reportConnectionObservability :: Observability.ConnectionObservability -> IO (),
     reportApplicationLog :: Text -> IO ()
   }
+
+-- | The client-action CSRF transport requirement selected from established
+-- request facts. The opt-out is deliberately named and typed so an
+-- application cannot confuse it with an unavailable CSRF authority.
+data ClientActionCsrfRequirement
+  = ClientActionCsrfRequired
+  | ClientActionCsrfNotRequired
+  deriving (Eq, Show)
 
 application :: Application route action context authorization -> Application route action context authorization
 application = id

@@ -7,7 +7,7 @@ import HarchWeb qualified
 import WebApi.AccountPages (AccountActionTarget (..), MfaEnrollmentForm (..), VerificationForm (..), emptyLoginForm, emptyRegistrationForm)
 import WebApi.Config (AcmeConfig (..), AppConfig (..), CertbotConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), SharedTlsCertificateFiles (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), defaultAppConfig, defaultStaticAssetContentTypes, defaultTlsPolicy)
 import WebApi.Page (AppPageModel (..), CallToAction (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), SpacesPageModel (..), UnavailableProfilePageDetails (..))
-import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), RouteSelectionError (..), defaultRequestContext)
+import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), RequestAuthenticationTransport (..), RouteSelectionError (..), defaultRequestContext)
 import WebApi.Route qualified
 
 requestIdFixture :: HarchWeb.RequestId
@@ -127,6 +127,7 @@ spec =
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
                 requestAccountPrincipal = Nothing,
+                requestAuthenticationTransport = NoRequestAuthentication,
                 requestMfaEnrollmentSessionId = Nothing
               }
           callToAction =
@@ -316,10 +317,11 @@ spec =
               requestPathPrefix = requestPathPrefix defaultRequestContext,
               requestQueryParameters = [],
               requestAccountPrincipal = Nothing,
+              requestAuthenticationTransport = NoRequestAuthentication,
               requestMfaEnrollmentSessionId = Nothing
             }
         )
-        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just (RequestId \"550e8400-e29b-41d4-a716-446655440000\"), requestRouteObservation = Nothing, requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestAccountPrincipal = Nothing, requestMfaEnrollmentSessionId = Nothing}"
+        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just (RequestId \"550e8400-e29b-41d4-a716-446655440000\"), requestRouteObservation = Nothing, requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestAccountPrincipal = Nothing, requestAuthenticationTransport = NoRequestAuthentication, requestMfaEnrollmentSessionId = Nothing}"
       show
         ( CallToAction
             { callToActionLabel = "Return home",
@@ -450,6 +452,7 @@ spec =
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
                 requestAccountPrincipal = Nothing,
+                requestAuthenticationTransport = NoRequestAuthentication,
                 requestMfaEnrollmentSessionId = Nothing
               }
           callToAction =
@@ -593,6 +596,7 @@ spec =
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
                 requestAccountPrincipal = Nothing,
+                requestAuthenticationTransport = NoRequestAuthentication,
                 requestMfaEnrollmentSessionId = Nothing
               }
           callToAction =
@@ -724,6 +728,7 @@ spec =
                 requestPathPrefix = requestPathPrefix defaultRequestContext,
                 requestQueryParameters = [],
                 requestAccountPrincipal = Nothing,
+                requestAuthenticationTransport = NoRequestAuthentication,
                 requestMfaEnrollmentSessionId = Nothing
               }
           callToAction =
@@ -775,7 +780,7 @@ spec =
       show [Page WebApi.Route.HomePage, Api WebApi.Route.StatusApi]
         `shouldBe` "[HomeRoute,StatusApiRoute]"
       show [requestContext]
-        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just (RequestId \"550e8400-e29b-41d4-a716-446655440000\"), requestRouteObservation = Nothing, requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestAccountPrincipal = Nothing, requestMfaEnrollmentSessionId = Nothing}]"
+        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just (RequestId \"550e8400-e29b-41d4-a716-446655440000\"), requestRouteObservation = Nothing, requestClientAddress = ClientAddress <redacted>, requestPathPrefix = PathPrefix \"\", requestQueryParameters = [], requestAccountPrincipal = Nothing, requestAuthenticationTransport = NoRequestAuthentication, requestMfaEnrollmentSessionId = Nothing}]"
 
       show [callToAction]
         `shouldBe` "[CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = SafeUrl \"/\"}]"

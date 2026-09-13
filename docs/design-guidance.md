@@ -3382,6 +3382,31 @@ cookie/bearer extraction, CSRF transport selection, OAuth, and durable
 API-client establishment to the selected guard; this slice supplies only
 profile precedence and capability injection.
 
+### Decision record — AHI-4D slice 2: source-aware JWT and CSRF selection (2026-09-13)
+
+**Decision: extend the existing authentication transport extractor and the
+single post-match client-action lifecycle with source-aware proof facts.** A
+cookie and Bearer header are two transports for one compact JWT, so their
+extractor parses each independently, rejects malformed or duplicate explicit
+headers, accepts only constant-work-equal values, and records cookie, bearer,
+or dual source without retaining a token in application context. It does not
+create a fallback parser or a second verifier.
+
+Post-match already selected the action declaration and authenticated its
+context before request execution reads an action body. It now carries that
+same selected metadata to the existing client-action CSRF policy callback,
+which is evaluated before body intake. A profile can therefore require CSRF
+for bearer requests, while `web-api`'s account profile omits it only for
+established bearer-only JWTs. Cookie and dual-source credentials remain
+ambient and require the normal CSRF transport; unknown actions and absent
+metadata retain that secure default. This preserves one route matcher,
+authentication rail, action decoder, and response interpreter.
+
+The remaining AHI-4D work is OAuth authorization-code/PKCE validation and
+durable API-client authentication; this slice intentionally provides only the
+account JWT source and client-action CSRF selection needed by the reference
+application.
+
 ### Decision record — AHI-4C: bounded page-security and JWT-claim rails (2026-09-04)
 
 **Decision: preserve the existing one-page-rendering and one-JWT-verification

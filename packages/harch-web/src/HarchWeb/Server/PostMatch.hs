@@ -54,14 +54,14 @@ import Network.Wai qualified as Wai
 -- is absent from the page codec; an unknown action owns no declaration.
 -- Keeping this selection with post-match guards prevents the admission rail
 -- from independently interpreting the request.
-data PostMatchGuardResult route context
+data PostMatchGuardResult route context authorization
   = HaltPostMatch (NonPageResponse route context)
-  | ContinuePostMatch context (Maybe route)
+  | ContinuePostMatch context (Maybe route) (Maybe (EndpointMetadata authorization))
 
 -- | Apply the explicit post-match security selection to every declared route
 -- outcome. A 404 has no endpoint declaration; a pre-route halt retains its
 -- older response-body contract and is not reinterpreted as endpoint policy.
-runPostMatchGuards :: Application route action context authorization -> RequestId -> Wai.Request -> Text -> RouteDispatch route context -> MiddlewareResult context -> IO (PostMatchGuardResult route context)
+runPostMatchGuards :: Application route action context authorization -> RequestId -> Wai.Request -> Text -> RouteDispatch route context -> MiddlewareResult context -> IO (PostMatchGuardResult route context authorization)
 runPostMatchGuards webApplication requestId request requestPath routeDispatch middlewareResult =
   case middlewareResult of
     HaltMiddleware _ responseBodyValue -> pure (HaltPostMatch (NonPageBodyResponse responseBodyValue))
@@ -71,7 +71,7 @@ runPostMatchGuards webApplication requestId request requestPath routeDispatch mi
           | isAction,
             Just _ <- actionRoute ->
               runSelectedEndpointGuards EndpointClientAction
-          | otherwise -> pure (ContinuePostMatch middlewareContext selectedAdmissionRoute)
+          | otherwise -> pure (ContinuePostMatch middlewareContext selectedAdmissionRoute Nothing)
         RouteMethodNotAllowed _ _ -> runSelectedEndpointGuards EndpointMethodNotAllowed
         RouteMatched _ -> runSelectedEndpointGuards EndpointMatched
         RouteMatchedHead _ -> runSelectedEndpointGuards EndpointMatchedHead
@@ -96,7 +96,7 @@ runPostMatchGuards webApplication requestId request requestPath routeDispatch mi
         else Just (routeEndpointMetadata webApplication (requestRoute routeRequest))
     runSelectedEndpointGuards routeDispatchKind =
       case selectedEndpointMetadata of
-        Nothing -> pure (ContinuePostMatch (requestContext routeRequest) selectedAdmissionRoute)
+        Nothing -> pure (ContinuePostMatch (requestContext routeRequest) selectedAdmissionRoute Nothing)
         Just selectedMetadata ->
           let observedRouteRequest =
                 guardRouteRequest
@@ -119,17 +119,17 @@ runPostMatchGuards webApplication requestId request requestPath routeDispatch mi
                 Right (Just selectedAuthentication) ->
                   runGuards [EndpointGuard (runAuthenticationGuard selectedAuthentication)] endpointRequest
     runGuards selectedAuthentication endpointRequest =
-      toPostMatchGuardResult selectedAdmissionRoute
+      toPostMatchGuardResult selectedAdmissionRoute (Just (endpointMetadata endpointRequest))
         <$> runEndpointGuardPipeline (applicationEndpointGuards (applicationSecurity webApplication) selectedAuthentication) endpointRequest
     securityEventSink selectedMetadata observedRouteRequest eventRoot =
       case applicationRouteModuleChain webApplication of
         Nothing -> rootSecurityEventSink eventRoot (endpointName selectedMetadata) (endpointRouteTemplate selectedMetadata) (requestContext observedRouteRequest)
         Just routeModuleChain -> rootSecurityEventSinkWithMountChain eventRoot (routeModuleChain (requestRoute guardRouteRequest)) (endpointName selectedMetadata) (endpointRouteTemplate selectedMetadata) (requestContext observedRouteRequest)
 
-toPostMatchGuardResult :: Maybe route -> EndpointGuardResult route context -> PostMatchGuardResult route context
-toPostMatchGuardResult selectedAdmissionRoute = \case
+toPostMatchGuardResult :: Maybe route -> Maybe (EndpointMetadata authorization) -> EndpointGuardResult route context -> PostMatchGuardResult route context authorization
+toPostMatchGuardResult selectedAdmissionRoute selectedMetadata = \case
   HaltEndpoint response -> HaltPostMatch response
-  ContinueEndpoint context -> ContinuePostMatch context selectedAdmissionRoute
+  ContinueEndpoint context -> ContinuePostMatch context selectedAdmissionRoute selectedMetadata
 
 routeDispatchRequest :: RouteDispatch route context -> RouteRequest route context
 routeDispatchRequest = \case

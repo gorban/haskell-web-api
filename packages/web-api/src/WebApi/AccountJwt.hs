@@ -70,7 +70,11 @@ import HarchWeb.Time (UnixTimeNanoseconds, unixTimeNanosecondsValue)
 import Network.HTTP.Types qualified as Http
 import Text.Show (showListWith)
 import WebApi.AccountPrincipal (AccountPrincipal, mkAccountPrincipal)
-import WebApi.Route (AppRequestContext (..), AppRoute (LoginRoute))
+import WebApi.Route
+  ( AppRequestContext (..),
+    AppRoute (LoginRoute),
+    RequestAuthenticationTransport (..),
+  )
 import WebApi.Session (AccountSessionStore (..))
 
 data AccountJwtConfiguration = AccountJwtConfiguration
@@ -375,24 +379,37 @@ numericDate instant =
 -- runtime. A successful signature is only an intermediate fact: this
 -- establishment step resolves the current durable session and checks both its
 -- subject and expiration before a principal reaches the request context.
-accountJwtAuthenticationPipeline :: AccountSessionStore -> IO UnixTimeNanoseconds -> AccountJwtRuntime -> HarchWeb.AuthenticationPipeline AppRoute AppRequestContext () HarchWeb.EncodedJwt AccountJwtClaims AccountPrincipal ()
+accountJwtAuthenticationPipeline :: AccountSessionStore -> IO UnixTimeNanoseconds -> AccountJwtRuntime -> HarchWeb.AuthenticationPipeline AppRoute AppRequestContext () HarchWeb.JwtProof (HarchWeb.JwtProofSource, AccountJwtClaims) (HarchWeb.JwtProofSource, AccountPrincipal) ()
 accountJwtAuthenticationPipeline sessionStore readClock runtime =
   HarchWeb.AuthenticationPipeline
     { HarchWeb.authenticationProofExtractor =
-        HarchWeb.cookieJwtExtractor
+        HarchWeb.cookieOrBearerJwtExtractor
           (HarchWeb.authenticationCookieName cookiePolicy)
           authenticationProofMaximumBytes,
       HarchWeb.authenticationProofVerifier =
-        HarchWeb.jwtProofVerifier
-          validationSettings
-          (HarchWeb.mkJwtAllowedAlgorithms (HarchWeb.JwtRs256 :| []))
-          (runtimeAccountJwtVerificationKeys runtime)
-          parseAccountJwtClaims,
-      HarchWeb.authenticationPrincipalEstablisher = establishAccountPrincipal sessionStore readClock,
+        HarchWeb.AuthenticationProofVerifier $ \proof -> do
+          verified <-
+            HarchWeb.verifyAuthenticationProof
+              ( HarchWeb.jwtProofVerifier
+                  validationSettings
+                  (HarchWeb.mkJwtAllowedAlgorithms (HarchWeb.JwtRs256 :| []))
+                  (runtimeAccountJwtVerificationKeys runtime)
+                  parseAccountJwtClaims
+              )
+              (HarchWeb.jwtProofEncodedJwt proof)
+          pure ((HarchWeb.jwtProofSource proof,) <$> verified),
+      HarchWeb.authenticationPrincipalEstablisher =
+        HarchWeb.PrincipalEstablisher $ \(source, claims) -> do
+          established <- HarchWeb.establishPrincipal (establishAccountPrincipal sessionStore readClock) claims
+          pure ((source,) <$> established),
       HarchWeb.authenticationAuthorization =
         HarchWeb.AuthenticationWithoutAuthorization
           (\endpointRequest -> authenticationErrorResponse (HarchWeb.requestContext (HarchWeb.endpointRouteRequest endpointRequest)) Http.status503 "Authorization is not configured for this application."),
-      HarchWeb.authenticationAttachPrincipal = \principal context -> context {requestAccountPrincipal = Just principal},
+      HarchWeb.authenticationAttachPrincipal = \(source, principal) context ->
+        context
+          { requestAccountPrincipal = Just principal,
+            requestAuthenticationTransport = requestTransport source
+          },
       HarchWeb.authenticationChallenge = accountAuthenticationChallenge,
       HarchWeb.authenticationUnavailable = \endpointRequest _ -> authenticationErrorResponse (HarchWeb.requestContext (HarchWeb.endpointRouteRequest endpointRequest)) Http.status503 "Authentication is temporarily unavailable."
     }
@@ -402,6 +419,13 @@ accountJwtAuthenticationPipeline sessionStore readClock runtime =
     validationSettings =
       Jwt.defaultJWTValidationSettings (== validatedStringOrUriValue (accountJwtAudience configuration))
         & Jwt.jwtValidationSettingsIssuerPredicate .~ (== validatedStringOrUriValue (accountJwtIssuer configuration))
+
+requestTransport :: HarchWeb.JwtProofSource -> RequestAuthenticationTransport
+requestTransport source =
+  case source of
+    HarchWeb.JwtProofFromCookie -> AccountJwtFromCookie
+    HarchWeb.JwtProofFromBearer -> AccountJwtFromBearer
+    HarchWeb.JwtProofFromCookieAndBearer -> AccountJwtFromCookieAndBearer
 
 accountAuthenticationChallenge :: HarchWeb.EndpointRequest AppRoute AppRequestContext () -> HarchWeb.AuthenticationFailure -> HarchWeb.NonPageResponse AppRoute AppRequestContext
 accountAuthenticationChallenge endpointRequest _ =

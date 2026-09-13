@@ -141,6 +141,7 @@ spec =
               }
       siteDecodeClientAction sampleSite actionPayload `shouldBe` HarchWeb.UnrecognizedClientAction
       HarchWeb.decodeClientAction siteApplication actionPayload `shouldBe` HarchWeb.UnrecognizedClientAction
+      HarchWeb.clientActionCsrfRequirement siteApplication Nothing (SampleContext "") `shouldBe` HarchWeb.ClientActionCsrfRequired
       case siteSecurityEventRoot sampleSite of
         Nothing -> pure ()
         Just _ -> expectationFailure "expected simpleSite to have no security-event root by default"

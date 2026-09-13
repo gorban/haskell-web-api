@@ -59,7 +59,7 @@ import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), ProfilePageModel (..), SignedOutProfilePageDetails (..), buildPageModelFromRouteData, renderPageFromRouteData)
 import WebApi.PendingRegistrationAudit (PendingRegistrationAuditStore (..), PendingRegistrationAuditStoreError (..))
 import WebApi.Postgres.Testing (buildRuntimePostgresAccountCredentialStoreWithRunner, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStoreWithRunner)
-import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), defaultRequestContext, renderRoutePath, routeCodec)
+import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), accountAuthenticationProfileName, defaultRequestContext, renderRoutePath, routeCodec)
 import WebApi.RouteData (RouteDataResult (..), RouteDataSelection (..), selectRouteData, selectRouteDataSelectionWithDatabase)
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..), MfaEnrollmentSessionStore (..), MfaEnrollmentSessionStoreError (..))
 import WebApi.VerificationResendAudit (VerificationResendAuditStore (..), VerificationResendAuditStoreError (..))
@@ -988,7 +988,8 @@ spec = do
             ( HarchWeb.endpointNameText (HarchWeb.endpointName endpointMetadataValue),
               HarchWeb.routeTemplateText (HarchWeb.endpointRouteTemplate endpointMetadataValue),
               HarchWeb.endpointProtocol endpointMetadataValue,
-              HarchWeb.endpointAccess endpointMetadataValue
+              HarchWeb.endpointAccess endpointMetadataValue,
+              HarchWeb.endpointAuthenticationProfile endpointMetadataValue
             )
           expectedMetadata =
             [ ("/register", "account.register", "/{locale}/register"),
@@ -1001,9 +1002,12 @@ spec = do
           expectedAccess path
             | path `elem` ["/profile", "/logout"] = HarchWeb.RequireAuthenticated
             | otherwise = HarchWeb.AllowUnauthenticated
+          expectedProfile path
+            | path `elem` ["/profile", "/logout"] = Just accountAuthenticationProfileName
+            | otherwise = Nothing
       forM_ expectedMetadata $ \(path, expectedName, template) ->
         fmap endpointDeclarationFields (accountActionEndpointMetadata "POST" path defaultRequestContext)
-          `shouldBe` Just (expectedName, template, HarchWeb.ActionEndpoint, expectedAccess path)
+          `shouldBe` Just (expectedName, template, HarchWeb.ActionEndpoint, expectedAccess path, expectedProfile path)
       accountActionEndpointMetadata "GET" "/register" defaultRequestContext `shouldBe` Nothing
       expectAll
         ( (accountActionRoute "POST" "/register" defaultRequestContext `shouldBe` Just WebApi.Route.RegistrationRoute)

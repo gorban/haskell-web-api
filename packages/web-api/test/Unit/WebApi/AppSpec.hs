@@ -42,7 +42,7 @@ import WebApi.Login (AccountCredential (..), AccountCredentialStore (..))
 import WebApi.Page (renderPage)
 import WebApi.Postgres.Testing (closePostgresPool, newPostgresPool, runPostgresMigrationsForRuntime, runPostgresSeed)
 import WebApi.Response (selectResponse)
-import WebApi.Route (AppRequestContext (..), AppRoute (..), defaultRequestContext, renderRoutePath)
+import WebApi.Route (AppRequestContext (..), AppRoute (..), RequestAuthenticationTransport (..), defaultRequestContext, renderRoutePath)
 import WebApi.Route qualified
 import WebApi.Session (AccountSessionStore (..))
 import WebApi.SetupPlan (TcpEndpoint (..))
@@ -74,6 +74,22 @@ spec = do
       expectedResponse <- selectResponse defaultAppConfig secondRequest
       actualResponse <- HarchWeb.renderResponse application secondRequest
       assertRenderedPageResult expectedResponse actualResponse
+
+    it "selects client-action CSRF from the resolved account transport" $ do
+      let application = buildAppWithDatabase defaultAppConfig defaultPageRepository
+          requirement route transport =
+            HarchWeb.clientActionCsrfRequirement
+              application
+              (Just (WebApi.Route.endpointMetadata route))
+              (defaultRequestContext {requestAuthenticationTransport = transport})
+      expectAll
+        ( (requirement ProfileRoute NoRequestAuthentication `shouldBe` HarchWeb.ClientActionCsrfRequired)
+            :| [ requirement ProfileRoute AccountJwtFromCookie `shouldBe` HarchWeb.ClientActionCsrfRequired,
+                 requirement ProfileRoute AccountJwtFromCookieAndBearer `shouldBe` HarchWeb.ClientActionCsrfRequired,
+                 requirement ProfileRoute AccountJwtFromBearer `shouldBe` HarchWeb.ClientActionCsrfNotRequired,
+                 requirement LoginRoute AccountJwtFromBearer `shouldBe` HarchWeb.ClientActionCsrfRequired
+               ]
+        )
 
     it "attaches trusted declared route facts after root route selection" $ do
       let selectedRoute = LoginRoute

@@ -33,6 +33,7 @@ import Data.Text.Encoding.Error qualified as TextEncodingError
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Csrf (PageSecurity, pageSecurityRuntimeNonce)
+import HarchWeb.EndpointSecurity (EndpointMetadata)
 import HarchWeb.RequestId (RequestId, RequestIdIngressResult (..), requestIdText, resolveRequestIdIngress)
 import HarchWeb.Routing
   ( RouteDispatch (..),
@@ -233,7 +234,7 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
       case guardResult of
         HaltPostMatch guardedResponse ->
           continueRoutedResponse routedRequestExecution timingState routeDispatch (nonPageResponse guardedResponse)
-        ContinuePostMatch guardedContext selectedAdmissionRoute -> do
+        ContinuePostMatch guardedContext selectedAdmissionRoute selectedEndpointMetadata -> do
           let guardedDispatch = setRouteDispatchContext guardedContext routeDispatch
           routeMiddleware <- routeAdmissionMiddleware routedRequestExecution selectedAdmissionRoute
           routeMiddleware
@@ -242,6 +243,7 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
                   (routedRequestExecution {routedRequestWaiRequest = admittedRequest, routedRequestRespond = admittedRespond})
                   timingState
                   decodedRequestMethod
+                  selectedEndpointMetadata
                   guardedDispatch
             )
             request
@@ -270,11 +272,12 @@ continueRoutedRequest ::
   RoutedRequestExecution route action context authorization ->
   RequestExecutionTimingState ->
   Text ->
+  Maybe (EndpointMetadata authorization) ->
   RouteDispatch route context ->
   IO Wai.ResponseReceived
-continueRoutedRequest routedRequestExecution timingState decodedRequestMethod routeDispatch = do
+continueRoutedRequest routedRequestExecution timingState decodedRequestMethod selectedEndpointMetadata routeDispatch = do
   renderStartedAt <- getMonotonicTimeNSec
-  response <- dispatchRoutedRequest routedRequestExecution decodedRequestMethod routeDispatch
+  response <- dispatchRoutedRequest routedRequestExecution decodedRequestMethod selectedEndpointMetadata routeDispatch
   continueRoutedResponseAt routedRequestExecution timingState routeDispatch renderStartedAt response
 
 continueRoutedResponse ::
@@ -352,11 +355,13 @@ middlewareTimingEntry webApplication startedAt completedAt =
 dispatchRoutedRequest ::
   RoutedRequestExecution route action context authorization ->
   Text ->
+  Maybe (EndpointMetadata authorization) ->
   RouteDispatch route context ->
   IO (Response route context)
 dispatchRoutedRequest
   routedRequestExecution
   decodedRequestMethod
+  selectedEndpointMetadata
   routeDispatch =
     let webApplication = routedRequestApplication routedRequestExecution
         request = routedRequestWaiRequest routedRequestExecution
@@ -366,7 +371,7 @@ dispatchRoutedRequest
           Right renderDispatch@RenderMatchedHead {} -> renderRouteDispatch webApplication (routedRequestId routedRequestExecution) request renderDispatch
           Right renderDispatch
             | isClientActionRequest request ->
-                clientActionResponse webApplication (routedRequestId routedRequestExecution) request decodedRequestMethod (routedRequestPath routedRequestExecution) routedRequestContext
+                clientActionResponse webApplication (routedRequestId routedRequestExecution) request decodedRequestMethod (routedRequestPath routedRequestExecution) selectedEndpointMetadata routedRequestContext
             | otherwise -> renderRouteDispatch webApplication (routedRequestId routedRequestExecution) request renderDispatch
 
 data RouteRenderDispatch route context

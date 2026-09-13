@@ -12,7 +12,7 @@ import Network.Wai qualified as Wai
 import TestCore.Wai (waiRequest)
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi.Config (AppConfig (..), defaultAppConfig)
-import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), PageRoute, RouteSelectionError (..), defaultRequestContext, renderRoutePath, renderRouteUrl)
+import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), PageRoute, RequestAuthenticationTransport (..), RouteSelectionError (..), defaultRequestContext, renderRoutePath, renderRouteUrl)
 import WebApi.Route qualified
 
 -- | Tests enter the public route codec through the same raw-target decoder
@@ -103,6 +103,19 @@ spec = do
       show LanguageRoute `shouldBe` "LanguageRoute"
       show HelpRoute `shouldBe` "HelpRoute"
       Page WebApi.Route.HomePage `shouldNotBe` Api ApiNotFound
+
+  describe "request authentication transport" $
+    it "keeps every source value comparable and inspectable" $ do
+      let transports = [NoRequestAuthentication, AccountJwtFromCookie, AccountJwtFromBearer, AccountJwtFromCookieAndBearer]
+      expectAll
+        ( (transports `shouldBe` transports)
+            :| [ map show transports
+                   `shouldBe` ["NoRequestAuthentication", "AccountJwtFromCookie", "AccountJwtFromBearer", "AccountJwtFromCookieAndBearer"],
+                 showList transports "" `shouldBe` "[NoRequestAuthentication,AccountJwtFromCookie,AccountJwtFromBearer,AccountJwtFromCookieAndBearer]",
+                 NoRequestAuthentication `shouldNotBe` AccountJwtFromCookie,
+                 AccountJwtFromBearer `shouldNotBe` AccountJwtFromCookieAndBearer
+               ]
+        )
 
   describe "requestContextFromWaiRequest" $
     it "accepts only a valid MFA-enrollment cookie while preserving the supplied context" $ do
@@ -262,7 +275,8 @@ spec = do
             ( HarchWeb.endpointNameText (HarchWeb.endpointName endpointMetadataValue),
               HarchWeb.routeTemplateText (HarchWeb.endpointRouteTemplate endpointMetadataValue),
               HarchWeb.endpointProtocol endpointMetadataValue,
-              HarchWeb.endpointAccess endpointMetadataValue
+              HarchWeb.endpointAccess endpointMetadataValue,
+              HarchWeb.endpointAuthenticationProfile endpointMetadataValue
             )
           expectedMetadata =
             [ (HomeRoute, "web.home", "/{locale}", HarchWeb.HtmlEndpoint),
@@ -284,9 +298,12 @@ spec = do
           expectedAccess route
             | route `elem` [LogoutRoute, ProfileRoute] = HarchWeb.RequireAuthenticated
             | otherwise = HarchWeb.AllowUnauthenticated
+          expectedProfile route
+            | route `elem` [LogoutRoute, ProfileRoute] = Just WebApi.Route.accountAuthenticationProfileName
+            | otherwise = Nothing
       forM_ expectedMetadata $ \(route, expectedName, template, protocol) ->
         endpointDeclarationFields (WebApi.Route.endpointMetadata route)
-          `shouldBe` (expectedName, template, protocol, expectedAccess route)
+          `shouldBe` (expectedName, template, protocol, expectedAccess route, expectedProfile route)
 
   describe "matchRoute" $ do
     it "remains available separately from HarchWeb.matchRoute" $
