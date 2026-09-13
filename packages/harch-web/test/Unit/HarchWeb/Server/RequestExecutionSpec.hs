@@ -797,9 +797,7 @@ spec =
                ]
         )
 
-    it "negotiates a terminal action failure as SSR HTML only when the caller accepts HTML" $ do
-      htmlBodyChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
-      jsonBodyChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
+    it "negotiates a terminal action failure as SSR HTML only when HTML wins Accept negotiation" $ do
       let terminalApplication =
             sampleApplication
               { HarchWeb.clientActionEndpointMetadata = \methodValue pathValue _ ->
@@ -812,29 +810,49 @@ spec =
                     else Nothing,
                 handleClientAction = \_ -> pure (Just (HarchWeb.ClientActionFailedTerminally HarchWeb.defaultClientActionTerminalFailure))
               }
-          actionRequest acceptValue bodyChunks =
+          actionRequest maybeAcceptValue bodyChunks =
             Wai.setRequestBodyChunks
               (nextRequestBodyChunk bodyChunks)
               ( (waiRequest ["es", "known"])
                   { Wai.requestMethod = "POST",
-                    Wai.requestHeaders = [("X-Harch-Action", "1"), ("Accept", acceptValue), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
+                    Wai.requestHeaders =
+                      [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
+                        <> maybe [] (\acceptValue -> [("Accept", acceptValue)]) maybeAcceptValue
                   }
               )
-      htmlResponse <- performWaiRequest (toWaiApplication terminalApplication) (actionRequest "text/html, application/json;q=0.9" htmlBodyChunks)
-      jsonResponse <- performWaiRequest (toWaiApplication terminalApplication) (actionRequest "application/json" jsonBodyChunks)
-      htmlBody <- readResponseBody htmlResponse
-      jsonBody <- readResponseBody jsonResponse
-      expectAll
-        ( (Wai.responseStatus htmlResponse `shouldBe` Http.status500)
-            :| [ lookup Http.hContentType (Wai.responseHeaders htmlResponse) `shouldBe` Just "text/html; charset=utf-8",
-                 htmlBody `shouldSatisfy` Text.isInfixOf "Request could not be completed",
-                 lookup "X-Request-ID" (Wai.responseHeaders htmlResponse) `shouldSatisfy` isJust,
-                 Wai.responseStatus jsonResponse `shouldBe` Http.status500,
-                 lookup Http.hContentType (Wai.responseHeaders jsonResponse) `shouldBe` Just "application/json; charset=utf-8",
-                 jsonBody `shouldSatisfy` Text.isInfixOf "\"requestId\":",
-                 jsonBody `shouldSatisfy` (not . Text.isInfixOf "Request could not be completed")
-               ]
-        )
+          terminalResponse maybeAcceptValue = do
+            bodyChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
+            response <- performWaiRequest (toWaiApplication terminalApplication) (actionRequest maybeAcceptValue bodyChunks)
+            body <- readResponseBody response
+            pure (response, body)
+      htmlResponse <- terminalResponse (Just "text/html, application/json;q=0.9")
+      jsonResponse <- terminalResponse (Just "application/json;q=1, text/html;q=0.9")
+      excludedHtmlResponse <- terminalResponse (Just "text/html;q=0, application/json")
+      wildcardHtmlResponse <- terminalResponse (Just "text/*, application/json;q=0.9")
+      missingAcceptResponse <- terminalResponse Nothing
+      unsupportedResponse <- terminalResponse (Just "image/png")
+      let assertHtmlResponse (response, responseBody) =
+            expectAll
+              ( (Wai.responseStatus response `shouldBe` Http.status500)
+                  :| [ lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/html; charset=utf-8",
+                       responseBody `shouldSatisfy` Text.isInfixOf "Request could not be completed",
+                       lookup "X-Request-ID" (Wai.responseHeaders response) `shouldSatisfy` isJust
+                     ]
+              )
+          assertJsonResponse (response, responseBody) =
+            expectAll
+              ( (Wai.responseStatus response `shouldBe` Http.status500)
+                  :| [ lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/json; charset=utf-8",
+                       responseBody `shouldSatisfy` Text.isInfixOf "\"requestId\":",
+                       responseBody `shouldSatisfy` (not . Text.isInfixOf "Request could not be completed")
+                     ]
+              )
+      assertHtmlResponse htmlResponse
+      assertHtmlResponse wildcardHtmlResponse
+      assertJsonResponse jsonResponse
+      assertJsonResponse excludedHtmlResponse
+      assertJsonResponse missingAcceptResponse
+      assertJsonResponse unsupportedResponse
 
     it "rejects oversized or cross-origin client actions before application dispatch" $ do
       oversizedChunks <- newIORef [ByteString.replicate 65537 97]
