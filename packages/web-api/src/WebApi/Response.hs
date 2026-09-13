@@ -1,189 +1,198 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module WebApi.Response
-  ( renderApiResponseFromRouteData,
+  ( FailureDiagnostics (..),
+    FailureSurface (..),
+    jsonErrorBody,
+    jsonText,
+    pageFailureDiagnostics,
+    renderLocale,
+    spacesLocation,
+    apiNotFoundResponse,
+    secondRouteApiBody,
+    selectResponseWithDatabaseAndAccountWorkflow,
     selectResponseWithDatabase,
     selectResponse,
+    statusApiBody,
+    toHarchDatabaseOperation,
   )
 where
 
+import Data.Aeson qualified as Aeson
+import Data.Aeson.Encoding qualified as JsonEncoding
+import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
+import HarchWeb.Database qualified as HarchDatabase
 import HarchWeb.Observability qualified as Observability
+import Network.HTTP.Types qualified as Http
+import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppConfig)
-import WebApi.Database (DatabaseEffect, DatabaseError (..), DatabaseOperation (..), defaultDatabaseEffect)
-import WebApi.Page (renderPageFromRouteData)
+import WebApi.Database (DatabaseError (..), DatabaseOperation (..), PageRepository, defaultPageRepository)
+import WebApi.Page (renderPageFromRouteData, renderProfilePageWithState, renderUnavailableProfilePage)
+import WebApi.Profile (ProfileLoadError (..), loadProfileForPrincipal)
 import WebApi.Route
   ( AppLocale (..),
     AppRequestContext (..),
-    AppRoute,
-    RequestSurface (..),
+    AppRoute (..),
+    renderRoutePath,
   )
 import WebApi.RouteData
   ( RouteDataResult (..),
     RouteDataSelection (..),
     SecondRouteData (..),
-    StatusApiData (..),
     selectRouteDataSelectionWithDatabase,
   )
 
-selectResponse :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
+-- | Select a page-handler outcome before Harch's single renderer attaches
+-- per-document security.  API and redirect routes are dispatched separately
+-- by 'WebApi.App'; this function cannot construct a final page response.
+selectResponse :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.PageResult AppRoute AppRequestContext)
 selectResponse config =
-  selectResponseWithDatabase config defaultDatabaseEffect
+  selectResponseWithDatabase config defaultPageRepository
 
-selectResponseWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
-selectResponseWithDatabase config databaseEffect routeRequest =
+selectResponseWithDatabase :: AppConfig -> PageRepository -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.PageResult AppRoute AppRequestContext)
+selectResponseWithDatabase config pageRepository routeRequest =
   fmap
-    ( \routeDataSelection ->
-        case requestSurface (HarchWeb.requestContext routeRequest) of
-          ApiSurface ->
-            HarchWeb.BodyResponse (renderApiResponseFromRouteDataSelection routeDataSelection)
-          PageSurface ->
-            renderPageResponseFromRouteDataSelection config routeRequest routeDataSelection
-    )
-    (selectRouteDataSelectionWithDatabase databaseEffect routeRequest)
+    (renderPageResponseFromRouteDataSelection config routeRequest)
+    (selectRouteDataSelectionWithDatabase pageRepository routeRequest)
+
+selectResponseWithDatabaseAndAccountWorkflow :: AppConfig -> PageRepository -> AccountWorkflow -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.PageResult AppRoute AppRequestContext)
+selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow routeRequest =
+  if isProfilePageRequest routeRequest
+    then selectProfileResponse config accountWorkflow routeRequest
+    else selectResponseWithDatabase config pageRepository routeRequest
+
+isProfilePageRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Bool
+isProfilePageRequest routeRequest =
+  HarchWeb.requestRoute routeRequest == ProfileRoute
+
+selectProfileResponse :: AppConfig -> AccountWorkflow -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.PageResult AppRoute AppRequestContext)
+selectProfileResponse config accountWorkflow routeRequest = do
+  loadedProfile <-
+    loadProfileForPrincipal
+      (accountWorkflowProfileStore accountWorkflow)
+      (requestAccountPrincipal (HarchWeb.requestContext routeRequest))
+  pure $
+    case loadedProfile of
+      Right profileState -> HarchWeb.RenderedPage (renderProfilePageWithState config routeRequest profileState)
+      Left (ProfileAccountStoreError _) ->
+        HarchWeb.RenderedPageWithMetadata
+          (pageErrorResponseMetadata profileFailureDiagnostics)
+          (renderUnavailableProfilePage config routeRequest)
+
+spacesLocation :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Text
+spacesLocation routeRequest =
+  renderRoutePath
+    HarchWeb.RouteRequest
+      { HarchWeb.requestRoute = SpacesRoute,
+        HarchWeb.requestContext = HarchWeb.requestContext routeRequest
+      }
 
 renderPageResponseFromRouteDataSelection ::
   AppConfig ->
   HarchWeb.RouteRequest AppRoute AppRequestContext ->
   RouteDataSelection ->
-  HarchWeb.Response AppRoute AppRequestContext
+  HarchWeb.PageResult AppRoute AppRequestContext
 renderPageResponseFromRouteDataSelection config routeRequest routeDataSelection =
   case routeData of
-    HomeRouteDataResult (Left databaseError) ->
-      let renderedPage = renderPageFromRouteData config routeRequest routeData
-       in HarchWeb.PageResponseWithMetadata
-            (pageErrorResponseMetadata (pageFailureDiagnostics PageSurface "/" "home-page" routeDataDatabaseOperationsValue databaseError))
-            renderedPage
     SecondRouteDataResult (Left databaseError) ->
       let renderedPage = renderPageFromRouteData config routeRequest routeData
-       in HarchWeb.PageResponseWithMetadata
-            (pageErrorResponseMetadata (pageFailureDiagnostics PageSurface "/second" "second-page" routeDataDatabaseOperationsValue databaseError))
+       in HarchWeb.RenderedPageWithMetadata
+            (pageErrorResponseMetadata (pageFailureDiagnostics PageFailureSurface "/second" "second-page" routeDataDatabaseOperationsValue databaseError))
             renderedPage
     _ ->
       let renderedPage = renderPageFromRouteData config routeRequest routeData
        in if null routeDataDatabaseOperationsValue
-            then HarchWeb.PageResponse renderedPage
-            else HarchWeb.PageResponseWithMetadata (pageSuccessResponseMetadata routeDataDatabaseOperationsValue) renderedPage
+            then HarchWeb.RenderedPage renderedPage
+            else HarchWeb.RenderedPageWithMetadata (pageSuccessResponseMetadata routeDataDatabaseOperationsValue) renderedPage
   where
     routeData = routeDataResult routeDataSelection
     routeDataDatabaseOperationsValue = routeDataDatabaseOperations routeDataSelection
 
-renderApiResponseFromRouteData :: RouteDataResult -> HarchWeb.ResponseBody
-renderApiResponseFromRouteData =
-  renderApiResponseFromRouteDataWithOperations []
+statusApiBody :: AppLocale -> JsonEncoding.Encoding
+statusApiBody locale =
+  JsonEncoding.pairs
+    ( JsonEncoding.pair "status" (Aeson.toEncoding ("ok" :: Text))
+        <> JsonEncoding.pair "locale" (Aeson.toEncoding (renderLocale locale))
+    )
 
-renderApiResponseFromRouteDataSelection :: RouteDataSelection -> HarchWeb.ResponseBody
-renderApiResponseFromRouteDataSelection routeDataSelection =
-  renderApiResponseFromRouteDataWithOperations
-    (routeDataDatabaseOperations routeDataSelection)
-    (routeDataResult routeDataSelection)
-
-renderApiResponseFromRouteDataWithOperations :: [DatabaseOperation] -> RouteDataResult -> HarchWeb.ResponseBody
-renderApiResponseFromRouteDataWithOperations databaseOperations routeData =
-  case routeData of
-    StatusApiDataResult statusApiData ->
-      jsonResponseBodyWithOperations 200 (statusApiBody statusApiData) databaseOperations
-    SecondRouteDataResult (Right secondRouteData) ->
-      jsonResponseBodyWithOperations 200 (secondRouteApiBody secondRouteData) databaseOperations
-    SecondRouteDataResult (Left databaseError) ->
-      jsonErrorResponseBody 503 "{\"error\":\"second-page-unavailable\"}" (pageFailureDiagnostics ApiSurface "/second" "second-page" databaseOperations databaseError)
-    _ ->
-      jsonResponseBodyWithOperations 404 "{\"error\":\"not-found\"}" databaseOperations
-
-statusApiBody :: StatusApiData -> Text
-statusApiBody statusApiData =
-  Text.concat
-    [ "{\"status\":\"ok\",\"locale\":\"",
-      renderLocale (statusApiLocale statusApiData),
-      "\"}"
-    ]
-
-secondRouteApiBody :: SecondRouteData -> Text
+secondRouteApiBody :: SecondRouteData -> JsonEncoding.Encoding
 secondRouteApiBody secondRouteData =
-  Text.concat
-    [ "{\"summary\":",
-      renderJsonString (secondRouteSummary secondRouteData),
-      ",\"highlights\":",
-      renderJsonStringList (secondRouteHighlights secondRouteData),
-      "}"
-    ]
+  JsonEncoding.pairs
+    ( JsonEncoding.pair "summary" (Aeson.toEncoding (secondRouteSummary secondRouteData))
+        <> JsonEncoding.pair "highlights" (Aeson.toEncoding (secondRouteHighlights secondRouteData))
+    )
 
-renderJsonStringList :: [Text] -> Text
-renderJsonStringList values =
-  Text.concat
-    [ "[",
-      Text.intercalate "," (map renderJsonString values),
-      "]"
-    ]
-
-renderJsonString :: Text -> Text
-renderJsonString value =
-  Text.concat ["\"", value, "\""]
+jsonErrorBody :: Text -> JsonEncoding.Encoding
+jsonErrorBody errorCode =
+  JsonEncoding.pairs (JsonEncoding.pair "error" (Aeson.toEncoding errorCode))
 
 renderLocale :: AppLocale -> Text
 renderLocale locale =
   case locale of
     English -> "en"
-    French -> "fr"
+    Spanish -> "es"
 
-jsonResponseBodyWithOperations :: Int -> Text -> [DatabaseOperation] -> HarchWeb.ResponseBody
-jsonResponseBodyWithOperations statusCode bodyText databaseOperations =
+apiNotFoundResponse :: HarchWeb.ResponseBody
+apiNotFoundResponse =
   HarchWeb.ResponseBody
-    { HarchWeb.responseStatus = statusCode,
+    { HarchWeb.responseStatus = Http.status404,
       HarchWeb.responseContentType = "application/json",
-      HarchWeb.responseBody = bodyText,
-      HarchWeb.responseObservabilityAttributes = databaseOperationObservabilityAttributes databaseOperations,
-      HarchWeb.responseLogEntries = []
+      HarchWeb.responseBody = jsonText (jsonErrorBody "not-found"),
+      HarchWeb.responseObservabilityAttributes = [],
+      HarchWeb.responseLogEntries = [],
+      HarchWeb.responseDatabaseOperations = []
     }
 
-jsonErrorResponseBody :: Int -> Text -> FailureDiagnostics -> HarchWeb.ResponseBody
-jsonErrorResponseBody statusCode bodyText diagnostics =
-  HarchWeb.ResponseBody
-    { HarchWeb.responseStatus = statusCode,
-      HarchWeb.responseContentType = "application/json",
-      HarchWeb.responseBody = bodyText,
-      HarchWeb.responseObservabilityAttributes = diagnosticsObservabilityAttributes diagnostics,
-      HarchWeb.responseLogEntries = diagnosticsLogEntries diagnostics
-    }
+jsonText :: JsonEncoding.Encoding -> Text
+jsonText = TextEncoding.decodeUtf8 . LazyByteString.toStrict . JsonEncoding.encodingToLazyByteString
 
 pageSuccessResponseMetadata :: [DatabaseOperation] -> HarchWeb.ResponseBody
 pageSuccessResponseMetadata databaseOperations =
   HarchWeb.ResponseBody
-    { HarchWeb.responseStatus = 200,
+    { HarchWeb.responseStatus = Http.status200,
       HarchWeb.responseContentType = "text/html; charset=utf-8",
       HarchWeb.responseBody = "",
-      HarchWeb.responseObservabilityAttributes = databaseOperationObservabilityAttributes databaseOperations,
-      HarchWeb.responseLogEntries = []
+      HarchWeb.responseObservabilityAttributes = [],
+      HarchWeb.responseLogEntries = [],
+      HarchWeb.responseDatabaseOperations = map toHarchDatabaseOperation databaseOperations
     }
 
 pageErrorResponseMetadata :: FailureDiagnostics -> HarchWeb.ResponseBody
 pageErrorResponseMetadata diagnostics =
   HarchWeb.ResponseBody
-    { HarchWeb.responseStatus = 500,
+    { HarchWeb.responseStatus = Http.status500,
       HarchWeb.responseContentType = "text/html; charset=utf-8",
       HarchWeb.responseBody = "",
       HarchWeb.responseObservabilityAttributes = diagnosticsObservabilityAttributes diagnostics,
-      HarchWeb.responseLogEntries = diagnosticsLogEntries diagnostics
+      HarchWeb.responseLogEntries = diagnosticsLogEntries diagnostics,
+      HarchWeb.responseDatabaseOperations = diagnosticsDatabaseOperations diagnostics
     }
 
 data FailureDiagnostics = FailureDiagnostics
   { diagnosticsObservabilityAttributes :: [Observability.ObservabilityAttribute],
-    diagnosticsLogEntries :: [Text]
+    diagnosticsLogEntries :: [Text],
+    diagnosticsDatabaseOperations :: [HarchDatabase.DatabaseOperation]
   }
 
-pageFailureDiagnostics :: RequestSurface -> Text -> Text -> [DatabaseOperation] -> DatabaseError -> FailureDiagnostics
-pageFailureDiagnostics requestSurfaceValue routePath routeLabel databaseOperations databaseError =
+data FailureSurface
+  = PageFailureSurface
+  | ApiFailureSurface
+
+pageFailureDiagnostics :: FailureSurface -> Text -> Text -> [DatabaseOperation] -> DatabaseError -> FailureDiagnostics
+pageFailureDiagnostics failureSurface routePath routeLabel databaseOperations databaseError =
   FailureDiagnostics
     { diagnosticsObservabilityAttributes =
         [ Observability.ObservabilityAttribute
-            { Observability.attributeName = "exception.type",
-              Observability.attributeValue = Observability.TextAttribute (databaseErrorType databaseError)
+            { Observability.attributeName = "error.type",
+              Observability.attributeValue = Observability.TextAttribute "SecondPageDataError"
             },
           Observability.ObservabilityAttribute
-            { Observability.attributeName = "exception.message",
-              Observability.attributeValue = Observability.TextAttribute (databaseErrorMessage databaseError)
+            { Observability.attributeName = "app.failure.code",
+              Observability.attributeValue = Observability.TextAttribute "database.second-page-data"
             },
           Observability.ObservabilityAttribute
             { Observability.attributeName = "app.route",
@@ -191,59 +200,61 @@ pageFailureDiagnostics requestSurfaceValue routePath routeLabel databaseOperatio
             },
           Observability.ObservabilityAttribute
             { Observability.attributeName = "app.surface",
-              Observability.attributeValue = Observability.TextAttribute (renderRequestSurface requestSurfaceValue)
+              Observability.attributeValue = Observability.TextAttribute (renderFailureSurface failureSurface)
             }
-        ]
-          <> databaseOperationObservabilityAttributes databaseOperations,
+        ],
       diagnosticsLogEntries =
         [ Text.concat
             [ "Database failure while rendering required ",
               routeLabel,
               " ",
-              renderRequestSurface requestSurfaceValue,
+              renderFailureSurface failureSurface,
               " response",
               renderDatabaseOperationsSuffix databaseOperations,
               ": ",
               Text.pack (show databaseError)
             ]
-        ]
+        ],
+      diagnosticsDatabaseOperations = map toHarchDatabaseOperation databaseOperations
     }
 
-databaseOperationObservabilityAttributes :: [DatabaseOperation] -> [Observability.ObservabilityAttribute]
-databaseOperationObservabilityAttributes =
-  concatMap databaseOperationObservabilityEntries
+profileFailureDiagnostics :: FailureDiagnostics
+profileFailureDiagnostics =
+  FailureDiagnostics
+    { diagnosticsObservabilityAttributes =
+        [ Observability.ObservabilityAttribute
+            { Observability.attributeName = "error.type",
+              Observability.attributeValue = Observability.TextAttribute profileLoadErrorType
+            },
+          Observability.ObservabilityAttribute
+            { Observability.attributeName = "app.failure.code",
+              Observability.attributeValue = Observability.TextAttribute "profile.load"
+            },
+          Observability.ObservabilityAttribute
+            { Observability.attributeName = "app.route",
+              Observability.attributeValue = Observability.TextAttribute "/profile"
+            },
+          Observability.ObservabilityAttribute
+            { Observability.attributeName = "app.surface",
+              Observability.attributeValue = Observability.TextAttribute "page"
+            }
+        ],
+      diagnosticsLogEntries = ["Profile loading failed: " <> profileLoadErrorType],
+      diagnosticsDatabaseOperations = []
+    }
 
-databaseOperationObservabilityEntries :: DatabaseOperation -> [Observability.ObservabilityAttribute]
-databaseOperationObservabilityEntries databaseOperation =
-  [ Observability.ObservabilityAttribute
-      { Observability.attributeName = "db.system",
-        Observability.attributeValue = Observability.TextAttribute "postgresql"
-      },
-    Observability.ObservabilityAttribute
-      { Observability.attributeName = "db.operation.name",
-        Observability.attributeValue = Observability.TextAttribute (databaseOperationName databaseOperation)
-      },
-    Observability.ObservabilityAttribute
-      { Observability.attributeName = "db.query.template",
-        Observability.attributeValue = Observability.TextAttribute (databaseQueryTemplate databaseOperation)
-      }
-  ]
-    <> maybeDatabaseOperationTimingAttributes databaseOperation
+profileLoadErrorType :: Text
+profileLoadErrorType = "AccountStoreError"
 
-maybeDatabaseOperationTimingAttributes :: DatabaseOperation -> [Observability.ObservabilityAttribute]
-maybeDatabaseOperationTimingAttributes databaseOperation =
-  case (databaseOperationStartedAtNanoseconds databaseOperation, databaseOperationEndedAtNanoseconds databaseOperation) of
-    (Just startedAt, Just endedAt) ->
-      [ Observability.ObservabilityAttribute
-          { Observability.attributeName = "db.operation.start_monotonic_ns",
-            Observability.attributeValue = Observability.IntAttribute (fromIntegral startedAt)
-          },
-        Observability.ObservabilityAttribute
-          { Observability.attributeName = "db.operation.duration_ns",
-            Observability.attributeValue = Observability.IntAttribute (fromIntegral (endedAt - min startedAt endedAt))
-          }
-      ]
-    _ -> []
+toHarchDatabaseOperation :: DatabaseOperation -> HarchDatabase.DatabaseOperation
+toHarchDatabaseOperation databaseOperation =
+  HarchDatabase.DatabaseOperation
+    { HarchDatabase.databaseOperationSystem = "postgresql",
+      HarchDatabase.databaseOperationName = databaseOperationName databaseOperation,
+      HarchDatabase.databaseQueryTemplate = databaseQueryTemplate databaseOperation,
+      HarchDatabase.databaseOperationStartedAtNanoseconds = databaseOperationStartedAtNanoseconds databaseOperation,
+      HarchDatabase.databaseOperationEndedAtNanoseconds = databaseOperationEndedAtNanoseconds databaseOperation
+    }
 
 renderDatabaseOperationsSuffix :: [DatabaseOperation] -> Text
 renderDatabaseOperationsSuffix databaseOperations =
@@ -261,20 +272,8 @@ renderDatabaseOperationsSuffix databaseOperations =
           ]
         <> "]"
 
-databaseErrorType :: DatabaseError -> Text
-databaseErrorType databaseError =
-  case databaseError of
-    HomePageDataError _ -> "HomePageDataError"
-    SecondPageDataError _ -> "SecondPageDataError"
-
-databaseErrorMessage :: DatabaseError -> Text
-databaseErrorMessage databaseError =
-  case databaseError of
-    HomePageDataError message -> message
-    SecondPageDataError message -> message
-
-renderRequestSurface :: RequestSurface -> Text
-renderRequestSurface requestSurfaceValue =
-  case requestSurfaceValue of
-    PageSurface -> "page"
-    ApiSurface -> "api"
+renderFailureSurface :: FailureSurface -> Text
+renderFailureSurface failureSurface =
+  case failureSurface of
+    PageFailureSurface -> "page"
+    ApiFailureSurface -> "api"

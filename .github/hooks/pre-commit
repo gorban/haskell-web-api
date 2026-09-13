@@ -6,3 +6,4 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
 .github/scripts/formatting-checks.sh
+tools/check-vscode-ormolu-formatter.sh

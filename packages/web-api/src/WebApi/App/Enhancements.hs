@@ -1,17 +1,10 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module WebApi.App.Enhancements
   ( pageEnhancementHooks,
   )
 where
 
 import Data.Text (Text)
-import WebApi.Route (AppRoute (..))
+import WebApi.Route (AppRoute, RouteMetadata (routeEnhancementHooks), routeMetadata)
 
 pageEnhancementHooks :: AppRoute -> [Text]
-pageEnhancementHooks route =
-  case route of
-    HomeRoute -> []
-    SecondRoute -> ["second-page"]
-    StatusApiRoute -> []
-    NotFoundRoute -> []
+pageEnhancementHooks = routeEnhancementHooks . routeMetadata

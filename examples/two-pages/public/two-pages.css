@@ -1,0 +1,10 @@
+.harch-home-root {
+  display: grid;
+  gap: 1rem;
+  max-inline-size: 42rem;
+}
+
+.harch-home-root :focus-visible {
+  outline: 3px solid currentColor;
+  outline-offset: 3px;
+}

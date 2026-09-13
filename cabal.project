@@ -1,14 +1,49 @@
 packages:
+  examples/catalog-domain/
+  examples/composed-domains/
+  examples/custom-api/
+  examples/custom-db-adapter/
+  examples/localization/
+  examples/multipart-upload/
+  examples/orders-domain/
+  examples/two-pages/
   packages/core/
   packages/harch-web/
   packages/hspec-expectations-match/
+  packages/postgres-database-changes/
   packages/test-core/
+  packages/test-spec-preprocessor/
   packages/web-api/
 
 with-compiler: ghc-9.14.1
 optimization: 2
 tests: True
 debug-info: True
+
+-- HTTP2 cleanup workaround: cabal.project.freeze pins http2-5.4.0 with
+-- time-manager-0.2.4. Track https://github.com/kazu-yamamoto/http2/issues/175.
+-- Once a public release restores callback cleanup, upgrade both packages in
+-- the freeze, keep Http2LifecycleSpec passing, and run the full warning/CI gates
+-- before retiring this note. Removing killManager alone is not a cleanup fix;
+-- lowering the manager bound on newer HTTP2 also hits the withHandle API change
+-- documented in https://github.com/kazu-yamamoto/http2/issues/169.
+-- This workaround is separate from the Serialise/Cborg exceptions below.
+
+-- TLS 2.4 requires serialise-0.2.6.1, whose released metadata predates the
+-- GHC 9.14 boot-library versions.  These are the smallest upper-bound
+-- exceptions that resolve its released source on base-4.22.  The dependency
+-- verification script records the upstream warnings and runs the released
+-- serialise and cborg suites before this plan may be refreshed.
+-- Track https://github.com/well-typed/cborg/pull/385 and the fixes on master.
+-- After public releases include them, refresh the freeze, remove these five
+-- exceptions, and verify upstream suites plus our TLS/runtime and full gates.
+-- Keep the regression tests; see docs/build-diagnostics.md for warning/patch cleanup.
+allow-newer:
+  serialise:base,
+  serialise:containers,
+  serialise:time,
+  cborg:base,
+  cborg:containers
 
 -- We do not need to capture coverage from third party packages (also, it fails if we try)
 package hspec-expectations-match

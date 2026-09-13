@@ -1,0 +1,672 @@
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
+
+-- | Request policy, response security headers, CORS, and request-context
+-- extraction. Request-resource limits (byte/count/timeout/concurrency
+-- bounds and the pre-routing 'HarchWeb.Security.RequestLimits.validateRequestHead'
+-- gate) live in "HarchWeb.Security.RequestLimits" instead, re-exported here
+-- wholesale — split out 2026-08-13 to close the AL module-health
+-- export-count signal (48 exports, over the 40 threshold). That cluster
+-- was already fully self-contained (no dependency on 'RequestPolicyConfig'
+-- or anything else this module owns), so the split needed no
+-- @.Internal@-module plumbing; the response-header/CORS, request-context,
+-- and path/redirect clusters that remain here are genuinely coupled to
+-- each other (see the AL decision record in @docs/design-guidance.md@) and
+-- were deliberately left unsplit rather than forced apart.
+module HarchWeb.Security
+  ( module HarchWeb.Security.ForwardedTrust,
+    module HarchWeb.Security.RequestLimits,
+    CorsPolicyConfig (..),
+    ClientAddress,
+    PathPrefix.PathPrefix,
+    PathPrefix.PathPrefixError (..),
+    PathPrefix.UrlPath,
+    RequestContextField (..),
+    RequestPolicyConfig (..),
+    ResponseSecurityHeadersConfig (..),
+    StrictTransportSecurityConfig (..),
+    addRuntimeNonceToContentSecurityPolicy,
+    applyRequestPathPrefix,
+    corsPreflightResponse,
+    clientAddressText,
+    defaultContentSecurityPolicy,
+    defaultClientAddress,
+    defaultCorsPolicyConfig,
+    defaultResponseSecurityHeadersConfig,
+    externalRequestPath,
+    httpsRedirectResponse,
+    PathPrefix.emptyPathPrefix,
+    PathPrefix.mkUrlPath,
+    parseRequestPathPrefix,
+    PathPrefix.pathPrefixText,
+    requestContextObservabilityAttributes,
+    requestClientAddress,
+    requestContextFields,
+    requestHostWithoutPort,
+    requestLogContextFields,
+    requestPathPrefix,
+    requestPolicyResponseHeaders,
+    requestPolicyResponseHeadersWithNonce,
+    prependRequestLogContext,
+    requestRedirectLocation,
+    requestScheme,
+    requestTraceContext,
+    responseSecurityHeaderValuesWithNonce,
+    socketAddressText,
+    stripRequestPathPrefix,
+    PathPrefix.urlPathText,
+    waiRequestPath,
+    waiRequestRouteTarget,
+  )
+where
+
+import Control.Applicative ((<|>))
+import Data.ByteString qualified as ByteString
+import Data.ByteString.Char8 qualified as ByteStringChar8
+import Data.Char (isAscii, isDigit, isHexDigit)
+import Data.Either (fromRight)
+import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe)
+import Data.Text (Text)
+import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
+import HarchWeb.Document (RuntimeNonce, runtimeNonceValue)
+import HarchWeb.Observability qualified as Observability
+import HarchWeb.PathPrefix qualified as PathPrefix
+import HarchWeb.Routing (RequestTarget, requestTarget)
+import HarchWeb.Security.ForwardedTrust
+import HarchWeb.Security.RequestLimits
+import Network.HTTP.Types qualified as Http
+import Network.Socket qualified as Socket
+import Network.Wai qualified as Wai
+
+data StrictTransportSecurityConfig = StrictTransportSecurityConfig
+  { strictTransportSecurityMaxAgeSeconds :: Int,
+    strictTransportSecurityIncludeSubDomains :: Bool,
+    strictTransportSecurityPreload :: Bool
+  }
+  deriving (Eq, Show)
+
+data CorsPolicyConfig = CorsPolicyConfig
+  { corsAllowedOrigins :: [Text],
+    corsAllowedMethods :: [Text],
+    corsAllowedHeaders :: [Text],
+    corsMaxAgeSeconds :: Maybe Int
+  }
+  deriving (Eq, Show)
+
+-- | A request-derived value retained in private traces and structured logs.
+-- These fields may contain personal or high-cardinality data, so metric
+-- projection is intentionally handled elsewhere.
+data RequestContextField = RequestContextField
+  { requestContextFieldName :: Text,
+    requestContextFieldValue :: Text
+  }
+  deriving (Eq, Show)
+
+-- | A bounded, canonicalized address selected at the one trusted-forwarding
+-- boundary.  Its constructor stays private: applications may persist the
+-- explicitly rendered value as an application-owned rate-limit key, but may
+-- not turn an arbitrary request header into a trusted client identity.
+--
+-- Decision (AHI-3, 2026-09-01): this extends the existing request-context
+-- resolver rather than adding an application forwarding parser.  A trusted
+-- @Forwarded@ or @X-Forwarded-For@ token is accepted only when it is a short
+-- address-shaped ASCII value; malformed values safely fall back to the
+-- accepted socket peer.  Direct socket peers retain the existing Unix and
+-- IPv6 rendering policy.
+newtype ClientAddress = ClientAddress Text
+  deriving (Eq)
+
+instance Show ClientAddress where
+  show _ = "ClientAddress <redacted>"
+
+-- | Render the opaque address only at a deliberate application persistence
+-- boundary.  It is unsuitable for public diagnostics, metrics, or logs.
+clientAddressText :: ClientAddress -> Text
+clientAddressText (ClientAddress address) = address
+
+-- | The loopback identity used only when an application synthesizes a request
+-- context without an accepted socket peer, such as a deterministic unit test.
+-- Real server requests always use 'requestClientAddress'.
+defaultClientAddress :: ClientAddress
+defaultClientAddress = ClientAddress "127.0.0.1"
+
+defaultCorsPolicyConfig :: CorsPolicyConfig
+defaultCorsPolicyConfig =
+  CorsPolicyConfig
+    { corsAllowedOrigins = [],
+      corsAllowedMethods = ["GET", "HEAD", "OPTIONS"],
+      corsAllowedHeaders = ["Content-Type", "X-Requested-With"],
+      corsMaxAgeSeconds = Nothing
+    }
+
+data ResponseSecurityHeadersConfig = ResponseSecurityHeadersConfig
+  { contentSecurityPolicy :: Maybe Text,
+    contentTypeOptionsNoSniff :: Bool,
+    xssProtection :: Maybe Text,
+    referrerPolicy :: Maybe Text,
+    permissionsPolicy :: Maybe Text,
+    frameOptions :: Maybe Text
+  }
+  deriving (Eq, Show)
+
+defaultContentSecurityPolicy :: Text
+defaultContentSecurityPolicy =
+  Text.intercalate
+    "; "
+    [ "default-src 'self'",
+      "base-uri 'self'",
+      "object-src 'none'",
+      "frame-ancestors 'none'",
+      "form-action 'self'",
+      "script-src 'self'",
+      "style-src 'self'",
+      "img-src 'self' data:",
+      "font-src 'self'",
+      "connect-src 'self'"
+    ]
+
+defaultResponseSecurityHeadersConfig :: ResponseSecurityHeadersConfig
+defaultResponseSecurityHeadersConfig =
+  ResponseSecurityHeadersConfig
+    { contentSecurityPolicy = Just defaultContentSecurityPolicy,
+      contentTypeOptionsNoSniff = True,
+      xssProtection = Just "1; mode=block",
+      referrerPolicy = Just "strict-origin-when-cross-origin",
+      permissionsPolicy = Just "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+      frameOptions = Just "DENY"
+    }
+
+data RequestPolicyConfig = RequestPolicyConfig
+  { redirectHttpToHttps :: Bool,
+    httpsRedirectPort :: Maybe Int,
+    -- | The bare host (no scheme, no port) the HTTPS upgrade redirects to.
+    -- 'requestRedirectLocation' never echoes the request's own @Host@ header
+    -- into the redirect target: an untrusted client (or an intermediary
+    -- cache) could set that header to anything, turning the redirect into
+    -- an open-redirect primitive. When this is 'Nothing' — no canonical
+    -- authority is configured — the upgrade simply does not redirect,
+    -- rather than falling back to the untrusted header. See the DF decision
+    -- record in @docs/design-guidance.md@.
+    httpsRedirectAuthority :: Maybe ByteString.ByteString,
+    strictTransportSecurity :: Maybe StrictTransportSecurityConfig,
+    -- | Which peers this deployment trusts to supply proxy-forwarded
+    -- request context. Every @X-Forwarded-*@\/@Forwarded@ read below is
+    -- gated on the request's actual TCP peer ('Wai.remoteHost') matching
+    -- this, never on the header content alone — a bare on\/off flag let any
+    -- client spoof its own client address and downgrade its own connection
+    -- by simply sending the header. See the DE decision record in
+    -- @docs/design-guidance.md@.
+    forwardedHeaderTrust :: ForwardedHeaderTrust,
+    requestHeadLimits :: RequestHeadLimits,
+    requestTransportLimits :: RequestTransportLimits,
+    requestConcurrencyLimit :: Maybe RequestConcurrencyLimit,
+    corsPolicy :: CorsPolicyConfig,
+    responseSecurityHeaders :: ResponseSecurityHeadersConfig
+  }
+  deriving (Eq, Show)
+
+httpsRedirectResponse :: ByteString.ByteString -> Wai.Response
+httpsRedirectResponse redirectLocation =
+  Wai.responseLBS
+    Http.status308
+    [ (Http.hLocation, redirectLocation),
+      (Http.hContentType, "text/plain; charset=utf-8")
+    ]
+    "Redirecting to HTTPS"
+
+waiRequestPath :: RequestPolicyConfig -> Wai.Request -> Text
+waiRequestPath requestPolicyConfig request =
+  PathPrefix.urlPathText
+    ( stripRequestPathPrefix
+        (requestPathPrefix requestPolicyConfig request)
+        (PathPrefix.mkUrlPath (rawRequestPath request))
+    )
+
+requestRedirectLocation :: RequestPolicyConfig -> Wai.Request -> Maybe ByteString.ByteString
+requestRedirectLocation requestPolicyConfig request =
+  if redirectHttpToHttps requestPolicyConfig
+    && requestScheme requestPolicyConfig request == "http"
+    && not (isAcmeHttp01ChallengeRequest requestPolicyConfig request)
+    then
+      fmap
+        ( \canonicalAuthority ->
+            "https://"
+              <> applyHttpsRedirectPort (httpsRedirectPort requestPolicyConfig) canonicalAuthority
+              <> requestRedirectPathAndQuery requestPolicyConfig request
+        )
+        (httpsRedirectAuthority requestPolicyConfig)
+    else Nothing
+
+requestRedirectPathAndQuery :: RequestPolicyConfig -> Wai.Request -> ByteString.ByteString
+requestRedirectPathAndQuery requestPolicyConfig request =
+  TextEncoding.encodeUtf8 (externalRequestPath requestPolicyConfig request) <> Wai.rawQueryString request
+
+applyHttpsRedirectPort :: Maybe Int -> ByteString.ByteString -> ByteString.ByteString
+applyHttpsRedirectPort maybeRedirectPort canonicalAuthority =
+  let hostOnly = ByteStringChar8.takeWhile (/= ':') canonicalAuthority
+   in case maybeRedirectPort of
+        Nothing -> canonicalAuthority
+        Just 443 -> hostOnly
+        Just redirectPort ->
+          hostOnly <> ":" <> ByteStringChar8.pack (show redirectPort)
+
+isAcmeHttp01ChallengeRequest :: RequestPolicyConfig -> Wai.Request -> Bool
+isAcmeHttp01ChallengeRequest requestPolicyConfig request =
+  Text.isPrefixOf "/.well-known/acme-challenge/" (waiRequestPath requestPolicyConfig request)
+
+requestPolicyResponseHeaders :: RequestPolicyConfig -> Wai.Request -> Http.ResponseHeaders
+requestPolicyResponseHeaders requestPolicyConfig request =
+  requestPolicyResponseHeadersWithNonce requestPolicyConfig request Nothing
+
+requestPolicyResponseHeadersWithNonce :: RequestPolicyConfig -> Wai.Request -> Maybe RuntimeNonce -> Http.ResponseHeaders
+requestPolicyResponseHeadersWithNonce requestPolicyConfig request maybeRuntimeNonce =
+  responseSecurityHeaderValuesWithNonce (responseSecurityHeaders requestPolicyConfig) maybeRuntimeNonce
+    <> strictTransportSecurityHeaders requestPolicyConfig request
+    <> corsPolicyHeaders (corsPolicy requestPolicyConfig) request
+
+responseSecurityHeaderValuesWithNonce :: ResponseSecurityHeadersConfig -> Maybe RuntimeNonce -> Http.ResponseHeaders
+responseSecurityHeaderValuesWithNonce responseSecurityHeadersConfig maybeRuntimeNonce =
+  catMaybes
+    [ ("Content-Security-Policy",) . TextEncoding.encodeUtf8
+        <$> contentSecurityPolicyWithRuntimeNonce maybeRuntimeNonce (contentSecurityPolicy responseSecurityHeadersConfig),
+      if contentTypeOptionsNoSniff responseSecurityHeadersConfig
+        then Just ("X-Content-Type-Options", "nosniff")
+        else Nothing,
+      ("X-XSS-Protection",) . TextEncoding.encodeUtf8
+        <$> xssProtection responseSecurityHeadersConfig,
+      ("Referrer-Policy",) . TextEncoding.encodeUtf8
+        <$> referrerPolicy responseSecurityHeadersConfig,
+      ("Permissions-Policy",) . TextEncoding.encodeUtf8
+        <$> permissionsPolicy responseSecurityHeadersConfig,
+      ("X-Frame-Options",) . TextEncoding.encodeUtf8
+        <$> frameOptions responseSecurityHeadersConfig
+    ]
+
+contentSecurityPolicyWithRuntimeNonce :: Maybe RuntimeNonce -> Maybe Text -> Maybe Text
+contentSecurityPolicyWithRuntimeNonce maybeRuntimeNonce maybeContentSecurityPolicy =
+  case (maybeRuntimeNonce, maybeContentSecurityPolicy) of
+    (Just runtimeNonce, Just policy) -> Just (addRuntimeNonceToContentSecurityPolicy runtimeNonce policy)
+    (_, policy) -> policy
+
+addRuntimeNonceToContentSecurityPolicy :: RuntimeNonce -> Text -> Text
+addRuntimeNonceToContentSecurityPolicy runtimeNonce policy =
+  Text.intercalate
+    "; "
+    ( if any isScriptSourceDirective directives
+        then map addNonceToDirective directives
+        else directives <> ["script-src " <> nonceSource]
+    )
+  where
+    nonceSource = "'nonce-" <> runtimeNonceValue runtimeNonce <> "'"
+    directives = filter (not . Text.null) (map Text.strip (Text.splitOn ";" policy))
+    isScriptSourceDirective directive =
+      case Text.words directive of
+        "script-src" : _ -> True
+        _ -> False
+    addNonceToDirective directive =
+      case Text.words directive of
+        "script-src" : sources ->
+          Text.unwords
+            ( "script-src"
+                : if "'none'" `elem` sources
+                  then [nonceSource]
+                  else sources <> [nonceSource]
+            )
+        _ -> Text.strip directive
+
+strictTransportSecurityHeaders :: RequestPolicyConfig -> Wai.Request -> Http.ResponseHeaders
+strictTransportSecurityHeaders requestPolicyConfig request =
+  case strictTransportSecurity requestPolicyConfig of
+    Just config
+      | requestScheme requestPolicyConfig request == "https" ->
+          [ ( "Strict-Transport-Security",
+              TextEncoding.encodeUtf8 (strictTransportSecurityHeaderValue config)
+            )
+          ]
+    _ -> []
+
+corsPolicyHeaders :: CorsPolicyConfig -> Wai.Request -> Http.ResponseHeaders
+corsPolicyHeaders corsPolicyConfig request =
+  case lookup "Origin" (Wai.requestHeaders request) of
+    Just originHeader
+      | originAllowed corsPolicyConfig originHeader ->
+          [("Access-Control-Allow-Origin", originHeader), ("Vary", "Origin")]
+            <> corsPreflightHeaders corsPolicyConfig request
+    _ -> []
+
+corsPreflightHeaders :: CorsPolicyConfig -> Wai.Request -> Http.ResponseHeaders
+corsPreflightHeaders corsPolicyConfig request =
+  if corsPreflightRequestAllowed corsPolicyConfig request
+    then
+      [("Access-Control-Allow-Methods", corsHeaderValue (corsAllowedMethods corsPolicyConfig))]
+        <> [ ("Access-Control-Allow-Headers", corsHeaderValue (corsAllowedHeaders corsPolicyConfig))
+           | not (null (corsAllowedHeaders corsPolicyConfig))
+           ]
+        <> [ ("Access-Control-Max-Age", ByteStringChar8.pack (show maxAgeSeconds))
+           | Just maxAgeSeconds <- [corsMaxAgeSeconds corsPolicyConfig]
+           ]
+    else []
+
+corsPreflightResponse :: RequestPolicyConfig -> Wai.Request -> Maybe Wai.Response
+corsPreflightResponse requestPolicyConfig request =
+  case lookup "Origin" (Wai.requestHeaders request) of
+    Just originHeader
+      | originAllowed (corsPolicy requestPolicyConfig) originHeader
+          && corsPreflightRequestAllowed (corsPolicy requestPolicyConfig) request ->
+          Just (Wai.responseLBS Http.status204 [] "")
+    _ -> Nothing
+
+isCorsPreflightRequest :: Wai.Request -> Bool
+isCorsPreflightRequest request =
+  Wai.requestMethod request == "OPTIONS"
+    && isJust (lookup "Origin" (Wai.requestHeaders request))
+    && isJust (lookup "Access-Control-Request-Method" (Wai.requestHeaders request))
+
+corsPreflightRequestAllowed :: CorsPolicyConfig -> Wai.Request -> Bool
+corsPreflightRequestAllowed corsPolicyConfig request =
+  case lookup "Access-Control-Request-Method" (Wai.requestHeaders request) of
+    Just requestedMethod ->
+      isCorsPreflightRequest request
+        && requestedMethodAllowed corsPolicyConfig requestedMethod
+    Nothing -> False
+
+originAllowed :: CorsPolicyConfig -> ByteString.ByteString -> Bool
+originAllowed corsPolicyConfig originHeader =
+  originHeader `elem` map TextEncoding.encodeUtf8 (corsAllowedOrigins corsPolicyConfig)
+
+requestedMethodAllowed :: CorsPolicyConfig -> ByteString.ByteString -> Bool
+requestedMethodAllowed corsPolicyConfig requestedMethod =
+  requestedMethod `elem` map TextEncoding.encodeUtf8 (corsAllowedMethods corsPolicyConfig)
+
+corsHeaderValue :: [Text] -> ByteString.ByteString
+corsHeaderValue = TextEncoding.encodeUtf8 . Text.intercalate ", "
+
+strictTransportSecurityHeaderValue :: StrictTransportSecurityConfig -> Text
+strictTransportSecurityHeaderValue config =
+  Text.intercalate
+    "; "
+    ( ["max-age=" <> Text.pack (show (strictTransportSecurityMaxAgeSeconds config))]
+        ++ ["includeSubDomains" | strictTransportSecurityIncludeSubDomains config]
+        ++ ["preload" | strictTransportSecurityPreload config]
+    )
+
+requestContextObservabilityAttributes :: RequestPolicyConfig -> Wai.Request -> [Observability.ObservabilityAttribute]
+requestContextObservabilityAttributes requestPolicyConfig request =
+  map
+    requestContextFieldObservabilityAttribute
+    (filter ((/= "url.scheme") . requestContextFieldName) (requestContextFields requestPolicyConfig request))
+
+requestLogContextFields :: RequestPolicyConfig -> Wai.Request -> [Text]
+requestLogContextFields requestPolicyConfig request =
+  map requestContextFieldLogField (requestContextFields requestPolicyConfig request)
+
+requestContextFields :: RequestPolicyConfig -> Wai.Request -> [RequestContextField]
+requestContextFields requestPolicyConfig request =
+  requiredField "client.address" (clientAddressText (requestClientAddress requestPolicyConfig request))
+    : requiredField "network.peer.address" (peerAddressText request)
+    : optionalField "harch.client.address.source" (effectiveClientAddressSource requestPolicyConfig request)
+    ++ optionalField "http.request.header.x_forwarded_for" (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-For" request)
+    ++ optionalField "http.request.header.forwarded" (trustedRequestHeaderText requestPolicyConfig "Forwarded" request)
+    ++ optionalField "http.request.header.x_forwarded_proto" (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-Proto" request)
+    ++ optionalField "http.request.header.x_forwarded_prefix" (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-Prefix" request)
+    ++ optionalField "user_agent.original" (requestHeaderText "User-Agent" request)
+    ++ optionalField "http.request.header.referer" (sanitizedReferer request)
+    ++ optionalField "http.request.header.x_requested_with" (requestHeaderText "X-Requested-With" request)
+    ++ optionalField "harch.request.source" (requestSource request)
+    ++ [requiredField "url.scheme" (requestScheme requestPolicyConfig request)]
+  where
+    requiredField = RequestContextField
+    optionalField name = maybe [] (pure . RequestContextField name)
+
+requestContextFieldObservabilityAttribute :: RequestContextField -> Observability.ObservabilityAttribute
+requestContextFieldObservabilityAttribute field =
+  textObservabilityAttribute (requestContextFieldName field) (requestContextFieldValue field)
+
+requestContextFieldLogField :: RequestContextField -> Text
+requestContextFieldLogField field =
+  renderRequestLogField (requestContextFieldName field) (requestContextFieldValue field)
+
+requestScheme :: RequestPolicyConfig -> Wai.Request -> Text
+requestScheme requestPolicyConfig request =
+  case fmap Text.toLower (trustedForwardedHeaderToken requestPolicyConfig "proto" request <|> trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-Proto" request) of
+    Just "https" -> "https"
+    Just "http" -> "http"
+    _ -> if Wai.isSecure request then "https" else "http"
+
+-- | Resolve the effective client identity from a trusted proxy header when it
+-- is valid, otherwise from the accepted socket peer.  This is the same
+-- resolver request observability uses, so applications cannot accidentally
+-- assign a different trust meaning to the same request.
+requestClientAddress :: RequestPolicyConfig -> Wai.Request -> ClientAddress
+requestClientAddress requestPolicyConfig request =
+  fromMaybe
+    (socketClientAddress (Wai.remoteHost request))
+    (trustedClientAddress requestPolicyConfig request)
+
+trustedClientAddress :: RequestPolicyConfig -> Wai.Request -> Maybe ClientAddress
+trustedClientAddress requestPolicyConfig request =
+  (trustedForwardedHeaderToken requestPolicyConfig "for" request <|> trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-For" request)
+    >>= forwardedClientAddress
+
+forwardedClientAddress :: Text -> Maybe ClientAddress
+forwardedClientAddress rawAddress = do
+  address <- nonEmptyForwardedAddress rawAddress
+  if Text.length address <= maximumClientAddressCharacters && Text.all isForwardedAddressCharacter address
+    then Just (ClientAddress (Text.toLower address))
+    else Nothing
+
+nonEmptyForwardedAddress :: Text -> Maybe Text
+nonEmptyForwardedAddress rawAddress =
+  let address = Text.strip rawAddress
+   in case Text.stripPrefix "[" address >>= Text.stripSuffix "]" of
+        Just bracketedAddress -> nonEmptyText bracketedAddress
+        Nothing -> nonEmptyText address
+
+nonEmptyText :: Text -> Maybe Text
+nonEmptyText value =
+  if Text.null value
+    then Nothing
+    else Just value
+
+isForwardedAddressCharacter :: Char -> Bool
+isForwardedAddressCharacter character =
+  isAscii character
+    && (isDigit character || isHexDigit character || character == '.' || character == ':')
+
+socketClientAddress :: Socket.SockAddr -> ClientAddress
+socketClientAddress = ClientAddress . Text.take maximumClientAddressCharacters . socketAddressText
+
+maximumClientAddressCharacters :: Int
+maximumClientAddressCharacters = 128
+
+effectiveClientAddressSource :: RequestPolicyConfig -> Wai.Request -> Maybe Text
+effectiveClientAddressSource requestPolicyConfig request =
+  case trustedForwardedHeaderToken requestPolicyConfig "for" request of
+    Just value
+      | Just _ <- forwardedClientAddress value -> Just "forwarded"
+    _ -> case trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-For" request of
+      Just value
+        | Just _ <- forwardedClientAddress value -> Just "x-forwarded-for"
+      _ -> Nothing
+
+peerAddressText :: Wai.Request -> Text
+peerAddressText = socketAddressText . Wai.remoteHost
+
+socketAddressText :: Socket.SockAddr -> Text
+socketAddressText socketAddress =
+  case socketAddress of
+    Socket.SockAddrInet _ hostAddress ->
+      let (firstOctet, secondOctet, thirdOctet, fourthOctet) = Socket.hostAddressToTuple hostAddress
+       in Text.intercalate "." (map (Text.pack . show) [firstOctet, secondOctet, thirdOctet, fourthOctet])
+    _ -> Text.pack (show socketAddress)
+
+requestHeaderToken :: Http.HeaderName -> Wai.Request -> Maybe Text
+requestHeaderToken headerName request = requestHeaderText headerName request >>= firstCommaSeparatedValue
+
+requestHeaderText :: Http.HeaderName -> Wai.Request -> Maybe Text
+requestHeaderText headerName request =
+  lookup headerName (Wai.requestHeaders request)
+    >>= either (const Nothing) (Just . limitObservabilityHeaderValue . Text.strip) . TextEncoding.decodeUtf8'
+
+trustedRequestHeaderText :: RequestPolicyConfig -> Http.HeaderName -> Wai.Request -> Maybe Text
+trustedRequestHeaderText requestPolicyConfig headerName request =
+  if isTrustedForwardingPeer (forwardedHeaderTrust requestPolicyConfig) (Wai.remoteHost request)
+    then requestHeaderText headerName request
+    else Nothing
+
+trustedRequestHeaderToken :: RequestPolicyConfig -> Http.HeaderName -> Wai.Request -> Maybe Text
+trustedRequestHeaderToken requestPolicyConfig headerName request =
+  if isTrustedForwardingPeer (forwardedHeaderTrust requestPolicyConfig) (Wai.remoteHost request)
+    then requestHeaderToken headerName request
+    else Nothing
+
+trustedForwardedHeaderToken :: RequestPolicyConfig -> Text -> Wai.Request -> Maybe Text
+trustedForwardedHeaderToken requestPolicyConfig parameterName request =
+  if isTrustedForwardingPeer (forwardedHeaderTrust requestPolicyConfig) (Wai.remoteHost request)
+    then forwardedHeaderToken parameterName request
+    else Nothing
+
+forwardedHeaderToken :: Text -> Wai.Request -> Maybe Text
+forwardedHeaderToken parameterName request = requestHeaderText "Forwarded" request >>= forwardedParameterValue parameterName
+
+forwardedParameterValue :: Text -> Text -> Maybe Text
+forwardedParameterValue parameterName headerValue =
+  case firstCommaSeparatedValue headerValue of
+    Nothing -> Nothing
+    Just forwardedElement ->
+      listToMaybe
+        [ cleanForwardedParameterValue parameterValue
+        | parameter <- Text.splitOn ";" forwardedElement,
+          let (parameterKey, parameterValueWithEquals) = Text.breakOn "=" (Text.strip parameter),
+          Text.toLower (Text.strip parameterKey) == Text.toLower parameterName,
+          Just parameterValue <- [Text.stripPrefix "=" parameterValueWithEquals],
+          not (Text.null (cleanForwardedParameterValue parameterValue))
+        ]
+
+cleanForwardedParameterValue :: Text -> Text
+cleanForwardedParameterValue = Text.strip . stripSurroundingQuotes . Text.strip
+
+stripSurroundingQuotes :: Text -> Text
+stripSurroundingQuotes value = fromMaybe value (Text.stripPrefix "\"" value >>= Text.stripSuffix "\"")
+
+sanitizedReferer :: Wai.Request -> Maybe Text
+sanitizedReferer request = sanitizeRefererValue <$> requestHeaderText "Referer" request
+
+sanitizeRefererValue :: Text -> Text
+sanitizeRefererValue = limitObservabilityHeaderValue . Text.takeWhile (\character -> character /= '?' && character /= '#')
+
+requestSource :: Wai.Request -> Maybe Text
+requestSource request =
+  case fmap Text.toLower (requestHeaderText "X-Requested-With" request) of
+    Just "tiny-navigation" -> Just "enhanced-navigation"
+    Just "xmlhttprequest" -> Just "xml-http-request"
+    Just _ -> Just "scripted-request"
+    Nothing ->
+      case (fmap Text.toLower (requestHeaderText "Accept" request), fmap Text.toLower (requestHeaderText "User-Agent" request)) of
+        (Just acceptHeader, _) | "application/json" `Text.isInfixOf` acceptHeader -> Just "api-client"
+        (_, Just userAgent) | "curl/" `Text.isPrefixOf` userAgent -> Just "manual-client"
+        (_, Just _) -> Just "browser-or-client"
+        _ -> Nothing
+
+requestTraceContext :: Wai.Request -> Maybe Observability.RequestTraceContext
+requestTraceContext request =
+  parseTraceParentHeader =<< requestHeaderText "traceparent" request
+  where
+    parseTraceParentHeader traceParentHeader =
+      case Text.splitOn "-" traceParentHeader of
+        [version, traceId, parentSpanId, traceFlags]
+          | isValidTraceParentVersion version
+              && isValidTraceParentTraceId traceId
+              && isValidTraceParentSpanId parentSpanId
+              && isValidTraceParentFlags traceFlags ->
+              Just
+                Observability.RequestTraceContext
+                  { Observability.traceContextTraceId = Text.toLower traceId,
+                    Observability.traceContextParentSpanId = Text.toLower parentSpanId,
+                    Observability.traceContextState = requestHeaderText "tracestate" request
+                  }
+        _ -> Nothing
+
+isValidTraceParentVersion, isValidTraceParentTraceId, isValidTraceParentSpanId, isValidTraceParentFlags :: Text -> Bool
+isValidTraceParentVersion version = Text.length version == 2 && Text.all isAsciiHexText version && Text.toLower version /= "ff"
+isValidTraceParentTraceId traceId = Text.length traceId == 32 && Text.all isAsciiHexText traceId && traceId /= "00000000000000000000000000000000"
+isValidTraceParentSpanId spanId = Text.length spanId == 16 && Text.all isAsciiHexText spanId && spanId /= "0000000000000000"
+isValidTraceParentFlags traceFlags = Text.length traceFlags == 2 && Text.all isAsciiHexText traceFlags
+
+isAsciiHexText :: Char -> Bool
+isAsciiHexText character = isHexDigit character && fromEnum character < 128
+
+limitObservabilityHeaderValue :: Text -> Text
+limitObservabilityHeaderValue = Text.take 256
+
+-- | Decision (PR-SEC7, 2026-08-28): parse a trusted forwarded prefix once at
+-- the request-policy boundary into 'PathPrefix.PathPrefix', rather than let
+-- individual URL sinks normalize raw header text. Invalid values fail closed
+-- to the root mount: a proxy which appends client-controlled headers cannot
+-- make framework-generated locations, links, or assets external.
+requestPathPrefix :: RequestPolicyConfig -> Wai.Request -> PathPrefix.PathPrefix
+requestPathPrefix requestPolicyConfig request =
+  maybe PathPrefix.emptyPathPrefix parsedPrefix (trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-Prefix" request)
+  where
+    parsedPrefix = fromRight PathPrefix.emptyPathPrefix . parseRequestPathPrefix
+
+rawRequestPath :: Wai.Request -> Text
+rawRequestPath request
+  | ByteString.null rawPath = "/"
+  | otherwise = decodeUtf8OrEmpty rawPath
+  where
+    rawPath = Wai.rawPathInfo request
+
+decodeUtf8OrEmpty :: ByteString.ByteString -> Text
+decodeUtf8OrEmpty bytes =
+  case TextEncoding.decodeUtf8' bytes of
+    Left _ -> Text.empty
+    Right decodedText -> decodedText
+
+waiRequestRouteTarget :: RequestPolicyConfig -> Wai.Request -> RequestTarget
+waiRequestRouteTarget requestPolicyConfig request =
+  requestTarget
+    (TextEncoding.encodeUtf8 (waiRequestPath requestPolicyConfig request))
+    (Wai.rawQueryString request)
+
+externalRequestPath :: RequestPolicyConfig -> Wai.Request -> Text
+externalRequestPath requestPolicyConfig request =
+  PathPrefix.urlPathText
+    ( applyRequestPathPrefix
+        (requestPathPrefix requestPolicyConfig request)
+        (PathPrefix.mkUrlPath (waiRequestPath requestPolicyConfig request))
+    )
+
+-- | Parse a raw path-prefix value into the only type accepted by framework
+-- browser-URL helpers. See 'requestPathPrefix' for the trusted-header policy.
+parseRequestPathPrefix :: Text -> Either PathPrefix.PathPrefixError PathPrefix.PathPrefix
+parseRequestPathPrefix = PathPrefix.parsePathPrefix
+
+applyRequestPathPrefix :: PathPrefix.PathPrefix -> PathPrefix.UrlPath -> PathPrefix.UrlPath
+applyRequestPathPrefix = PathPrefix.applyPathPrefix
+
+stripRequestPathPrefix :: PathPrefix.PathPrefix -> PathPrefix.UrlPath -> PathPrefix.UrlPath
+stripRequestPathPrefix = PathPrefix.stripPathPrefix
+
+firstCommaSeparatedValue :: Text -> Maybe Text
+firstCommaSeparatedValue value =
+  case filter (not . Text.null) (map Text.strip (Text.splitOn "," value)) of
+    [] -> Nothing
+    firstValue : _ -> Just firstValue
+
+requestHostWithoutPort :: Wai.Request -> Maybe Text
+requestHostWithoutPort request = fmap (Text.takeWhile (/= ':')) (requestHeaderToken "Host" request)
+
+textObservabilityAttribute :: Text -> Text -> Observability.ObservabilityAttribute
+textObservabilityAttribute name value =
+  Observability.ObservabilityAttribute
+    { Observability.attributeName = name,
+      Observability.attributeValue = Observability.TextAttribute value
+    }
+
+renderRequestLogField :: Text -> Text -> Text
+renderRequestLogField fieldName fieldValue = fieldName <> "=" <> Text.pack (show fieldValue)
+
+prependRequestLogContext :: [Text] -> Text -> Text
+prependRequestLogContext fields logEntry = "[" <> Text.intercalate " " fields <> "] " <> logEntry

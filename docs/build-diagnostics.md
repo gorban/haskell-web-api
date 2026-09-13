@@ -1,0 +1,114 @@
+# Build diagnostics
+
+The optimized build and coverage build are diagnostic boundaries, not merely test runs. Use
+`tools/run-optimized-build-check.sh` followed by `tools/run-code-coverage-check.sh` locally. CI
+runs those same wrappers before formatting or integration work; it does not maintain a second
+coverage pipeline in YAML. The coverage wrapper first executes the coverage-gate fixture suite,
+then captures the real coverage output and applies the same warning classifier, so a local run and
+a CI run prove the same failure contract.
+
+Both commands require LLVM `ld.lld` and pass `-fuse-ld=lld` to GHC's native linker invocation. This
+removes the GNU `ld.bfd` dynamic-closure-symbol warning rather than suppressing it. CI installs
+`lld`; local developers must install an `ld.lld` executable before either wrapper starts Cabal. See
+the [setup guide](../SETUP.md#ghcup-prerequisites) for the Ubuntu and Fedora/Distrobox package lists.
+
+## Bounded long-running CI operations
+
+`tools/run-observed-command.sh` is the common local/CI boundary for operations that may otherwise
+be silent for minutes. It emits a label, UTC start time, configured deadline, elapsed completion
+time, and a clear timeout or exit-status error while streaming the operation's complete combined
+stdout/stderr to the caller. It deliberately never prints command arguments or environment values:
+callers provide a stable, non-sensitive label instead. CI uses it for database seeding, and the
+pinned formatter installer uses it for each download/build phase; the same scripts are available to
+local developers. Its hermetic fixture covers successful output, ordinary failures, and a timeout.
+
+## Runtime coverage scope
+
+The coverage gate requires 100% expressions, alternatives, and top-level declarations from every
+package's executable runtime code. Its only exclusions are the exact internal Template Haskell
+modules `HarchWeb.Markup.Quasi`, `HarchWeb.Markup.Quasi.AttributeLowering`,
+`HarchWeb.Markup.Quasi.Lowering`, `HarchWeb.Markup.Quasi.LoweringSupport`,
+and `HarchWeb.Markup.Quasi.Parser`. GHC runs those while compiling a quasiquote, before the test
+process and its `.tix` file exist; standard HPC therefore cannot attribute that compiler-process
+execution to the test run. The quasiquoter remains covered by compile-time acceptance and rejection
+specs.
+
+This is not a general generated-code exemption: ordinary generated instances, application code,
+runtime error paths, and all other production modules remain in the gate. Add no module to this list
+without demonstrating that it executes exclusively in GHC's compiler process and documenting the
+corresponding compile-time acceptance test.
+
+Each nonexcluded project package must also produce its own Cabal-authoritative HPC report. A valid
+zero-counter category is still a report; an absent report is a gate failure. The extracted
+`test-spec-preprocessor` owns its direct Hspec behavior suite, rather than borrowing coverage from
+the `TestCore` compatibility facade. That keeps the package graph acyclic while making its runtime
+implementation part of the enforced coverage surface.
+
+## Fatal diagnostics
+
+Any line containing `warning:` or `Warning:` is fatal unless it matches the exact documented
+external exception below. This deliberately includes compiler warnings and all linker warnings,
+warnings such as missing libraries, unresolved symbols, duplicate definitions, or incompatible
+linkage. GHC's optimized build also uses `-Werror`, but the coverage build needs this additional
+gate because it is compiled with coverage instrumentation.
+
+## Exact GHC 9.14 TLS compatibility warnings
+
+The frozen TLS 2.4.3 plan reaches released `cborg-0.2.10.0` and
+`serialise-0.2.6.1`, whose Cabal upper bounds predate `base-4.22`. The optimized
+and coverage wrappers admit exactly five GHC 9.14 warning headers from those two
+source packages: Cborg's two redundant short-`ByteString` imports and `Typeable`
+derivation, and Serialise's deprecated mutable-byte-array call and redundant
+pattern. `tools/test-tls-compatibility-stack.sh` runs both released suites and
+proves the runtime plan uses the unmodified Hackage Serialise tarball.
+
+This is an exact-header exception, not a package-wide warning exemption. The
+diagnostic fixture rejects any changed or additional warning in those source
+paths, and every warning outside those five headers remains fatal.
+
+Track [Cborg PR #385](https://github.com/well-typed/cborg/pull/385) together with
+fixes already on master. The tested proposed merge passes both upstream suites
+with `-Werror` and our server-runtime regressions without these package exceptions
+or the duplicate-orphan patch. Once public releases include those changes,
+refresh the freeze and verifier versions; remove the five bounds exceptions,
+obsolete verifier overrides/test patch, and five warning allowances plus their
+callers. Require fresh strict upstream builds against the runtime dependency
+plan and the full local/CI gates before retirement. Preserve upstream tests and
+application regressions; adapt classifier fixtures to reject the formerly allowed
+warnings. This does not retire the HTTP2 pin, Warp peer hooks, or findings in
+other dependencies.
+
+The frozen plan's public `primitive-0.9.1.0` library remains unmodified. Its
+released `test-qc` source is verified only in the TLS compatibility script's
+disposable source tree. That tree applies [#447](https://github.com/haskell/primitive/issues/447)'s
+`TypeInType` replacement, then applies [#434](https://github.com/haskell/primitive/pull/434)'s
+module-local deprecation setting to the three deprecated compatibility wrappers.
+`test-qc` runs with `-Werror`; the diagnostic gate receives no Primitive warning
+allowance. The script deletes its isolated Cabal store and proves the repository
+runtime dry-run still chooses the public Hackage `primitive` tarball.
+
+After a public release includes both changes, refresh the freeze entry, run
+unpatched `test-qc` with `-Werror` against the selected library dependencies,
+and rerun the full local/CI gates. Remove the temporary patch but retain its
+regression evidence and all upstream test cases. PR #434 scopes compatibility
+handling to deprecated wrappers; #447 changes test compilation only and does
+not establish a runtime bug fix.
+
+## Documented GHC HPC deprecation
+
+The same GHC 9.14.1 coverage mode can run instrumented custom-Setup and source-preprocessor
+helpers. Their invocations do not receive a test suite's RTS arguments, so GHC can report this
+exact five-line block when a helper reopens its own `.tix` file:
+
+```
+Deprecation warning:
+I am reading in the existing tix file, and will add hpc info from this run to the existing data in that file.
+GHC 9.14 will cease looking for an existing tix file by default.
+If you positively want to add hpc info to the current tix file, use the RTS option --read-tix-file=yes.
+More information can be found in the accepted GHC proposal 612.
+```
+
+The coverage command already supplies `--read-tix-file=no` to test suites and cleans stale
+`.tix` data. No supported option reaches every Cabal-launched helper without producing a new
+compiler diagnostic. The gate accepts this complete, version-specific block only; a different
+deprecation warning is fatal.

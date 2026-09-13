@@ -1,0 +1,422 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+-- | Declarative site composition.
+--
+-- FQ8 makes the stable route-table, shell, and CSRF declaration inputs one
+-- 'SimpleSiteConfiguration'. Dynamic policy, middleware, action, and
+-- reporter customizations stay on 'Site' itself. The default disabled
+-- reporters remain ordinary no-op observer policy, not strictness or
+-- coverage-only callbacks.
+module HarchWeb.Site
+  ( RouteDefinition (..),
+    RouteHandler (..),
+    Site (..),
+    SimpleSiteConfiguration (..),
+    apiOnlySite,
+    buildSiteApplication,
+    pageRoute,
+    simpleSite,
+  )
+where
+
+import Data.List.NonEmpty (NonEmpty)
+import Data.Maybe (mapMaybe)
+import Data.Text (Text)
+import HarchWeb
+  ( Application (..),
+    ApplicationSecurity,
+    ClientActionDecodeResult,
+    ClientActionPayload,
+    ClientActionRequest,
+    ClientActionResult,
+    Document,
+    EndpointMetadata,
+    ForwardedHeaderTrust (..),
+    NavigationItem (..),
+    NavigationRuntime,
+    NonPageResponse,
+    Page,
+    PageResult (..),
+    PageShell (..),
+    PathPrefix,
+    RequestId,
+    RequestIdIngress,
+    RequestMiddleware,
+    RequestPolicyConfig (..),
+    Response (..),
+    RouteCodec,
+    RouteExecutionPolicy,
+    RouteRequest,
+    RuntimeAsset,
+    RuntimeDescriptor (..),
+    StaticAssetRoot,
+    StaticAssetsConfig (..),
+    StrictTransportSecurityConfig,
+    buildPageShell,
+    defaultCaptureKernel,
+    defaultCorsPolicyConfig,
+    defaultNavigationRuntime,
+    defaultResponseSecurityHeadersConfig,
+    emptyPathPrefix,
+    freshRequestIdIngress,
+    literalElementId,
+    navigationRuntimeScriptSource,
+    requestIdText,
+    unboundedRequestHeadLimits,
+    unboundedRouteExecutionPolicy,
+    warpDefaultRequestTransportLimits,
+  )
+import HarchWeb qualified
+import HarchWeb.Csrf (CsrfPagePreparationFailure (..), CsrfProtection, PageSecurity, csrfProtectionUnavailable, preparePageSecurity)
+import HarchWeb.Document qualified as Document
+import HarchWeb.Localization (locale)
+import HarchWeb.Observability qualified as Observability
+import HarchWeb.Server.ClientAction (csrfCookieFromRequest)
+import Network.HTTP.Types qualified as Http
+import Network.Wai qualified as Wai
+
+-- | A matched route is either an SSR page or a protocol endpoint.  Only the
+-- page alternative receives the security state that must be authored into
+-- its markup; protocol endpoints cannot accidentally receive a nonce/token
+-- which has no valid meaning for them.
+data RouteHandler route context
+  = PageRouteHandler (PageSecurity -> RouteRequest route context -> IO (PageResult route context))
+  | ProtocolRouteHandler (Wai.Request -> RouteRequest route context -> IO (NonPageResponse route context))
+
+data RouteDefinition route context authorization = RouteDefinition
+  { routeNavigationLabel :: Maybe Text,
+    -- | Required typed endpoint metadata. Ordinary page/API/action builders
+    -- supply authenticated metadata; a public endpoint must name
+    -- 'AllowUnauthenticated' explicitly.
+    routeMetadata :: EndpointMetadata authorization,
+    -- | The methods this route owns. 'buildSiteApplication' installs this
+    -- declaration into the shared route codec, making the site table the
+    -- authoritative source for ordinary page and protocol dispatch alike.
+    routeMethods :: [HarchWeb.RouteMethod],
+    -- | Optional additional admission for this route after the shared
+    -- dispatcher has selected its path and method. It cannot alter listener,
+    -- request-head, or application-wide policy; see 'RouteExecutionPolicy'.
+    routeExecutionPolicy :: RouteExecutionPolicy,
+    routeHandler :: RouteHandler route context
+  }
+
+data Site route action context authorization = Site
+  { siteName :: Text,
+    siteDefaultRequestContext :: context,
+    siteRequestContextFromRequest :: Wai.Request -> RequestId -> context -> context,
+    siteRequestIdIngress :: RequestIdIngress,
+    siteStaticAssets :: StaticAssetsConfig,
+    siteNavigationRuntime :: Maybe NavigationRuntime,
+    -- | Replaceable behavior modules paired with the shell descriptors that
+    -- load them. Declaration order is ownership order for duplicate paths.
+    siteRuntimeAssets :: [RuntimeAsset],
+    siteNavigationRuntimePathPrefix :: context -> PathPrefix,
+    siteRequestPolicy :: RequestPolicyConfig,
+    siteRequestMiddleware :: [RequestMiddleware context],
+    siteSecurity :: ApplicationSecurity route context authorization,
+    siteSecurityEventRoot :: Maybe (HarchWeb.SecurityEventRoot context),
+    siteRouteModuleChain :: Maybe (route -> NonEmpty HarchWeb.ModuleName),
+    siteAttachRouteObservation :: route -> EndpointMetadata authorization -> context -> context,
+    siteRouteCodec :: RouteCodec route context,
+    siteNavigationRoutes :: [route],
+    siteRouteDefinition :: route -> RouteDefinition route context authorization,
+    siteClientActionEndpointMetadata :: Text -> Text -> context -> Maybe (EndpointMetadata authorization),
+    siteClientActionRoute :: Text -> Text -> context -> Maybe route,
+    siteClientActionFailureRoute :: Maybe (HarchWeb.HarchClientFailure -> HarchWeb.FailureReference -> route),
+    siteDecodeClientAction :: ClientActionPayload context -> ClientActionDecodeResult action,
+    siteCsrfProtection :: CsrfProtection context,
+    siteHandleClientAction :: ClientActionRequest route action context -> IO (Maybe (ClientActionResult route context)),
+    sitePageShell :: Page route context -> PageShell route context,
+    siteReportRequestObservability :: Observability.RequestObservability -> IO (),
+    siteReportConnectionObservability :: Observability.ConnectionObservability -> IO (),
+    siteReportApplicationLog :: Text -> IO ()
+  }
+
+-- | The stable declaration inputs for 'simpleSite'.  Request middleware,
+-- assets, policies, client actions, and reporters remain deliberate
+-- subsequent 'Site' customizations; grouping only the route-table and shell
+-- declaration prevents those values being transposed at every simple
+-- composition root. CSRF is deliberately required here: a page-capable site
+-- must select an authority rather than inherit a verifier which accepts every
+-- token. This extends the existing site composition boundary instead of
+-- creating a second CSRF dispatcher; see the AHI-4C decision record in
+-- @docs/design-guidance.md@.
+data SimpleSiteConfiguration route context authorization = SimpleSiteConfiguration
+  { simpleSiteName :: Text,
+    simpleSiteDefaultRequestContext :: context,
+    simpleSiteRouteCodec :: RouteCodec route context,
+    simpleSiteSecurity :: ApplicationSecurity route context authorization,
+    simpleSiteCsrfProtection :: CsrfProtection context,
+    simpleSitePageShell :: Page route context -> PageShell route context,
+    simpleSiteNavigationRoutes :: [route],
+    simpleSiteRouteDefinition :: route -> RouteDefinition route context authorization
+  }
+
+simpleSite ::
+  SimpleSiteConfiguration route context authorization ->
+  Site route action context authorization
+simpleSite configuration =
+  Site
+    { siteName = simpleSiteName configuration,
+      siteDefaultRequestContext = simpleSiteDefaultRequestContext configuration,
+      siteRequestContextFromRequest = \_ _ requestContext -> requestContext,
+      siteRequestIdIngress = freshRequestIdIngress,
+      siteStaticAssets = emptyStaticAssetsConfig,
+      siteNavigationRuntime = Just defaultNavigationRuntime,
+      siteRuntimeAssets = [],
+      siteNavigationRuntimePathPrefix = const emptyPathPrefix,
+      siteRequestPolicy = defaultSiteRequestPolicy,
+      siteRequestMiddleware = [],
+      siteSecurity = simpleSiteSecurity configuration,
+      siteSecurityEventRoot = Nothing,
+      siteRouteModuleChain = Nothing,
+      siteAttachRouteObservation = \_ _ requestContext -> requestContext,
+      siteRouteCodec = simpleSiteRouteCodec configuration,
+      siteNavigationRoutes = simpleSiteNavigationRoutes configuration,
+      siteRouteDefinition = simpleSiteRouteDefinition configuration,
+      siteClientActionEndpointMetadata = \_ _ _ -> Nothing,
+      siteClientActionRoute = \_ _ _ -> Nothing,
+      siteClientActionFailureRoute = Nothing,
+      siteDecodeClientAction = const HarchWeb.UnrecognizedClientAction,
+      siteCsrfProtection = simpleSiteCsrfProtection configuration,
+      siteHandleClientAction = const (pure Nothing),
+      sitePageShell = simpleSitePageShell configuration,
+      siteReportRequestObservability = const (pure ()),
+      siteReportConnectionObservability = const (pure ()),
+      siteReportApplicationLog = const (pure ())
+    }
+
+-- | Compose a site whose route table contains protocol endpoints only. It
+-- extends the ordinary 'Site' boundary rather than adding a second
+-- dispatcher: the supplied codec and definition remain the complete
+-- method/path table. API-only sites have no navigation runtime or navigation
+-- routes. Its unavailable CSRF authority means a page route is not a valid
+-- configuration: the one site renderer returns its ordinary safe 503 rather
+-- than inventing page security or a fallback document.
+apiOnlySite ::
+  Text ->
+  context ->
+  RouteCodec route context ->
+  ApplicationSecurity route context authorization ->
+  (route -> RouteDefinition route context authorization) ->
+  Site route action context authorization
+apiOnlySite name defaultContext codec siteSecurityValue routeDefinition =
+  ( simpleSite
+      SimpleSiteConfiguration
+        { simpleSiteName = name,
+          simpleSiteDefaultRequestContext = defaultContext,
+          simpleSiteRouteCodec = codec,
+          simpleSiteSecurity = siteSecurityValue,
+          simpleSiteCsrfProtection = csrfProtectionUnavailable,
+          simpleSitePageShell = const apiOnlyFallbackPageShell,
+          simpleSiteNavigationRoutes = [],
+          simpleSiteRouteDefinition = routeDefinition
+        }
+  )
+    { siteNavigationRuntime = Nothing
+    }
+
+apiOnlyFallbackPageShell :: PageShell route context
+apiOnlyFallbackPageShell =
+  PageShell
+    { shellDocumentLanguage = locale "en",
+      shellBodyAttributes = [],
+      shellNavigationAttributes = [],
+      shellNavigationItems = [],
+      shellMainId = literalElementId "main",
+      shellMainAttributes = [],
+      shellNavigationLifecycle = Nothing,
+      shellStylesheets = [],
+      shellRuntimeDescriptors = []
+    }
+
+pageRoute ::
+  EndpointMetadata authorization ->
+  Maybe Text ->
+  (PageSecurity -> RouteRequest route context -> IO (Page route context)) ->
+  RouteDefinition route context authorization
+pageRoute metadata navigationLabel renderPage =
+  RouteDefinition
+    { routeNavigationLabel = navigationLabel,
+      routeMetadata = metadata,
+      routeMethods = [HarchWeb.RouteGet],
+      routeExecutionPolicy = unboundedRouteExecutionPolicy,
+      routeHandler = PageRouteHandler $ \pageSecurity routeRequest ->
+        RenderedPage <$> renderPage pageSecurity routeRequest
+    }
+
+buildSiteApplication :: (Eq route) => Site route action context authorization -> Application route action context authorization
+buildSiteApplication site =
+  HarchWeb.application
+    Application
+      { appName = siteName site,
+        defaultRequestContext = siteDefaultRequestContext site,
+        requestContextFromRequest = siteRequestContextFromRequest site,
+        applicationRequestIdIngress = siteRequestIdIngress site,
+        applicationNavigationRuntime = siteNavigationRuntime site,
+        applicationRuntimeAssets = siteRuntimeAssets site,
+        applicationStaticAssets = siteStaticAssets site,
+        applicationRequestPolicy = siteRequestPolicy site,
+        applicationRequestMiddleware = siteRequestMiddleware site,
+        routeCodec = (siteRouteCodec site) {HarchWeb.routeMethods = HarchWeb.routeMethodPolicy . routeMethods . siteRouteDefinition site},
+        applicationSecurity = siteSecurity site,
+        applicationSecurityEventRoot = siteSecurityEventRoot site,
+        applicationRouteModuleChain = siteRouteModuleChain site,
+        applicationAttachRouteObservation = siteAttachRouteObservation site,
+        routeEndpointMetadata = routeMetadata . siteRouteDefinition site,
+        clientActionEndpointMetadata = siteClientActionEndpointMetadata site,
+        clientActionRoute = siteClientActionRoute site,
+        applicationClientActionFailureRoute = siteClientActionFailureRoute site,
+        HarchWeb.routeExecutionPolicy = routeDefinitionExecutionPolicy . siteRouteDefinition site,
+        HarchWeb.routeExecutionIdentity = HarchWeb.routeExecutionIdentityFromMetadata . routeMetadata . siteRouteDefinition site,
+        renderRequestResponse = renderSiteResponse site,
+        decodeClientAction = siteDecodeClientAction site,
+        csrfProtection = siteCsrfProtection site,
+        handleClientAction = siteHandleClientAction site,
+        pageShell = renderSitePageShell site,
+        reportRequestObservability = siteReportRequestObservability site,
+        reportConnectionObservability = siteReportConnectionObservability site,
+        reportApplicationLog = siteReportApplicationLog site
+      }
+
+renderSiteResponse :: Site route action context authorization -> RequestId -> Wai.Request -> RouteRequest route context -> IO (Response route context)
+renderSiteResponse site requestId request routeRequest =
+  case routeHandler (siteRouteDefinition site (HarchWeb.requestRoute routeRequest)) of
+    PageRouteHandler renderPage -> do
+      preparedPageSecurity <- preparePageSecurity (siteCsrfProtection site) (csrfCookieFromRequest request) (HarchWeb.requestContext routeRequest)
+      case preparedPageSecurity of
+        Left CsrfPageProtectionUnavailable -> pure (csrfUnavailableResponse requestId)
+        Right pageSecurity -> do
+          pageResult <- renderPage pageSecurity routeRequest
+          pure $
+            case pageResult of
+              RenderedPage page -> PageResponse pageSecurity page
+              RenderedPageWithMetadata responseBodyValue page -> PageResponseWithMetadata pageSecurity responseBodyValue page
+              RenderedPageWithHeaders pageHeaders page -> PageResponseWithHeaders pageSecurity pageHeaders page
+    ProtocolRouteHandler renderProtocol -> HarchWeb.nonPageResponse <$> renderProtocol request routeRequest
+
+csrfUnavailableResponse :: RequestId -> Response route context
+csrfUnavailableResponse requestId =
+  BodyResponse
+    HarchWeb.ResponseBody
+      { HarchWeb.responseStatus = Http.status503,
+        HarchWeb.responseContentType = "text/plain; charset=utf-8",
+        HarchWeb.responseBody = "CSRF protection is unavailable. Request ID: " <> requestIdText requestId <> ".",
+        HarchWeb.responseObservabilityAttributes = [],
+        HarchWeb.responseLogEntries = [],
+        HarchWeb.responseDatabaseOperations = []
+      }
+
+routeDefinitionExecutionPolicy :: RouteDefinition route context authorization -> RouteExecutionPolicy
+routeDefinitionExecutionPolicy RouteDefinition {routeExecutionPolicy = executionPolicy} = executionPolicy
+
+renderSitePageShell :: (Eq route) => Site route action context authorization -> Page route context -> Document route
+renderSitePageShell site page =
+  buildPageShell
+    (siteRouteCodec site)
+    ( addFrameworkShellConventions
+        site
+        page
+        ( addRouteNavigation
+            (siteNavigationItems site)
+            (sitePageShell site page)
+        )
+    )
+    page
+
+siteNavigationItems :: Site route action context authorization -> [NavigationItem route]
+siteNavigationItems site =
+  mapMaybe
+    ( \routeValue ->
+        fmap
+          ( \navigationLabel ->
+              NavigationItem
+                { navigationLabel = navigationLabel,
+                  navigationRoute = routeValue
+                }
+          )
+          (routeNavigationLabel (siteRouteDefinition site routeValue))
+    )
+    (siteNavigationRoutes site)
+
+addRouteNavigation :: [NavigationItem route] -> PageShell route context -> PageShell route context
+addRouteNavigation generatedNavigation shell =
+  shell
+    { shellNavigationItems =
+        generatedNavigation <> shellNavigationItems shell
+    }
+
+addFrameworkShellConventions ::
+  Site route action context authorization ->
+  Page route context ->
+  PageShell route context ->
+  PageShell route context
+addFrameworkShellConventions site page shell =
+  shell
+    { shellNavigationAttributes =
+        ensureAttribute "data-navigation-region" "primary" (shellNavigationAttributes shell),
+      shellMainAttributes =
+        ensureAttribute "data-navigation-content" "true" (shellMainAttributes shell),
+      shellRuntimeDescriptors =
+        maybe
+          (shellRuntimeDescriptors shell)
+          ( \runtime ->
+              prependUnique
+                defaultCaptureKernel
+                ( appendUnique
+                    DeferredModule
+                      { runtimeDescriptorName = "harch-navigation",
+                        runtimeDescriptorSource = navigationRuntimeScriptSource (siteNavigationRuntimePathPrefix site (HarchWeb.pageContext page)) runtime
+                      }
+                    (shellRuntimeDescriptors shell)
+                )
+          )
+          (siteNavigationRuntime site)
+    }
+
+ensureAttribute :: Text -> Text -> [HarchWeb.HtmlAttribute] -> [HarchWeb.HtmlAttribute]
+ensureAttribute name value attributes =
+  if any ((== name) . Document.attributeName) attributes
+    then attributes
+    else
+      attributes
+        <> [ HarchWeb.HtmlAttribute
+               { HarchWeb.attributeName = name,
+                 HarchWeb.attributeValue = value
+               }
+           ]
+
+appendUnique :: (Eq a) => a -> [a] -> [a]
+appendUnique value values =
+  if value `elem` values
+    then values
+    else values <> [value]
+
+prependUnique :: (Eq a) => a -> [a] -> [a]
+prependUnique value values =
+  if value `elem` values
+    then values
+    else value : values
+
+emptyStaticAssetsConfig :: StaticAssetsConfig
+emptyStaticAssetsConfig =
+  StaticAssetsConfig
+    { staticAssetRoots = [] :: [StaticAssetRoot],
+      staticAssetContentTypes = HarchWeb.defaultStaticAssetContentTypes,
+      staticCacheControlSeconds = Nothing
+    }
+
+defaultSiteRequestPolicy :: RequestPolicyConfig
+defaultSiteRequestPolicy =
+  RequestPolicyConfig
+    { redirectHttpToHttps = False,
+      httpsRedirectPort = Nothing,
+      httpsRedirectAuthority = Nothing,
+      strictTransportSecurity = Nothing :: Maybe StrictTransportSecurityConfig,
+      forwardedHeaderTrust = NeverTrustForwarded,
+      requestHeadLimits = unboundedRequestHeadLimits,
+      requestTransportLimits = warpDefaultRequestTransportLimits,
+      requestConcurrencyLimit = Nothing,
+      corsPolicy = defaultCorsPolicyConfig,
+      responseSecurityHeaders = defaultResponseSecurityHeadersConfig
+    }

@@ -1,0 +1,326 @@
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
+
+-- | Private runtime listener orchestration behind the public 'runServer' facade.
+--
+-- FQ8 groups listener- and ACME-request dependencies that are fixed for one
+-- runtime. WAI request, response, and timing values remain explicit at their
+-- delivery boundary, including the established strict timing point before a
+-- challenge response is reported.
+module HarchWeb.Server.Runtime
+  ( runServer,
+    runServerWithWaiMiddleware,
+    waitForShutdownSignalWith,
+  )
+where
+
+import Control.Concurrent (newEmptyMVar, newMVar, takeMVar, tryPutMVar)
+import Control.Exception (bracket, finally)
+import Control.Monad (void)
+import Data.Bifunctor (first)
+import Data.Maybe (isNothing, listToMaybe, mapMaybe)
+import Data.Text (Text)
+import Data.Text qualified as Text
+import Data.Word (Word64)
+import GHC.Clock (getMonotonicTimeNSec)
+import HarchWeb.Acme
+import HarchWeb.Acme.Certbot.Runtime (RuntimeAcmeServerEnvironment (..), runtimeAcmeBindPlans, startAcmeRuntimeServersWithRequestTransportLimits, stopAcmeRuntimeServers)
+import HarchWeb.Acme.Challenge (acmeChallengeRoutePath)
+import HarchWeb.Observability (planObservabilityStartup)
+import HarchWeb.RequestId (newRequestId)
+import HarchWeb.Security (requestHeadLimits, requestTransportLimits)
+import HarchWeb.Server.Application (Application (..))
+import HarchWeb.Server.Config
+import HarchWeb.Server.RequestExecution (applyRequestIdResponseHeader, reportEarlyRequestObservability, toWaiApplication)
+import HarchWeb.Server.RequestObservability (requestObservabilityContext)
+import HarchWeb.Server.Transport
+  ( RuntimeTransportDependencies (..),
+    startHttpRuntimeServers,
+    startManualTlsRuntimeServers,
+    stopRuntimeServers,
+  )
+import Network.Wai qualified as Wai
+import System.IO (Handle, hFlush, hPutStrLn)
+import System.Posix.Signals (Handler (Catch), Signal, SignalSet, installHandler, sigINT, sigTERM)
+import Text.Read (readMaybe)
+
+runServer ::
+  (Eq route, HasServerConfig config) =>
+  Handle ->
+  config ->
+  Application route action context authorization ->
+  IO ()
+runServer = runServerWithWaiMiddleware id
+
+-- | Like 'runServer', but composes a caller-supplied 'Wai.Middleware' in
+-- front of the rendered application before it reaches any runtime listener,
+-- e.g. an application-authored middleware handling paths outside the typed
+-- 'Application' entirely. ACME HTTP-01 challenge responses bypass the
+-- middleware; every other request passes through it first.
+runServerWithWaiMiddleware ::
+  (Eq route, HasServerConfig config) =>
+  Wai.Middleware ->
+  Handle ->
+  config ->
+  Application route action context authorization ->
+  IO ()
+runServerWithWaiMiddleware waiMiddleware outputHandle config webApplication =
+  either
+    (ioError . userError)
+    (runServerWithStartupPlan waiMiddleware outputHandle config webApplication)
+    (validatedServerStartupPlan config)
+
+validatedServerStartupPlan :: (HasServerConfig config) => config -> Either String ServerStartupPlan
+validatedServerStartupPlan config = do
+  startupPlan <- first (("Invalid listener startup plan: " <>) . show) (planServerStartup config)
+  maybe (Right startupPlan) Left (runtimeStartupValidationError startupPlan)
+
+runServerWithStartupPlan ::
+  (Eq route, HasServerConfig config) =>
+  Wai.Middleware ->
+  Handle ->
+  config ->
+  Application route action context authorization ->
+  ServerStartupPlan ->
+  IO ()
+runServerWithStartupPlan waiMiddleware outputHandle config webApplication startupPlan = do
+  let observabilityPlan = planObservabilityStartup (observability (toServerConfig config))
+  challengeStore <- AcmeChallengeStore <$> newMVar []
+  webrootStore <- newCertbotWebrootStore
+  let runtimeRequestPolicy = requestPolicy (toServerConfig config)
+  gatedWaiApplication <- toWaiApplication webApplication
+  let runtimeRequestEnvironment =
+        RuntimeRequestEnvironment
+          { runtimeRenderedWaiApplication = waiMiddleware gatedWaiApplication,
+            runtimeChallengeStore = challengeStore,
+            runtimeWebrootStore = webrootStore,
+            runtimeTypedApplication = webApplication
+          }
+      runtimeApplication = toRuntimeWaiApplication runtimeRequestEnvironment
+      connectionReporter = reportConnectionObservability webApplication
+      runtimeRequestHeadLimits = requestHeadLimits runtimeRequestPolicy
+      runtimeRequestTransportLimits = requestTransportLimits runtimeRequestPolicy
+      runtimeTransportDependencies =
+        RuntimeTransportDependencies
+          { runtimeTransportRequestHeadLimits = runtimeRequestHeadLimits,
+            runtimeTransportRequestLimits = runtimeRequestTransportLimits,
+            runtimeTransportApplication = runtimeApplication
+          }
+  connectionReporter `seq`
+    observabilityPlan `seq`
+      bracket
+        (startHttpRuntimeServers runtimeTransportDependencies (httpEndpoints (httpBindPlan startupPlan)))
+        stopRuntimeServers
+        ( \httpServers ->
+            bracket
+              ( startAcmeRuntimeServersWithRequestTransportLimits
+                  RuntimeAcmeServerEnvironment
+                    { runtimeAcmeWebrootStore = webrootStore,
+                      runtimeAcmeRequestHeadLimits = runtimeRequestHeadLimits,
+                      runtimeAcmeRequestTransportLimits = runtimeRequestTransportLimits,
+                      runtimeAcmeApplication = runtimeApplication,
+                      runtimeAcmeConnectionReporter = connectionReporter,
+                      runtimeAcmeApplicationLogger = reportApplicationLog webApplication
+                    }
+                  (runtimeAcmeBindPlans startupPlan)
+              )
+              stopAcmeRuntimeServers
+              ( \acmeServers ->
+                  bracket
+                    (startManualTlsRuntimeServers runtimeTransportDependencies (manualTlsBindPlans startupPlan) connectionReporter)
+                    stopRuntimeServers
+                    ( \manualTlsServers ->
+                        httpServers `seq`
+                          acmeServers `seq`
+                            manualTlsServers `seq`
+                              announceRuntimeStartup outputHandle startupPlan
+                                >> waitForShutdownSignal
+                    )
+              )
+        )
+
+-- | Dependencies fixed for all ACME challenge checks within one running
+-- server. They are deliberately separate from request-specific timing and
+-- responder values so the request adapter does not become another general
+-- dispatch abstraction.
+data RuntimeRequestEnvironment route action context authorization = RuntimeRequestEnvironment
+  { runtimeRenderedWaiApplication :: Wai.Application,
+    runtimeChallengeStore :: AcmeChallengeStore,
+    runtimeWebrootStore :: CertbotWebrootStore,
+    runtimeTypedApplication :: Application route action context authorization
+  }
+
+toRuntimeWaiApplication :: RuntimeRequestEnvironment route action context authorization -> Wai.Application
+toRuntimeWaiApplication runtimeRequestEnvironment request respond = do
+  requestStartedAt <- getMonotonicTimeNSec
+  let webApplication = runtimeTypedApplication runtimeRequestEnvironment
+      requestPolicyConfig = applicationRequestPolicy webApplication
+  maybeChallengeResponse <- acmeChallengeResponseForRequest requestPolicyConfig (runtimeChallengeStore runtimeRequestEnvironment) (runtimeWebrootStore runtimeRequestEnvironment) request
+  maybe
+    (runtimeRenderedWaiApplication runtimeRequestEnvironment request respond)
+    (respondAcmeChallenge runtimeRequestEnvironment request requestStartedAt respond)
+    maybeChallengeResponse
+
+respondAcmeChallenge ::
+  RuntimeRequestEnvironment route action context authorization ->
+  Wai.Request ->
+  Word64 ->
+  (Wai.Response -> IO Wai.ResponseReceived) ->
+  Wai.Response ->
+  IO Wai.ResponseReceived
+respondAcmeChallenge runtimeRequestEnvironment request requestStartedAt respond challengeResponse = do
+  requestId <- newRequestId
+  let webApplication = runtimeTypedApplication runtimeRequestEnvironment
+      requestPolicyConfig = applicationRequestPolicy webApplication
+      respondWithRequestId = respond . applyRequestIdResponseHeader requestId
+  challengeResponseReportedAt <- challengeResponse `seq` getMonotonicTimeNSec
+  reportEarlyRequestObservability
+    (requestObservabilityContext webApplication requestId request requestPolicyConfig)
+    requestStartedAt
+    challengeResponseReportedAt
+    (acmeChallengeRoutePath requestPolicyConfig request)
+    challengeResponse
+  respondWithRequestId challengeResponse
+
+announceRuntimeStartup :: Handle -> ServerStartupPlan -> IO ()
+announceRuntimeStartup outputHandle startupPlan = do
+  mapM_ (hPutStrLn outputHandle . uncurry listenerStartupMessage) (runtimeStartupListeners startupPlan)
+  hFlush outputHandle
+
+runtimeStartupListeners :: ServerStartupPlan -> [(ListenerScheme, ListenerEndpoint)]
+runtimeStartupListeners startupPlan =
+  map (Http,) (httpEndpoints (httpBindPlan startupPlan))
+    <> map ((Https,) . tlsEndpoint) (manualTlsBindPlans startupPlan)
+    <> mapMaybe (fmap (Https,) . acmeTlsEndpoint) (acmeBindPlans startupPlan)
+
+listenerStartupMessage :: ListenerScheme -> ListenerEndpoint -> String
+listenerStartupMessage listenerScheme endpoint =
+  listenerSchemePrefix listenerScheme
+    <> Text.unpack (endpointHost endpoint)
+    <> ":"
+    <> show (endpointPort endpoint)
+
+listenerSchemePrefix :: ListenerScheme -> String
+listenerSchemePrefix listenerScheme =
+  case listenerScheme of
+    Http -> "HTTP Server listening at http://"
+    Https -> "HTTPS Server listening at https://"
+
+waitForShutdownSignal :: IO ()
+waitForShutdownSignal = waitForShutdownSignalWith installHandler
+
+-- | Install and restore the SIGINT/SIGTERM handlers around one shutdown wait.
+-- Keeping the OS call as a parameter lets the focused runtime test prove that
+-- every installation uses the unmasked-handler policy and that both original
+-- handlers are restored, rather than treating the policy value as coverage
+-- scaffolding.
+waitForShutdownSignalWith :: (Signal -> Handler -> Maybe SignalSet -> IO Handler) -> IO ()
+waitForShutdownSignalWith installSignalHandler = do
+  shutdownSignal <- newEmptyMVar
+  let installShutdownHandler signal handler = installSignalHandler signal handler Nothing
+      requestShutdown = void (tryPutMVar shutdownSignal ())
+  previousInterruptHandler <- installShutdownHandler sigINT (Catch requestShutdown)
+  previousTerminationHandler <- installShutdownHandler sigTERM (Catch requestShutdown)
+  takeMVar shutdownSignal
+    `finally` do
+      _ <- installShutdownHandler sigINT previousInterruptHandler
+      installShutdownHandler sigTERM previousTerminationHandler
+
+runtimeStartupValidationError :: ServerStartupPlan -> Maybe String
+runtimeStartupValidationError startupPlan =
+  case ( null (acmeBindPlans startupPlan),
+         null (httpEndpoints (httpBindPlan startupPlan)),
+         null (manualTlsBindPlans startupPlan)
+       ) of
+    (True, True, True) ->
+      Just "Unsupported runtime listener startup plan: no runtime listeners are configured."
+    (False, _, _) ->
+      firstAcmeRuntimeStartupError (httpEndpoints (httpBindPlan startupPlan)) (acmeBindPlans startupPlan)
+    (True, _, _) ->
+      Nothing
+
+firstAcmeRuntimeStartupError :: [ListenerEndpoint] -> [AcmeBindPlan] -> Maybe String
+firstAcmeRuntimeStartupError httpListenerEndpoints acmePlans =
+  listToMaybe (mapMaybe (validateAcmeRuntimeBindPlan httpListenerEndpoints) acmePlans)
+
+validateAcmeRuntimeBindPlan :: [ListenerEndpoint] -> AcmeBindPlan -> Maybe String
+validateAcmeRuntimeBindPlan httpListenerEndpoints acmePlan =
+  either Just (validateAcmeChallengePort httpListenerEndpoints acmePlan) (acmeHttp01ChallengePort acmePlan)
+
+validateAcmeChallengePort :: [ListenerEndpoint] -> AcmeBindPlan -> Int -> Maybe String
+validateAcmeChallengePort httpListenerEndpoints acmePlan challengePort =
+  maybe
+    (validateHttpOnlyAcmeChallengePort acmePlan challengePort)
+    (const (validateTlsAcmeChallengePort httpListenerEndpoints acmePlan challengePort))
+    (acmeTlsEndpoint acmePlan)
+
+validateHttpOnlyAcmeChallengePort :: AcmeBindPlan -> Int -> Maybe String
+validateHttpOnlyAcmeChallengePort acmePlan challengePort =
+  if endpointPort (acmeEndpoint acmePlan) == challengePort
+    then validateAcmeRuntimeConfiguration acmePlan
+    else
+      Just $
+        "Unsupported runtime listener startup plan: ACME listener on "
+          <> renderListenerEndpoint (acmeEndpoint acmePlan)
+          <> " requires the configured http-01 port to match its HTTP listener port "
+          <> show (endpointPort (acmeEndpoint acmePlan))
+          <> "."
+
+validateTlsAcmeChallengePort :: [ListenerEndpoint] -> AcmeBindPlan -> Int -> Maybe String
+validateTlsAcmeChallengePort httpListenerEndpoints acmePlan challengePort =
+  if hasMatchingAcmeHttp01ChallengeEndpoint challengePort httpListenerEndpoints acmePlan
+    then validateAcmeRuntimeConfiguration acmePlan
+    else
+      Just $
+        "Unsupported runtime listener startup plan: ACME listener on "
+          <> renderListenerEndpoint (acmeEndpoint acmePlan)
+          <> " requires an HTTP listener on port "
+          <> show challengePort
+          <> " for http-01 challenges."
+
+validateAcmeRuntimeConfiguration :: AcmeBindPlan -> Maybe String
+validateAcmeRuntimeConfiguration acmePlan =
+  if isNothing (acmeTlsEndpoint acmePlan)
+    && isNothing (acmeCertificateDirectory (acmeListenerConfig acmePlan))
+    then
+      Just $
+        "Unsupported runtime listener startup plan: ACME listener on "
+          <> renderListenerEndpoint (acmeEndpoint acmePlan)
+          <> " requires an ACME certificate directory so HTTPS listeners can consume published certificates."
+    else Nothing
+
+hasMatchingAcmeHttp01ChallengeEndpoint :: Int -> [ListenerEndpoint] -> AcmeBindPlan -> Bool
+hasMatchingAcmeHttp01ChallengeEndpoint challengePort httpListenerEndpoints acmePlan =
+  any (isAcmeHttp01ChallengeEndpointFor challengePort (acmeEndpoint acmePlan)) httpListenerEndpoints
+
+acmeHttp01ChallengePort :: AcmeBindPlan -> Either String Int
+acmeHttp01ChallengePort acmePlan =
+  let certbotConfig = acmeCertbotConfig (acmeListenerConfig acmePlan)
+   in case certbotOptionValue "--http-01-port" (certbotArguments certbotConfig) of
+        Nothing ->
+          Right (acmeHttp01Port (acmeListenerConfig acmePlan))
+        Just portText ->
+          maybe
+            ( Left $
+                "Unsupported runtime listener startup plan: ACME listener on "
+                  <> renderListenerEndpoint (acmeEndpoint acmePlan)
+                  <> " has an invalid certbot http-01 port: "
+                  <> Text.unpack portText
+            )
+            Right
+            (readMaybe (Text.unpack portText))
+
+certbotOptionValue :: Text -> [Text] -> Maybe Text
+certbotOptionValue optionName arguments =
+  listToMaybe (certbotOptionValues optionName arguments)
+
+isAcmeHttp01ChallengeEndpointFor :: Int -> ListenerEndpoint -> ListenerEndpoint -> Bool
+isAcmeHttp01ChallengeEndpointFor challengePort acmeListenerEndpoint httpListenerEndpoint =
+  endpointPort httpListenerEndpoint == challengePort
+    && ( endpointHost httpListenerEndpoint == "0.0.0.0"
+           || endpointHost httpListenerEndpoint == endpointHost acmeListenerEndpoint
+       )
+
+renderListenerEndpoint :: ListenerEndpoint -> String
+renderListenerEndpoint endpoint =
+  Text.unpack (endpointHost endpoint) <> ":" <> show (endpointPort endpoint)

@@ -1,4 +1,6 @@
 /dist-newstyle/
+/packages/test-core/playwright-runner/node_modules/
+**/test-results/playwright/
 /.vscode/*
 !/.vscode/settings.json
 !/.vscode/launch.json
@@ -10,10 +12,16 @@ cabal.project.local~
 /.env.local
 **/.tls/
 
-# Ignore LICENSE files copied by Setup.hs, except root and 3rd party packages
+# Ignore LICENSE files copied by Setup.hs, except root, published packages, and third-party packages
 **/LICENSE
 !/LICENSE
+!/examples/two-pages/LICENSE
+!/packages/core/LICENSE
+!/packages/harch-web/LICENSE
 !/packages/hspec-expectations-match/LICENSE
+!/packages/test-core/LICENSE
+!/packages/web-api/LICENSE
 
-# Ignore intentionally duplicated test-core sources in core package that avoids cyclic dependencies
-/packages/core/test-core-src/
+# Keep core's small, intentional test-core source snapshot: core tests cannot
+# depend on test-core without creating a package dependency cycle.
+!/packages/core/test-core-src/

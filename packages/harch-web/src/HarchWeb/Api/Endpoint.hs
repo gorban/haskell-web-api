@@ -1,0 +1,82 @@
+-- | Typed API endpoint declarations and their single shared route-family
+-- dispatcher.
+--
+-- Decision record (2026-08-18): this module remains the one public API
+-- facade. Its three cohesive private collaborators are split by ownership:
+-- @.Internal@ owns representation that must stay abstract to callers,
+-- @.Family@ owns the one method-aware route-family adapter, and @.Runtime@
+-- owns request decoding and protocol-response interpretation. This is a
+-- structural extension of the existing boundary, not a second dispatcher or
+-- a newly exposed internal API: all callers construct one
+-- 'ApiEndpointFamily' and compose its
+-- 'apiRouteEndpointFamilyCodec'/'apiRouteEndpointFamilyDefinition' pair.
+-- The split repairs the module-health signal while keeping the family
+-- dispatcher's ownership and 'ApiPath' abstraction intact; see
+-- @docs/design-guidance.md@ and the Endpoint module-health task in
+-- @TASKS.md@.
+module HarchWeb.Api.Endpoint
+  ( ApiMethod (..),
+    ApiPath,
+    ApiFieldFailurePolicy (..),
+    ApiEndpointContract (..),
+    ApiRouteEndpointDeclaration (..),
+    ApiRouteEndpoint,
+    SomeApiRouteEndpoint (..),
+    ApiEndpointRequest (..),
+    ApiRequestBody (..),
+    ApiRequestBodyByteLimit,
+    ApiStreamingRequest (..),
+    RequestBodyReadFailure (..),
+    ApiMultipartRequest,
+    ApiMultipartRequestError (..),
+    withApiMultipartRequest,
+    apiMethodText,
+    apiRequestBodyByteLimit,
+    requireApiRequestBodyByteLimit,
+    apiRequestBodyByteLimitValue,
+    apiRouteEndpoint,
+    apiRouteEndpointNeverFailing,
+    apiRouteEndpointPath,
+    apiRouteDefinition,
+    apiRouteDefinitionWithContext,
+    apiRouteDefinitionWithContextNeverFailing,
+    ApiEndpointFamily,
+    ApiEndpointFamilyError (..),
+    apiEndpointFamily,
+    requireApiEndpointFamily,
+    apiRouteEndpointFamilyCodec,
+    apiRouteEndpointFamilyDefinition,
+    at,
+    apiResponseBodyToProtocolResponse,
+    ApiHttpResponse (..),
+    apiHttpResponseToProtocolResponse,
+  )
+where
+
+import HarchWeb.Api.Endpoint.Family
+import HarchWeb.Api.Endpoint.Internal
+  ( ApiEndpointContract (..),
+    ApiEndpointRequest (..),
+    ApiFieldFailurePolicy (..),
+    ApiMethod (..),
+    ApiMultipartRequest,
+    ApiMultipartRequestError (..),
+    ApiPath,
+    ApiRequestBody (..),
+    ApiRequestBodyByteLimit,
+    ApiRouteEndpoint,
+    ApiRouteEndpointDeclaration (..),
+    ApiStreamingRequest (..),
+    RequestBodyReadFailure (..),
+    SomeApiRouteEndpoint (..),
+    apiMethodText,
+    apiRequestBodyByteLimit,
+    apiRequestBodyByteLimitValue,
+    apiRouteEndpoint,
+    apiRouteEndpointNeverFailing,
+    apiRouteEndpointPath,
+    at,
+    requireApiRequestBodyByteLimit,
+    withApiMultipartRequest,
+  )
+import HarchWeb.Api.Endpoint.Runtime

@@ -56,10 +56,8 @@ parseTracingEndpoint endpoint = do
     else parseAuthority defaultPort authority
 
 checkTracingEndpointReachable :: Text -> IO (Either TracingEndpointParseError Bool)
-checkTracingEndpointReachable endpoint =
-  case parseTracingEndpoint endpoint of
-    Left parseError -> pure (Left parseError)
-    Right tcpEndpoint -> fmap Right (checkTcpEndpointReachable tcpEndpoint)
+checkTracingEndpointReachable =
+  traverse checkTcpEndpointReachable . parseTracingEndpoint
 
 resolveAndConnect :: TcpEndpoint -> IO Bool
 resolveAndConnect endpoint = do

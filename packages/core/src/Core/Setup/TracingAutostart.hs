@@ -7,8 +7,12 @@ module Core.Setup.TracingAutostart
   )
 where
 
-import Control.Exception (IOException, try)
-import Core.Setup.DatabaseAutostart (ContainerRuntimeFailure (..))
+import Core.Setup.ContainerRuntime
+  ( ContainerAutostartOutcomes (..),
+    ContainerRuntimeFailure (..),
+    attemptContainerAutostart,
+    runContainerRuntimeCommand,
+  )
 import Core.Setup.Prerequisite
   ( TcpEndpoint (..),
     parseTracingEndpoint,
@@ -16,12 +20,9 @@ import Core.Setup.Prerequisite
 import Core.Setup.PrerequisitePlan
   ( ContainerRuntime (..),
     TracingPrerequisitePlan (..),
-    autostartRuntimes,
   )
 import Data.Text (Text)
 import Data.Text qualified as Text
-import System.Exit (ExitCode (..))
-import System.Process (proc, readCreateProcessWithExitCode)
 
 data TracingAutostartResult
   = TracingAutostartSkipped Text
@@ -40,26 +41,16 @@ attemptTracingAutostartWith ::
   TracingPrerequisitePlan ->
   IO TracingAutostartResult
 attemptTracingAutostartWith runCommand tracingPlan =
-  case tracingAutostartPlan tracingPlan of
-    Nothing ->
-      pure (TracingAutostartSkipped "tracing autostart is disabled for this setup plan")
-    Just autostartPlan ->
-      case tracingAutostartArguments tracingPlan of
-        Left skipReason ->
-          pure (TracingAutostartSkipped skipReason)
-        Right commandArguments ->
-          let tryRuntimes failures [] =
-                pure (TracingAutostartFailed (reverse failures))
-              tryRuntimes failures (runtime : remainingRuntimes) = do
-                launchResult <- runCommand runtime commandArguments
-                case launchResult of
-                  Right () ->
-                    pure (TracingAutostartSucceeded runtime)
-                  Left failureMessage ->
-                    tryRuntimes
-                      (ContainerRuntimeFailure runtime failureMessage : failures)
-                      remainingRuntimes
-           in tryRuntimes [] (autostartRuntimes autostartPlan)
+  attemptContainerAutostart
+    runCommand
+    (tracingAutostartPlan tracingPlan)
+    "tracing autostart is disabled for this setup plan"
+    (tracingAutostartArguments tracingPlan)
+    ContainerAutostartOutcomes
+      { containerAutostartSkipped = TracingAutostartSkipped,
+        containerAutostartSucceeded = TracingAutostartSucceeded,
+        containerAutostartFailed = TracingAutostartFailed
+      }
 
 tracingAutostartArguments :: TracingPrerequisitePlan -> Either Text [String]
 tracingAutostartArguments tracingPlan = do
@@ -116,37 +107,3 @@ renderPortBinding host hostPort containerPort =
     <> Text.pack (show hostPort)
     <> ":"
     <> Text.pack (show containerPort)
-
-runContainerRuntimeCommand :: ContainerRuntime -> [String] -> IO (Either Text ())
-runContainerRuntimeCommand runtime commandArguments = do
-  let executable = renderContainerRuntimeExecutable runtime
-  processResult <-
-    try (readCreateProcessWithExitCode (proc executable commandArguments) "") ::
-      IO (Either IOException (ExitCode, String, String))
-  pure $
-    case processResult of
-      Left processError ->
-        Left (Text.pack (show processError))
-      Right (ExitSuccess, _, _) ->
-        Right ()
-      Right (ExitFailure exitCode, stdoutText, stderrText) ->
-        Left (renderCommandFailure exitCode stdoutText stderrText)
-
-renderContainerRuntimeExecutable :: ContainerRuntime -> String
-renderContainerRuntimeExecutable containerRuntime =
-  case containerRuntime of
-    PodmanRuntime -> "podman"
-    DockerRuntime -> "docker"
-
-renderCommandFailure :: Int -> String -> String -> Text
-renderCommandFailure exitCode stdoutText stderrText =
-  let failureMessage = firstNonEmptyText [Text.pack stderrText, Text.pack stdoutText]
-   in if Text.null failureMessage
-        then "command failed with exit code " <> Text.pack (show exitCode)
-        else failureMessage
-
-firstNonEmptyText :: [Text] -> Text
-firstNonEmptyText textValues =
-  case filter (not . Text.null) (map Text.strip textValues) of
-    message : _ -> message
-    [] -> ""
