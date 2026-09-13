@@ -442,13 +442,16 @@ spec =
                   runPageScript
                     "new Promise((resolve) => { if (window.__harchNavigationRuntimeReady) { resolve(true); return; } window.addEventListener('harch:navigation-runtime-ready', () => resolve(true), { once: true }); })"
                 blockRequestsMatching "**/second"
+                blockRequestsMatching "**/profile"
                 _ <-
                   runPageScript
                     "const status = document.querySelector('[data-navigation-route-status]'); let count = 0; status.dataset.testMutationCount = '0'; new MutationObserver((records) => { count += records.filter((record) => record.type === 'childList' || record.type === 'characterData').length; status.dataset.testMutationCount = String(count); }).observe(status, { childList: true, characterData: true, subtree: true }); true"
                 press (byRole Link `named` "Second") "Enter"
                 waitForBlockedRequestsMatching "**/second"
                 press (byRole Link `named` "Profile") "Enter"
+                waitForBlockedRequestsMatching "**/profile"
                 releaseRequestsMatching "**/second"
+                releaseRequestsMatching "**/profile"
                 assertAllObserved do
                   currentUrl `shouldEqual` loginUrl
                   byRole Heading `shouldHaveText` "Sign in"
