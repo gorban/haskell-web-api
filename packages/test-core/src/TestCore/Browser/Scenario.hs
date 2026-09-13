@@ -44,15 +44,16 @@ module TestCore.Browser.Scenario
     visitWithoutScripts,
     waitForBlockedRequestCountMatching,
     waitForBlockedRequestsMatching,
+    withSharedCookieDocument,
   )
 where
 
 import Control.Concurrent (threadDelay)
-import Control.Exception (SomeException, displayException, fromException, throwIO, try)
+import Control.Exception (SomeException, displayException, fromException, mask, onException, throwIO, try)
 import Control.Monad (void)
-import Control.Monad.Except (ExceptT, MonadError (throwError), runExceptT)
+import Control.Monad.Except (ExceptT (..), MonadError (throwError), runExceptT)
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Reader (ReaderT, ask, runReaderT)
+import Control.Monad.Reader (ReaderT (..), ask, runReaderT)
 import Data.Aeson (Value, (.=))
 import Data.Aeson.Types (Pair)
 import Data.List.NonEmpty (NonEmpty (..))
@@ -110,6 +111,33 @@ runBrowserSpec :: BrowserConfig -> BrowserScenario () -> Expectation
 runBrowserSpec config scenario = do
   result <- runBrowserScenario config scenario
   either (expectationFailure . show) pure result
+
+-- | Run a scenario against one temporary document in the current browser
+-- context. It shares the primary document's cookie jar, then closes before
+-- control returns to that primary document.
+--
+-- This deliberately does not expose a page handle, page selection, or raw
+-- Playwright API. It exists for browser evidence whose security property
+-- depends on another tab changing shared cookie state while an older document
+-- remains open. All ordinary scenario commands inside the block target the
+-- temporary document; the original document remains available after it.
+-- Opening a second document is scoped so a failed assertion cannot leak it
+-- into a later example or leave the runner with ambiguous command ownership.
+withSharedCookieDocument :: BrowserScenario a -> BrowserScenario a
+withSharedCookieDocument scenario =
+  BrowserScenario $ ReaderT $ \session -> ExceptT $
+    mask $ \restore -> do
+      opened <- sendCommand session "openSharedCookieDocument" []
+      case opened of
+        Left browserError -> pure (Left browserError)
+        Right _ -> do
+          let closeDocument = void (sendCommand session "closeSharedCookieDocument" [])
+          actionResult <- restore (runExceptT (runReaderT (unBrowserScenario scenario) session)) `onException` closeDocument
+          closeResult <- sendCommand session "closeSharedCookieDocument" []
+          pure $
+            case actionResult of
+              Left browserError -> Left browserError
+              Right value -> value <$ closeResult
 
 command :: Text -> [Pair] -> BrowserScenario Value
 command commandName fields = do

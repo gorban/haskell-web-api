@@ -19,6 +19,9 @@ const state = {
   browser: null,
   context: null,
   page: null,
+  primaryPage: null,
+  secondaryPage: null,
+  primaryPageTracking: null,
   config: null,
   scriptsEnabled: null,
   mobileViewport: null,
@@ -73,6 +76,8 @@ function validateEnvelope(request) {
 async function execute(request) {
   switch (request.command) {
     case 'initialize': return initialize(request);
+    case 'openSharedCookieDocument': return openSharedCookieDocument();
+    case 'closeSharedCookieDocument': return closeSharedCookieDocument();
     case 'visit': return visit(request.url, true);
     case 'visitWithoutScripts': return visit(request.url, false);
     case 'setCookie': return setCookie(request.url, request.name, request.value);
@@ -152,23 +157,70 @@ async function createContext(scriptsEnabled) {
     };
   });
   state.page = await state.context.newPage();
+  state.primaryPage = state.page;
+  state.secondaryPage = null;
+  state.primaryPageTracking = null;
+  state.blockedRequests = new Map();
+  resetActivePageTracking(state.page);
+  return null;
+}
+
+function resetActivePageTracking(page) {
   state.countHardNavigations = false;
   state.documentIdentity = null;
   state.documentRequestCount = 0;
   state.accountedDocumentRequestCount = 0;
   state.metrics = emptyMetrics();
-  state.blockedRequests = new Map();
-
-  state.page.on('request', (request) => {
+  page.on('request', (request) => {
     if (state.countHardNavigations && request.isNavigationRequest() && request.frame() === state.page.mainFrame()) {
       state.documentRequestCount += 1;
       state.metrics.hardNavigationCount += 1;
     }
   });
+}
 
+function currentPageTracking() {
+  return {
+    countHardNavigations: state.countHardNavigations,
+    documentIdentity: state.documentIdentity,
+    documentRequestCount: state.documentRequestCount,
+    accountedDocumentRequestCount: state.accountedDocumentRequestCount,
+    metrics: state.metrics,
+  };
+}
+
+function restorePageTracking(tracking) {
+  state.countHardNavigations = tracking.countHardNavigations;
+  state.documentIdentity = tracking.documentIdentity;
+  state.documentRequestCount = tracking.documentRequestCount;
+  state.accountedDocumentRequestCount = tracking.accountedDocumentRequestCount;
+  state.metrics = tracking.metrics;
+}
+
+async function openSharedCookieDocument() {
+  if (!state.context || !state.primaryPage) throw new Error('browser runner has not been initialized');
+  if (state.secondaryPage) throw new Error('a shared-cookie document is already open');
+  state.primaryPageTracking = currentPageTracking();
+  state.secondaryPage = await state.context.newPage();
+  state.page = state.secondaryPage;
+  resetActivePageTracking(state.page);
+  return null;
+}
+
+async function closeSharedCookieDocument() {
+  if (!state.secondaryPage || !state.primaryPageTracking) throw new Error('no shared-cookie document is open');
+  const secondaryPage = state.secondaryPage;
+  const primaryTracking = state.primaryPageTracking;
+  state.secondaryPage = null;
+  state.primaryPageTracking = null;
+  await secondaryPage.close();
+  state.page = state.primaryPage;
+  restorePageTracking(primaryTracking);
+  return null;
 }
 
 async function emulateMobileViewport(width, height) {
+  if (state.secondaryPage) throw new Error('cannot recreate the browser context while a shared-cookie document is open');
   state.mobileViewport = {
     width: positiveInteger(width, 'mobile viewport width'),
     height: positiveInteger(height, 'mobile viewport height'),
@@ -206,6 +258,9 @@ async function paste(locator, value) {
 
 async function visit(url, scriptsEnabled) {
   requireString(url, 'visit URL');
+  if (state.secondaryPage && state.scriptsEnabled !== scriptsEnabled) {
+    throw new Error('cannot change JavaScript mode while a shared-cookie document is open');
+  }
   if (!state.context || state.scriptsEnabled !== scriptsEnabled) await createContext(scriptsEnabled);
   state.countHardNavigations = false;
   const page = requirePage();
@@ -435,6 +490,9 @@ async function closeBrowser(failed, failureMessage) {
     state.browser = null;
     state.context = null;
     state.page = null;
+    state.primaryPage = null;
+    state.secondaryPage = null;
+    state.primaryPageTracking = null;
   }
   return artifacts;
 }

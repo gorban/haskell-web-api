@@ -108,6 +108,25 @@ spec =
           )
           `shouldReturn` Right (Aeson.Bool True)
 
+    it "scopes a shared-cookie document and restores the primary document after success or failure" $
+      withFakeRunner "shared-document" $ \config -> do
+        completed <-
+          runBrowserScenario config do
+            visit "http://localhost/primary"
+            secondaryValue <- withSharedCookieDocument do
+              visit "http://localhost/secondary"
+              pure ("secondary document" :: Text.Text)
+            visit "http://localhost/primary-after-secondary"
+            pure secondaryValue
+        failed <-
+          runBrowserScenario config do
+            withSharedCookieDocument do
+              click (byText "Missing")
+        expectAll
+          ( (completed `shouldBe` Right "secondary document")
+              :| [failed `shouldBe` Left (BrowserCommandFailed 3 "secondary document failed" [])]
+          )
+
     it "batches heterogeneous observed assertions in one browser snapshot" $
       withFakeRunner "aggregate-only" $ \config ->
         runBrowserSpec config $
@@ -510,6 +529,8 @@ spec =
           "const enteredPath = process.argv[3];",
           "let textAttempts = 0;",
           "let snapshotAttempts = 0;",
+          "let sharedDocumentOpen = false;",
+          "let sharedDocumentClosed = false;",
           "const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });",
           "function reply(id, status, value, message, artifacts = []) {",
           "  process.stdout.write(JSON.stringify({ protocol: 1, id, status, value, message, artifacts }) + '\\n');",
@@ -537,6 +558,15 @@ spec =
           "    if (mode === 'closed' && request.command === 'visit') { process.exit(0); }",
           "    if (mode === 'no-value' && request.command === 'visit') { rawReply({ protocol: 1, id: request.id, status: 'ok' }); continue; }",
           "    if (mode === 'scenario-and-finish-error' && request.command === 'visit') { reply(request.id, 'error', null, 'scenario failed'); continue; }",
+          "    if (mode === 'shared-document' && request.command === 'openSharedCookieDocument') {",
+          "      if (sharedDocumentOpen) { reply(request.id, 'error', null, 'shared document opened twice'); continue; }",
+          "      sharedDocumentOpen = true; reply(request.id, 'ok', null); continue;",
+          "    }",
+          "    if (mode === 'shared-document' && request.command === 'closeSharedCookieDocument') {",
+          "      if (!sharedDocumentOpen) { reply(request.id, 'error', null, 'shared document was not open'); continue; }",
+          "      sharedDocumentOpen = false; sharedDocumentClosed = true; reply(request.id, 'ok', null); continue;",
+          "    }",
+          "    if (mode === 'shared-document' && request.command === 'click' && sharedDocumentOpen) { reply(request.id, 'error', null, 'secondary document failed'); continue; }",
           "    if (mode === 'command-error' && request.command === 'click') { reply(request.id, 'error', null, 'missing element'); continue; }",
           "    if (mode === 'scenario-error-finish-no-artifacts' && request.command === 'click') { reply(request.id, 'error', null, 'missing element'); continue; }",
           "    if (mode === 'command-error-no-artifacts' && request.command === 'click') { rawReply({ protocol: 1, id: request.id, status: 'error', message: 'missing element' }); continue; }",
@@ -570,6 +600,7 @@ spec =
           "    }",
           "    if (request.command === 'runPageScript') { reply(request.id, 'ok', request.source === 'true'); continue; }",
           "    if (request.command === 'finish') {",
+          "      if (mode === 'shared-document' && (sharedDocumentOpen || !sharedDocumentClosed)) { reply(request.id, 'error', null, 'shared document leaked'); return; }",
           "      if (mode === 'scenario-and-finish-error' || mode === 'finish-error') { reply(request.id, 'error', null, 'finish failed'); return; }",
           "      if (mode === 'finish-invalid') { reply(request.id, 'ok', 'invalid finish value'); return; }",
           "      if (mode === 'finish-no-artifacts' || mode === 'scenario-error-finish-no-artifacts') { reply(request.id, 'ok', {}); return; }",

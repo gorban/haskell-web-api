@@ -121,6 +121,31 @@ spec =
                   css "[data-harch-action-status]" `shouldHaveText` "This action needs your attention."
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
 
+            it "rejects an older admission document after another tab rotates shared security" $ \(browser, server) -> do
+              let admissionUrl = localServerBaseUrl server <> "/public/admission"
+                  loginUrl = localServerBaseUrl server <> "/en/public/login"
+                  loginField = byLabel "Admission name"
+                  codeField = byLabel "One-time code"
+              runBrowserSpec browser do
+                visit admissionUrl
+                fill loginField "support_operator"
+                fill codeField browserAdmissionCode
+                withSharedCookieDocument do
+                  visit admissionUrl
+                  fill loginField "support_operator"
+                  fill codeField browserAdmissionCode
+                  submit (byRole Form `named` "Admission")
+                  assertAllObserved do
+                    currentUrl `shouldEqual` loginUrl
+                    byRole Heading `named` "Login" `shouldHaveText` "Login"
+                submit (byRole Form `named` "Admission")
+                assertAllObserved do
+                  currentUrl `shouldEqual` admissionUrl
+                  css "[data-harch-action-status]" `shouldHaveText` "This action needs your attention."
+                  inputValue loginField `shouldEqual` "support_operator"
+                  inputValue codeField `shouldEqual` browserAdmissionCode
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+
             it "keeps an invalid admission TOTP draft editable until its corrected submission succeeds" $ \(browser, server) -> do
               let admissionUrl = localServerBaseUrl server <> "/public/admission"
                   loginUrl = localServerBaseUrl server <> "/en/public/login"
