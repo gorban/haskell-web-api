@@ -5,9 +5,11 @@
 -- owners. This does not add another extractor, router, or authentication rail.
 module HarchWeb.Authentication
   ( module HarchWeb.Authentication.Pipeline,
+    module HarchWeb.Authentication.Flow,
     module HarchWeb.Authentication.Transport,
   )
 where
 
+import HarchWeb.Authentication.Flow
 import HarchWeb.Authentication.Pipeline
 import HarchWeb.Authentication.Transport

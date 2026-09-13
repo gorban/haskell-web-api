@@ -16,6 +16,48 @@ import Network.Wai qualified as Wai
 import Unit.HarchWeb.TestSupport (TestContext (requestLanguage), TestRoute (DataRoute), defaultContext)
 
 spec = do
+  describe "authentication-flow vocabulary" $
+    it "keeps browser, OAuth grant, and client-method policy as separate typed axes" $ do
+      browserConfiguration <- newIORef BrowserSessionFlowConfiguration >>= readIORef
+      clientMethod <- newIORef ClientSecretBasic >>= readIORef
+      let oauthConfiguration = OAuth2FlowConfiguration (ClientCredentialsGrant clientMethod :| [])
+          browserFlow :: InteractiveAuthenticationFlow Text
+          browserFlow = BrowserSessionFlow browserConfiguration
+          oauthFlow :: InteractiveAuthenticationFlow Text
+          oauthFlow = OAuth2Flow oauthConfiguration
+          customFlow :: InteractiveAuthenticationFlow Text
+          customFlow = CustomAuthenticationFlow "deployment-defined"
+      expectAll
+        ( (browserFlow `shouldBe` browserFlow)
+            :| [ oauthFlow `shouldBe` oauthFlow,
+                 customFlow `shouldBe` customFlow,
+                 oauth2FlowGrants oauthConfiguration `shouldBe` (ClientCredentialsGrant clientMethod :| []),
+                 browserFlow `shouldNotBe` oauthFlow,
+                 browserConfiguration `shouldBe` browserConfiguration,
+                 oauthConfiguration `shouldBe` OAuth2FlowConfiguration (ClientCredentialsGrant clientMethod :| []),
+                 ClientCredentialsGrant clientMethod `shouldBe` ClientCredentialsGrant clientMethod,
+                 clientMethod `shouldBe` clientMethod,
+                 (browserConfiguration /= browserConfiguration) `shouldBe` False,
+                 (oauthConfiguration /= oauthConfiguration) `shouldBe` False,
+                 (ClientCredentialsGrant clientMethod /= ClientCredentialsGrant clientMethod) `shouldBe` False,
+                 (clientMethod /= clientMethod) `shouldBe` False,
+                 show browserFlow `shouldBe` "BrowserSessionFlow BrowserSessionFlowConfiguration",
+                 show oauthFlow
+                   `shouldBe` "OAuth2Flow (OAuth2FlowConfiguration {oauth2FlowGrants = ClientCredentialsGrant ClientSecretBasic :| []})",
+                 show customFlow `shouldBe` "CustomAuthenticationFlow \"deployment-defined\"",
+                 show BrowserSessionFlowConfiguration `shouldBe` "BrowserSessionFlowConfiguration",
+                 show oauthConfiguration
+                   `shouldBe` "OAuth2FlowConfiguration {oauth2FlowGrants = ClientCredentialsGrant ClientSecretBasic :| []}",
+                 show (ClientCredentialsGrant ClientSecretBasic) `shouldBe` "ClientCredentialsGrant ClientSecretBasic",
+                 show ClientSecretBasic `shouldBe` "ClientSecretBasic",
+                 showList [browserFlow, oauthFlow, customFlow] "" `shouldSatisfy` (not . null),
+                 showList [browserConfiguration] "" `shouldSatisfy` (not . null),
+                 showList [oauthConfiguration] "" `shouldSatisfy` (not . null),
+                 showList [ClientCredentialsGrant clientMethod] "" `shouldSatisfy` (not . null),
+                 showList [clientMethod] "" `shouldSatisfy` (not . null)
+               ]
+        )
+
   describe "authentication proof extractors" $ do
     it "distinguishes absent, duplicate, malformed, and oversized cookie proofs" $ do
       let extractor = cookieJwtExtractor (requiredCookieName "__Host-session") (requiredProofMaximumBytes 8)

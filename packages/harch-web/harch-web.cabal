@@ -70,6 +70,7 @@ library
     HarchWeb.ApplicationModule
     HarchWeb.Authentication
     HarchWeb.Authentication.Attempt
+    HarchWeb.Authentication.Flow
     HarchWeb.Authentication.Jwt
     HarchWeb.ClientActionFailure
     HarchWeb.ClientStorage

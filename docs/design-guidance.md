@@ -3407,6 +3407,18 @@ durable API-client authentication; this slice intentionally provides only the
 account JWT source and client-action CSRF selection needed by the reference
 application.
 
+### Decision record — AHI-4D slice 3: authentication-flow vocabulary (2026-09-13)
+
+**Decision: add one closed, extensible flow vocabulary at Harch's existing
+authentication boundary before introducing OAuth endpoint or storage adapters.**
+Browser session, OAuth grant, and client-authentication method are separate
+typed axes.  This lets a later client-credentials adapter select HTTP Basic
+without giving it browser-session semantics, and lets later authorization-code,
+device, mTLS, or custom flows add constructors without changing the meaning of
+the existing client-credentials value.  The vocabulary contains no raw secret,
+token parser, route handler, or store; those remain at their existing protocol,
+authentication, and application-owned persistence boundaries.
+
 ### Decision record — AHI-4C: bounded page-security and JWT-claim rails (2026-09-04)
 
 **Decision: preserve the existing one-page-rendering and one-JWT-verification
