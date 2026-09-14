@@ -417,6 +417,7 @@ spec =
                 blockRequestsMatching "**/assets/dialog.js"
                 visit secondUrl
                 click (byRole Link `named` "Language")
+                waitForBlockedRequestsMatching "**/assets/dialog.js"
                 failBlockedRequestsMatching "**/assets/dialog.js"
                 assertAllObserved do
                   currentUrl `shouldEqual` languageUrl
