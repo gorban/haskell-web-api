@@ -7,11 +7,13 @@ module HarchWeb.Authentication
   ( module HarchWeb.Authentication.Pipeline,
     module HarchWeb.Authentication.ApiClient,
     module HarchWeb.Authentication.Flow,
+    module HarchWeb.Authentication.OAuth2,
     module HarchWeb.Authentication.Transport,
   )
 where
 
 import HarchWeb.Authentication.ApiClient
 import HarchWeb.Authentication.Flow
+import HarchWeb.Authentication.OAuth2
 import HarchWeb.Authentication.Pipeline
 import HarchWeb.Authentication.Transport

@@ -3429,6 +3429,16 @@ The value allows the protocol's complete printable token range, including URI
 characters, but rejects whitespace, quotation marks, backslashes, controls,
 and non-ASCII characters before a declaration can enter a profile.
 
+**Decision: decode the fixed OAuth client-credentials body through Harch's
+existing bounded API form codec.** The new protocol value requires one exact
+`grant_type` and models omitted scope separately from an explicit non-empty
+scope request. It preserves RFC 6749's single-space scope grammar rather than
+normalizing whitespace, and lets the established request boundary reject
+duplicate or malformed form fields. HTTP Basic, client-secret verification,
+durable scope allowance, token issuance, and response encoding remain later
+workflow adapters; this slice neither adds a second body parser nor claims a
+token endpoint.
+
 ### Decision record — AHI-4D slice 3: durable API-client capability (2026-09-13)
 
 **Decision: add `ApiClientStore` as an application-supplied capability at the

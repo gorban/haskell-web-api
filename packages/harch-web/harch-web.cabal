@@ -73,6 +73,7 @@ library
     HarchWeb.Authentication.Attempt
     HarchWeb.Authentication.Flow
     HarchWeb.Authentication.Jwt
+    HarchWeb.Authentication.OAuth2
     HarchWeb.ClientActionFailure
     HarchWeb.ClientStorage
     HarchWeb.Controls

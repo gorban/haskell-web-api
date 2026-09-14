@@ -11,6 +11,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb
+import HarchWeb.Api (ApiRequestData (..), ApiRequestDecodeResult (..), ApiRequestParseError (..), ApiRequestSource (..), runRequestCodec)
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import Unit.HarchWeb.TestSupport (TestContext (requestLanguage), TestRoute (DataRoute), defaultContext)
@@ -105,6 +106,58 @@ spec = do
                  show OAuth2ScopeInvalidCharacter `shouldBe` "OAuth2ScopeInvalidCharacter",
                  (showList <$> traverse mkOAuth2Scope ["api/read"] <*> pure "") `shouldSatisfy` either (const False) (not . null),
                  showList [OAuth2ScopeEmpty, OAuth2ScopeInvalidCharacter] "" `shouldSatisfy` (not . null)
+               ]
+        )
+
+  describe "OAuth client-credentials form decoding" $
+    it "uses the bounded API form boundary without normalizing ambiguous scope requests" $ do
+      let decode fields = runRequestCodec oauth2ClientCredentialsRequestCodec (ApiRequestData [] [] [] fields)
+          scopeTexts result =
+            case result of
+              ApiRequestDecoded request -> oauth2RequestedScopeTexts (oauth2ClientCredentialsScopes request)
+              ApiRequestRejected _ -> []
+              ApiRequestCodecInvalid -> []
+          usesDefaultScopes result =
+            case result of
+              ApiRequestDecoded request ->
+                case oauth2ClientCredentialsScopes request of
+                  UseClientDefaultScopes -> True
+                  RequestOAuth2Scopes _ -> False
+              ApiRequestRejected _ -> False
+              ApiRequestCodecInvalid -> False
+          clientCredentialsGrant result =
+            case result of
+              ApiRequestDecoded request -> oauth2ClientCredentialsGrant request == ClientCredentialsGrant ClientSecretBasic
+              ApiRequestRejected _ -> False
+              ApiRequestCodecInvalid -> False
+          requestErrors result =
+            case result of
+              ApiRequestDecoded _ -> Nothing
+              ApiRequestRejected errors -> Just errors
+              ApiRequestCodecInvalid -> Nothing
+          requiredGrant = [("grant_type", "client_credentials")]
+      expectAll
+        ( (usesDefaultScopes (decode requiredGrant) `shouldBe` True)
+            :| [ scopeTexts (decode requiredGrant) `shouldBe` [],
+                 clientCredentialsGrant (decode requiredGrant) `shouldBe` True,
+                 scopeTexts (decode [("grant_type", "client_credentials"), ("scope", "api/read profile:read")]) `shouldBe` ["api/read", "profile:read"],
+                 requestErrors (decode []) `shouldBe` Just (MissingApiField ApiFormSource "grant_type" :| []),
+                 requestErrors (decode [("grant_type", "client_credentials"), ("grant_type", "client_credentials")])
+                   `shouldBe` Just (DuplicateApiField ApiFormSource "grant_type" :| []),
+                 requestErrors (decode [("grant_type", "refresh_token")])
+                   `shouldBe` Just (InvalidApiField ApiFormSource "grant_type" :| []),
+                 requestErrors (decode [("grant_type", "client_credentials"), ("scope", "")])
+                   `shouldBe` Just (InvalidApiField ApiFormSource "scope" :| []),
+                 requestErrors (decode [("grant_type", "client_credentials"), ("scope", "api/read  profile:read")])
+                   `shouldBe` Just (InvalidApiField ApiFormSource "scope" :| []),
+                 requestErrors (decode [("grant_type", "client_credentials"), ("scope", " api/read")])
+                   `shouldBe` Just (InvalidApiField ApiFormSource "scope" :| []),
+                 requestErrors (decode [("grant_type", "client_credentials"), ("scope", "api/read ")])
+                   `shouldBe` Just (InvalidApiField ApiFormSource "scope" :| []),
+                 requestErrors (decode [("grant_type", "client_credentials"), ("scope", "api/read"), ("scope", "profile:read")])
+                   `shouldBe` Just (DuplicateApiField ApiFormSource "scope" :| []),
+                 requestErrors (decode [("grant_type", "client_credentials"), ("scope", "api/read\\scope")])
+                   `shouldBe` Just (InvalidApiField ApiFormSource "scope" :| [])
                ]
         )
 
