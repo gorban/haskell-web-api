@@ -408,10 +408,13 @@ To upgrade dependencies in a dedicated change:
    dependencies. Do not hand-label an untested plan as a passing baseline.
 3. When changing TLS, Serialise, Cborg, Primitive, HTTP2, or time-manager, run
    `tools/test-tls-compatibility-stack.sh`. It tests released Cborg, Serialise,
-   and Primitive source in an isolated store. It temporarily patches Serialise's
-   duplicate test orphan and Primitive's released strict-test compatibility
-   source; it then cleans that store and verifies the runtime plan still uses
-   unmodified Hackage tarballs. Do not copy either patch into a runtime dependency.
+   Primitive, and HTTP2 source in an isolated store. It temporarily patches
+   Serialise's duplicate test orphan, Primitive's released strict-test
+   compatibility source, and HTTP2-5.4.4 with the pending timeout-lifecycle
+   fix; it then cleans that store and verifies the runtime plan still uses
+   unmodified Hackage tarballs. Do not copy any test-source patch into a runtime
+   dependency. The HTTP2 experiment keeps time-manager-0.2.4 only inside that
+   disposable test plan and runs all of its upstream tests with `-Werror`.
    For retirement after public releases contain [Cborg PR #385](https://github.com/well-typed/cborg/pull/385),
    [Primitive PR #434](https://github.com/haskell/primitive/pull/434), and the
    [Primitive #447](https://github.com/haskell/primitive/issues/447) fix, follow

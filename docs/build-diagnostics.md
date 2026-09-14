@@ -94,6 +94,19 @@ regression evidence and all upstream test cases. PR #434 scopes compatibility
 handling to deprecated wrappers; #447 changes test compilation only and does
 not establish a runtime bug fix.
 
+The same disposable script tests a local copy of public `http2-5.4.4` with the
+pending [HTTP2 #176](https://github.com/kazu-yamamoto/http2/pull/176) change:
+it restores the `time-manager >=0.2.4 && <0.3` bound and brackets receiver
+timeout registration with `register`/`cancel`, then adds the #175 lifecycle
+regression to the existing upstream suite. This is a test-only proof that the
+proposed code is warning-clean and preserves all upstream tests; it is never a
+repository runtime dependency. The script uses an isolated Cabal store, deletes
+it after the tests, and finally dry-runs the root plan, requiring public Hackage
+tarballs for `http2` and `time-manager` as well as the TLS packages. No HTTP2
+warning allowance exists. Retire the local patch only after a public HTTP2
+release includes the lifecycle repair, passes its unpatched suite with `-Werror`,
+and the updated frozen plan passes all repository gates.
+
 ## Documented GHC HPC deprecation
 
 The same GHC 9.14.1 coverage mode can run instrumented custom-Setup and source-preprocessor

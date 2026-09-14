@@ -867,8 +867,8 @@ exceptions or Warp accepted-peer hooks. [HTTP2 #169](https://github.com/kazu-yam
 explains why lowering the manager bound on newer HTTP2 is not sufficient.
 
 `tools/test-tls-compatibility-stack.sh` downloads only the released Cborg,
-Serialise, and Primitive source packages into an isolated Cabal directory, runs
-their suites, and then deletes that directory. It temporarily removes the duplicate
+Serialise, Primitive, and HTTP2 source packages into an isolated Cabal directory,
+runs their suites, and then deletes that directory. It temporarily removes the duplicate
 primitive `Vector` QuickCheck orphan from Serialise's *test source* because every
 released `quickcheck-instances` version accepted by Serialise already provides it.
 For Primitive's test suite only, it replaces the deprecated `TypeInType` pragma
@@ -880,7 +880,15 @@ Hackage tarballs for `cborg`, `serialise`, and `primitive`. It is the only calle
 allowed to use the diagnostic gate's package-version-specific GHC 9.14 compatibility
 mode; all warnings in the repository optimized and coverage gates remain fatal. This
 makes the exception observable and removable when upstream releases correct their
-bounds and warnings.
+bounds and warnings. The HTTP2-5.4.4 tree additionally receives the pending
+[#176](https://github.com/kazu-yamamoto/http2/pull/176) receiver/lifecycle patch
+and a #175 regression within its existing suite, with time-manager-0.2.4 selected
+only there. This extends the existing isolated source-test boundary instead of
+putting patched HTTP2 in Cabal's runtime graph: the script deletes its store and
+asserts the root dry-run selects public Hackage `http2` and `time-manager` tarballs.
+The patched upstream suite runs with `-Werror`; it creates no warning allowance.
+Replace the test-only patch with a released HTTP2 update only after its unpatched
+suite, our retained lifecycle regression, and all repository gates pass.
 
 TLS 2.4 also removed the former legacy cipher inventory. Harch now represents
 only TLS 1.2 and 1.3, rather than accepting an older protocol configuration that
