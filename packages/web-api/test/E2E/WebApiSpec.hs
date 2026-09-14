@@ -741,7 +741,7 @@ spec =
                   css "[data-web-api-reauthentication-status]" `shouldHaveText` "Signed in. Confirm to retry the original action."
                   attributeValue retryOriginalAction "hidden" `shouldEqual` Nothing
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
-                click retryOriginalAction
+                _ <- runPageScript "const retry = document.querySelector('[data-web-api-reauthentication-retry]'); retry.click(); retry.click(); true"
                 assertAllObserved do
                   byText "Check your inbox for a verification link." `shouldHaveText` "Check your inbox for a verification link."
                   attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
