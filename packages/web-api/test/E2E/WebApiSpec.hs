@@ -647,7 +647,7 @@ spec =
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
             readIORef deliveryCountReference `shouldReturn` 0
 
-        it "discards a retained profile action when enhanced navigation starts" $ \(browser, appConfig) ->
+        it "discards a retained profile action and stale login completion when enhanced navigation starts" $ \(browser, appConfig) ->
           withTestAccountJwtFixture $ \environmentConfig _ -> do
             runtime <- requiredAccountJwtRuntime environmentConfig
             initialNow <- Time.currentUnixTimeNanoseconds
@@ -664,6 +664,9 @@ spec =
               let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
                   spacesUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/spaces"
                   reauthenticationDialog = css "#reauthentication-dialog"
+                  identifierField = byLabel "Email address or username"
+                  passwordField = byLabel "Password"
+                  authenticatorCodeField = byLabel "Authenticator code"
               runBrowserSpec browser do
                 setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
                 visit profileUrl
@@ -671,11 +674,22 @@ spec =
                 assertAllObserved do
                   attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                blockRequestsMatching "**/login"
+                fill identifierField "person@example.test"
+                fill passwordField "correct horse battery staple"
+                fill authenticatorCodeField reauthenticationTotpCode
+                click (byRole Button `named` "Sign in")
+                waitForBlockedRequestsMatching "**/login"
                 _ <- runPageScript "Array.from(document.querySelectorAll('nav a')).find((link) => link.textContent === 'Home')?.click(); true"
                 assertAllObserved do
                   currentUrl `shouldEqual` spacesUrl
                   byRole Heading `shouldHaveText` "Site under construction"
-                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 1}|])
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 2}|])
+                releaseRequestsMatching "**/login"
+                assertAllObserved do
+                  currentUrl `shouldEqual` spacesUrl
+                  byRole Heading `shouldHaveText` "Site under construction"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 2}|])
             readIORef deliveryCountReference `shouldReturn` 0
 
         it "recovers one retained profile action after its signed durable session expires" $ \(browser, appConfig) ->
