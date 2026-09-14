@@ -3,6 +3,7 @@
 module Unit.HarchWeb.Observability.Otlp.TestSupport
   ( CapturedCollectorRequest (..),
     withOtlpCollector,
+    withDelayedOtlpCollector,
     extractQuotedJsonField,
     extractQuotedJsonIntegerFields,
     expectPlausibleEpochNanoTimestamps,
@@ -39,6 +40,24 @@ withOtlpCollector ::
   (HttpClient.Manager -> Text -> MVar CapturedCollectorRequest -> IO a) ->
   IO a
 withOtlpCollector responseStatus responseBody action =
+  withOtlpCollectorAfterDelay 0 responseStatus responseBody action
+
+withDelayedOtlpCollector ::
+  Int ->
+  Http.Status ->
+  LazyByteString.ByteString ->
+  (HttpClient.Manager -> Text -> MVar CapturedCollectorRequest -> IO a) ->
+  IO a
+withDelayedOtlpCollector delayMicroseconds responseStatus responseBody action =
+  withOtlpCollectorAfterDelay delayMicroseconds responseStatus responseBody action
+
+withOtlpCollectorAfterDelay ::
+  Int ->
+  Http.Status ->
+  LazyByteString.ByteString ->
+  (HttpClient.Manager -> Text -> MVar CapturedCollectorRequest -> IO a) ->
+  IO a
+withOtlpCollectorAfterDelay delayMicroseconds responseStatus responseBody action =
   withUnusedLoopbackPort $ \collectorPort -> do
     manager <- HttpClient.newManager HttpClient.defaultManagerSettings
     capturedRequestReference <- newEmptyMVar
@@ -53,6 +72,7 @@ withOtlpCollector responseStatus responseBody action =
                 capturedCollectorHeaders = Wai.requestHeaders request,
                 capturedCollectorBody = requestBody
               }
+          threadDelay delayMicroseconds
           respond (Wai.responseLBS responseStatus [("Content-Type", "application/json")] responseBody)
     serverThreadId <- forkIO (Warp.run collectorPort collectorApplication)
     threadDelay 50000

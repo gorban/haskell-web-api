@@ -2,13 +2,13 @@
 
 {-# SPEC #-}
 
-import Control.Concurrent (forkIO, killThread, newEmptyMVar, newMVar, putMVar, readMVar, takeMVar, threadDelay)
+import Control.Concurrent (MVar, forkIO, isEmptyMVar, killThread, newEmptyMVar, newMVar, putMVar, readMVar, takeMVar, threadDelay)
 import Control.Exception (AsyncException (ThreadKilled), Exception (displayException), SomeException, finally, throwIO, try)
 import Control.Monad (when)
-import Data.ByteString qualified as ByteString (empty, isInfixOf)
+import Data.ByteString qualified as ByteString (ByteString, empty, isInfixOf)
 import Data.ByteString.Builder qualified as Builder ()
 import Data.ByteString.Char8 qualified as ByteStringChar8 (pack)
-import Data.ByteString.Lazy qualified as LazyByteString ()
+import Data.ByteString.Lazy qualified as LazyByteString (toStrict)
 import Data.Char ()
 import Data.Either (isLeft, isRight)
 import Data.Functor.Compose ()
@@ -18,8 +18,8 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (isNothing)
 import Data.Text ()
 import Data.Text qualified as Text (Text, isInfixOf, isPrefixOf, pack, unpack)
-import Data.Text.Encoding qualified as TextEncoding ()
-import HarchWeb (AcmeChallengeStore (AcmeChallengeStore), AcmeConfig (AcmeConfig, acmeCertbotConfig, acmeCertificateDirectory, acmeContactEmails, acmeDirectoryUrl, acmeDomains, acmeHttp01Port), Application (applicationRequestPolicy, reportApplicationLog, reportConnectionObservability, reportRequestObservability, requestContextFromRequest), CertbotConfig (CertbotConfig, certbotArguments, certbotExecutable), ListenerConfig (ListenerConfig, listenerAcme, listenerHost, listenerPort, listenerScheme, listenerTls), ListenerScheme (Http, Https), ManualTlsBindPlan, ManualTlsCertificateFiles (ManualTlsCertificateFiles, certificateFile, privateKeyFile), RequestPolicyConfig (forwardedHeaderTrust), TlsCertificateSource (AcmeCertificateSource, ManualCertificateFiles), TlsConfig (TlsConfig, certificateSource, tlsPolicy), acmeChallengeResponseForRequest, defaultTlsPolicy, newCertbotWebrootStore, prepareCertbotManualTlsBindPlan, runServer, runServerWithWaiMiddleware, validAcmeHttp01ChallengeToken, waitForShutdownSignalWith)
+import Data.Text.Encoding qualified as TextEncoding (decodeUtf8)
+import HarchWeb (AcmeChallengeStore (AcmeChallengeStore), AcmeConfig (AcmeConfig, acmeCertbotConfig, acmeCertificateDirectory, acmeContactEmails, acmeDirectoryUrl, acmeDomains, acmeHttp01Port), Application (applicationRequestPolicy, reportApplicationLog, reportConnectionObservability, reportRequestObservability, requestContextFromRequest), CertbotConfig (CertbotConfig, certbotArguments, certbotExecutable), ListenerConfig (ListenerConfig, listenerAcme, listenerHost, listenerPort, listenerScheme, listenerTls), ListenerScheme (Http, Https), ManualTlsBindPlan, ManualTlsCertificateFiles (ManualTlsCertificateFiles, certificateFile, privateKeyFile), ObservabilityConfig (ObservabilityConfig, metricsExporter, tracingExporter), OtlpExporter (OtlpExporter, otlpEndpoint, otlpHeaders), RequestPolicyConfig (forwardedHeaderTrust), ServerConfig (observability), TlsCertificateSource (AcmeCertificateSource, ManualCertificateFiles), TlsConfig (TlsConfig, certificateSource, tlsPolicy), acmeChallengeResponseForRequest, defaultTlsPolicy, newCertbotWebrootStore, prepareCertbotManualTlsBindPlan, runServer, runServerWithWaiMiddleware, validAcmeHttp01ChallengeToken, waitForShutdownSignalWith)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -27,7 +27,7 @@ import HarchWeb.Observability qualified as Observability (ConnectionObservabilit
 import HarchWeb.Security qualified as Security ()
 import HarchWeb.Server.Transport.Internal (acceptTrackedConnection, clearPendingAddressForAcceptLoopFailure, forkTrackedConnection, newActiveConnectionAddresses, openLoopbackSocket, recordAcceptLoopThread, socketPort)
 import Network.HTTP.Client qualified as HttpClient ()
-import Network.HTTP.Types qualified as Http (status200)
+import Network.HTTP.Types qualified as Http (status200, status503)
 import Network.Socket qualified as Socket (AddrInfo (addrAddress, addrFlags), AddrInfoFlag (AI_PASSIVE), Family (AF_INET), SockAddr (SockAddrInet), Socket, SocketOption (ReuseAddr), SocketType (Stream), bind, close, connect, defaultHints, defaultProtocol, getAddrInfo, listen, maxListenQueue, openSocket, setSocketOption, socket, tupleToHostAddress, withSocketsDo)
 import Network.Socket.ByteString qualified as SocketByteString (recv, sendAll)
 import Network.TLS qualified as TLS
@@ -46,6 +46,7 @@ import System.Process ()
 import TestCore.CustomAssertions ()
 import TestCore.Wai ()
 import Text.Read ()
+import Unit.HarchWeb.Observability.Otlp.TestSupport (CapturedCollectorRequest (capturedCollectorBody), withDelayedOtlpCollector, withOtlpCollector)
 import Unit.HarchWeb.TestSupport (acmeHttpsListener, acmeHttpsListenerWithContacts, acmeHttpsListenerWithDomains, acmeHttpsListenerWithDomainsAndChallengePort, certbotHttp01Backend, certbotHttp01BackendWithExecutable, connectAndCloseLoopbackSocket, connectAndCloseLoopbackSocketFrom, defaultRequestPolicy, expectLoopbackPortReusable, expectMeasuredRootRequestTiming, fakeCertbotScriptPreamble, hasTextAttribute, httpRuntimeListener, manualTlsCertificatePem, manualTlsPrivateKeyPem, readLoopbackHttpResponse, readLoopbackHttpResponseBytesWithHostAndHeadersResult, readLoopbackHttpResponseBytesWithHostResult, readLoopbackHttpResponseBytesWithHostResultFrom, readLoopbackHttpsResponse, readLoopbackHttpsResponseResult, readRawLoopbackHttpResponse, runtimeAcmePlanWithCertbotConfig, sampleApplication, sampleRequestContextFromRequest, serverConfigWithListeners, sharedHttpsListener, stripVolatileRequestTiming, testTrustedForwardedProxy, waitForConnectionObservability, waitForHttpsServerResponse, waitForServerExit, waitForServerResponse, withCustomFakeCertbotExecutable, withEmptyExecutablePath, withFailingFakeCertbotExecutable, withFakeCertbotExecutable, withManualTlsFiles, withOccupiedLoopbackPort, withUnusedLoopbackPort)
 
 spec = do
@@ -119,6 +120,182 @@ spec = do
         `finally` closeListener
 
   describe "runServer" $ do
+    it "exports a real runtime request to a configured OTLP trace receiver despite an opaque collector response" $
+      withOtlpCollector Http.status200 "not-json" $ \_ collectorUrl capturedRequestReference ->
+        withUnusedLoopbackPort $ \unusedPort ->
+          withSystemTempFile "harch-web-otlp-output.txt" $ \_ outputHandle -> do
+            completionReference <- newIORef Nothing
+            requestReportsReference <- newIORef (0 :: Int)
+            let runtimeConfig =
+                  (serverConfigWithListeners [httpRuntimeListener "127.0.0.1" unusedPort])
+                    { observability =
+                        ObservabilityConfig
+                          { tracingExporter = Just OtlpExporter {otlpEndpoint = collectorUrl, otlpHeaders = []},
+                            metricsExporter = Nothing
+                          }
+                    }
+                observingApplication =
+                  sampleApplication
+                    { reportRequestObservability = \_ ->
+                        modifyIORef' requestReportsReference (+ 1)
+                    }
+            serverThreadId <- forkIO $ do
+              result <- try (runServer outputHandle runtimeConfig observingApplication) :: IO (Either SomeException ())
+              writeIORef completionReference (Just result)
+            responseText <- waitForServerResponse completionReference unusedPort "/known"
+            capturedRequest <- readMVar capturedRequestReference
+            Text.isInfixOf "<h1>Known</h1>" responseText `shouldBe` True
+            readIORef requestReportsReference `shouldReturn` 1
+            TextEncoding.decodeUtf8 (LazyByteString.toStrict (capturedCollectorBody capturedRequest))
+              `shouldSatisfy` Text.isInfixOf "\"name\":\"GET /known\""
+            killThread serverThreadId
+            waitForServerExit completionReference
+
+    it "does not contact an OTLP receiver when trace export is unset" $
+      withOtlpCollector Http.status200 "{}" $ \_ _ capturedRequestReference ->
+        withUnusedLoopbackPort $ \unusedPort ->
+          withSystemTempFile "harch-web-unconfigured-otlp-output.txt" $ \_ outputHandle -> do
+            completionReference <- newIORef Nothing
+            serverThreadId <- forkIO $ do
+              result <- try (runServer outputHandle (serverConfigWithListeners [httpRuntimeListener "127.0.0.1" unusedPort]) sampleApplication) :: IO (Either SomeException ())
+              writeIORef completionReference (Just result)
+            responseText <- waitForServerResponse completionReference unusedPort "/known"
+            Text.isInfixOf "<h1>Known</h1>" responseText `shouldBe` True
+            isEmptyMVar capturedRequestReference `shouldReturn` True
+            killThread serverThreadId
+            waitForServerExit completionReference
+
+    it "keeps a successful response and redacts a rejecting OTLP collector diagnostic" $
+      withOtlpCollector Http.status503 "collector response containing secret-value" $ \_ collectorUrl _ ->
+        withUnusedLoopbackPort $ \unusedPort ->
+          withSystemTempFile "harch-web-rejecting-otlp-output.txt" $ \_ outputHandle -> do
+            completionReference <- newIORef Nothing
+            applicationLogsReference <- newIORef []
+            let runtimeConfig =
+                  (serverConfigWithListeners [httpRuntimeListener "127.0.0.1" unusedPort])
+                    { observability =
+                        ObservabilityConfig
+                          { tracingExporter = Just OtlpExporter {otlpEndpoint = collectorUrl, otlpHeaders = [("Authorization", "secret-value")]},
+                            metricsExporter = Nothing
+                          }
+                    }
+                observingApplication =
+                  sampleApplication
+                    { reportApplicationLog = \message ->
+                        modifyIORef' applicationLogsReference (message :)
+                    }
+            serverThreadId <- forkIO $ do
+              result <- try (runServer outputHandle runtimeConfig observingApplication) :: IO (Either SomeException ())
+              writeIORef completionReference (Just result)
+            responseText <- waitForServerResponse completionReference unusedPort "/known"
+            applicationLogs <- waitForApplicationLogs applicationLogsReference
+            Text.isInfixOf "<h1>Known</h1>" responseText `shouldBe` True
+            applicationLogs `shouldBe` ["Failed to export request observability to OTLP: OTLP collector rejected export with status 503"]
+            applicationLogs `shouldSatisfy` all (not . Text.isInfixOf "secret-value")
+            killThread serverThreadId
+            waitForServerExit completionReference
+
+    it "keeps a successful response when OTLP export times out" $
+      withDelayedOtlpCollector 3000000 Http.status200 "{}" $ \_ collectorUrl _ ->
+        withUnusedLoopbackPort $ \unusedPort ->
+          withSystemTempFile "harch-web-timeout-otlp-output.txt" $ \_ outputHandle -> do
+            completionReference <- newIORef Nothing
+            applicationLogsReference <- newIORef []
+            let runtimeConfig =
+                  (serverConfigWithListeners [httpRuntimeListener "127.0.0.1" unusedPort])
+                    { observability =
+                        ObservabilityConfig
+                          { tracingExporter = Just OtlpExporter {otlpEndpoint = collectorUrl, otlpHeaders = []},
+                            metricsExporter = Nothing
+                          }
+                    }
+                observingApplication =
+                  sampleApplication
+                    { reportApplicationLog = \message ->
+                        modifyIORef' applicationLogsReference (message :)
+                    }
+            serverThreadId <- forkIO $ do
+              result <- try (runServer outputHandle runtimeConfig observingApplication) :: IO (Either SomeException ())
+              writeIORef completionReference (Just result)
+            responseText <- waitForServerResponse completionReference unusedPort "/known"
+            applicationLogs <- waitForApplicationLogs applicationLogsReference
+            Text.isInfixOf "<h1>Known</h1>" responseText `shouldBe` True
+            applicationLogs `shouldBe` ["Failed to export request observability to OTLP: export timed out"]
+            killThread serverThreadId
+            waitForServerExit completionReference
+
+    it "keeps serving when the application diagnostic reporter fails" $
+      withUnusedLoopbackPort $ \unusedPort ->
+        withSystemTempFile "harch-web-failing-diagnostic-output.txt" $ \_ outputHandle -> do
+          completionReference <- newIORef Nothing
+          let runtimeConfig =
+                (serverConfigWithListeners [httpRuntimeListener "127.0.0.1" unusedPort])
+                  { observability =
+                      ObservabilityConfig
+                        { tracingExporter = Just OtlpExporter {otlpEndpoint = "http://[::1?exporter-secret", otlpHeaders = []},
+                          metricsExporter = Nothing
+                        }
+                  }
+              observingApplication =
+                sampleApplication
+                  { reportApplicationLog = \_ ->
+                      throwIO (userError "application diagnostic sink failure")
+                  }
+          serverThreadId <- forkIO $ do
+            result <- try (runServer outputHandle runtimeConfig observingApplication) :: IO (Either SomeException ())
+            writeIORef completionReference (Just result)
+          responseText <- waitForServerResponse completionReference unusedPort "/known"
+          threadDelay 50000
+          Text.isInfixOf "<h1>Known</h1>" responseText `shouldBe` True
+          completionResult <- readIORef completionReference
+          completionResult `shouldSatisfy` isNothing
+          killThread serverThreadId
+          waitForServerExit completionReference
+
+    it "allows server shutdown to interrupt a pending OTLP export" $
+      withDelayedOtlpCollector 3000000 Http.status200 "{}" $ \_ collectorUrl capturedRequestReference ->
+        withUnusedLoopbackPort $ \unusedPort ->
+          withSystemTempFile "harch-web-interrupted-otlp-output.txt" $ \_ outputHandle -> do
+            completionReference <- newIORef Nothing
+            let runtimeConfig =
+                  (serverConfigWithListeners [httpRuntimeListener "127.0.0.1" unusedPort])
+                    { observability =
+                        ObservabilityConfig
+                          { tracingExporter = Just OtlpExporter {otlpEndpoint = collectorUrl, otlpHeaders = []},
+                            metricsExporter = Nothing
+                          }
+                    }
+            serverThreadId <- forkIO $ do
+              result <- try (runServer outputHandle runtimeConfig sampleApplication) :: IO (Either SomeException ())
+              writeIORef completionReference (Just result)
+            clientCompletion <- newEmptyMVar
+            _ <- forkIO (sendRequestUntilServerAccepts completionReference unusedPort clientCompletion)
+            _ <- readMVar capturedRequestReference
+            killThread serverThreadId
+            waitForServerExit completionReference
+            _ <- takeMVar clientCompletion
+            completionResult <- readIORef completionReference
+            case completionResult of
+              Just (Left exception) -> displayException exception `shouldBe` "thread killed"
+              Just (Right ()) -> expectationFailure "expected the interrupted server to stop with ThreadKilled"
+              Nothing -> expectationFailure "expected the interrupted server to stop"
+
+    it "rejects configured OTLP metrics before opening a listener" $
+      withUnusedLoopbackPort $ \unusedPort ->
+        withSystemTempFile "harch-web-otlp-metrics-output.txt" $ \_ outputHandle -> do
+          let runtimeConfig =
+                (serverConfigWithListeners [httpRuntimeListener "127.0.0.1" unusedPort])
+                  { observability =
+                      ObservabilityConfig
+                        { tracingExporter = Nothing,
+                          metricsExporter = Just OtlpExporter {otlpEndpoint = "http://collector.invalid/v1/metrics", otlpHeaders = []}
+                        }
+                  }
+          result <- try (runServer outputHandle runtimeConfig sampleApplication) :: IO (Either SomeException ())
+          case result of
+            Left exception -> displayException exception `shouldBe` "user error (Unsupported observability configuration: OTLP metrics export is not implemented.)"
+            Right () -> expectationFailure "expected configured OTLP metrics to be rejected before startup"
+
     it "serves responses on the configured HTTP listener and stays running until signalled to stop" $
       withUnusedLoopbackPort $ \unusedPort ->
         withSystemTempFile "harch-web-output.txt" $ \outputPath outputHandle -> do
@@ -362,6 +539,56 @@ spec = do
               `shouldSatisfy` hasTextAttribute "exception.type" "InsecureConnectionDenied"
             killThread serverThreadId
             waitForServerExit completionReference
+
+    it "exports real TLS transport failures as OTLP connection spans" $
+      withOtlpCollector Http.status200 "{}" $ \_ collectorUrl capturedRequestReference ->
+        withUnusedLoopbackPort $ \unusedPort ->
+          withManualTlsFiles $ \certificatePath privateKeyPath ->
+            withSystemTempFile "harch-web-otlp-connection-output.txt" $ \_ outputHandle -> do
+              completionReference <- newIORef Nothing
+              connectionReportsReference <- newIORef (0 :: Int)
+              let manualTlsConfig =
+                    ( serverConfigWithListeners
+                        [ ListenerConfig
+                            { listenerHost = "127.0.0.1",
+                              listenerPort = unusedPort,
+                              listenerScheme = Https,
+                              listenerTls =
+                                Just
+                                  TlsConfig
+                                    { certificateSource =
+                                        ManualCertificateFiles
+                                          ManualTlsCertificateFiles
+                                            { certificateFile = certificatePath,
+                                              privateKeyFile = privateKeyPath
+                                            },
+                                      tlsPolicy = defaultTlsPolicy
+                                    },
+                              listenerAcme = Nothing
+                            }
+                        ]
+                    )
+                      { observability =
+                          ObservabilityConfig
+                            { tracingExporter = Just OtlpExporter {otlpEndpoint = collectorUrl, otlpHeaders = []},
+                              metricsExporter = Nothing
+                            }
+                      }
+                  observingApplication =
+                    sampleApplication
+                      { reportConnectionObservability = \_ ->
+                          modifyIORef' connectionReportsReference (+ 1)
+                      }
+              serverThreadId <- forkIO $ do
+                result <- try (runServer outputHandle manualTlsConfig observingApplication) :: IO (Either SomeException ())
+                writeIORef completionReference (Just result)
+              _ <- waitForPlaintextTlsConnection completionReference unusedPort
+              capturedRequest <- readMVar capturedRequestReference
+              TextEncoding.decodeUtf8 (LazyByteString.toStrict (capturedCollectorBody capturedRequest))
+                `shouldSatisfy` Text.isInfixOf "\"name\":\"CONNECTION insecure-connection-denied\""
+              readIORef connectionReportsReference `shouldReturn` 1
+              killThread serverThreadId
+              waitForServerExit completionReference
 
     it "reports prematurely closed HTTPS listener connections as connection observability with peer addresses" $
       withUnusedLoopbackPort $ \unusedPort ->
@@ -1951,6 +2178,59 @@ waitForConnectionObservabilityAtPeer connectionObservabilityReference expectedEv
               (Observability.observabilityConnectionSpan connectionObservabilityValue)
        in hasTextAttribute "harch.connection.event" expectedEventName attributes
             && hasTextAttribute "network.peer.address" expectedPeerAddress attributes
+
+waitForApplicationLogs :: IORef [Text.Text] -> IO [Text.Text]
+waitForApplicationLogs applicationLogsReference =
+  waitForLogAttempts (500 :: Int)
+  where
+    waitForLogAttempts remainingAttempts = do
+      applicationLogs <- readIORef applicationLogsReference
+      if null applicationLogs
+        then
+          if remainingAttempts > 0
+            then threadDelay 10000 >> waitForLogAttempts (remainingAttempts - 1)
+            else expectationFailure "expected the OTLP export failure to reach the application logger" >> pure []
+        else pure applicationLogs
+
+waitForPlaintextTlsConnection :: IORef (Maybe (Either SomeException ())) -> Int -> IO (Either String ByteString.ByteString)
+waitForPlaintextTlsConnection completionReference port =
+  waitForConnectionAttempts (500 :: Int)
+  where
+    waitForConnectionAttempts remainingAttempts = do
+      completionResult <- readIORef completionReference
+      case completionResult of
+        Just (Left exception) ->
+          expectationFailure ("expected runServer to remain running, but it failed early: " <> displayException exception)
+            >> pure (Left "runServer failed before the TLS listener accepted a connection")
+        Just (Right ()) ->
+          expectationFailure "expected runServer to remain running, but it exited early"
+            >> pure (Left "runServer exited before the TLS listener accepted a connection")
+        Nothing -> do
+          plaintextResult <- readLoopbackHttpResponseBytesWithHostResult port "127.0.0.1" "/known"
+          case plaintextResult of
+            Right _ -> pure plaintextResult
+            Left _
+              | remainingAttempts > 0 -> threadDelay 10000 >> waitForConnectionAttempts (remainingAttempts - 1)
+              | otherwise -> expectationFailure "expected the TLS listener to accept a plaintext connection" >> pure plaintextResult
+
+sendRequestUntilServerAccepts :: IORef (Maybe (Either SomeException ())) -> Int -> MVar (Either IOError Text.Text) -> IO ()
+sendRequestUntilServerAccepts completionReference port clientCompletion =
+  sendRequestAttempts (500 :: Int)
+  where
+    sendRequestAttempts remainingAttempts = do
+      completionResult <- readIORef completionReference
+      case completionResult of
+        Just (Left exception) ->
+          putMVar clientCompletion (Left (userError (displayException exception)))
+        Just (Right ()) ->
+          putMVar clientCompletion (Left (userError "runServer exited before accepting the request"))
+        Nothing -> do
+          requestResult <- try (readLoopbackHttpResponse port "/known")
+          case requestResult of
+            Right responseText -> putMVar clientCompletion (Right responseText)
+            Left requestException
+              | remainingAttempts > 0 -> threadDelay 10000 >> sendRequestAttempts (remainingAttempts - 1)
+              | otherwise -> putMVar clientCompletion (Left requestException)
 
 attemptLoopbackTlsHandshake :: Int -> [TLS.Version] -> [TLS.Cipher] -> IO (Either SomeException ())
 attemptLoopbackTlsHandshake port versions ciphers =

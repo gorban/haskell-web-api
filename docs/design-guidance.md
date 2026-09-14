@@ -2976,6 +2976,23 @@ a failed request with an `X-API-Key` value and endpoint query credential through
 worker's final log-message formatter, proving neither secret appears; the existing status/body test
 continues to prove collector response bodies cannot enter diagnostics.
 
+### Decision record — configured OTLP runtime export (2026-09-14)
+
+**Decision: install configured tracing through the existing `Application` reporters when
+`runServer` starts; reject metrics configuration until there is a complete metrics exporter.** The
+server already owns listener lifetime and application reporting owns the post-response observation
+boundary. Wrapping those reporters therefore preserves their ordering and gives tracing one
+startup-owned HTTP manager without a second WAI middleware or a parallel dispatcher. The wrapper
+calls the application reporter first and exports only the framework's typed, safe observation after
+the response has been delivered. A bounded timeout and the existing closed OTLP failure vocabulary
+make exporter and logger failures private, redacted diagnostics only.
+
+The runtime deliberately does not accept `metricsExporter` as a harmless no-op: it fails before
+listeners start. A future metrics implementation must add its encoding, exporter, sink evidence,
+and documentation before changing that rejection. The HTTP manager has the `http-client` lifecycle
+recommended by its installed version: it is scoped to the running server and is finalized when no
+longer referenced; calling its deprecated explicit closer would itself violate the warning gate.
+
 ### Decision record — DT: configurable modern TLS server policy (2026-08-26)
 
 **Decision: extend the existing listener `TlsConfig` and its manual/ACME bind plans with one closed

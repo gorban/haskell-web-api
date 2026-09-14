@@ -100,8 +100,8 @@ The smaller `two-pages-example` has its own fixed local configuration and does n
 | `OTLP_TRACING_ENABLED` | Explicit tracing switch. True uses the local endpoint unless overridden; false wins over endpoint/header settings. | unset |
 | `OTLP_TRACING_ENDPOINT` | OTLP HTTP trace endpoint. | unset |
 | `OTLP_TRACING_HEADERS` | Comma-delimited trace headers in `name=value` form. | unset |
-| `OTLP_METRICS_ENDPOINT` | OTLP HTTP metrics endpoint. | unset |
-| `OTLP_METRICS_HEADERS` | Comma-delimited metric headers in `name=value` form. | unset |
+| `OTLP_METRICS_ENDPOINT` | Reserved for a future complete OTLP metrics exporter. Supplying it makes `runServer` reject startup. | unset |
+| `OTLP_METRICS_HEADERS` | Reserved metric headers. Supplying them with a metrics endpoint makes `runServer` reject startup. | unset |
 | `SETUP_AUTOSTART_DATABASE` | Allow setup tooling to plan local PostgreSQL startup if unreachable. | `true` |
 | `SETUP_AUTOSTART_JAEGER` | Allow setup tooling to plan local Jaeger startup if configured but unreachable. | `false` |
 
@@ -366,8 +366,6 @@ HSTS_PRELOAD=true
 
 OTLP_TRACING_ENABLED=true
 OTLP_TRACING_HEADERS=authorization=Bearer demo-token,x-service-name=web-api
-OTLP_METRICS_ENDPOINT=http://127.0.0.1:4318/v1/metrics
-OTLP_METRICS_HEADERS=authorization=Bearer demo-token,x-service-name=web-api
 ```
 
 Static requests are limited to configured roots and content-type extensions. Hidden path segments such
@@ -378,7 +376,8 @@ remain external. CORS is same-origin unless exact origins are configured.
 OTLP request span names use stable route values. Unmatched requests group under `not-found`, while the
 concrete URL remains on `url.path`. The custom exporter also covers redirects, assets, CORS preflights,
 ACME challenges, connection-level TLS failures, and certificate lifecycle events that sit outside
-ordinary page handling.
+ordinary page handling. OTLP metrics are deliberately unsupported until their encoder and exporter are
+implemented; a metrics configuration fails startup instead of silently dropping metrics.
 
 Scenario-oriented `.env.local` templates live in `examples/runtime-config/`, including local HTTP,
 OTLP, manual TLS, shared certificates, ACME, and reverse-proxy/TLS-offload configurations. For example:

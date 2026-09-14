@@ -8,6 +8,7 @@ free from telemetry by default.
 Current repo alignment:
 
 - OTLP tracing is already wired,
+- OTLP metrics configuration is rejected at startup until its complete runtime exporter exists,
 - the repo already documents local Jaeger usage,
 - the custom trace export layer is intentional and should remain documented as such.
 
@@ -104,7 +105,7 @@ back the mutation rather than manufacturing a successful audit record.
 
 | Signal | Owner and delivery policy | Data/retention boundary |
 | --- | --- | --- |
-| Request logs and OTLP traces/metrics | Application observability configuration; diagnostics are best effort and must not change an otherwise valid authorization decision. | Low-cardinality route/status attributes and private diagnostics according to the deployment's telemetry policy. |
+| Request logs and OTLP traces | Application observability configuration; diagnostics are best effort and must not change an otherwise valid authorization decision. OTLP metrics configuration is rejected at startup until its complete exporter exists. | Low-cardinality route/status attributes and private diagnostics according to the deployment's telemetry policy. |
 | `web-api` account activity | Application PostgreSQL transaction policy; selected state changes require the audit append to commit atomically, while a known-account denial stays denied if its optional audit write is unavailable. | Closed event vocabulary with opaque account/request IDs and bounded trusted route metadata; operator/reporting access only. |
 
 Never substitute a successful telemetry export for a required audit commit, or

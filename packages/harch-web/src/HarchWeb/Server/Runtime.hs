@@ -26,13 +26,13 @@ import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Acme
 import HarchWeb.Acme.Certbot.Runtime (RuntimeAcmeServerEnvironment (..), runtimeAcmeBindPlans, startAcmeRuntimeServersWithRequestTransportLimits, stopAcmeRuntimeServers)
 import HarchWeb.Acme.Challenge (acmeChallengeRoutePath)
-import HarchWeb.Observability (planObservabilityStartup)
 import HarchWeb.RequestId (newRequestId)
 import HarchWeb.Security (requestHeadLimits, requestTransportLimits)
 import HarchWeb.Server.Application (Application (..))
 import HarchWeb.Server.Config
 import HarchWeb.Server.RequestExecution (applyRequestIdResponseHeader, reportEarlyRequestObservability, toWaiApplication)
 import HarchWeb.Server.RequestObservability (requestObservabilityContext)
+import HarchWeb.Server.RuntimeObservability (withRuntimeObservability)
 import HarchWeb.Server.Transport
   ( RuntimeTransportDependencies (..),
     startHttpRuntimeServers,
@@ -83,61 +83,64 @@ runServerWithStartupPlan ::
   Application route action context authorization ->
   ServerStartupPlan ->
   IO ()
-runServerWithStartupPlan waiMiddleware outputHandle config webApplication startupPlan = do
-  let observabilityPlan = planObservabilityStartup (observability (toServerConfig config))
-  challengeStore <- AcmeChallengeStore <$> newMVar []
-  webrootStore <- newCertbotWebrootStore
-  let runtimeRequestPolicy = requestPolicy (toServerConfig config)
-  gatedWaiApplication <- toWaiApplication webApplication
-  let runtimeRequestEnvironment =
-        RuntimeRequestEnvironment
-          { runtimeRenderedWaiApplication = waiMiddleware gatedWaiApplication,
-            runtimeChallengeStore = challengeStore,
-            runtimeWebrootStore = webrootStore,
-            runtimeTypedApplication = webApplication
-          }
-      runtimeApplication = toRuntimeWaiApplication runtimeRequestEnvironment
-      connectionReporter = reportConnectionObservability webApplication
-      runtimeRequestHeadLimits = requestHeadLimits runtimeRequestPolicy
-      runtimeRequestTransportLimits = requestTransportLimits runtimeRequestPolicy
-      runtimeTransportDependencies =
-        RuntimeTransportDependencies
-          { runtimeTransportRequestHeadLimits = runtimeRequestHeadLimits,
-            runtimeTransportRequestLimits = runtimeRequestTransportLimits,
-            runtimeTransportApplication = runtimeApplication
-          }
-  connectionReporter `seq`
-    observabilityPlan `seq`
-      bracket
-        (startHttpRuntimeServers runtimeTransportDependencies (httpEndpoints (httpBindPlan startupPlan)))
-        stopRuntimeServers
-        ( \httpServers ->
-            bracket
-              ( startAcmeRuntimeServersWithRequestTransportLimits
-                  RuntimeAcmeServerEnvironment
-                    { runtimeAcmeWebrootStore = webrootStore,
-                      runtimeAcmeRequestHeadLimits = runtimeRequestHeadLimits,
-                      runtimeAcmeRequestTransportLimits = runtimeRequestTransportLimits,
-                      runtimeAcmeApplication = runtimeApplication,
-                      runtimeAcmeConnectionReporter = connectionReporter,
-                      runtimeAcmeApplicationLogger = reportApplicationLog webApplication
-                    }
-                  (runtimeAcmeBindPlans startupPlan)
-              )
-              stopAcmeRuntimeServers
-              ( \acmeServers ->
-                  bracket
-                    (startManualTlsRuntimeServers runtimeTransportDependencies (manualTlsBindPlans startupPlan) connectionReporter)
-                    stopRuntimeServers
-                    ( \manualTlsServers ->
-                        httpServers `seq`
-                          acmeServers `seq`
-                            manualTlsServers `seq`
-                              announceRuntimeStartup outputHandle startupPlan
-                                >> waitForShutdownSignal
-                    )
-              )
-        )
+runServerWithStartupPlan waiMiddleware outputHandle config webApplication startupPlan =
+  withRuntimeObservability
+    webApplication
+    (observability (toServerConfig config))
+    ( \runtimeWebApplication -> do
+        challengeStore <- AcmeChallengeStore <$> newMVar []
+        webrootStore <- newCertbotWebrootStore
+        let runtimeRequestPolicy = requestPolicy (toServerConfig config)
+        gatedWaiApplication <- toWaiApplication runtimeWebApplication
+        let runtimeRequestEnvironment =
+              RuntimeRequestEnvironment
+                { runtimeRenderedWaiApplication = waiMiddleware gatedWaiApplication,
+                  runtimeChallengeStore = challengeStore,
+                  runtimeWebrootStore = webrootStore,
+                  runtimeTypedApplication = runtimeWebApplication
+                }
+            runtimeApplication = toRuntimeWaiApplication runtimeRequestEnvironment
+            connectionReporter = reportConnectionObservability runtimeWebApplication
+            runtimeRequestHeadLimits = requestHeadLimits runtimeRequestPolicy
+            runtimeRequestTransportLimits = requestTransportLimits runtimeRequestPolicy
+            runtimeTransportDependencies =
+              RuntimeTransportDependencies
+                { runtimeTransportRequestHeadLimits = runtimeRequestHeadLimits,
+                  runtimeTransportRequestLimits = runtimeRequestTransportLimits,
+                  runtimeTransportApplication = runtimeApplication
+                }
+        connectionReporter `seq`
+          bracket
+            (startHttpRuntimeServers runtimeTransportDependencies (httpEndpoints (httpBindPlan startupPlan)))
+            stopRuntimeServers
+            ( \httpServers ->
+                bracket
+                  ( startAcmeRuntimeServersWithRequestTransportLimits
+                      RuntimeAcmeServerEnvironment
+                        { runtimeAcmeWebrootStore = webrootStore,
+                          runtimeAcmeRequestHeadLimits = runtimeRequestHeadLimits,
+                          runtimeAcmeRequestTransportLimits = runtimeRequestTransportLimits,
+                          runtimeAcmeApplication = runtimeApplication,
+                          runtimeAcmeConnectionReporter = connectionReporter,
+                          runtimeAcmeApplicationLogger = reportApplicationLog runtimeWebApplication
+                        }
+                      (runtimeAcmeBindPlans startupPlan)
+                  )
+                  stopAcmeRuntimeServers
+                  ( \acmeServers ->
+                      bracket
+                        (startManualTlsRuntimeServers runtimeTransportDependencies (manualTlsBindPlans startupPlan) connectionReporter)
+                        stopRuntimeServers
+                        ( \manualTlsServers ->
+                            httpServers `seq`
+                              acmeServers `seq`
+                                manualTlsServers `seq`
+                                  announceRuntimeStartup outputHandle startupPlan
+                                    >> waitForShutdownSignal
+                        )
+                  )
+            )
+    )
 
 -- | Dependencies fixed for all ACME challenge checks within one running
 -- server. They are deliberately separate from request-specific timing and
