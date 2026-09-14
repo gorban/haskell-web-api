@@ -87,6 +87,7 @@ import App.Composed.Admission.Session
   )
 import App.Composed.Admission.Types
 import App.Composed.Model
+import Catalog.Domain (CatalogRoute (CatalogIndex))
 import Control.Monad.Except (runExceptT)
 import HarchWeb.ClientStorage (noClientStorageCleanup)
 import HarchWeb.EndpointSecurity
@@ -111,6 +112,7 @@ import HarchWeb.Server
 import HarchWeb.Session (OpaqueSession)
 import HarchWeb.Totp (TotpCode)
 import Network.HTTP.Types qualified as Http
+import Orders.Domain (OrdersRoute (OrdersIndex))
 
 data AdmissionRequirement
   = RequireAdmission
@@ -176,7 +178,7 @@ applyAdmissionPolicy policy applicationSecurity =
 admissionRequirement :: RootRoute -> AdmissionRequirement
 admissionRequirement (Localized _ localRoute) =
   case localRoute of
-    Public PublicAdmission -> AllowWithoutAdmission
+    Public (PublicAdmission _) -> AllowWithoutAdmission
     Public PublicAdmissionNativeFallback -> AllowWithoutAdmission
     Public (PublicAsset _) -> AllowWithoutAdmission
     Public PublicNotFound -> AllowWithoutAdmission
@@ -224,9 +226,16 @@ admissionChallenge endpointRequest =
       RouteRequest
         { requestRoute =
             case requestRoute routeRequest of
-              Localized selectedLocale _ -> Localized selectedLocale (Public PublicAdmission),
+              Localized selectedLocale _ -> Localized selectedLocale (Public (PublicAdmission (admissionReturnTarget (requestRoute routeRequest)))),
           requestContext = requestContext routeRequest
         }
+
+admissionReturnTarget :: RootRoute -> AdmissionReturnTarget
+admissionReturnTarget (Localized _ localRoute) =
+  case localRoute of
+    Catalog CatalogIndex -> ReturnToCatalogIndex
+    Orders OrdersIndex -> ReturnToOrdersIndex
+    _ -> ReturnToAccountLogin
 
 admissionUnavailableResponse :: NonPageResponse RootRoute ComposedContext
 admissionUnavailableResponse =

@@ -16,7 +16,7 @@ import App.Composed.Model
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.List.NonEmpty qualified as NonEmpty
-import Data.Maybe (isJust)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Action (ActionCodec, ActionCompletionPolicy (ApplyActionResponse), ActionReauthenticationPolicy (DoNotRetain), ClientActionDecodeResult (DecodedClientAction), ClientActionPayload (..), actionCodec, decodeAction, formField, parseField, post, prefixActionCodecByContext, publicAction, required)
@@ -52,7 +52,11 @@ import HarchWeb.Routing
     RouteRequest (..),
     mapRouteParseResult,
     pathSegmentText,
+    queryNameText,
+    queryValue,
+    queryValueText,
     requiredPathSegment,
+    requiredQueryName,
   )
 import HarchWeb.Routing qualified as Routing
 import HarchWeb.SecurityEvent (requiredModuleNameOrDie)
@@ -102,7 +106,7 @@ buildPublicModuleWithAdmissionWorkflow staticAssetsConfig csrfProtection _admiss
       moduleActionCodec = admissionActions,
       moduleActionRoute = \_ target ->
         case (_admissionWorkflow, target) of
-          (Just _, AdmissionActionTarget) -> Just (Public PublicAdmission)
+          (Just _, AdmissionActionTarget) -> Just (Public (PublicAdmission ReturnToAccountLogin))
           _ -> Nothing,
       moduleHandleAction = handleAdmissionAction,
       moduleGuards = []
@@ -171,7 +175,7 @@ admissionActionPath = "/public/admission/actions/submit"
 
 publicDeclaredRoutes :: Maybe (AdmissionConfig, AdmissionProofConfig) -> [LocalizedRoute]
 publicDeclaredRoutes maybeAdmissionWorkflow =
-  [ Public PublicAdmission,
+  [ Public (PublicAdmission ReturnToAccountLogin),
     Public PublicLogin,
     Public (PublicAsset (StaticAssetRoute [requiredPathSegment "public", requiredPathSegment "assets", requiredPathSegment "app.css"])),
     Public PublicNotFound
@@ -186,7 +190,11 @@ publicRouteCodec staticAssetsConfig maybeAdmissionWorkflow =
           [publicSegment, loginSegment]
             | pathSegmentText publicSegment == "public", pathSegmentText loginSegment == "login" -> Routing.RouteParsed (RouteRequest (Public PublicLogin) requestContext)
           [publicSegment, admissionSegment]
-            | pathSegmentText publicSegment == "public", pathSegmentText admissionSegment == "admission" -> Routing.RouteParsed (RouteRequest (Public PublicAdmission) requestContext)
+            | pathSegmentText publicSegment == "public",
+              pathSegmentText admissionSegment == "admission" ->
+                case admissionReturnTargetFromLocation location of
+                  Just returnTarget -> Routing.RouteParsed (RouteRequest (Public (PublicAdmission returnTarget)) requestContext)
+                  Nothing -> Routing.RouteNotMatched
           [publicSegment, admissionSegment, nativeSegment]
             | pathSegmentText publicSegment == "public",
               pathSegmentText admissionSegment == "admission",
@@ -197,7 +205,13 @@ publicRouteCodec staticAssetsConfig maybeAdmissionWorkflow =
           _ -> mapAssetRoute requestContext location,
       renderRoute = \routeRequest ->
         case requestRoute routeRequest of
-          Public PublicAdmission -> RouteLocation [requiredPathSegment "public", requiredPathSegment "admission"] []
+          Public (PublicAdmission returnTarget) ->
+            RouteLocation
+              [requiredPathSegment "public", requiredPathSegment "admission"]
+              ( case returnTarget of
+                  ReturnToAccountLogin -> []
+                  _ -> [(requiredAdmissionReturnQueryName, requiredAdmissionReturnQueryValue returnTarget)]
+              )
           Public PublicAdmissionNativeFallback
             | isJust maybeAdmissionWorkflow -> RouteLocation [requiredPathSegment "public", requiredPathSegment "admission", requiredPathSegment "native"] []
           Public PublicLogin -> RouteLocation [requiredPathSegment "public", requiredPathSegment "login"] []
@@ -206,7 +220,7 @@ publicRouteCodec staticAssetsConfig maybeAdmissionWorkflow =
           _ -> error "attempted to render a non-public route through the public module",
       notFoundRequest = RouteRequest (Public PublicNotFound),
       routeMethods = \case
-        Public PublicAdmission -> Routing.routeMethodPolicy [Routing.RouteGet]
+        Public (PublicAdmission _) -> Routing.routeMethodPolicy [Routing.RouteGet]
         Public PublicAdmissionNativeFallback
           | isJust maybeAdmissionWorkflow -> Routing.routeMethodPolicy [Routing.RoutePost]
         Public PublicLogin -> Routing.routeMethodPolicy [Routing.RouteGet]
@@ -215,6 +229,8 @@ publicRouteCodec staticAssetsConfig maybeAdmissionWorkflow =
         _ -> RouteHidden
     }
   where
+    requiredAdmissionReturnQueryName = requiredQueryName "return"
+    requiredAdmissionReturnQueryValue returnTarget = fromMaybe (error "expected valid admission return query value") (queryValue (admissionReturnTargetText returnTarget))
     staticCodec = staticAssetRouteCodec staticAssetsConfig
     mapAssetRoute requestContext location =
       mapRouteParseResult (Public . PublicAsset) (parseRoute staticCodec requestContext location)
@@ -222,7 +238,7 @@ publicRouteCodec staticAssetsConfig maybeAdmissionWorkflow =
 publicRouteDefinition :: StaticAssetsConfig -> CsrfProtection ComposedContext -> Maybe (AdmissionConfig, AdmissionProofConfig) -> ActionCodec RootActionTarget ComposedContext RootAuthorization RootAction -> LocalizedRoute -> RouteDefinition LocalizedRoute ComposedContext RootAuthorization
 publicRouteDefinition staticAssetsConfig csrfProtection maybeAdmissionWorkflow admissionActions routeValue =
   case routeValue of
-    Public PublicAdmission ->
+    Public (PublicAdmission returnTarget) ->
       RouteDefinition
         { routeNavigationLabel = Nothing,
           routeMetadata = mkEndpointMetadata (requiredEndpointNameOrDie "root.public.admission") (requiredRouteTemplateOrDie "/public/admission") HtmlEndpoint AllowUnauthenticated,
@@ -233,9 +249,9 @@ publicRouteDefinition staticAssetsConfig csrfProtection maybeAdmissionWorkflow a
               ( RenderedPage
                   Page
                     { pageTitle = "Admission",
-                      pageRoute = Public PublicAdmission,
+                      pageRoute = Public (PublicAdmission returnTarget),
                       pageContext = requestContext request,
-                      pageBody = admissionPage pageSecurity (requestContext request) maybeAdmissionWorkflow admissionActions,
+                      pageBody = admissionPage pageSecurity (requestContext request) returnTarget maybeAdmissionWorkflow admissionActions,
                       pageBootstrapHooks = []
                     }
               )
@@ -307,19 +323,19 @@ publicRouteDefinition staticAssetsConfig csrfProtection maybeAdmissionWorkflow a
         }
     _ -> error "attempted to select a non-public route through the public module"
 
-admissionPage :: PageSecurity -> ComposedContext -> Maybe (AdmissionConfig, AdmissionProofConfig) -> ActionCodec RootActionTarget ComposedContext RootAuthorization RootAction -> Html
-admissionPage pageSecurity requestContext maybeAdmissionWorkflow admissionActions =
+admissionPage :: PageSecurity -> ComposedContext -> AdmissionReturnTarget -> Maybe (AdmissionConfig, AdmissionProofConfig) -> ActionCodec RootActionTarget ComposedContext RootAuthorization RootAction -> Html
+admissionPage pageSecurity requestContext returnTarget maybeAdmissionWorkflow admissionActions =
   element
     sectionTag
     []
     ( [element headingOneTag [] [text "Admission"]]
         <> case maybeAdmissionWorkflow of
           Nothing -> [element paragraphTag [] [text "Admission is not enabled."]]
-          Just _ -> [admissionForm pageSecurity requestContext admissionActions]
+          Just _ -> [admissionForm pageSecurity requestContext returnTarget admissionActions]
     )
 
-admissionForm :: PageSecurity -> ComposedContext -> ActionCodec RootActionTarget ComposedContext RootAuthorization RootAction -> Html
-admissionForm pageSecurity requestContext admissionActions =
+admissionForm :: PageSecurity -> ComposedContext -> AdmissionReturnTarget -> ActionCodec RootActionTarget ComposedContext RootAuthorization RootAction -> Html
+admissionForm pageSecurity requestContext returnTarget admissionActions =
   Controls.renderActionForm
     ( Controls.actionForm
         localizedAdmissionActions
@@ -336,7 +352,7 @@ admissionForm pageSecurity requestContext admissionActions =
                     }
               ]
           }
-        [ voidElement inputTag [inputType "hidden", name "return", value "login"],
+        [ voidElement inputTag [inputType "hidden", name "return", value (admissionReturnTargetText returnTarget)],
           admissionInput
             (literalElementId "admission-login")
             "Admission name"
@@ -360,6 +376,14 @@ admissionForm pageSecurity requestContext admissionActions =
           (\context -> "/" <> localeText (requestLocale (requestCore context)))
           "/{locale}"
           admissionActions
+
+admissionReturnTargetFromLocation :: RouteLocation -> Maybe AdmissionReturnTarget
+admissionReturnTargetFromLocation location =
+  case routeQueryFields location of
+    [] -> Just ReturnToAccountLogin
+    [(queryFieldName, queryFieldValue)]
+      | queryNameText queryFieldName == "return" -> mkAdmissionReturnTarget (queryValueText queryFieldValue)
+    _ -> Nothing
 
 admissionInput :: ElementId -> Text.Text -> [Attribute] -> Html
 admissionInput controlId labelText inputAttributes =

@@ -223,7 +223,7 @@ spec = describe "Unit.App.Composed" $ do
         trustedClient = TrustedNetworkClient BrowserClient defaultClientAddress
     moduleActionRoute publicModule defaultComposedContext AdmissionActionTarget `shouldBe` Nothing
     moduleDeclaredRoutes publicModule
-      `shouldBe` [ Public PublicAdmission,
+      `shouldBe` [ Public (PublicAdmission ReturnToAccountLogin),
                    Public PublicLogin,
                    Public (PublicAsset (StaticAssetRoute [requiredPathSegment "public", requiredPathSegment "assets", requiredPathSegment "app.css"])),
                    Public PublicNotFound
@@ -604,8 +604,8 @@ spec = describe "Unit.App.Composed" $ do
                Wai.responseStatus notFoundResponse `shouldBe` Http.status404,
                Wai.responseStatus actionChallenge `shouldBe` Http.status401,
                lookup Http.hLocation (Wai.responseHeaders loginChallenge) `shouldBe` Just "/es/public/admission",
-               lookup Http.hLocation (Wai.responseHeaders catalogChallenge) `shouldBe` Just "/es/public/admission",
-               Text.isInfixOf "\"href\":\"/es/public/admission\"" actionChallengeBody `shouldBe` True,
+               lookup Http.hLocation (Wai.responseHeaders catalogChallenge) `shouldBe` Just "/es/public/admission?return=catalog",
+               Text.isInfixOf "\"href\":\"/es/public/admission?return=catalog\"" actionChallengeBody `shouldBe` True,
                Wai.responseStatus admittedLogin `shouldBe` Http.status200,
                Wai.responseStatus admittedCatalog `shouldBe` Http.status200,
                Wai.responseStatus admittedOrders `shouldBe` Http.status200,
@@ -997,7 +997,7 @@ spec = describe "Unit.App.Composed" $ do
         shell = Site.sitePageShell defaultSite (Page "Login" rootRoute (spanishContext defaultComposedContext) (error "page body is not inspected") [])
     moduleName rootModule `shouldBe` requiredModuleName "root"
     moduleDeclaredRoutes rootModule
-      `shouldBe` [ Localized (locale "en") (Public PublicAdmission),
+      `shouldBe` [ Localized (locale "en") (Public (PublicAdmission ReturnToAccountLogin)),
                    Localized (locale "en") (Public PublicLogin),
                    Localized (locale "en") (Public (PublicAsset assetRoute)),
                    Localized (locale "en") (Public PublicNotFound),
@@ -1137,13 +1137,13 @@ spec = describe "Unit.App.Composed" $ do
     Routing.routeMethods (moduleRouteCodec publicModule) (Catalog CatalogIndex) `shouldBe` Routing.RouteHidden
     notFoundRequest (moduleRouteCodec publicModule) publicContext `shouldBe` RouteRequest (Public PublicNotFound) publicContext
     moduleActionRoute publicModule publicContext AdmissionActionTarget `shouldBe` Nothing
-    fmap isNothing (moduleHandleAction publicModule (ClientActionRequest (RouteRequest (Public PublicAdmission) publicContext) (CatalogAction RefreshCatalog) Nothing publicContext)) `shouldReturn` True
-    let admissionDefinition = moduleEndpoints publicModule (Public PublicAdmission)
+    fmap isNothing (moduleHandleAction publicModule (ClientActionRequest (RouteRequest (Public (PublicAdmission ReturnToAccountLogin)) publicContext) (CatalogAction RefreshCatalog) Nothing publicContext)) `shouldReturn` True
+    let admissionDefinition = moduleEndpoints publicModule (Public (PublicAdmission ReturnToAccountLogin))
         loginDefinition = moduleEndpoints publicModule (Public PublicLogin)
         assetDefinition = moduleEndpoints publicModule (Public (PublicAsset (StaticAssetRoute (routePathSegments assetLocation))))
         missingDefinition = moduleEndpoints publicModule (Public PublicNotFound)
-    Routing.routeMethods (moduleRouteCodec publicModule) (Public PublicAdmission) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
-    directAdmissionResponse <- runRouteDefinition admissionDefinition Wai.defaultRequest (RouteRequest (Public PublicAdmission) publicContext)
+    Routing.routeMethods (moduleRouteCodec publicModule) (Public (PublicAdmission ReturnToAccountLogin)) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
+    directAdmissionResponse <- runRouteDefinition admissionDefinition Wai.defaultRequest (RouteRequest (Public (PublicAdmission ReturnToAccountLogin)) publicContext)
     case directAdmissionResponse of
       PageResponse _ page -> do
         pageTitle page `shouldBe` "Admission"
@@ -1217,7 +1217,7 @@ spec = describe "Unit.App.Composed" $ do
         "admission-enabled public routes"
         (buildComposedSiteWithAdmissionSecurityDependencies (withCsrfProtection admissionCsrfProtection defaultComposedSiteDependencies) (AdmissionEnabled sessionConfig unavailableAdmissionProofConfig) authenticatedSecurity)
     let enabledNativeRoute = Localized (locale "en") (Public PublicAdmissionNativeFallback)
-        enabledAdmissionRoute = Localized (locale "en") (Public PublicAdmission)
+        enabledAdmissionRoute = Localized (locale "en") (Public (PublicAdmission ReturnToAccountLogin))
         disabledSite = buildComposedSiteWithDependencies defaultComposedSiteDependencies
         admissionDefinition = Site.siteRouteDefinition enabledSite enabledAdmissionRoute
         nativeDefinition = Site.siteRouteDefinition enabledSite enabledNativeRoute
@@ -1814,7 +1814,7 @@ rootActionRequest rootContext action =
   where
     actionRoute rootAction =
       case rootAction of
-        SubmitAdmission {} -> Public PublicAdmission
+        SubmitAdmission {} -> Public (PublicAdmission ReturnToAccountLogin)
         CatalogAction {} -> Catalog CatalogIndex
         OrdersAction {} -> Orders OrdersIndex
 

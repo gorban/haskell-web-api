@@ -20,6 +20,7 @@ module App.Composed.Model
     RootPrincipal (..),
     RootRoute (..),
     allowedLocale,
+    admissionReturnTargetText,
     admissionReturnTargetRoute,
     defaultComposedContext,
     defaultComposedStaticAssets,
@@ -58,7 +59,7 @@ import HarchWeb.Totp (TotpCode)
 import Orders.Domain
 
 data PublicRoute
-  = PublicAdmission
+  = PublicAdmission AdmissionReturnTarget
   | PublicAdmissionNativeFallback
   | PublicLogin
   | PublicAsset StaticAssetRoute
@@ -66,17 +67,29 @@ data PublicRoute
   deriving (Eq, Show)
 
 -- | The admission form accepts a closed return target, never a browser URL.
--- Its present vocabulary intentionally has one target; a later public route
--- must extend this ADT and its pure rendering rather than reintroduce an
--- unvalidated redirect string.
-data AdmissionReturnTarget = ReturnToAccountLogin
+-- The guard derives this value from the route it already matched, and the
+-- public codec decodes only this vocabulary from the optional return query.
+-- This preserves a protected destination without creating an open redirect.
+data AdmissionReturnTarget
+  = ReturnToAccountLogin
+  | ReturnToCatalogIndex
+  | ReturnToOrdersIndex
   deriving (Eq, Show)
 
 mkAdmissionReturnTarget :: Text -> Maybe AdmissionReturnTarget
 mkAdmissionReturnTarget value =
   case value of
     "login" -> Just ReturnToAccountLogin
+    "catalog" -> Just ReturnToCatalogIndex
+    "orders" -> Just ReturnToOrdersIndex
     _ -> Nothing
+
+admissionReturnTargetText :: AdmissionReturnTarget -> Text
+admissionReturnTargetText returnTarget =
+  case returnTarget of
+    ReturnToAccountLogin -> "login"
+    ReturnToCatalogIndex -> "catalog"
+    ReturnToOrdersIndex -> "orders"
 
 data LocalizedRoute
   = Public PublicRoute
@@ -88,6 +101,8 @@ admissionReturnTargetRoute :: AdmissionReturnTarget -> LocalizedRoute
 admissionReturnTargetRoute returnTarget =
   case returnTarget of
     ReturnToAccountLogin -> Public PublicLogin
+    ReturnToCatalogIndex -> Catalog CatalogIndex
+    ReturnToOrdersIndex -> Orders OrdersIndex
 
 data RootRoute = Localized Locale LocalizedRoute
   deriving (Eq, Show)

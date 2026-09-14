@@ -109,6 +109,22 @@ spec =
       aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture) $
         parallel $
           describe "admission sessions and replay" $ do
+            it "returns a direct protected Catalog navigation through the typed admission target" $ \(browser, server) -> do
+              let catalogUrl = localServerBaseUrl server <> "/en/catalog"
+                  admissionUrl = localServerBaseUrl server <> "/en/public/admission?return=catalog"
+              runBrowserSpec browser do
+                visit catalogUrl
+                assertAllObserved do
+                  currentUrl `shouldEqual` admissionUrl
+                  byRole Heading `named` "Admission" `shouldHaveText` "Admission"
+                fill (byLabel "Admission name") "support_operator"
+                fill (byLabel "One-time code") browserAdmissionCode
+                submit (byRole Form `named` "Admission")
+                assertAllObserved do
+                  currentUrl `shouldEqual` catalogUrl
+                  byRole Heading `named` "en catalog" `shouldHaveText` "en catalog"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+
             it "submits admission through the enhanced action and replaces credential history" $ \(browser, server) -> do
               let admissionUrl = localServerBaseUrl server <> "/public/admission"
                   loginUrl = localServerBaseUrl server <> "/en/public/login"

@@ -417,6 +417,18 @@ PostgreSQL store/migrations, synchronizer CSRF backend, and cleanup remain
 application-owned. AHI-4C is nevertheless not complete until runnable
 deployment provisioning and the full browser proof matrix are green.
 
+### Decision record — closed admission return targets (AHI-4C, 2026-09-14)
+
+**Decision: extend the existing `PublicRoute` and `RouteCodec` with a closed
+`AdmissionReturnTarget`, rather than carry a raw return URL or create a second
+redirect store.** The admission guard derives its target from the `RootRoute`
+that it already matched. The public codec accepts only the empty default or one
+recognized `return` query value and renders that same vocabulary in the form.
+This preserves Catalog and Orders destinations through the admission lifecycle
+without admitting an open redirect. Declaring each query value as a separate
+route would duplicate the canonical admission endpoint metadata, so the module
+declares one default route while its codec owns all typed query variants.
+
 ### Decision record — typed action navigation at the existing response boundary (AHI-4C, 2026-09-03)
 
 **Decision: extend `ClientActionResponse` with `ActionNavigation route context`
