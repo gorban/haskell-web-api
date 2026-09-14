@@ -69,6 +69,7 @@ library
     HarchWeb.Api.Multipart.Storage
     HarchWeb.ApplicationModule
     HarchWeb.Authentication
+    HarchWeb.Authentication.ApiClient
     HarchWeb.Authentication.Attempt
     HarchWeb.Authentication.Flow
     HarchWeb.Authentication.Jwt

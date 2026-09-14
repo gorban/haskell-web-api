@@ -3419,6 +3419,19 @@ the existing client-credentials value.  The vocabulary contains no raw secret,
 token parser, route handler, or store; those remain at their existing protocol,
 authentication, and application-owned persistence boundaries.
 
+### Decision record — AHI-4D slice 3: durable API-client capability (2026-09-13)
+
+**Decision: add `ApiClientStore` as an application-supplied capability at the
+existing proof-to-principal boundary.** A verified bearer token is not itself a
+current API-client principal: each request must establish the client against
+its durable disabled, secret, and scope state. Harch names discovery and
+current-principal establishment as separate operations, while mapping only an
+adapter's safe unavailable outcome into its existing authentication failure
+rail. It owns neither PostgreSQL details nor a cross-request acceptance cache.
+This extends the current principal-establisher seam rather than adding a
+second authentication dispatcher; the next slice supplies the concrete OAuth
+workflow and PostgreSQL adapter.
+
 ### Decision record — AHI-4C: bounded page-security and JWT-claim rails (2026-09-04)
 
 **Decision: preserve the existing one-page-rendering and one-JWT-verification

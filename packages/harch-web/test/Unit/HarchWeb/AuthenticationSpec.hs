@@ -16,6 +16,32 @@ import Network.Wai qualified as Wai
 import Unit.HarchWeb.TestSupport (TestContext (requestLanguage), TestRoute (DataRoute), defaultContext)
 
 spec = do
+  describe "durable API-client storage" $
+    it "keeps discovery and current-principal establishment application supplied" $ do
+      dependency <- newIORef (mkAuthenticationDependency (requiredSecurityFailureCodeOrDie "api-client.store-unavailable")) >>= readIORef
+      let store :: ApiClientStore Text Text
+          store =
+            ApiClientStore
+              { findApiClient = \clientId -> pure $ Right $ if clientId == ("known" :: Text) then Just "configured-client" else Nothing,
+                establishApiClient = \clientId -> pure $ Right $ if clientId == ("current" :: Text) then Just "current-client" else Nothing
+              }
+          unavailable = ApiClientStoreUnavailable dependency
+      knownClient <- findApiClient store "known"
+      unknownClient <- findApiClient store "unknown"
+      currentClient <- establishApiClient store "current"
+      unavailableClient <- establishApiClient store "disabled"
+      expectAll
+        ( (knownClient `shouldBe` Right (Just "configured-client"))
+            :| [ unknownClient `shouldBe` Right Nothing,
+                 currentClient `shouldBe` Right (Just "current-client"),
+                 unavailableClient `shouldBe` Right Nothing,
+                 unavailable `shouldBe` unavailable,
+                 (unavailable /= unavailable) `shouldBe` False,
+                 show unavailable `shouldBe` "ApiClientStoreUnavailable (AuthenticationDependency (SecurityFailureCode \"api-client.store-unavailable\"))",
+                 showList [unavailable] "" `shouldSatisfy` (not . null)
+               ]
+        )
+
   describe "authentication-flow vocabulary" $
     it "keeps browser, OAuth grant, and client-method policy as separate typed axes" $ do
       browserConfiguration <- newIORef BrowserSessionFlowConfiguration >>= readIORef
