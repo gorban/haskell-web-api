@@ -191,7 +191,7 @@ spec = do
             applicationLogs <- waitForApplicationLogs applicationLogsReference
             Text.isInfixOf "<h1>Known</h1>" responseText `shouldBe` True
             applicationLogs `shouldBe` ["Failed to export request observability to OTLP: OTLP collector rejected export with status 503"]
-            applicationLogs `shouldSatisfy` all (not . Text.isInfixOf "secret-value")
+            applicationLogs `shouldSatisfy` (not . any (Text.isInfixOf "secret-value"))
             killThread serverThreadId
             waitForServerExit completionReference
 

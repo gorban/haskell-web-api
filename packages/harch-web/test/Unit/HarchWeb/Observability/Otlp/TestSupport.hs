@@ -39,8 +39,7 @@ withOtlpCollector ::
   LazyByteString.ByteString ->
   (HttpClient.Manager -> Text -> MVar CapturedCollectorRequest -> IO a) ->
   IO a
-withOtlpCollector responseStatus responseBody action =
-  withOtlpCollectorAfterDelay 0 responseStatus responseBody action
+withOtlpCollector = withOtlpCollectorAfterDelay 0
 
 withDelayedOtlpCollector ::
   Int ->
@@ -48,8 +47,7 @@ withDelayedOtlpCollector ::
   LazyByteString.ByteString ->
   (HttpClient.Manager -> Text -> MVar CapturedCollectorRequest -> IO a) ->
   IO a
-withDelayedOtlpCollector delayMicroseconds responseStatus responseBody action =
-  withOtlpCollectorAfterDelay delayMicroseconds responseStatus responseBody action
+withDelayedOtlpCollector = withOtlpCollectorAfterDelay
 
 withOtlpCollectorAfterDelay ::
   Int ->
