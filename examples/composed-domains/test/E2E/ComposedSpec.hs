@@ -35,6 +35,20 @@ spec =
       aroundAllWith withBrowserAndServer $
         parallel $
           describe "public navigation" $ do
+            it "keeps root authentication while disabled admission removes its form and guard" $ \(browser, server) -> do
+              let admissionUrl = localServerBaseUrl server <> "/public/admission"
+                  catalogUrl = localServerBaseUrl server <> "/catalog"
+              runBrowserSpec browser do
+                visit admissionUrl
+                assertAllObserved do
+                  byRole Heading `shouldHaveText` "Admission"
+                  byText "Admission is not enabled." `shouldHaveText` "Admission is not enabled."
+                  isVisible (byRole Form `named` "Admission") `shouldEqual` False
+                visit catalogUrl
+                assertAllObserved do
+                  currentUrl `shouldEqual` catalogUrl
+                  byRole Heading `named` "en catalog" `shouldHaveText` "en catalog"
+
             it "keeps localized public and mounted-domain navigation SSR-complete and enhanced" $ \(browser, server) -> do
               let loginUrl = localServerBaseUrl server <> "/es/public/login"
                   catalogUrl = localServerBaseUrl server <> "/es/catalog"
@@ -316,7 +330,10 @@ withAdmissionBrowserAndServer fixture action browser = do
 
 composedBrowserApplication :: Application RootRoute RootAction ComposedContext RootAuthorization
 composedBrowserApplication =
-  Site.buildSiteApplication (buildComposedSiteWithSecurityDependencies (browserDependencies browserCsrfProtection) browserSecurity)
+  Site.buildSiteApplication $
+    case buildComposedSiteWithAdmissionSecurityDependencies (browserDependencies browserCsrfProtection) AdmissionDisabled browserSecurity of
+      Left admissionError -> error ("expected disabled admission browser site: " <> show admissionError)
+      Right site -> site
 
 data AdmissionCredentialStoreState
   = AdmissionCredentialStoreAvailable
