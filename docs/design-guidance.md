@@ -3419,6 +3419,16 @@ the existing client-credentials value.  The vocabulary contains no raw secret,
 token parser, route handler, or store; those remain at their existing protocol,
 authentication, and application-owned persistence boundaries.
 
+**Decision: represent each OAuth scope as one RFC 6749-constrained typed
+token at that same boundary.** A token endpoint will own splitting and
+duplicate handling for its untrusted, space-delimited field, while metadata,
+grant selection, and authorization requirements need the same safe unit value.
+Putting the validator in the existing flow vocabulary avoids three divergent
+string checks without preempting the typed endpoint or adding a second parser.
+The value allows the protocol's complete printable token range, including URI
+characters, but rejects whitespace, quotation marks, backslashes, controls,
+and non-ASCII characters before a declaration can enter a profile.
+
 ### Decision record — AHI-4D slice 3: durable API-client capability (2026-09-13)
 
 **Decision: add `ApiClientStore` as an application-supplied capability at the

@@ -84,6 +84,30 @@ spec = do
                ]
         )
 
+  describe "OAuth scope declarations" $ do
+    it "accepts the complete RFC 6749 scope-token character range" $ do
+      dynamicScope <- newIORef "api/read:second~v1" >>= readIORef
+      let accepted = mkOAuth2Scope dynamicScope
+          scopeError = either Just (const Nothing)
+      expectAll
+        ( (oauth2ScopeText <$> accepted `shouldBe` Right dynamicScope)
+            :| [ oauth2ScopeText <$> mkOAuth2Scope "!#[].~" `shouldBe` Right "!#[].~",
+                 scopeError (mkOAuth2Scope "") `shouldBe` Just OAuth2ScopeEmpty,
+                 scopeError (mkOAuth2Scope "contains space") `shouldBe` Just OAuth2ScopeInvalidCharacter,
+                 scopeError (mkOAuth2Scope "quote\"") `shouldBe` Just OAuth2ScopeInvalidCharacter,
+                 scopeError (mkOAuth2Scope "backslash\\") `shouldBe` Just OAuth2ScopeInvalidCharacter,
+                 scopeError (mkOAuth2Scope "line\nbreak") `shouldBe` Just OAuth2ScopeInvalidCharacter,
+                 scopeError (mkOAuth2Scope "non-ascii-\233") `shouldBe` Just OAuth2ScopeInvalidCharacter,
+                 OAuth2ScopeEmpty `shouldBe` OAuth2ScopeEmpty,
+                 (OAuth2ScopeEmpty /= OAuth2ScopeInvalidCharacter) `shouldBe` True,
+                 show <$> mkOAuth2Scope "api/read" `shouldBe` Right "OAuth2Scope {oauth2ScopeText = \"api/read\"}",
+                 show OAuth2ScopeEmpty `shouldBe` "OAuth2ScopeEmpty",
+                 show OAuth2ScopeInvalidCharacter `shouldBe` "OAuth2ScopeInvalidCharacter",
+                 (showList <$> traverse mkOAuth2Scope ["api/read"] <*> pure "") `shouldSatisfy` either (const False) (not . null),
+                 showList [OAuth2ScopeEmpty, OAuth2ScopeInvalidCharacter] "" `shouldSatisfy` (not . null)
+               ]
+        )
+
   describe "authentication proof extractors" $ do
     it "distinguishes absent, duplicate, malformed, and oversized cookie proofs" $ do
       let extractor = cookieJwtExtractor (requiredCookieName "__Host-session") (requiredProofMaximumBytes 8)

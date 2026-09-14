@@ -15,10 +15,16 @@ module HarchWeb.Authentication.Flow
     OAuth2FlowConfiguration (..),
     OAuth2Grant (..),
     ClientAuthenticationMethod (..),
+    OAuth2Scope,
+    OAuth2ScopeError (..),
+    mkOAuth2Scope,
+    oauth2ScopeText,
   )
 where
 
 import Data.List.NonEmpty (NonEmpty)
+import Data.Text (Text)
+import Data.Text qualified as Text
 
 -- | The authentication interaction an application exposes.  The custom
 -- branch remains application-defined without reinterpreting browser or OAuth
@@ -49,3 +55,37 @@ newtype OAuth2Grant = ClientCredentialsGrant ClientAuthenticationMethod
 -- as constructors rather than overloading the client-credentials grant.
 data ClientAuthenticationMethod = ClientSecretBasic
   deriving (Eq, Show)
+
+-- | A single OAuth 2.0 scope token.  OAuth's space-delimited wire syntax
+-- belongs to the token endpoint; this value represents one already-separated
+-- token and prevents metadata, grants, and authorization declarations from
+-- accepting a space or control character as part of a scope.
+newtype OAuth2Scope = OAuth2Scope
+  { oauth2ScopeText :: Text
+  }
+  deriving (Show)
+
+-- | The safe construction failures for an OAuth scope declaration.  These
+-- are configuration or protocol-input outcomes, not a reason to retain a
+-- client-provided scope value in a public response.
+data OAuth2ScopeError
+  = OAuth2ScopeEmpty
+  | OAuth2ScopeInvalidCharacter
+  deriving (Eq, Show)
+
+-- | Validate one OAuth scope token using RFC 6749's @NQCHAR@ grammar:
+-- printable ASCII excluding space, quotation mark, and backslash.  Keeping
+-- this at the shared flow boundary makes later form parsing and metadata
+-- publication agree on the same syntax without adding another protocol
+-- dispatcher.
+mkOAuth2Scope :: Text -> Either OAuth2ScopeError OAuth2Scope
+mkOAuth2Scope value
+  | Text.null value = Left OAuth2ScopeEmpty
+  | Text.all validCharacter value = Right (OAuth2Scope value)
+  | otherwise = Left OAuth2ScopeInvalidCharacter
+  where
+    validCharacter character =
+      let codePoint = fromEnum character
+       in codePoint == 0x21
+            || (codePoint >= 0x23 && codePoint <= 0x5B)
+            || (codePoint >= 0x5D && codePoint <= 0x7E)
