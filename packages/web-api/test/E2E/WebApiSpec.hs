@@ -875,6 +875,66 @@ spec =
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 4}|])
             readIORef deliveryCountReference `shouldReturn` 1
 
+        it "settles a retained profile action when current profile authorization changes before replay" $ \(browser, appConfig) ->
+          withTestAccountJwtFixture $ \environmentConfig _ -> do
+            runtime <- requiredAccountJwtRuntime environmentConfig
+            initialNow <- Time.currentUnixTimeNanoseconds
+            initialSessionId <- Session.generateSessionId
+            let initialSession =
+                  Session.OpaqueSession
+                    { Session.sessionId = initialSessionId,
+                      Session.sessionPrincipal = pendingProfileAccountId,
+                      Session.sessionIssuedAtNanoseconds = initialNow,
+                      Session.sessionExpiresAtNanoseconds = initialNow + 86400000000000
+                    }
+                issuer = accountJwtIssuerFromRuntime runtime
+            initialJwt <- issueInitialSessionJwt issuer initialSession
+            sessionsReference <- newIORef [initialSession]
+            profileLoadsReference <- newIORef (0 :: Int)
+            deliveryCountReference <- newIORef (0 :: Int)
+            profileAuthorizationLoadsReference <- newIORef (0 :: Int)
+            initialWorkflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
+            let initialProfileStore = accountWorkflowProfileStore initialWorkflow
+                changedAuthorizationWorkflow =
+                  initialWorkflow
+                    { accountWorkflowProfileStore =
+                        AccountProfileStore
+                          { findAccountProfile = \accountId -> do
+                              initialRender <- atomicModifyIORef' profileAuthorizationLoadsReference (\count -> (count + 1, count == 0))
+                              if initialRender
+                                then findAccountProfile initialProfileStore accountId
+                                else pure (Right Nothing)
+                          }
+                    }
+                security = accountJwtSecurity runtime (accountWorkflowSessionStore changedAuthorizationWorkflow)
+            HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository changedAuthorizationWorkflow security) $ \server -> do
+              let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                  profileSubmit = byRole Button `named` "Resend verification email"
+                  reauthenticationDialog = css "#reauthentication-dialog"
+                  identifierField = byLabel "Email address or username"
+                  passwordField = byLabel "Password"
+                  authenticatorCodeField = byLabel "Authenticator code"
+                  retryOriginalAction = byRole Button `named` "Retry original action"
+                  profileMessage = css "#profile-region [data-account-message]"
+              runBrowserSpec browser do
+                setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+                visit profileUrl
+                click profileSubmit
+                fill identifierField "person@example.test"
+                fill passwordField "correct horse battery staple"
+                fill authenticatorCodeField reauthenticationTotpCode
+                click (byRole Button `named` "Sign in")
+                assertAllObserved do
+                  css "[data-web-api-reauthentication-status]" `shouldHaveText` "Signed in. Confirm to retry the original action."
+                  attributeValue retryOriginalAction "hidden" `shouldEqual` Nothing
+                click retryOriginalAction
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
+                  profileMessage `shouldHaveText` "Sign in before requesting another verification email."
+                  attributeValue profileMessage "role" `shouldEqual` Just "alert"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
+            readIORef deliveryCountReference `shouldReturn` 0
+
         it "keeps one retained profile action through a throttled login before one successful retry" $ \(browser, appConfig) ->
           withTestAccountJwtFixture $ \environmentConfig _ -> do
             runtime <- requiredAccountJwtRuntime environmentConfig
