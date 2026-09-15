@@ -317,6 +317,25 @@ spec =
                   inputValue codeField `shouldEqual` browserAdmissionCode
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
 
+      aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture {admissionFixtureSessionStore = BrowserAdmissionSessionStoreCapacityExceeded}) $
+        parallel $
+          describe "full admission session storage" $
+            it "keeps a successful proof recoverable when durable session capacity is exhausted" $ \(browser, server) -> do
+              let admissionUrl = localServerBaseUrl server <> "/public/admission"
+                  loginField = byLabel "Admission name"
+                  codeField = byLabel "One-time code"
+              runBrowserSpec browser do
+                visit admissionUrl
+                fill loginField "support_operator"
+                fill codeField browserAdmissionCode
+                submit (byRole Form `named` "Admission")
+                assertAllObserved do
+                  currentUrl `shouldEqual` admissionUrl
+                  css "[data-harch-action-status]" `shouldHaveText` "This action needs your attention."
+                  inputValue loginField `shouldEqual` "support_operator"
+                  inputValue codeField `shouldEqual` browserAdmissionCode
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+
       aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture {admissionFixtureCredentials = BrowserAdmissionCredentialStoreUnavailable}) $
         parallel $
           describe "unavailable admission credentials" $
@@ -392,6 +411,7 @@ data AdmissionSessionStoreState
   = BrowserAdmissionSessionStoreAvailable
   | BrowserAdmissionSessionStoreUnavailable
   | BrowserAdmissionSessionStoreWriteUnavailable
+  | BrowserAdmissionSessionStoreCapacityExceeded
 
 admissionBrowserApplication :: AdmissionBrowserFixture -> IO (Application RootRoute RootAction ComposedContext RootAuthorization)
 admissionBrowserApplication AdmissionBrowserFixture {admissionFixtureAttempts = attemptStore, admissionFixtureSessions = storedSessions, admissionFixtureSessionStore = sessionStoreState, admissionFixtureCredentials = credentialState} = do
@@ -424,6 +444,7 @@ admissionBrowserApplication AdmissionBrowserFixture {admissionFixtureAttempts = 
           { saveAdmissionSession = \session ->
               case sessionStoreState of
                 BrowserAdmissionSessionStoreWriteUnavailable -> pure (Left AdmissionSessionStoreUnavailable)
+                BrowserAdmissionSessionStoreCapacityExceeded -> pure (Right False)
                 _ -> atomicModifyIORef' sessions (\saved -> (session : filter ((/= sessionId session) . sessionId) saved, Right True)),
             loadAdmissionSession = \requestedSessionId ->
               case sessionStoreState of
@@ -432,6 +453,9 @@ admissionBrowserApplication AdmissionBrowserFixture {admissionFixtureAttempts = 
                   pure (Right (find ((== requestedSessionId) . mkAdmissionSessionId . sessionId) saved))
                 BrowserAdmissionSessionStoreUnavailable -> pure (Left AdmissionSessionStoreUnavailable)
                 BrowserAdmissionSessionStoreWriteUnavailable -> do
+                  saved <- readIORef sessions
+                  pure (Right (find ((== requestedSessionId) . mkAdmissionSessionId . sessionId) saved))
+                BrowserAdmissionSessionStoreCapacityExceeded -> do
                   saved <- readIORef sessions
                   pure (Right (find ((== requestedSessionId) . mkAdmissionSessionId . sessionId) saved)),
             invalidateAdmissionSession = \requestedSessionId _ ->
