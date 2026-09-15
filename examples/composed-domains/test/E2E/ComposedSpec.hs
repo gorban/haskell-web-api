@@ -286,6 +286,18 @@ spec =
                 visit loginUrl
                 assertAllObserved $ currentUrl `shouldEqual` admissionUrl
 
+      aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture {admissionFixtureSessionStore = BrowserAdmissionSessionStoreUnavailable}) $
+        parallel $
+          describe "unavailable admission sessions" $
+            it "returns the typed unavailable response instead of treating a durable credential as absent" $ \(browser, server) -> do
+              let loginUrl = localServerBaseUrl server <> "/en/public/login"
+              runBrowserSpec browser do
+                setCookie loginUrl "__Host-composed-admission" expiredAdmissionBrowserSessionValue
+                visit loginUrl
+                assertAllObserved do
+                  currentUrl `shouldEqual` loginUrl
+                  textContent (css "body") `shouldEqual` "Admission is temporarily unavailable."
+
       aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture {admissionFixtureCredentials = BrowserAdmissionCredentialStoreUnavailable}) $
         parallel $
           describe "unavailable admission credentials" $
@@ -333,11 +345,12 @@ withBrowserAndServer action browser =
 data AdmissionBrowserFixture = AdmissionBrowserFixture
   { admissionFixtureAttempts :: AdmissionAttemptStore,
     admissionFixtureSessions :: [OpaqueSession AdmissionPrincipalId],
+    admissionFixtureSessionStore :: AdmissionSessionStoreState,
     admissionFixtureCredentials :: AdmissionCredentialStoreState
   }
 
 defaultAdmissionBrowserFixture :: AdmissionBrowserFixture
-defaultAdmissionBrowserFixture = AdmissionBrowserFixture permissiveAdmissionAttemptStore [] AdmissionCredentialStoreAvailable
+defaultAdmissionBrowserFixture = AdmissionBrowserFixture permissiveAdmissionAttemptStore [] BrowserAdmissionSessionStoreAvailable AdmissionCredentialStoreAvailable
 
 withAdmissionBrowserAndServer :: AdmissionBrowserFixture -> ((BrowserConfig, LocalTestServer) -> IO a) -> BrowserConfig -> IO a
 withAdmissionBrowserAndServer fixture action browser = do
@@ -356,8 +369,12 @@ data AdmissionCredentialStoreState
   | BrowserAdmissionCredentialStoreUnavailable
   | BrowserAdmissionCredentialStoreCorrupt
 
+data AdmissionSessionStoreState
+  = BrowserAdmissionSessionStoreAvailable
+  | BrowserAdmissionSessionStoreUnavailable
+
 admissionBrowserApplication :: AdmissionBrowserFixture -> IO (Application RootRoute RootAction ComposedContext RootAuthorization)
-admissionBrowserApplication AdmissionBrowserFixture {admissionFixtureAttempts = attemptStore, admissionFixtureSessions = storedSessions, admissionFixtureCredentials = credentialState} = do
+admissionBrowserApplication AdmissionBrowserFixture {admissionFixtureAttempts = attemptStore, admissionFixtureSessions = storedSessions, admissionFixtureSessionStore = sessionStoreState, admissionFixtureCredentials = credentialState} = do
   sessions <- newIORef storedSessions
   usedCounters <- newIORef ([] :: [Word64])
   let loginName = requiredBrowser "admission login" (mkAdmissionLoginName "support_operator")
@@ -386,9 +403,12 @@ admissionBrowserApplication AdmissionBrowserFixture {admissionFixtureAttempts = 
         AdmissionSessionStore
           { saveAdmissionSession = \session ->
               atomicModifyIORef' sessions (\saved -> (session : filter ((/= sessionId session) . sessionId) saved, Right True)),
-            loadAdmissionSession = \requestedSessionId -> do
-              saved <- readIORef sessions
-              pure (Right (find ((== requestedSessionId) . mkAdmissionSessionId . sessionId) saved)),
+            loadAdmissionSession = \requestedSessionId ->
+              case sessionStoreState of
+                BrowserAdmissionSessionStoreAvailable -> do
+                  saved <- readIORef sessions
+                  pure (Right (find ((== requestedSessionId) . mkAdmissionSessionId . sessionId) saved))
+                BrowserAdmissionSessionStoreUnavailable -> pure (Left AdmissionSessionStoreUnavailable),
             invalidateAdmissionSession = \requestedSessionId _ ->
               atomicModifyIORef' sessions (\saved -> (filter ((/= requestedSessionId) . mkAdmissionSessionId . sessionId) saved, Right True))
           }
