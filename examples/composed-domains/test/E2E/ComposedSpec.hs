@@ -428,6 +428,32 @@ spec =
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
               readIORef (synchronizerBrowserVerificationCount csrfFixture) `shouldReturn` 1
 
+            it "rejects an older synchronizer document after another tab rotates shared security without a third verification" $ \(browser, server, csrfFixture) -> do
+              let admissionUrl = localServerBaseUrl server <> "/public/admission"
+                  loginUrl = localServerBaseUrl server <> "/en/public/login"
+                  loginField = byLabel "Admission name"
+                  codeField = byLabel "One-time code"
+              runBrowserSpec browser do
+                visit admissionUrl
+                fill loginField "support_operator"
+                fill codeField browserAdmissionCode
+                withSharedCookieDocument do
+                  visit admissionUrl
+                  fill loginField "support_operator"
+                  fill codeField browserAdmissionCode
+                  submit (byRole Form `named` "Admission")
+                  assertAllObserved do
+                    currentUrl `shouldEqual` loginUrl
+                    byRole Heading `named` "Login" `shouldHaveText` "Login"
+                submit (byRole Form `named` "Admission")
+                assertAllObserved do
+                  currentUrl `shouldEqual` admissionUrl
+                  css "[data-harch-action-status]" `shouldHaveText` "This action needs your attention."
+                  inputValue loginField `shouldEqual` "support_operator"
+                  inputValue codeField `shouldEqual` browserAdmissionCode
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+              readIORef (synchronizerBrowserVerificationCount csrfFixture) `shouldReturn` 2
+
 withBrowserAndServer :: ((BrowserConfig, LocalTestServer) -> IO a) -> BrowserConfig -> IO a
 withBrowserAndServer action browser =
   withLocalTestServer composedBrowserApplication (\server -> action (browser, server))
