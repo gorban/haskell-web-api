@@ -298,6 +298,25 @@ spec =
                   currentUrl `shouldEqual` loginUrl
                   textContent (css "body") `shouldEqual` "Admission is temporarily unavailable."
 
+      aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture {admissionFixtureSessionStore = BrowserAdmissionSessionStoreWriteUnavailable}) $
+        parallel $
+          describe "unavailable admission session writes" $
+            it "keeps a successful proof recoverable without issuing a credential or navigating" $ \(browser, server) -> do
+              let admissionUrl = localServerBaseUrl server <> "/public/admission"
+                  loginField = byLabel "Admission name"
+                  codeField = byLabel "One-time code"
+              runBrowserSpec browser do
+                visit admissionUrl
+                fill loginField "support_operator"
+                fill codeField browserAdmissionCode
+                submit (byRole Form `named` "Admission")
+                assertAllObserved do
+                  currentUrl `shouldEqual` admissionUrl
+                  css "[data-harch-action-status]" `shouldHaveText` "This action needs your attention."
+                  inputValue loginField `shouldEqual` "support_operator"
+                  inputValue codeField `shouldEqual` browserAdmissionCode
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+
       aroundWith (withAdmissionBrowserAndServer defaultAdmissionBrowserFixture {admissionFixtureCredentials = BrowserAdmissionCredentialStoreUnavailable}) $
         parallel $
           describe "unavailable admission credentials" $
@@ -372,6 +391,7 @@ data AdmissionCredentialStoreState
 data AdmissionSessionStoreState
   = BrowserAdmissionSessionStoreAvailable
   | BrowserAdmissionSessionStoreUnavailable
+  | BrowserAdmissionSessionStoreWriteUnavailable
 
 admissionBrowserApplication :: AdmissionBrowserFixture -> IO (Application RootRoute RootAction ComposedContext RootAuthorization)
 admissionBrowserApplication AdmissionBrowserFixture {admissionFixtureAttempts = attemptStore, admissionFixtureSessions = storedSessions, admissionFixtureSessionStore = sessionStoreState, admissionFixtureCredentials = credentialState} = do
@@ -402,13 +422,18 @@ admissionBrowserApplication AdmissionBrowserFixture {admissionFixtureAttempts = 
       sessionStore =
         AdmissionSessionStore
           { saveAdmissionSession = \session ->
-              atomicModifyIORef' sessions (\saved -> (session : filter ((/= sessionId session) . sessionId) saved, Right True)),
+              case sessionStoreState of
+                BrowserAdmissionSessionStoreWriteUnavailable -> pure (Left AdmissionSessionStoreUnavailable)
+                _ -> atomicModifyIORef' sessions (\saved -> (session : filter ((/= sessionId session) . sessionId) saved, Right True)),
             loadAdmissionSession = \requestedSessionId ->
               case sessionStoreState of
                 BrowserAdmissionSessionStoreAvailable -> do
                   saved <- readIORef sessions
                   pure (Right (find ((== requestedSessionId) . mkAdmissionSessionId . sessionId) saved))
-                BrowserAdmissionSessionStoreUnavailable -> pure (Left AdmissionSessionStoreUnavailable),
+                BrowserAdmissionSessionStoreUnavailable -> pure (Left AdmissionSessionStoreUnavailable)
+                BrowserAdmissionSessionStoreWriteUnavailable -> do
+                  saved <- readIORef sessions
+                  pure (Right (find ((== requestedSessionId) . mkAdmissionSessionId . sessionId) saved)),
             invalidateAdmissionSession = \requestedSessionId _ ->
               atomicModifyIORef' sessions (\saved -> (filter ((/= requestedSessionId) . mkAdmissionSessionId . sessionId) saved, Right True))
           }
