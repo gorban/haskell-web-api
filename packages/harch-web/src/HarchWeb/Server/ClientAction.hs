@@ -5,6 +5,7 @@ module HarchWeb.Server.ClientAction
   ( ClientActionProtocolError (..),
     clientActionProtocolErrorResponse,
     clientActionMethodNotAllowedResponse,
+    clientActionAuthenticationNavigationResponse,
     clientActionReauthenticationRequiredResponse,
     clientActionResponseBody,
     isClientActionRequest,
@@ -35,7 +36,7 @@ import HarchWeb.Csrf (CsrfToken, mkCsrfToken, validateCsrfToken)
 import HarchWeb.Markup (ElementId, elementIdText, regionPatchHtml, regionPatchId, safeUrlText)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.RequestId (RequestId, requestIdText)
-import HarchWeb.Routing (RouteCodec (..), encodeRouteLocation)
+import HarchWeb.Routing (RouteCodec (..), RouteRequest, encodeRouteLocation)
 import HarchWeb.Server.Response
 import Network.HTTP.Types qualified as Http
 import Network.HTTP.Types.URI qualified as HttpUri
@@ -246,6 +247,24 @@ clientActionReauthenticationRequiredResponse =
       clientActionStorageCleanup = noClientStorageCleanup,
       clientActionFailureDestinations = noClientActionFailureDestinations,
       clientActionHeaders = [("X-Harch-Action-Reauthenticate", "required")],
+      clientActionObservabilityAttributes = [],
+      clientActionLogEntries = []
+    }
+
+-- | A pre-handler challenge from an independent authentication boundary.  Its
+-- marker is distinct from retained reauthentication: the browser settles the
+-- captured action without retaining it, then follows this typed internal
+-- destination.  Ordinary handler 4xx responses cannot opt into that behavior.
+clientActionAuthenticationNavigationResponse :: RouteRequest route context -> ClientActionResponse route context
+clientActionAuthenticationNavigationResponse routeRequest =
+  ClientActionResponse
+    { clientActionStatus = Http.status401,
+      clientActionPatches = [],
+      clientActionFocusId = Nothing,
+      clientActionNavigation = NavigateInternal ReplaceHistory routeRequest,
+      clientActionStorageCleanup = noClientStorageCleanup,
+      clientActionFailureDestinations = noClientActionFailureDestinations,
+      clientActionHeaders = [("X-Harch-Action-Authentication", "navigate")],
       clientActionObservabilityAttributes = [],
       clientActionLogEntries = []
     }

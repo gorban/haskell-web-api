@@ -27,6 +27,7 @@ module HarchWeb.Authentication.Pipeline
     ScopeRequirement (..),
     SecurityFailureCode,
     authenticationChallengeForAction,
+    authenticationNavigationChallengeForAction,
     authenticationGuardFromPipeline,
     mkAuthenticationDependency,
     mkPrincipalRejection,
@@ -55,7 +56,7 @@ import HarchWeb.EndpointSecurity
     EndpointMetadata (..),
     EndpointRequest (..),
   )
-import HarchWeb.Routing (RouteRequest (requestContext))
+import HarchWeb.Routing (RouteRequest (..))
 import HarchWeb.SecurityEvent
   ( AuthenticationEvent (..),
     AuthenticationEventOutcome (..),
@@ -65,8 +66,10 @@ import HarchWeb.SecurityEvent
     SecurityEventSink (..),
   )
 import HarchWeb.SecurityFailureCode
-import HarchWeb.Server.ClientAction (clientActionReauthenticationRequiredResponse)
+import HarchWeb.Server.ClientAction (clientActionAuthenticationNavigationResponse, clientActionReauthenticationRequiredResponse)
 import HarchWeb.Server.Response (NonPageResponse (..))
+import HarchWeb.Server.ResponseRendering (nonPageInternalRedirectResponse)
+import Network.HTTP.Types qualified as Http
 
 newtype ProofRejection = ProofRejection SecurityFailureCode deriving (Eq, Show)
 
@@ -148,6 +151,22 @@ authenticationChallengeForAction :: EndpointRequest route context authorization 
 authenticationChallengeForAction request ordinary = case endpointDispatchKind request of
   EndpointClientAction -> NonPageClientActionBodyResponse clientActionReauthenticationRequiredResponse
   _ -> ordinary
+
+-- | Challenge an action at a second, independently required authentication
+-- boundary.  It intentionally differs from 'authenticationChallengeForAction':
+-- the captured envelope is not retained or replayed after this response.  The
+-- browser follows the supplied root-codec-rendered destination, while native
+-- submission receives its paired typed 303 redirect.
+--
+-- Decision (AHI-4C, 2026-09-15): keep ordinary 4xx action results on their
+-- recoverable patch rail, but give an endpoint guard's authentication
+-- challenge this explicit framework marker.  Reusing generic 4xx navigation
+-- would turn validation failure into history mutation; a raw URL or a second
+-- client fetch path would split route and action ownership.
+authenticationNavigationChallengeForAction :: EndpointRequest route context authorization -> RouteRequest route context -> NonPageResponse route context
+authenticationNavigationChallengeForAction request destination = case endpointDispatchKind request of
+  EndpointClientAction -> NonPageClientActionBodyResponse (clientActionAuthenticationNavigationResponse destination)
+  _ -> nonPageInternalRedirectResponse Http.status303 destination
 
 runAuthenticationPipeline :: AuthenticationPipeline route context authorization proof verified principal denial -> EndpointRequest route context authorization -> IO (EndpointGuardResult route context)
 runAuthenticationPipeline pipeline request = case endpointAccess (endpointMetadata request) of

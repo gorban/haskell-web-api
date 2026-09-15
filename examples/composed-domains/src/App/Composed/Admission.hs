@@ -89,10 +89,9 @@ import App.Composed.Admission.Types
 import App.Composed.Model
 import Catalog.Domain (CatalogRoute (CatalogIndex))
 import Control.Monad.Except (runExceptT)
-import HarchWeb.ClientStorage (noClientStorageCleanup)
+import HarchWeb.Authentication (authenticationNavigationChallengeForAction)
 import HarchWeb.EndpointSecurity
   ( ApplicationSecurity (..),
-    EndpointDispatchKind (EndpointClientAction),
     EndpointGuard (..),
     EndpointGuardResult (..),
     EndpointRequest (..),
@@ -101,13 +100,8 @@ import HarchWeb.RequestContext (RequestContext (..))
 import HarchWeb.Routing (RouteRequest (..))
 import HarchWeb.Security (ClientAddress)
 import HarchWeb.Server
-  ( ActionNavigation (NavigateInternal),
-    ClientActionResponse (..),
-    HistoryMode (ReplaceHistory),
-    NonPageResponse (..),
+  ( NonPageResponse (..),
     ResponseBody (..),
-    noClientActionFailureDestinations,
-    nonPageInternalRedirectResponse,
   )
 import HarchWeb.Session (OpaqueSession)
 import HarchWeb.Totp (TotpCode)
@@ -205,21 +199,7 @@ admissionGuard config = EndpointGuard $ \endpointRequest ->
 
 admissionChallenge :: EndpointRequest RootRoute ComposedContext RootAuthorization -> NonPageResponse RootRoute ComposedContext
 admissionChallenge endpointRequest =
-  case endpointDispatchKind endpointRequest of
-    EndpointClientAction ->
-      NonPageClientActionBodyResponse
-        ClientActionResponse
-          { clientActionStatus = Http.status401,
-            clientActionPatches = [],
-            clientActionFocusId = Nothing,
-            clientActionNavigation = NavigateInternal ReplaceHistory admissionRoute,
-            clientActionStorageCleanup = noClientStorageCleanup,
-            clientActionFailureDestinations = noClientActionFailureDestinations,
-            clientActionHeaders = [],
-            clientActionObservabilityAttributes = [],
-            clientActionLogEntries = []
-          }
-    _ -> nonPageInternalRedirectResponse Http.status303 admissionRoute
+  authenticationNavigationChallengeForAction endpointRequest admissionRoute
   where
     routeRequest = endpointRouteRequest endpointRequest
     admissionRoute =

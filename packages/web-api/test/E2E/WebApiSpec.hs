@@ -1,4 +1,5 @@
 {-# LANGUAGE BlockArguments #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 
@@ -23,6 +24,7 @@ import HarchWeb.Session qualified as Session
 import HarchWeb.Time qualified as Time
 import HarchWeb.Totp qualified as Totp
 import Network.HTTP.Types qualified as Http
+import Network.Wai qualified as Wai
 import TestSupport.AccountJwt (withTestAccountJwtFixture)
 import TestSupport.BrowserApp (withBrowserApp, withBrowserServer)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..), VerificationResendAdmission (..), VerificationResendClaim (..), VerificationResendClaimSettlement (..))
@@ -765,6 +767,60 @@ spec =
             sessions <- readIORef sessionsReference
             find ((== initialSessionId) . Session.sessionId) sessions `shouldBe` Just expiredInitialSession
 
+        it "does not let account reauthentication bypass an expired required admission grant" $ \(browser, appConfig) ->
+          withTestAccountJwtFixture $ \environmentConfig _ -> do
+            runtime <- requiredAccountJwtRuntime environmentConfig
+            initialNow <- Time.currentUnixTimeNanoseconds
+            initialSessionId <- Session.generateSessionId
+            admissionSessionId <- Session.generateSessionId
+            let initialSession =
+                  Session.OpaqueSession
+                    { Session.sessionId = initialSessionId,
+                      Session.sessionPrincipal = pendingProfileAccountId,
+                      Session.sessionIssuedAtNanoseconds = initialNow,
+                      Session.sessionExpiresAtNanoseconds = initialNow + 86400000000000
+                    }
+                issuer = accountJwtIssuerFromRuntime runtime
+            initialJwt <- issueInitialSessionJwt issuer initialSession
+            sessionsReference <- newIORef [initialSession]
+            profileLoadsReference <- newIORef (0 :: Int)
+            deliveryCountReference <- newIORef (0 :: Int)
+            admissionGrantState <- newIORef RequiredAdmissionGrantActive
+            workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
+            let security = accountJwtSecurityWithRequiredAdmission runtime (accountWorkflowSessionStore workflow) admissionSessionId admissionGrantState
+            HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+              let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                  loginUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/login"
+                  profileSubmit = byRole Button `named` "Resend verification email"
+                  reauthenticationDialog = css "#reauthentication-dialog"
+                  identifierField = byLabel "Email address or username"
+                  passwordField = byLabel "Password"
+                  authenticatorCodeField = byLabel "Authenticator code"
+                  retryOriginalAction = byRole Button `named` "Retry original action"
+              runBrowserSpec browser do
+                setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+                setCookie profileUrl (Session.sessionCookieNameText requiredAdmissionCookieName) (Session.sessionIdText admissionSessionId)
+                visit profileUrl
+                click profileSubmit
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                fill identifierField "person@example.test"
+                fill passwordField "correct horse battery staple"
+                fill authenticatorCodeField reauthenticationTotpCode
+                click (byRole Button `named` "Sign in")
+                assertAllObserved do
+                  css "[data-web-api-reauthentication-status]" `shouldHaveText` "Signed in. Confirm to retry the original action."
+                  attributeValue retryOriginalAction "hidden" `shouldEqual` Nothing
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+                click retryOriginalAction
+                assertAllObserved do
+                  currentUrl `shouldEqual` loginUrl
+                  byRole Heading `named` "Sign in" `shouldHaveText` "Sign in"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
+            readIORef deliveryCountReference `shouldReturn` 0
+            readIORef admissionGrantState `shouldReturn` RequiredAdmissionGrantExpired
+
         it "keeps one retained profile action available through corrected password and MFA failures" $ \(browser, appConfig) ->
           withTestAccountJwtFixture $ \environmentConfig _ -> do
             runtime <- requiredAccountJwtRuntime environmentConfig
@@ -1290,6 +1346,50 @@ expireInitialProfileSession sessionsReference =
       session
         { Session.sessionExpiresAtNanoseconds = Session.sessionIssuedAtNanoseconds session
         }
+
+-- | This browser fixture composes Web API's real account-JWT guard with a
+-- second, application-owned durable admission boundary.  The account example
+-- has no admission page of its own, so the independent challenge uses its
+-- existing public login route solely as a typed destination.  The composed
+-- admission application uses the same framework challenge primitive with its
+-- actual admission route.  This verifies the ordering and recovery rule
+-- without inventing a second account or action transport in the test.
+data RequiredAdmissionGrantState
+  = RequiredAdmissionGrantActive
+  | RequiredAdmissionGrantExpired
+  deriving (Eq, Show)
+
+requiredAdmissionCookieName :: Session.SessionCookieName
+requiredAdmissionCookieName =
+  fromMaybe (error "expected static required-admission cookie name") (Session.mkSessionCookieName "__Host-required-admission")
+
+accountJwtSecurityWithRequiredAdmission :: AccountJwtRuntime -> AccountSessionStore -> Session.SessionId -> IORef RequiredAdmissionGrantState -> HarchWeb.ApplicationSecurity AppRoute WebApi.Route.AppRequestContext ()
+accountJwtSecurityWithRequiredAdmission runtime sessionStore admissionSessionId admissionState =
+  case accountJwtSecurity runtime sessionStore of
+    HarchWeb.AuthenticationEnabled preGuards accountGuard postGuards ->
+      HarchWeb.AuthenticationEnabled preGuards accountGuard (requiredAdmissionGuard admissionSessionId admissionState : postGuards)
+    _ -> error "account JWT security must install its authentication guard"
+
+requiredAdmissionGuard :: Session.SessionId -> IORef RequiredAdmissionGrantState -> HarchWeb.EndpointGuard AppRoute WebApi.Route.AppRequestContext ()
+requiredAdmissionGuard admissionSessionId admissionState =
+  HarchWeb.EndpointGuard $ \endpointRequest ->
+    case HarchWeb.endpointAccess (HarchWeb.endpointMetadata endpointRequest) of
+      HarchWeb.AllowUnauthenticated -> pure (HarchWeb.ContinueEndpoint (requestContext endpointRequest))
+      _ -> do
+        state <-
+          case Session.extractSessionCookieId requiredAdmissionCookieName (Wai.requestHeaders (HarchWeb.endpointWaiRequest endpointRequest)) of
+            Session.SessionCookieFound receivedSessionId | receivedSessionId == admissionSessionId ->
+              atomicModifyIORef' admissionState $ \case
+                RequiredAdmissionGrantActive -> (RequiredAdmissionGrantExpired, RequiredAdmissionGrantActive)
+                RequiredAdmissionGrantExpired -> (RequiredAdmissionGrantExpired, RequiredAdmissionGrantExpired)
+            _ -> pure RequiredAdmissionGrantExpired
+        pure $
+          case state of
+            RequiredAdmissionGrantActive -> HarchWeb.ContinueEndpoint (requestContext endpointRequest)
+            RequiredAdmissionGrantExpired -> HarchWeb.HaltEndpoint (HarchWeb.authenticationNavigationChallengeForAction endpointRequest (admissionDestination endpointRequest))
+  where
+    requestContext = HarchWeb.requestContext . HarchWeb.endpointRouteRequest
+    admissionDestination = HarchWeb.RouteRequest LoginRoute . requestContext
 
 accountJwtSecurity :: AccountJwtRuntime -> AccountSessionStore -> HarchWeb.ApplicationSecurity AppRoute WebApi.Route.AppRequestContext ()
 accountJwtSecurity runtime sessionStore =

@@ -615,6 +615,7 @@ spec = describe "Unit.App.Composed" $ do
                Wai.responseStatus ordersChallenge `shouldBe` Http.status303,
                Wai.responseStatus notFoundResponse `shouldBe` Http.status404,
                Wai.responseStatus actionChallenge `shouldBe` Http.status401,
+               lookup "X-Harch-Action-Authentication" (Wai.responseHeaders actionChallenge) `shouldBe` Just "navigate",
                lookup Http.hLocation (Wai.responseHeaders loginChallenge) `shouldBe` Just "/es/public/admission",
                lookup Http.hLocation (Wai.responseHeaders catalogChallenge) `shouldBe` Just "/es/public/admission?return=catalog",
                Text.isInfixOf "\"href\":\"/es/public/admission?return=catalog\"" actionChallengeBody `shouldBe` True,

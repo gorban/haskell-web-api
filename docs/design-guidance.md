@@ -567,6 +567,23 @@ continuation or history mutation. The composed admission browser proof alters
 the submitted page token while retaining the genuine host cookie and verifies
 that the action neither establishes admission nor navigates.
 
+**Independent-grant challenge refinement (AHI-4C, 2026-09-15): extend the
+existing authentication-challenge response marker with one distinct typed
+navigation case.** A normal 4xx action response remains recoverable and never
+changes history: validation, CSRF, authorization, and capacity rejections may
+render fields or status but cannot be mistaken for a completed mutation. An
+endpoint guard for a separately required grant, such as admission after an
+account session, instead calls
+`authenticationNavigationChallengeForAction`. Its enhanced 401 has a
+framework-owned marker and a root-codec-rendered `NavigateInternal` target;
+the runtime settles the envelope without retaining it and follows that target.
+The paired native response is the same typed 303 redirect. This avoids a raw
+URL, an application-owned second fetch/replay path, and the unsafe rule that
+every handler-authored 4xx navigation should execute. The real-browser account
+fixture proves that a newly issued account session cannot bypass an expired
+independent durable grant; the composed admission guard uses this primitive
+with its own public admission destination.
+
 ### Decision record — bounded application-declared browser-storage cleanup (AHI-4C, 2026-09-09)
 
 **Decision: begin the client-state cleanup path with an opaque, validated

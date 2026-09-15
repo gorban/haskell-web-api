@@ -468,6 +468,32 @@ spec = do
                ]
         )
 
+    it "navigates an independent authentication challenge without retaining its action" $ do
+      let destination = RouteRequest DataRoute defaultContext
+          actionRequest = (endpointRequest RequireAuthenticated []) {endpointDispatchKind = EndpointClientAction}
+          expectedActionResponse =
+            ClientActionResponse
+              { clientActionStatus = Http.status401,
+                clientActionPatches = [],
+                clientActionFocusId = Nothing,
+                clientActionNavigation = NavigateInternal ReplaceHistory destination,
+                clientActionStorageCleanup = noClientStorageCleanup,
+                clientActionFailureDestinations = noClientActionFailureDestinations,
+                clientActionHeaders = [("X-Harch-Action-Authentication", "navigate")],
+                clientActionObservabilityAttributes = [],
+                clientActionLogEntries = []
+              }
+      expectAll
+        ( ( authenticationNavigationChallengeForAction actionRequest destination
+              `shouldBe` NonPageClientActionBodyResponse expectedActionResponse
+          )
+            :| [ authenticationNavigationChallengeForAction (endpointRequest RequireAuthenticated []) destination
+                   `shouldBe` nonPageInternalRedirectResponse Http.status303 destination,
+                 clientActionStatus expectedActionResponse `shouldBe` Http.status401,
+                 clientActionHeaders expectedActionResponse `shouldBe` [("X-Harch-Action-Authentication", "navigate")]
+               ]
+        )
+
     it "gives failure responders the selected endpoint and typed failure" $ do
       let dependency = mkAuthenticationDependency (requiredFailureCode "identity.store-unavailable")
           pipeline =
