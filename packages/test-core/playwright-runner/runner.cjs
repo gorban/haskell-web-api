@@ -345,21 +345,24 @@ async function failBlockedRequestsMatching(pattern) {
   if (!blocked) throw new Error(`request pattern is not blocked: ${pattern}`);
   blocked.acceptingRequests = false;
   state.blockedRequests.delete(pattern);
-  // See releaseRequestsMatching: later requests pass through while the
-  // captured request still receives the requested failure.
-  for (const { route, resolve } of blocked.pendingRoutes) {
+  // Later requests pass through while the captured request receives the
+  // requested failure.  Wait until the browser has delivered that failure:
+  // returning after only issuing route.abort left the scenario racing the
+  // page's error-driven native fallback.
+  await Promise.all(blocked.pendingRoutes.map(async ({ route, resolve }) => {
     try {
-      const aborted = route.abort('failed');
-      resolve();
-      void aborted.catch(() => {});
+      await route.abort('failed');
     } catch (_) {
+      // The page may have superseded this request before Playwright could
+      // deliver the requested failure. It has no route left for us to settle.
+    } finally {
       resolve();
     }
-  }
-  // As above, completion of the already-issued abort is independent of
-  // Playwright finishing route deregistration.  Keep that cleanup detached
-  // so the browser can take its error-driven native fallback immediately.
-  void state.context.unroute(pattern, blocked.handler).catch(() => {});
+  }));
+  // Do not reconfigure context routing during the native fallback. Chromium
+  // can cancel the replacement document while unroute is in flight. The
+  // inert handler passes all later requests through and is released with this
+  // scenario's context when the browser session closes.
   return null;
 }
 
