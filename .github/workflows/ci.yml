@@ -64,11 +64,31 @@ jobs:
             sleep 1
           done
 
-          pg_cron_configuration="$(docker exec --env PGPASSWORD=web_api_owner web-api-postgres \
-            psql --username=web_api_owner --dbname=web_api_dev --no-password \
-              --tuples-only --no-align --quiet --set ON_ERROR_STOP=1 \
-              --command "SHOW shared_preload_libraries; SHOW cron.database_name; SHOW cron.timezone; SHOW cron.use_background_workers; SHOW cron.max_running_jobs; SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'pg_cron');")"
-          test "$pg_cron_configuration" = $'pg_cron\nweb_api_dev\nUTC\non\n2\nt'
+          expected_pg_cron_configuration=$'pg_cron\nweb_api_dev\nUTC\non\n2\nt'
+          pg_cron_error="$(mktemp)"
+          trap 'rm -f "$pg_cron_error"' EXIT
+
+          for _ in $(seq 1 30); do
+            if pg_cron_configuration="$(docker exec --env PGPASSWORD=web_api_owner web-api-postgres \
+              psql --username=web_api_owner --dbname=web_api_dev --no-password \
+                --tuples-only --no-align --quiet --set ON_ERROR_STOP=1 \
+                --command "SHOW shared_preload_libraries; SHOW cron.database_name; SHOW cron.timezone; SHOW cron.use_background_workers; SHOW cron.max_running_jobs; SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'pg_cron');" 2>"$pg_cron_error")"; then
+              test "$pg_cron_configuration" = "$expected_pg_cron_configuration"
+              break
+            fi
+
+            if ! grep -Eq 'database system is (starting up|shutting down)|connection to server .* failed' "$pg_cron_error"; then
+              cat "$pg_cron_error" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+
+          if [ "${pg_cron_configuration:-}" != "$expected_pg_cron_configuration" ]; then
+            cat "$pg_cron_error" >&2
+            docker logs web-api-postgres >&2
+            exit 1
+          fi
 
       - name: Setup Haskell
         if: steps.postgres.outcome == 'success'
