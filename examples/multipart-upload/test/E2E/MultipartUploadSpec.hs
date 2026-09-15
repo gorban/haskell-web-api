@@ -43,6 +43,27 @@ spec =
                 assertAllObserved $ byRole Heading `named` "Upload received" `shouldHaveText` "Upload received"
               nativeUploadDiscardCount uploadState `shouldReturn` 1
 
+          it "requires reselection after a CSRF-rejected native upload without reading the selected file" $ \(browser, server, uploadState) ->
+            withTempFile "multipart-upload-e2e-reselect" [] "attachment.txt" $ \(_tempRoot, filePath) -> do
+              writeFile filePath "e2e file contents, reselection required"
+              let uploadUrl = localServerBaseUrl server <> "/native-upload"
+                  uploadField = css "#native-upload-file"
+              runBrowserSpec browser do
+                visit uploadUrl
+                setInputFiles uploadField filePath
+                _ <- runPageScript "document.querySelector('input[name=\"_harch_csrf\"]').value = 'invalid'; true"
+                submit (byRole Form `named` "Upload a file")
+                assertAllObserved do
+                  byRole Heading `named` "Upload failed" `shouldHaveText` "Upload failed"
+                  byText "Your upload form had expired. Go back and try again." `shouldHaveText` "Your upload form had expired. Go back and try again."
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1, mutationRequestCount = 0}|])
+                liftScenarioIO $ nativeUploadDiscardCount uploadState `shouldReturn` 0
+                click (byRole Button `named` "Try again")
+                setInputFiles uploadField filePath
+                submit (byRole Form `named` "Upload a file")
+                assertAllObserved $ byRole Heading `named` "Upload received" `shouldHaveText` "Upload received"
+              nativeUploadDiscardCount uploadState `shouldReturn` 1
+
 withBrowserAndUploadServer :: ((BrowserConfig, LocalTestServer, NativeUploadState) -> IO a) -> BrowserConfig -> IO a
 withBrowserAndUploadServer action browser = do
   uploadState <- newNativeUploadState
