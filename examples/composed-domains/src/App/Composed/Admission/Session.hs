@@ -154,6 +154,11 @@ data AdmissionGuardFailure
   = AdmissionNotEstablished
   | AdmissionUnavailable
 
+-- | Establish only an active admission grant.  An expired durable row is
+-- invalidated through the application-owned store before returning the normal
+-- challenge: expiry remains enforced even if cleanup races with revocation,
+-- while an unavailable cleanup store is a typed 503 rather than a claim that
+-- the durable lifecycle settled.
 establishAdmissionPrincipal :: AdmissionConfig -> EndpointRequest RootRoute ComposedContext RootAuthorization -> ExceptT AdmissionGuardFailure IO AdmissionPrincipal
 establishAdmissionPrincipal config endpointRequest = do
   sessionToken <-
@@ -177,4 +182,8 @@ establishAdmissionPrincipal config endpointRequest = do
             (sessionExpiresAtNanoseconds session)
         )
     MissingSession -> throwError AdmissionNotEstablished
-    ExpiredSession -> throwError AdmissionNotEstablished
+    ExpiredSession -> do
+      invalidation <- liftIO (invalidateAdmissionSession (admissionConfigSessionStore config) sessionToken now)
+      case invalidation of
+        Left _ -> throwError AdmissionUnavailable
+        Right _ -> throwError AdmissionNotEstablished

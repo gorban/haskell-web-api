@@ -527,7 +527,13 @@ spec = describe "Unit.App.Composed" $ do
               invalidateAdmissionSession = \_ _ -> pure (Right True)
             }
         unavailableStore = activeStore {loadAdmissionSession = \_ -> pure (Left AdmissionSessionStoreUnavailable)}
-        expiredStore =
+        authenticatedSecurity =
+          AuthenticationEnabled
+            []
+            (AuthenticationGuard (pure . ContinueEndpoint . authenticatedRootContext . endpointRouteRequest))
+            []
+    expiredInvalidations <- newIORef []
+    let expiredStore =
           activeStore
             { loadAdmissionSession = \receivedSessionId ->
                 pure
@@ -536,16 +542,16 @@ spec = describe "Unit.App.Composed" $ do
                           then Just (OpaqueSession admissionSessionId admissionPrincipalId 1 500)
                           else Nothing
                       )
-                  )
+                  ),
+              invalidateAdmissionSession = \invalidatedSessionId invalidatedAt -> do
+                modifyIORef' expiredInvalidations (<> [(invalidatedSessionId, invalidatedAt)])
+                pure (Right True)
             }
-        authenticatedSecurity =
-          AuthenticationEnabled
-            []
-            (AuthenticationGuard (pure . ContinueEndpoint . authenticatedRootContext . endpointRouteRequest))
-            []
+        expiredCleanupUnavailableStore = expiredStore {invalidateAdmissionSession = \_ _ -> pure (Left AdmissionSessionStoreUnavailable)}
     activeConfig <- requiredAdmission "admission configuration" (mkAdmissionConfig defaultAdmissionSessionCookiePolicy activeStore (pure (Right 500)))
     unavailableConfig <- requiredAdmission "unavailable admission configuration" (mkAdmissionConfig defaultAdmissionSessionCookiePolicy unavailableStore (pure (Right 500)))
     expiredConfig <- requiredAdmission "expired admission configuration" (mkAdmissionConfig defaultAdmissionSessionCookiePolicy expiredStore (pure (Right 500)))
+    expiredCleanupUnavailableConfig <- requiredAdmission "expired admission cleanup-unavailable configuration" (mkAdmissionConfig defaultAdmissionSessionCookiePolicy expiredCleanupUnavailableStore (pure (Right 500)))
     unavailableClockConfig <- requiredAdmission "admission clock configuration" (mkAdmissionConfig defaultAdmissionSessionCookiePolicy activeStore (pure (Left AdmissionSessionClockUnavailable)))
     activeSite <-
       requiredAdmission
@@ -559,6 +565,10 @@ spec = describe "Unit.App.Composed" $ do
       requiredAdmission
         "expired admission-enabled root"
         (buildComposedSiteWithAdmissionSecurityDependencies (withCsrfProtection admissionCsrfProtection defaultComposedSiteDependencies) (AdmissionEnabled expiredConfig unavailableAdmissionProofConfig) authenticatedSecurity)
+    expiredCleanupUnavailableSite <-
+      requiredAdmission
+        "expired admission cleanup-unavailable root"
+        (buildComposedSiteWithAdmissionSecurityDependencies (withCsrfProtection admissionCsrfProtection defaultComposedSiteDependencies) (AdmissionEnabled expiredCleanupUnavailableConfig unavailableAdmissionProofConfig) authenticatedSecurity)
     unavailableClockSite <-
       requiredAdmission
         "clock-unavailable admission-enabled root"
@@ -572,6 +582,7 @@ spec = describe "Unit.App.Composed" $ do
     activeApplication <- toWaiApplication (Site.buildSiteApplication activeSite)
     unavailableApplication <- toWaiApplication (Site.buildSiteApplication unavailableSite)
     expiredApplication <- toWaiApplication (Site.buildSiteApplication expiredSite)
+    expiredCleanupUnavailableApplication <- toWaiApplication (Site.buildSiteApplication expiredCleanupUnavailableSite)
     unavailableClockApplication <- toWaiApplication (Site.buildSiteApplication unavailableClockSite)
     let requestAdaptedContext = Site.siteRequestContextFromRequest activeSite (waiRequest ["es", "catalog"]) testRequestId defaultComposedContext
         requestAdaptedClientAddress =
@@ -591,6 +602,7 @@ spec = describe "Unit.App.Composed" $ do
     admittedOrders <- performWaiRequest (pure activeApplication) ((waiRequest ["es", "orders"]) {Wai.requestHeaders = [(Http.hCookie, "__Host-composed-admission=0123456789abcdef0123456789abcdef")]})
     unavailableResponse <- performWaiRequest (pure unavailableApplication) ((waiRequest ["es", "catalog"]) {Wai.requestHeaders = [(Http.hCookie, "__Host-composed-admission=0123456789abcdef0123456789abcdef")]})
     expiredResponse <- performWaiRequest (pure expiredApplication) ((waiRequest ["es", "catalog"]) {Wai.requestHeaders = [(Http.hCookie, "__Host-composed-admission=0123456789abcdef0123456789abcdef")]})
+    expiredCleanupUnavailableResponse <- performWaiRequest (pure expiredCleanupUnavailableApplication) ((waiRequest ["es", "catalog"]) {Wai.requestHeaders = [(Http.hCookie, "__Host-composed-admission=0123456789abcdef0123456789abcdef")]})
     unavailableClockResponse <- performWaiRequest (pure unavailableClockApplication) ((waiRequest ["es", "catalog"]) {Wai.requestHeaders = [(Http.hCookie, "__Host-composed-admission=0123456789abcdef0123456789abcdef")]})
     malformedCookieResponse <- performWaiRequest (pure activeApplication) ((waiRequest ["es", "catalog"]) {Wai.requestHeaders = [(Http.hCookie, "__Host-composed-admission=short")]})
     ambiguousCookieResponse <- performWaiRequest (pure activeApplication) ((waiRequest ["es", "catalog"]) {Wai.requestHeaders = [(Http.hCookie, "__Host-composed-admission=0123456789abcdef0123456789abcdef; __Host-composed-admission=0123456789abcdef0123456789abcdef")]})
@@ -611,9 +623,11 @@ spec = describe "Unit.App.Composed" $ do
                Wai.responseStatus admittedOrders `shouldBe` Http.status200,
                Wai.responseStatus unavailableResponse `shouldBe` Http.status503,
                Wai.responseStatus expiredResponse `shouldBe` Http.status303,
+               Wai.responseStatus expiredCleanupUnavailableResponse `shouldBe` Http.status503,
                Wai.responseStatus unavailableClockResponse `shouldBe` Http.status503,
                Wai.responseStatus malformedCookieResponse `shouldBe` Http.status303,
                Wai.responseStatus ambiguousCookieResponse `shouldBe` Http.status303,
+               readIORef expiredInvalidations `shouldReturn` [(mkAdmissionSessionId admissionSessionId, 500)],
                requestLocale (requestCore requestAdaptedContext) `shouldBe` locale "es",
                correlationRequestId (requestCorrelation (requestCore requestAdaptedContext)) `shouldBe` Just testRequestId,
                requestAdaptedClientAddress `shouldSatisfy` maybe False (not . Text.null)
