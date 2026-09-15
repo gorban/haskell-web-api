@@ -8,7 +8,7 @@ import App.Composed
 import Catalog.Domain
 import Crypto.Error (maybeCryptoError)
 import Data.ByteString qualified as ByteString
-import Data.IORef (atomicModifyIORef', newIORef, readIORef)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
@@ -22,7 +22,7 @@ import HarchWeb.RequestContext (RequestContext (..), RequestIdentity (..))
 import HarchWeb.Secret (encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
 import HarchWeb.Session (OpaqueSession (..), mkSessionId)
 import HarchWeb.Site qualified as Site
-import HarchWeb.Time (unixTimeNanoseconds, unixTimeSeconds)
+import HarchWeb.Time (UnixTimeNanoseconds, unixTimeNanoseconds, unixTimeSeconds)
 import HarchWeb.Totp (mkTotpSecret, renderTotpSecret, totpCode, totpCodeText)
 import Orders.Domain
 
@@ -393,6 +393,41 @@ spec =
                   inputValue codeField `shouldEqual` browserAdmissionCode
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
 
+      aroundWith withSynchronizerAdmissionBrowserAndServer $
+        parallel $
+          describe "durable synchronizer admission CSRF" $ do
+            it "submits admission through the same guarded action transport" $ \(browser, server, csrfFixture) -> do
+              let admissionUrl = localServerBaseUrl server <> "/public/admission"
+                  loginUrl = localServerBaseUrl server <> "/en/public/login"
+              runBrowserSpec browser do
+                visit admissionUrl
+                fill (byLabel "Admission name") "support_operator"
+                fill (byLabel "One-time code") browserAdmissionCode
+                submit (byRole Form `named` "Admission")
+                assertAllObserved do
+                  currentUrl `shouldEqual` loginUrl
+                  byRole Heading `named` "Login" `shouldHaveText` "Login"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+              readIORef (synchronizerBrowserVerificationCount csrfFixture) `shouldReturn` 1
+
+            it "rejects a synchronizer token revoked after SSR without navigating or consuming the draft" $ \(browser, server, csrfFixture) -> do
+              let admissionUrl = localServerBaseUrl server <> "/public/admission"
+                  loginField = byLabel "Admission name"
+                  codeField = byLabel "One-time code"
+              runBrowserSpec browser do
+                visit admissionUrl
+                liftScenarioIO $ writeIORef (synchronizerBrowserTokens csrfFixture) []
+                fill loginField "support_operator"
+                fill codeField browserAdmissionCode
+                submit (byRole Form `named` "Admission")
+                assertAllObserved do
+                  currentUrl `shouldEqual` admissionUrl
+                  css "[data-harch-action-status]" `shouldHaveText` "This action needs your attention."
+                  inputValue loginField `shouldEqual` "support_operator"
+                  inputValue codeField `shouldEqual` browserAdmissionCode
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+              readIORef (synchronizerBrowserVerificationCount csrfFixture) `shouldReturn` 1
+
 withBrowserAndServer :: ((BrowserConfig, LocalTestServer) -> IO a) -> BrowserConfig -> IO a
 withBrowserAndServer action browser =
   withLocalTestServer composedBrowserApplication (\server -> action (browser, server))
@@ -414,6 +449,45 @@ withAdmissionBrowserAndServer fixture action browser = do
   admissionApplication <- admissionBrowserApplication fixture
   withLocalTestServer admissionApplication (\server -> action (browser, server))
 
+-- | Browser-level proof uses a durable-shaped store rather than the default
+-- signed backend for these two cases.  The fixture keeps only token digests,
+-- bindings, and expiry; removing its record after SSR models an immediate
+-- server-side revocation.  It exercises Harch's one cookie/field transport
+-- and the composed application's selected backend without putting a test
+-- database or a second action path into the browser runtime.
+data SynchronizerBrowserCsrfFixture = SynchronizerBrowserCsrfFixture
+  { synchronizerBrowserTokens :: IORef [(SynchronizerTokenDigest, Csrf.CsrfBindingDigest, UnixTimeNanoseconds)],
+    synchronizerBrowserVerificationCount :: IORef Int
+  }
+
+withSynchronizerAdmissionBrowserAndServer :: ((BrowserConfig, LocalTestServer, SynchronizerBrowserCsrfFixture) -> IO a) -> BrowserConfig -> IO a
+withSynchronizerAdmissionBrowserAndServer action browser = do
+  (csrfProtection, csrfFixture) <- newSynchronizerBrowserCsrfFixture
+  admissionApplication <- admissionBrowserApplicationWithCsrf defaultAdmissionBrowserFixture csrfProtection
+  withLocalTestServer admissionApplication (\server -> action (browser, server, csrfFixture))
+
+newSynchronizerBrowserCsrfFixture :: IO (Csrf.CsrfProtection ComposedContext, SynchronizerBrowserCsrfFixture)
+newSynchronizerBrowserCsrfFixture = do
+  tokens <- newIORef []
+  verificationCount <- newIORef 0
+  let fixture = SynchronizerBrowserCsrfFixture tokens verificationCount
+      store =
+        SynchronizerTokenStore
+          { saveSynchronizerToken = \_ tokenDigest bindingDigest _ expiresAt ->
+              atomicModifyIORef' tokens $ \stored ->
+                if any (\(storedDigest, _, _) -> storedDigest == tokenDigest) stored
+                  then (stored, Right False)
+                  else ((tokenDigest, bindingDigest, expiresAt) : stored, Right True),
+            verifySynchronizerToken = \tokenDigest bindingDigest now -> do
+              modifyIORef' verificationCount (+ 1)
+              stored <- readIORef tokens
+              pure (Right (any (\(storedDigest, storedBinding, expiresAt) -> storedDigest == tokenDigest && storedBinding == bindingDigest && expiresAt > now) stored)),
+            cleanupSynchronizerTokens = \now -> do
+              modifyIORef' tokens (filter (\(_, _, expiresAt) -> expiresAt > now))
+              pure (Right ())
+          }
+  pure (synchronizerCsrfProtection store (pure (unixTimeNanoseconds 123456000000000)) resolveAdmissionCsrfBinding, fixture)
+
 composedBrowserApplication :: Application RootRoute RootAction ComposedContext RootAuthorization
 composedBrowserApplication =
   Site.buildSiteApplication $
@@ -433,7 +507,10 @@ data AdmissionSessionStoreState
   | BrowserAdmissionSessionStoreCapacityExceeded
 
 admissionBrowserApplication :: AdmissionBrowserFixture -> IO (Application RootRoute RootAction ComposedContext RootAuthorization)
-admissionBrowserApplication AdmissionBrowserFixture {admissionFixtureAttempts = attemptStore, admissionFixtureSessions = storedSessions, admissionFixtureSessionStore = sessionStoreState, admissionFixtureCredentials = credentialState} = do
+admissionBrowserApplication fixture = admissionBrowserApplicationWithCsrf fixture admissionBrowserCsrfProtection
+
+admissionBrowserApplicationWithCsrf :: AdmissionBrowserFixture -> Csrf.CsrfProtection ComposedContext -> IO (Application RootRoute RootAction ComposedContext RootAuthorization)
+admissionBrowserApplicationWithCsrf AdmissionBrowserFixture {admissionFixtureAttempts = attemptStore, admissionFixtureSessions = storedSessions, admissionFixtureSessionStore = sessionStoreState, admissionFixtureCredentials = credentialState} csrfProtection = do
   sessions <- newIORef storedSessions
   usedCounters <- newIORef ([] :: [Word64])
   let loginName = requiredBrowser "admission login" (mkAdmissionLoginName "support_operator")
@@ -510,7 +587,7 @@ admissionBrowserApplication AdmissionBrowserFixture {admissionFixtureAttempts = 
     case mkAdmissionConfig defaultAdmissionSessionCookiePolicy sessionStore (pure (Right now)) of
       Left _ -> expectationFailure "expected browser admission session configuration" >> fail "unreachable"
       Right config -> pure config
-  case buildComposedSiteWithAdmissionSecurityDependencies (browserDependencies admissionBrowserCsrfProtection) (AdmissionEnabled sessionConfig proofConfig) browserSecurity of
+  case buildComposedSiteWithAdmissionSecurityDependencies (browserDependencies csrfProtection) (AdmissionEnabled sessionConfig proofConfig) browserSecurity of
     Left _ -> expectationFailure "expected admission-enabled browser site" >> fail "unreachable"
     Right site -> pure (Site.buildSiteApplication site)
 
