@@ -5,13 +5,17 @@
 
 import Control.Exception (ErrorCall (..), evaluate)
 import Data.ByteString qualified as ByteString
+import Data.ByteString.Base64 qualified as Base64
 import Data.Either (fromRight)
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
-import HarchWeb.Api (ApiRequestData (..), ApiRequestDecodeResult (..), ApiRequestParseError (..), ApiRequestSource (..), runRequestCodec)
+import HarchWeb.Api (ApiRequestData (..), ApiRequestDecodeResult (..), ApiRequestParseError (..), ApiRequestSource (..), apiHeaderName, runRequestCodec)
+import HarchWeb.Password (defaultPasswordHashingPolicy, hashPasswordWithSalt, mkPassword, verifyPassword)
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import Unit.HarchWeb.TestSupport (TestContext (requestLanguage), TestRoute (DataRoute), defaultContext)
@@ -158,6 +162,49 @@ spec = do
                    `shouldBe` Just (DuplicateApiField ApiFormSource "scope" :| []),
                  requestErrors (decode [("grant_type", "client_credentials"), ("scope", "api/read\\scope")])
                    `shouldBe` Just (InvalidApiField ApiFormSource "scope" :| [])
+               ]
+        )
+
+  describe "OAuth client-secret Basic decoding" $
+    it "uses the bounded API header boundary and keeps credentials opaque" $ do
+      let maximumBytes = requiredOAuth2ClientCredentialsMaximumBytesOrDie 128
+          decode headers = runRequestCodec (oauth2ClientSecretBasicCodec maximumBytes) (ApiRequestData [] headers [] [])
+          clientId result =
+            case result of
+              ApiRequestDecoded credentials -> Just (oauth2ClientIdText (oauth2ClientCredentialsId credentials))
+              ApiRequestRejected _ -> Nothing
+              ApiRequestCodecInvalid -> Nothing
+          secretMatches expected result =
+            case result of
+              ApiRequestDecoded credentials ->
+                case hashPasswordWithSalt defaultPasswordHashingPolicy "oauth-client-secret" (mkPassword expected) of
+                  Just expectedHash -> verifyPassword (oauth2ClientCredentialsSecret credentials) expectedHash
+                  Nothing -> False
+              ApiRequestRejected _ -> False
+              ApiRequestCodecInvalid -> False
+          requestErrors result =
+            case result of
+              ApiRequestDecoded _ -> Nothing
+              ApiRequestRejected errors -> Just errors
+              ApiRequestCodecInvalid -> Nothing
+          authorization = fromMaybe (error "expected Authorization header") (apiHeaderName "Authorization")
+          basic encodedCredentials = "Basic " <> TextEncoding.decodeUtf8 (Base64.encode encodedCredentials)
+          lowercaseBasic encodedCredentials = "basic " <> TextEncoding.decodeUtf8 (Base64.encode encodedCredentials)
+          validHeader = [(authorization, basic "demo-client:demo-secret")]
+      expectAll
+        ( (clientId (decode validHeader) `shouldBe` Just "demo-client")
+            :| [ secretMatches "demo-secret" (decode validHeader) `shouldBe` True,
+                 clientId (decode [(authorization, lowercaseBasic "demo-client:demo-secret")]) `shouldBe` Just "demo-client",
+                 clientId (decode [(authorization, basic "demo%2Dclient:demo+secret")]) `shouldBe` Just "demo-client",
+                 secretMatches "demo secret" (decode [(authorization, basic "demo%2Dclient:demo+secret")]) `shouldBe` True,
+                 requestErrors (decode []) `shouldBe` Just (MissingApiField ApiHeaderSource "authorization" :| []),
+                 requestErrors (decode [(authorization, basic "demo-client:demo-secret"), (authorization, basic "another-client:another-secret")]) `shouldBe` Just (DuplicateApiField ApiHeaderSource "authorization" :| []),
+                 requestErrors (decode [(authorization, "Bearer token")]) `shouldBe` Just (InvalidApiField ApiHeaderSource "authorization" :| []),
+                 requestErrors (decode [(authorization, "Basic not-base64!")]) `shouldBe` Just (InvalidApiField ApiHeaderSource "authorization" :| []),
+                 requestErrors (decode [(authorization, basic "missing-secret:")]) `shouldBe` Just (InvalidApiField ApiHeaderSource "authorization" :| []),
+                 requestErrors (decode [(authorization, basic "missing-client")]) `shouldBe` Just (InvalidApiField ApiHeaderSource "authorization" :| []),
+                 requestErrors (runRequestCodec (oauth2ClientSecretBasicCodec (requiredOAuth2ClientCredentialsMaximumBytesOrDie 8)) (ApiRequestData [] validHeader [] [])) `shouldBe` Just (InvalidApiField ApiHeaderSource "authorization" :| []),
+                 mkOAuth2ClientCredentialsMaximumBytes 0 `shouldBe` Left "OAuth client-credentials maximum bytes must be positive"
                ]
         )
 

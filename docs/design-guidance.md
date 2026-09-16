@@ -3506,6 +3506,26 @@ This extends the current principal-establisher seam rather than adding a
 second authentication dispatcher; the next slice supplies the concrete OAuth
 workflow and PostgreSQL adapter.
 
+### Decision record — AHI-4D slice 3: OAuth Basic credential decoding (2026-09-16)
+
+**Decision: extend the existing typed API request codec with the strict HTTP
+Basic decoder required by the client-credentials workflow.** `RequestCodec`
+already owns case-insensitive header selection, bounded endpoint input, and
+missing/duplicate field rejection. A separate token-endpoint header parser
+would duplicate those rules and make form and header failures behave
+differently. The OAuth decoder therefore accepts exactly one bounded
+`Authorization` field, recognizes the case-insensitive `Basic` scheme, then
+performs Base64 and RFC form-component decoding before it yields an opaque
+client ID and existing opaque `Password` value.
+
+The credential pair has no `Show` instance. The only client-ID accessor is for
+the application-supplied durable store, and the secret is passed directly to
+the existing Argon2 verifier. This slice deliberately does not authenticate a
+client, accept client credentials in a form body, issue a token, map OAuth
+errors, or add a route: those concerns remain with the later application
+workflow and PostgreSQL adapter. It extends the one API decoding and
+authentication boundary rather than creating a second protocol dispatcher.
+
 ### Decision record — AHI-4C: bounded page-security and JWT-claim rails (2026-09-04)
 
 **Decision: preserve the existing one-page-rendering and one-JWT-verification
