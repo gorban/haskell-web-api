@@ -24,12 +24,16 @@ import HarchWeb.Authentication.Pipeline (AuthenticationDependency)
 newtype ApiClientStoreError = ApiClientStoreUnavailable AuthenticationDependency
   deriving (Eq, Show)
 
--- | Application-supplied durable API-client storage.  Both operations return
--- 'Nothing' for an absent, disabled, or otherwise non-establishable client so
--- the protocol adapter can preserve anti-enumeration behavior.  Each bearer
--- request uses 'establishApiClient'; applications must not substitute a
--- cross-request acceptance cache without an explicit invalidation contract.
-data ApiClientStore clientId client = ApiClientStore
-  { findApiClient :: clientId -> IO (Either ApiClientStoreError (Maybe client)),
-    establishApiClient :: clientId -> IO (Either ApiClientStoreError (Maybe client))
+-- | Application-supplied durable API-client storage.  Discovery returns the
+-- issuance view, including active secret hashes.  Establishment returns the
+-- current bearer-principal view, which must not require an active secret: a
+-- secret is a client-authentication credential, not a property carried by an
+-- issued bearer token.  Both operations return 'Nothing' for an absent,
+-- disabled, or otherwise non-establishable client so the protocol adapter can
+-- preserve anti-enumeration behavior.  Each bearer request uses
+-- 'establishApiClient'; applications must not substitute a cross-request
+-- acceptance cache without an explicit invalidation contract.
+data ApiClientStore clientId issuanceClient establishedClient = ApiClientStore
+  { findApiClient :: clientId -> IO (Either ApiClientStoreError (Maybe issuanceClient)),
+    establishApiClient :: clientId -> IO (Either ApiClientStoreError (Maybe establishedClient))
   }

@@ -20,15 +20,21 @@ import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import Unit.HarchWeb.TestSupport (TestContext (requestLanguage), TestRoute (DataRoute), defaultContext)
 
+newtype IssuanceClient = IssuanceClient Text
+  deriving (Eq, Show)
+
+newtype EstablishedClient = EstablishedClient Text
+  deriving (Eq, Show)
+
 spec = do
   describe "durable API-client storage" $
     it "keeps discovery and current-principal establishment application supplied" $ do
       dependency <- newIORef (mkAuthenticationDependency (requiredSecurityFailureCodeOrDie "api-client.store-unavailable")) >>= readIORef
-      let store :: ApiClientStore Text Text
+      let store :: ApiClientStore Text IssuanceClient EstablishedClient
           store =
             ApiClientStore
-              { findApiClient = \clientId -> pure $ Right $ if clientId == ("known" :: Text) then Just "configured-client" else Nothing,
-                establishApiClient = \clientId -> pure $ Right $ if clientId == ("current" :: Text) then Just "current-client" else Nothing
+              { findApiClient = \clientId -> pure $ Right $ if clientId == ("known" :: Text) then Just $ IssuanceClient "configured-client" else Nothing,
+                establishApiClient = \clientId -> pure $ Right $ if clientId == ("current" :: Text) then Just $ EstablishedClient "current-client" else Nothing
               }
           unavailable = ApiClientStoreUnavailable dependency
       knownClient <- findApiClient store "known"
@@ -36,9 +42,9 @@ spec = do
       currentClient <- establishApiClient store "current"
       unavailableClient <- establishApiClient store "disabled"
       expectAll
-        ( (knownClient `shouldBe` Right (Just "configured-client"))
+        ( (knownClient `shouldBe` Right (Just (IssuanceClient "configured-client")))
             :| [ unknownClient `shouldBe` Right Nothing,
-                 currentClient `shouldBe` Right (Just "current-client"),
+                 currentClient `shouldBe` Right (Just (EstablishedClient "current-client")),
                  unavailableClient `shouldBe` Right Nothing,
                  unavailable `shouldBe` unavailable,
                  (unavailable /= unavailable) `shouldBe` False,

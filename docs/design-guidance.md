@@ -3502,6 +3502,12 @@ its durable disabled, secret, and scope state. Harch names discovery and
 current-principal establishment as separate operations, while mapping only an
 adapter's safe unavailable outcome into its existing authentication failure
 rail. It owns neither PostgreSQL details nor a cross-request acceptance cache.
+Discovery and establishment deliberately have independent result types:
+discovery needs active secret hashes for client authentication, whereas bearer
+establishment needs the current enabled principal and scopes without requiring
+an active secret. This prevents a secret-rotation implementation from making
+an otherwise valid issued bearer token unrepresentable at the capability
+boundary. The unit contract instantiates the two views with distinct types.
 This extends the current principal-establisher seam rather than adding a
 second authentication dispatcher; the next slice supplies the concrete OAuth
 workflow and PostgreSQL adapter.
