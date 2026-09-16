@@ -88,6 +88,7 @@ library
     WebApi.AccountSessionAudit
     WebApi.ActivityAudit
     WebApi.Api.Endpoints
+    WebApi.ApiClient
     WebApi.App
     WebApi.App.Enhancements
     WebApi.App.Observability
@@ -229,6 +230,7 @@ test-suite haskell-web-api-tests
     Unit.WebApi.AccountPagesSpec
     Unit.WebApi.AccountSpec
     Unit.WebApi.ActivityAuditSpec
+    Unit.WebApi.ApiClientSpec
     Unit.WebApi.App.EnhancementsSpec
     Unit.WebApi.AppEffectSpec
     Unit.WebApi.AppSpec
