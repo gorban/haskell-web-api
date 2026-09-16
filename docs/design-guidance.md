@@ -3510,6 +3510,9 @@ an otherwise valid issued bearer token unrepresentable at the capability
 boundary. 'WebApi.ApiClient' mirrors the distinction with its secret-bearing
 'ApiClient' issuance view and secret-free 'EstablishedApiClient' bearer view;
 the unit contract instantiates the storage capability with distinct types.
+The established view filters a token's granted scopes against its current
+durable allowance while preserving token order: removing a grant therefore
+takes effect immediately, and adding a grant cannot enlarge an existing token.
 This extends the current principal-establisher seam rather than adding a
 second authentication dispatcher; the next slice supplies the concrete OAuth
 workflow and PostgreSQL adapter.

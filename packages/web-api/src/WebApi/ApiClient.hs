@@ -23,6 +23,7 @@ module WebApi.ApiClient
     establishApiClient,
     establishedApiClientAllowedScopes,
     establishedApiClientId,
+    intersectEstablishedApiClientScopes,
     mkApiClient,
     mkApiClientId,
     selectApiClientScopes,
@@ -120,6 +121,13 @@ establishApiClient client =
     { establishedApiClientId = apiClientId client,
       establishedApiClientAllowedScopes = apiClientAllowedScopes client
     }
+
+-- | Restrict scopes carried by an issued bearer token to the client's current
+-- durable allowance.  The result retains token order: removing a durable
+-- grant takes effect immediately, while adding one cannot enlarge a token
+-- already issued with a narrower scope set.
+intersectEstablishedApiClientScopes :: EstablishedApiClient -> [OAuth2Scope] -> [OAuth2Scope]
+intersectEstablishedApiClientScopes client = filter (`containsScope` establishedApiClientAllowedScopes client)
 
 containsScope :: OAuth2Scope -> [OAuth2Scope] -> Bool
 containsScope scope = any ((== oauth2ScopeText scope) . oauth2ScopeText)

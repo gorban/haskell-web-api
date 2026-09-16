@@ -26,6 +26,7 @@ spec =
                  (passwordHashText <$> apiClientSecretHashes configuredClient) `shouldBe` ("configured-secret" :| ["rotating-secret"]),
                  apiClientIdText (establishedApiClientId establishedClient) `shouldBe` "automation-client",
                  scopeTexts (establishedApiClientAllowedScopes establishedClient) `shouldBe` ["resource:read", "profile:read:self"],
+                 scopeTexts (intersectEstablishedApiClientScopes establishedClient [selfRead, requiredScope "other:scope"]) `shouldBe` ["profile:read:self"],
                  selectedScopeTextsAre ["resource:read"] (selectApiClientScopes configuredClient []) `shouldBe` True,
                  selectedScopeTextsAre ["profile:read:self"] (selectApiClientScopes configuredClient [selfRead]) `shouldBe` True,
                  scopeErrorIs ApiClientRequestedScopeDuplicate (selectApiClientScopes configuredClient [sharedRead, sharedRead]) `shouldBe` True,
