@@ -3,6 +3,7 @@
 module TestSupport.RealPostgres
   ( databaseSetupEnvironment,
     containerizedPsqlScriptContents,
+    defaultAuditSchedulerPostgresConfig,
     defaultMigrationPostgresConfig,
     defaultPostgresContainerImage,
     defaultRealPostgresConfig,
@@ -10,20 +11,32 @@ module TestSupport.RealPostgres
     ensureDefaultPostgresAvailableScript,
     supportedPostgresMajorVersions,
     withContainerizedPsqlOnPath,
+    withPostgresTlsFixtures,
   )
 where
 
-import Control.Exception (finally)
-import Data.Maybe (fromMaybe)
-import qualified Data.Text as Text
+import Control.Applicative ((<|>))
+import Control.Concurrent (threadDelay)
+import Control.Exception (bracket, finally, onException, try)
+import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Text qualified as Text
 import System.Directory (findExecutable)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
+import System.FilePath (takeFileName)
 import System.IO.Temp (withSystemTempDirectory)
-import System.Process (callProcess)
-import WebApi.Config (AppEnvironmentConfig (..), DatabaseConfig (..), defaultAppEnvironmentConfig)
+import System.Process (callProcess, readProcess)
+import Text.Read (readMaybe)
+import WebApi.Config (AppEnvironmentConfig (..), DatabaseConfig (..), DatabaseSslMode (DatabaseSslVerifyFull), DatabaseTransportSecurity (DatabaseTransportSsl), defaultAppEnvironmentConfig)
+import WebApi.Postgres.Testing (runRuntimeScalarQuery)
 
+-- | The AHI-5 test image has PostgreSQL 17 and the reviewed pg_cron package.
+--
+-- The audit implementation owns its PostgreSQL schema and maintenance routine;
+-- this fixture proves only the deployment configuration the repository relies
+-- on. Tests call repository-owned routines directly rather than waiting for a
+-- third-party scheduler clock.
 defaultPostgresContainerImage :: String
-defaultPostgresContainerImage = "docker.io/library/postgres:17"
+defaultPostgresContainerImage = "localhost/haskell-web-api/postgres-pgcron:17-1.6.7"
 
 supportedPostgresMajorVersions :: [Int]
 supportedPostgresMajorVersions = [17]
@@ -87,6 +100,14 @@ containerRuntimeSelectionScriptLines =
     "fi"
   ]
 
+postgresImageBuildScriptLines :: [String]
+postgresImageBuildScriptLines =
+  [ "build_postgres_pgcron_image() {",
+    "  repo_root=\"$(git rev-parse --show-toplevel)\"",
+    "  WEB_API_CONTAINER_RUNTIME=\"$runtime\" bash \"$repo_root/tools/build-postgres-pgcron-test-image.sh\"",
+    "}"
+  ]
+
 defaultRealPostgresConfig :: DatabaseConfig
 defaultRealPostgresConfig =
   databaseConfig defaultAppEnvironmentConfig
@@ -96,6 +117,13 @@ defaultMigrationPostgresConfig =
   defaultRealPostgresConfig
     { databaseUser = "web_api_owner",
       databasePassword = "web_api_owner"
+    }
+
+defaultAuditSchedulerPostgresConfig :: DatabaseConfig
+defaultAuditSchedulerPostgresConfig =
+  defaultMigrationPostgresConfig
+    { databaseUser = "web_api_audit_scheduler",
+      databasePassword = "web_api_audit_scheduler"
     }
 
 databaseSetupEnvironment :: [(String, String)] -> [(String, String)]
@@ -110,6 +138,11 @@ databaseSetupEnvironment inheritedEnvironment =
     ("WEB_API_MIGRATION_DATABASE_NAME", Text.unpack (databaseName defaultMigrationPostgresConfig)),
     ("WEB_API_MIGRATION_DATABASE_USER", Text.unpack (databaseUser defaultMigrationPostgresConfig)),
     ("WEB_API_MIGRATION_DATABASE_PASSWORD", Text.unpack (databasePassword defaultMigrationPostgresConfig)),
+    ("WEB_API_AUDIT_SCHEDULER_DATABASE_HOST", Text.unpack (databaseHost defaultAuditSchedulerPostgresConfig)),
+    ("WEB_API_AUDIT_SCHEDULER_DATABASE_PORT", show (databasePort defaultAuditSchedulerPostgresConfig)),
+    ("WEB_API_AUDIT_SCHEDULER_DATABASE_NAME", Text.unpack (databaseName defaultAuditSchedulerPostgresConfig)),
+    ("WEB_API_AUDIT_SCHEDULER_DATABASE_USER", Text.unpack (databaseUser defaultAuditSchedulerPostgresConfig)),
+    ("WEB_API_AUDIT_SCHEDULER_DATABASE_PASSWORD", Text.unpack (databasePassword defaultAuditSchedulerPostgresConfig)),
     ("PATH", lookupValue "PATH" inheritedEnvironment)
   ]
     <> filter
@@ -125,7 +158,12 @@ databaseSetupEnvironment inheritedEnvironment =
                         "WEB_API_MIGRATION_DATABASE_PORT",
                         "WEB_API_MIGRATION_DATABASE_NAME",
                         "WEB_API_MIGRATION_DATABASE_USER",
-                        "WEB_API_MIGRATION_DATABASE_PASSWORD"
+                        "WEB_API_MIGRATION_DATABASE_PASSWORD",
+                        "WEB_API_AUDIT_SCHEDULER_DATABASE_HOST",
+                        "WEB_API_AUDIT_SCHEDULER_DATABASE_PORT",
+                        "WEB_API_AUDIT_SCHEDULER_DATABASE_NAME",
+                        "WEB_API_AUDIT_SCHEDULER_DATABASE_USER",
+                        "WEB_API_AUDIT_SCHEDULER_DATABASE_PASSWORD"
                       ]
       )
       inheritedEnvironment
@@ -177,6 +215,7 @@ ensureDefaultPostgresAvailableScript =
            "fi"
          ]
       <> containerRuntimeSelectionScriptLines
+      <> postgresImageBuildScriptLines
       <> [ "container_is_running() {",
            "  [ \"$($runtime inspect --format '{{.State.Running}}' web-api-postgres 2>/dev/null || true)\" = \"true\" ]",
            "}",
@@ -185,6 +224,7 @@ ensureDefaultPostgresAvailableScript =
            "    return 0",
            "  fi",
            "  \"$runtime\" start web-api-postgres >/dev/null 2>&1 && return 0",
+           "  build_postgres_pgcron_image",
            "  \"$runtime\" run --name web-api-postgres -e POSTGRES_USER=web_api_owner -e POSTGRES_PASSWORD=web_api_owner -e POSTGRES_DB=web_api_dev -p 127.0.0.1:5432:5432 -d " <> defaultPostgresContainerImage <> " >/dev/null",
            "}",
            "wait_until_ready() {",
@@ -235,6 +275,160 @@ ensureDefaultPostgresAvailable =
       "-c",
       ensureDefaultPostgresAvailableScript
     ]
+
+-- | Starts isolated PostgreSQL 17 listeners with and without TLS. The TLS
+-- listener's self-signed certificate is deliberately trusted only by the
+-- returned verified configuration, while the other returned configurations
+-- prove bad-CA, hostname-mismatch, and TLS-disabled failures through libpq.
+-- The container runtime assigns loopback ports, so the fixture never releases
+-- a locally chosen port before the listener owns it.
+--
+-- @pg_isready@ establishes container-side server readiness, but not that the
+-- published host endpoint has completed its TLS startup.  Before returning a
+-- configuration, this fixture therefore proves the exact @verify-full@ path
+-- the test relies on.  A connected non-TLS result remains an immediate test
+-- failure rather than a retried success.
+withPostgresTlsFixtures :: (DatabaseConfig -> DatabaseConfig -> DatabaseConfig -> DatabaseConfig -> IO value) -> IO value
+withPostgresTlsFixtures action = do
+  containerRuntime <- requireContainerRuntime
+  withSystemTempDirectory "web-api-postgres-tls" $ \certificateDirectory -> do
+    callProcess "chmod" ["755", certificateDirectory]
+    let fixtureName = "web-api-postgres-tls-" <> takeFileName certificateDirectory
+        tlsContainerName = fixtureName <> "-tls"
+        plainContainerName = fixtureName <> "-plain"
+        certificateMount = certificateDirectory <> ":/tls:Z"
+    callProcess
+      containerRuntime
+      [ "run",
+        "--rm",
+        "--volume",
+        certificateMount,
+        "--entrypoint",
+        "sh",
+        defaultPostgresContainerImage,
+        "-c",
+        "openssl req -new -x509 -nodes -subj '/CN=127.0.0.1' -addext 'subjectAltName=IP:127.0.0.1' -keyout /tls/server.key -out /tls/root.crt -days 1 && cp /tls/root.crt /tls/server.crt && openssl req -new -x509 -nodes -subj '/CN=untrusted.example' -keyout /tls/untrusted.key -out /tls/untrusted.crt -days 1 && chmod 600 /tls/server.key && chown 999:999 /tls/server.key /tls/server.crt /tls/root.crt /tls/untrusted.crt"
+      ]
+    let startTls =
+          callProcess
+            containerRuntime
+            [ "run",
+              "--rm",
+              "--detach",
+              "--name",
+              tlsContainerName,
+              "--env",
+              "POSTGRES_USER=web_api_runtime",
+              "--env",
+              "POSTGRES_PASSWORD=web_api",
+              "--env",
+              "POSTGRES_DB=web_api_tls",
+              "--publish",
+              "127.0.0.1::5432",
+              "--volume",
+              certificateDirectory <> ":/tls:ro,Z",
+              defaultPostgresContainerImage,
+              "postgres",
+              "-c",
+              "ssl=on",
+              "-c",
+              "ssl_cert_file=/tls/server.crt",
+              "-c",
+              "ssl_key_file=/tls/server.key"
+            ]
+        startPlain =
+          callProcess
+            containerRuntime
+            [ "run",
+              "--rm",
+              "--detach",
+              "--name",
+              plainContainerName,
+              "--env",
+              "POSTGRES_USER=web_api_runtime",
+              "--env",
+              "POSTGRES_PASSWORD=web_api",
+              "--env",
+              "POSTGRES_DB=web_api_tls",
+              "--publish",
+              "127.0.0.1::5432",
+              defaultPostgresContainerImage
+            ]
+        stopContainer containerName = do
+          _ <- try (callProcess containerRuntime ["rm", "--force", containerName]) :: IO (Either IOError ())
+          pure ()
+        fixtureConfig port rootCertificate =
+          defaultRealPostgresConfig
+            { databasePort = port,
+              databaseName = "web_api_tls",
+              databaseUser = "web_api_runtime",
+              databasePassword = "web_api",
+              databaseTransportSecurity = DatabaseTransportSsl DatabaseSslVerifyFull (Just (Text.pack rootCertificate))
+            }
+        acquire = do
+          startTls
+          startPlain
+          waitForPostgres containerRuntime tlsContainerName
+          waitForPostgres containerRuntime plainContainerName
+          tlsPort <- publishedLoopbackPort containerRuntime tlsContainerName
+          plainPort <- publishedLoopbackPort containerRuntime plainContainerName
+          waitForVerifiedTls (fixtureConfig tlsPort (certificateDirectory <> "/root.crt"))
+          pure (tlsPort, plainPort)
+    bracket
+      (acquire `onException` (stopContainer plainContainerName >> stopContainer tlsContainerName))
+      (const (stopContainer plainContainerName >> stopContainer tlsContainerName))
+      $ \(tlsPort, plainPort) -> do
+        let verifiedConfig = fixtureConfig tlsPort (certificateDirectory <> "/root.crt")
+            untrustedCaConfig = fixtureConfig tlsPort (certificateDirectory <> "/untrusted.crt")
+            hostnameMismatchConfig = verifiedConfig {databaseHost = "localhost"}
+            tlsDisabledConfig = fixtureConfig plainPort (certificateDirectory <> "/root.crt")
+        action verifiedConfig untrustedCaConfig hostnameMismatchConfig tlsDisabledConfig
+
+requireContainerRuntime :: IO FilePath
+requireContainerRuntime = do
+  docker <- findExecutable "docker"
+  podman <- findExecutable "podman"
+  case docker <|> podman of
+    Just executable -> pure executable
+    Nothing -> ioError (userError "A podman or docker runtime is required for PostgreSQL TLS integration tests")
+
+waitForPostgres :: FilePath -> String -> IO ()
+waitForPostgres containerRuntime containerName = go (30 :: Int)
+  where
+    go attempts = do
+      ready <- try (callProcess containerRuntime ["exec", containerName, "pg_isready", "--username=web_api_runtime", "--dbname=web_api_tls"]) :: IO (Either IOError ())
+      case ready of
+        Right () -> pure ()
+        Left _
+          | attempts > 0 -> threadDelay 1000000 >> go (attempts - 1)
+          | otherwise -> ioError (userError "PostgreSQL TLS fixture did not become ready")
+
+waitForVerifiedTls :: DatabaseConfig -> IO ()
+waitForVerifiedTls databaseConfig = go (30 :: Int)
+  where
+    go attempts = do
+      result <- runRuntimeScalarQuery databaseConfig "SELECT ssl::text FROM pg_stat_ssl WHERE pid = pg_backend_pid();"
+      case result of
+        Right "true" -> pure ()
+        Right tlsStatus ->
+          ioError (userError ("PostgreSQL TLS fixture connected without TLS: " <> Text.unpack tlsStatus))
+        Left connectionFailure
+          | attempts > 0 -> threadDelay 1000000 >> go (attempts - 1)
+          | otherwise ->
+              ioError (userError ("PostgreSQL TLS fixture did not accept verify-full connections: " <> Text.unpack connectionFailure))
+
+publishedLoopbackPort :: FilePath -> String -> IO Int
+publishedLoopbackPort containerRuntime containerName = do
+  output <- readProcess containerRuntime ["port", containerName, "5432/tcp"] ""
+  case listToMaybe (lines output) >>= parsePort of
+    Just port
+      | port > 0 && port <= 65535 -> pure port
+    _ -> ioError (userError ("PostgreSQL TLS fixture did not publish an IPv4 loopback port: " <> show output))
+  where
+    parsePort address =
+      case break (== ':') (reverse address) of
+        (reversedPort, ':' : _) -> readMaybe (reverse reversedPort)
+        _ -> Nothing
 
 withTemporaryEnvironment :: String -> Maybe String -> IO a -> IO a
 withTemporaryEnvironment key maybeValue action = do

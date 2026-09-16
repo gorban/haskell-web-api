@@ -18,6 +18,11 @@ SHELL ["/bin/bash", "-eo", "pipefail", "-c"]
 # Install build dependencies, GHCup, GHC, and Cabal in one layer
 ENV GHCUP_INSTALL_BASE_PREFIX=/opt
 ENV PATH="/opt/.ghcup/bin:/root/.local/bin:/root/.cabal/bin:${PATH}"
+# The project-owned spec preprocessor reads UTF-8 source. Debian's bare image
+# otherwise inherits the ASCII C locale, which makes its coverage/test stage
+# reject ordinary Unicode in Haskell comments and strings.
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
 RUN <<EOF
 apt-get update
 apt-get install -y --no-install-recommends \
@@ -28,11 +33,14 @@ apt-get install -y --no-install-recommends \
     libc6-dev \
     libffi-dev \
     libgmp-dev \
+    libicu-dev \
     libpq-dev \
     libnuma-dev \
     libncurses-dev \
     make \
+    lld \
     nodejs \
+    npm \
     pkg-config \
     postgresql-client \
     xz-utils \
@@ -51,22 +59,29 @@ ghcup install cabal 3.16.1.0 --set
 ghc --version
 cabal --version
 
-# Install hspec-discover globally (before project context exists)
-# GHC needs this executable during test compilation
-# Use --install-method=copy to avoid symlink issues in Docker
-cabal update
-cabal install hspec-discover --install-method=copy --overwrite-policy=always
 EOF
 
 WORKDIR /app
 
 # Copy cabal files first for better layer caching
-COPY cabal.project ./
+COPY cabal.project cabal.project.freeze ./
+COPY examples/catalog-domain/catalog-domain.cabal examples/catalog-domain/
+COPY examples/composed-domains/composed-domains.cabal examples/composed-domains/
+COPY examples/custom-api/custom-api.cabal examples/custom-api/
+COPY examples/custom-db-adapter/custom-db-adapter.cabal examples/custom-db-adapter/
+COPY examples/localization/localization-example.cabal examples/localization/
+COPY examples/multipart-upload/multipart-upload-example.cabal examples/multipart-upload/
+COPY examples/orders-domain/orders-domain.cabal examples/orders-domain/
+COPY examples/two-pages/two-pages-example.cabal examples/two-pages/
+COPY examples/two-pages/Setup.hs examples/two-pages/SetupHooks.hs examples/two-pages/
 COPY packages/core/core.cabal packages/core/
 COPY packages/harch-web/harch-web.cabal packages/harch-web/
 COPY packages/hspec-expectations-match/hspec-expectations-match.cabal packages/hspec-expectations-match/
+COPY packages/postgres-database-changes/postgres-database-changes.cabal packages/postgres-database-changes/
 COPY packages/test-core/test-core.cabal packages/test-core/
-COPY packages/web-api/web-api.cabal packages/web-api/
+COPY packages/test-spec-preprocessor/test-spec-preprocessor.cabal packages/test-spec-preprocessor/
+COPY packages/web-api/haskell-web-api.cabal packages/web-api/
+COPY packages/web-api/Setup.hs packages/web-api/SetupHooks.hs packages/web-api/
 
 # Download dependencies (cacheable layer)
 RUN <<EOF
@@ -82,9 +97,27 @@ COPY . .
 # =============================================================================
 FROM builder AS build-and-test
 
+# This hermetic target exercises the repository's unit-coverage boundary and
+# selected browser behavior.  Setup prerequisites intentionally read the
+# package-local override file, so provide only the no-daemon policy in this
+# build stage rather than changing a developer's host environment. Cabal runs
+# the web-api setup hook from that package directory.
+RUN printf '%s\n' \
+    'SETUP_AUTOSTART_DATABASE=false' \
+    'SETUP_AUTOSTART_JAEGER=false' \
+    > packages/web-api/.env.local
+
+# Install the test-only browser in this stage; release images remain browser-free.
+RUN <<EOF
+cd packages/test-core/playwright-runner
+npm ci
+npx playwright install chromium --with-deps
+EOF
+
 # Run coverage script (builds with -O0 for accurate coverage) then rebuild with -O2 for release
 RUN <<EOF
 ./generate-code-coverage.sh # Runs Unit tests and ensures 100% coverage
+cabal test two-pages-example-tests --test-show-details=direct --test-options="--match real-browser"
 cabal build all -O2
 cp dist-newstyle/build/x86_64-linux/ghc-*/haskell-web-api-*/opt/build/haskell-web-api/haskell-web-api /app/haskell-web-api-bin
 EOF
@@ -137,28 +170,38 @@ EOF
 # =============================================================================
 # Stage 6: Minimal runtime image after the coverage-tested build
 # =============================================================================
-FROM alpine:3.20 AS runtime-with-tests
+FROM debian:bookworm-slim AS runtime-with-tests
 
-# Install runtime dependencies, including libpq for in-process PostgreSQL access
-# and certbot for the certbot ACME backend, then create the non-root runtime user.
+# Match the builder's Debian ABI.  The executable links ICU through the C++
+# bridge, libpq and their transitive system libraries; Alpine's musl/gcompat
+# layer is not a supported substitute for that loader/library closure.
 RUN <<EOF
 set -e
-  apk add --no-cache \
-    gmp \
-    libffi \
-    libpq \
-    gcompat \
+apt-get update
+apt-get install -y --no-install-recommends \
     ca-certificates \
+    certbot \
+    libcap2-bin \
+    libffi8 \
+    libgmp10 \
+    libicu72 \
+    libncurses6 \
+    libnuma1 \
+    libpq5 \
+    libstdc++6 \
+    libtinfo6 \
     openssl \
-    certbot
-addgroup -g 1000 app
-adduser -D -u 1000 -G app app
+    zlib1g
+rm -rf /var/lib/apt/lists/*
+addgroup --gid 1000 app
+adduser --disabled-password --gecos '' --uid 1000 --ingroup app app
 EOF
 
 WORKDIR /app
 
 # Copy the compiled binary from build stage
 COPY --from=build-and-test --chown=app:app /app/haskell-web-api-bin /app/haskell-web-api
+COPY --from=build-and-test --chown=app:app /app/cabal.project.freeze /app/cabal.project.freeze
 
 # Copy the app's bundled public assets so runtime images keep the same asset layout
 # as the repository even before runtime config is expanded further.
@@ -168,10 +211,8 @@ COPY --from=build-and-test --chown=app:app /app/packages/web-api/public /app/pub
 # then keep the container itself running as the non-root app user.
 RUN <<EOF
 set -e
-apk add --no-cache --virtual .bind-low-port-deps libcap
 setcap cap_net_bind_service+ep /app/haskell-web-api
 getcap /app/haskell-web-api
-apk del .bind-low-port-deps
 EOF
 
 # Switch to non-root user
@@ -183,33 +224,40 @@ ENTRYPOINT ["/app/haskell-web-api"]
 # =============================================================================
 # Stage 7: Minimal runtime image without running coverage/tests
 # =============================================================================
-FROM alpine:3.20 AS runtime
+FROM debian:bookworm-slim AS runtime
 
 RUN <<EOF
 set -e
-  apk add --no-cache \
-    gmp \
-    libffi \
-    libpq \
-    gcompat \
+apt-get update
+apt-get install -y --no-install-recommends \
     ca-certificates \
+    certbot \
+    libcap2-bin \
+    libffi8 \
+    libgmp10 \
+    libicu72 \
+    libncurses6 \
+    libnuma1 \
+    libpq5 \
+    libstdc++6 \
+    libtinfo6 \
     openssl \
-    certbot
-addgroup -g 1000 app
-adduser -D -u 1000 -G app app
+    zlib1g
+rm -rf /var/lib/apt/lists/*
+addgroup --gid 1000 app
+adduser --disabled-password --gecos '' --uid 1000 --ingroup app app
 EOF
 
 WORKDIR /app
 
 COPY --from=release-build --chown=app:app /app/haskell-web-api-bin /app/haskell-web-api
+COPY --from=release-build --chown=app:app /app/cabal.project.freeze /app/cabal.project.freeze
 COPY --from=release-build --chown=app:app /app/packages/web-api/public /app/public
 
 RUN <<EOF
 set -e
-apk add --no-cache --virtual .bind-low-port-deps libcap
 setcap cap_net_bind_service+ep /app/haskell-web-api
 getcap /app/haskell-web-api
-apk del .bind-low-port-deps
 EOF
 
 USER app

@@ -1,6 +1,37 @@
-module Core.Control.Error (handleError) where
+module Core.Control.Error
+  ( fromMaybeError,
+    guardError,
+    handleError,
+    liftEitherWith,
+    liftMaybeWith,
+  )
+where
 
-import Control.Monad.Except (ExceptT, runExceptT)
+import Control.Monad (unless)
+import Control.Monad.Except (ExceptT (ExceptT), MonadError, runExceptT, throwError)
+import Data.Bifunctor (first)
+
+-- | Lift an optional value into an error-capable computation without losing
+-- the reason that absence is invalid at this boundary.
+fromMaybeError :: (MonadError error monad) => error -> Maybe value -> monad value
+fromMaybeError errorValue = maybe (throwError errorValue) pure
+
+-- | Stop an error-capable computation unless its required condition holds.
+guardError :: (MonadError error monad) => error -> Bool -> monad ()
+guardError errorValue condition = unless condition (throwError errorValue)
+
+-- | Lift an effectful 'Either' while translating its error at the workflow
+-- boundary. This keeps the source adapter's error distinct from the
+-- workflow's domain error without spelling an 'ExceptT' constructor at every
+-- use site.
+liftEitherWith :: (Functor monad) => (sourceError -> error) -> monad (Either sourceError value) -> ExceptT error monad value
+liftEitherWith mapError = ExceptT . fmap (first mapError)
+
+-- | Lift an effectful optional value into an error-capable computation.
+--
+-- Use this at an effect boundary where absence is a domain failure.
+liftMaybeWith :: (Functor monad) => error -> monad (Maybe value) -> ExceptT error monad value
+liftMaybeWith errorValue = ExceptT . fmap (maybe (Left errorValue) Right)
 
 -- | Run an 'ExceptT' computation and handle the error case.
 --

@@ -4,14 +4,16 @@
 
 import Control.Exception (finally)
 import Control.Monad (forM_)
-import qualified Core.Setup.DatabaseAutostart as DatabaseAutostart
-import qualified Core.Setup.PrerequisitePlan as PrerequisitePlan
-import qualified Core.Setup.TracingAutostart as TracingAutostart
+import Core.Setup.DatabaseAutostart qualified as DatabaseAutostart
+import Core.Setup.PrerequisitePlan qualified as PrerequisitePlan
+import Core.Setup.TracingAutostart qualified as TracingAutostart
 import Data.IORef (modifyIORef', newIORef, readIORef)
-import qualified Data.Text as Text
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.Text qualified as Text
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (callProcess)
+import Unit.Core.Setup.TestSupport (withEmptyPath)
 
 withPathScripts :: [(FilePath, String)] -> IO a -> IO a
 withPathScripts scripts action =
@@ -27,21 +29,6 @@ withPathScripts scripts action =
             (\existingPath -> tempDirectory <> ":" <> existingPath)
             originalPath
     setEnv "PATH" updatedPath
-    action
-      `finally` maybe
-        (unsetEnv "PATH")
-        (setEnv "PATH")
-        originalPath
-
-withIsolatedPathScripts :: [(FilePath, String)] -> IO a -> IO a
-withIsolatedPathScripts scripts action =
-  withSystemTempDirectory "tracing-autostart-bin" $ \tempDirectory -> do
-    forM_ scripts $ \(scriptName, scriptBody) -> do
-      let scriptPath = tempDirectory <> "/" <> scriptName
-      writeFile scriptPath scriptBody
-      callProcess "chmod" ["+x", scriptPath]
-    originalPath <- lookupEnv "PATH"
-    setEnv "PATH" tempDirectory
     action
       `finally` maybe
         (unsetEnv "PATH")
@@ -226,31 +213,29 @@ spec = do
     it "surfaces real runner stderr failures from docker"
       $ withPathScripts
         [("docker", "#!/bin/sh\nprintf 'docker stderr' >&2\nexit 7\n")]
-      $ do
-        TracingAutostart.attemptTracingAutostart
-          (singleRuntimePlan PrerequisitePlan.DockerRuntime)
-          `shouldReturn` TracingAutostart.TracingAutostartFailed
-            [ DatabaseAutostart.ContainerRuntimeFailure
-                { DatabaseAutostart.failedContainerRuntime = PrerequisitePlan.DockerRuntime,
-                  DatabaseAutostart.containerRuntimeFailureMessage = "docker stderr"
-                }
-            ]
+      $ TracingAutostart.attemptTracingAutostart
+        (singleRuntimePlan PrerequisitePlan.DockerRuntime)
+        `shouldReturn` TracingAutostart.TracingAutostartFailed
+          [ DatabaseAutostart.ContainerRuntimeFailure
+              { DatabaseAutostart.failedContainerRuntime = PrerequisitePlan.DockerRuntime,
+                DatabaseAutostart.containerRuntimeFailureMessage = "docker stderr"
+              }
+          ]
 
     it "uses the fallback exit-code message when the real runner exits silently"
       $ withPathScripts
         [("docker", "#!/bin/sh\nexit 7\n")]
-      $ do
-        TracingAutostart.attemptTracingAutostart
-          (singleRuntimePlan PrerequisitePlan.DockerRuntime)
-          `shouldReturn` TracingAutostart.TracingAutostartFailed
-            [ DatabaseAutostart.ContainerRuntimeFailure
-                { DatabaseAutostart.failedContainerRuntime = PrerequisitePlan.DockerRuntime,
-                  DatabaseAutostart.containerRuntimeFailureMessage = "command failed with exit code 7"
-                }
-            ]
+      $ TracingAutostart.attemptTracingAutostart
+        (singleRuntimePlan PrerequisitePlan.DockerRuntime)
+        `shouldReturn` TracingAutostart.TracingAutostartFailed
+          [ DatabaseAutostart.ContainerRuntimeFailure
+              { DatabaseAutostart.failedContainerRuntime = PrerequisitePlan.DockerRuntime,
+                DatabaseAutostart.containerRuntimeFailureMessage = "command failed with exit code 7"
+              }
+          ]
 
     it "surfaces missing runtime executables from the real runner explicitly" $
-      withIsolatedPathScripts [] $
+      withEmptyPath $
         do
           autostartResult <-
             TracingAutostart.attemptTracingAutostart
@@ -281,20 +266,12 @@ spec = do
             TracingAutostart.TracingAutostartSucceeded PrerequisitePlan.DockerRuntime
           failedResult =
             TracingAutostart.TracingAutostartFailed [failedRuntime]
-      failedRuntime `shouldBe` failedRuntime
-      failedRuntime
-        `shouldNotBe` failedRuntime
-          { DatabaseAutostart.containerRuntimeFailureMessage = "docker failed"
-          }
-      skippedResult `shouldBe` skippedResult
-      skippedResult `shouldNotBe` succeededResult
-      succeededResult `shouldBe` succeededResult
-      failedResult `shouldBe` failedResult
-      show skippedResult
-        `shouldBe` "TracingAutostartSkipped \"automatic Jaeger autostart only supports OTLP_TRACING_ENDPOINT hosts 127.0.0.1 or 0.0.0.0, but got collector.internal\""
-      show succeededResult
-        `shouldBe` "TracingAutostartSucceeded DockerRuntime"
-      show failedResult
-        `shouldBe` "TracingAutostartFailed [ContainerRuntimeFailure {failedContainerRuntime = PodmanRuntime, containerRuntimeFailureMessage = \"podman failed\"}]"
-      show [skippedResult, succeededResult, failedResult]
-        `shouldBe` "[TracingAutostartSkipped \"automatic Jaeger autostart only supports OTLP_TRACING_ENDPOINT hosts 127.0.0.1 or 0.0.0.0, but got collector.internal\",TracingAutostartSucceeded DockerRuntime,TracingAutostartFailed [ContainerRuntimeFailure {failedContainerRuntime = PodmanRuntime, containerRuntimeFailureMessage = \"podman failed\"}]]"
+      expectAll
+        ( (failedRuntime `shouldNotBe` failedRuntime {DatabaseAutostart.containerRuntimeFailureMessage = "docker failed"})
+            :| [ skippedResult `shouldNotBe` succeededResult,
+                 show skippedResult `shouldBe` "TracingAutostartSkipped \"automatic Jaeger autostart only supports OTLP_TRACING_ENDPOINT hosts 127.0.0.1 or 0.0.0.0, but got collector.internal\"",
+                 show succeededResult `shouldBe` "TracingAutostartSucceeded DockerRuntime",
+                 show failedResult `shouldBe` "TracingAutostartFailed [ContainerRuntimeFailure {failedContainerRuntime = PodmanRuntime, containerRuntimeFailureMessage = \"podman failed\"}]",
+                 show [skippedResult, succeededResult, failedResult] `shouldBe` "[TracingAutostartSkipped \"automatic Jaeger autostart only supports OTLP_TRACING_ENDPOINT hosts 127.0.0.1 or 0.0.0.0, but got collector.internal\",TracingAutostartSucceeded DockerRuntime,TracingAutostartFailed [ContainerRuntimeFailure {failedContainerRuntime = PodmanRuntime, containerRuntimeFailureMessage = \"podman failed\"}]]"
+               ]
+        )
