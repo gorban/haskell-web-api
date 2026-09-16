@@ -167,7 +167,8 @@ spec = do
 
   describe "OAuth client-secret Basic decoding" $
     it "uses the bounded API header boundary and keeps credentials opaque" $ do
-      let maximumBytes = requiredOAuth2ClientCredentialsMaximumBytesOrDie 128
+      configuredMaximumBytes <- newIORef (128 :: Int) >>= readIORef
+      let maximumBytes = requiredOAuth2ClientCredentialsMaximumBytesOrDie configuredMaximumBytes
           decode headers = runRequestCodec (oauth2ClientSecretBasicCodec maximumBytes) (ApiRequestData [] headers [] [])
           clientId result =
             case result of
@@ -190,6 +191,10 @@ spec = do
           authorization = fromMaybe (error "expected Authorization header") (apiHeaderName "Authorization")
           basic encodedCredentials = "Basic " <> TextEncoding.decodeUtf8 (Base64.encode encodedCredentials)
           lowercaseBasic encodedCredentials = "basic " <> TextEncoding.decodeUtf8 (Base64.encode encodedCredentials)
+          maximumBytesError result =
+            case result of
+              Left message -> message == "OAuth client-credentials maximum bytes must be positive"
+              Right _ -> False
           validHeader = [(authorization, basic "demo-client:demo-secret")]
       expectAll
         ( (clientId (decode validHeader) `shouldBe` Just "demo-client")
@@ -201,12 +206,17 @@ spec = do
                  requestErrors (decode [(authorization, basic "demo-client:demo-secret"), (authorization, basic "another-client:another-secret")]) `shouldBe` Just (DuplicateApiField ApiHeaderSource "authorization" :| []),
                  requestErrors (decode [(authorization, "Bearer token")]) `shouldBe` Just (InvalidApiField ApiHeaderSource "authorization" :| []),
                  requestErrors (decode [(authorization, "Basic not-base64!")]) `shouldBe` Just (InvalidApiField ApiHeaderSource "authorization" :| []),
+                 requestErrors (decode [(authorization, basic "demo%ZZclient:demo-secret")]) `shouldBe` Just (InvalidApiField ApiHeaderSource "authorization" :| []),
+                 requestErrors (decode [(authorization, basic (ByteString.pack [255, 58, 115, 101, 99, 114, 101, 116]))]) `shouldBe` Just (InvalidApiField ApiHeaderSource "authorization" :| []),
                  requestErrors (decode [(authorization, basic "missing-secret:")]) `shouldBe` Just (InvalidApiField ApiHeaderSource "authorization" :| []),
                  requestErrors (decode [(authorization, basic "missing-client")]) `shouldBe` Just (InvalidApiField ApiHeaderSource "authorization" :| []),
                  requestErrors (runRequestCodec (oauth2ClientSecretBasicCodec (requiredOAuth2ClientCredentialsMaximumBytesOrDie 8)) (ApiRequestData [] validHeader [] [])) `shouldBe` Just (InvalidApiField ApiHeaderSource "authorization" :| []),
-                 mkOAuth2ClientCredentialsMaximumBytes 0 `shouldBe` Left "OAuth client-credentials maximum bytes must be positive"
+                 maximumBytesError (mkOAuth2ClientCredentialsMaximumBytes 0) `shouldBe` True
                ]
         )
+      evaluate (requiredOAuth2ClientCredentialsMaximumBytesOrDie 0 `seq` ())
+        `shouldThrow` \case
+          ErrorCall message -> "invalid OAuth client-credentials maximum-byte declaration" `Text.isInfixOf` Text.pack message
 
   describe "authentication proof extractors" $ do
     it "distinguishes absent, duplicate, malformed, and oversized cookie proofs" $ do

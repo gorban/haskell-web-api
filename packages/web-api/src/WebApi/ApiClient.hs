@@ -37,13 +37,11 @@ import HarchWeb.Password (PasswordHash)
 -- because client identifiers remain private application data even though they
 -- are not bearer credentials.
 newtype ApiClientId = ApiClientId Text
-  deriving (Eq, Ord)
 
 data ApiClientIdError
   = ApiClientIdEmpty
   | ApiClientIdTooLong
   | ApiClientIdInvalidCharacter
-  deriving (Eq, Show)
 
 -- | A currently enabled API client. Disabled or unknown clients are modeled
 -- by an adapter returning 'Nothing'; they cannot reach a principal-establishing
@@ -60,12 +58,10 @@ data ApiClientConfigurationError
   | ApiClientAllowedScopesDuplicate
   | ApiClientDefaultScopesDuplicate
   | ApiClientDefaultScopeNotAllowed
-  deriving (Eq, Show)
 
 data ApiClientScopeError
   = ApiClientRequestedScopeDuplicate
   | ApiClientRequestedScopeNotAllowed
-  deriving (Eq, Show)
 
 mkApiClientId :: Text -> Either ApiClientIdError ApiClientId
 mkApiClientId value

@@ -5,7 +5,7 @@
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import HarchWeb.Authentication (OAuth2Scope, mkOAuth2Scope, oauth2ScopeText)
-import HarchWeb.Password (PasswordHash (..))
+import HarchWeb.Password (PasswordHash (..), passwordHashText)
 import WebApi.ApiClient
 
 spec =
@@ -22,17 +22,18 @@ spec =
             :| [ apiClientIdText (apiClientId configuredClient) `shouldBe` "automation-client",
                  scopeTexts (apiClientAllowedScopes configuredClient) `shouldBe` ["resource:read", "profile:read:self"],
                  scopeTexts (apiClientDefaultScopes configuredClient) `shouldBe` ["resource:read"],
-                 scopeTexts <$> selectApiClientScopes configuredClient [] `shouldBe` Right ["resource:read"],
-                 scopeTexts <$> selectApiClientScopes configuredClient [selfRead] `shouldBe` Right ["profile:read:self"],
-                 scopeError (selectApiClientScopes configuredClient [sharedRead, sharedRead]) `shouldBe` Just ApiClientRequestedScopeDuplicate,
-                 scopeError (selectApiClientScopes configuredClient [requiredScope "other:scope"]) `shouldBe` Just ApiClientRequestedScopeNotAllowed,
-                 clientIdError (mkApiClientId "") `shouldBe` Just ApiClientIdEmpty,
-                 clientIdError (mkApiClientId (mconcat (replicate 129 "a"))) `shouldBe` Just ApiClientIdTooLong,
-                 clientIdError (mkApiClientId "bad client") `shouldBe` Just ApiClientIdInvalidCharacter,
-                 configurationError (mkApiClient identifier (PasswordHash "configured-secret" :| []) [] []) `shouldBe` Just ApiClientAllowedScopesEmpty,
-                 configurationError (mkApiClient identifier (PasswordHash "configured-secret" :| []) [sharedRead, sharedRead] []) `shouldBe` Just ApiClientAllowedScopesDuplicate,
-                 configurationError (mkApiClient identifier (PasswordHash "configured-secret" :| []) [sharedRead] [sharedRead, sharedRead]) `shouldBe` Just ApiClientDefaultScopesDuplicate,
-                 configurationError (mkApiClient identifier (PasswordHash "configured-secret" :| []) [sharedRead] [selfRead]) `shouldBe` Just ApiClientDefaultScopeNotAllowed
+                 (passwordHashText <$> apiClientSecretHashes configuredClient) `shouldBe` ("configured-secret" :| ["rotating-secret"]),
+                 selectedScopeTextsAre ["resource:read"] (selectApiClientScopes configuredClient []) `shouldBe` True,
+                 selectedScopeTextsAre ["profile:read:self"] (selectApiClientScopes configuredClient [selfRead]) `shouldBe` True,
+                 scopeErrorIs ApiClientRequestedScopeDuplicate (selectApiClientScopes configuredClient [sharedRead, sharedRead]) `shouldBe` True,
+                 scopeErrorIs ApiClientRequestedScopeNotAllowed (selectApiClientScopes configuredClient [requiredScope "other:scope"]) `shouldBe` True,
+                 clientIdErrorIs ApiClientIdEmpty (mkApiClientId "") `shouldBe` True,
+                 clientIdErrorIs ApiClientIdTooLong (mkApiClientId (mconcat (replicate 129 "a"))) `shouldBe` True,
+                 clientIdErrorIs ApiClientIdInvalidCharacter (mkApiClientId "bad client") `shouldBe` True,
+                 configurationErrorIs ApiClientAllowedScopesEmpty (mkApiClient identifier (PasswordHash "configured-secret" :| []) [] []) `shouldBe` True,
+                 configurationErrorIs ApiClientAllowedScopesDuplicate (mkApiClient identifier (PasswordHash "configured-secret" :| []) [sharedRead, sharedRead] []) `shouldBe` True,
+                 configurationErrorIs ApiClientDefaultScopesDuplicate (mkApiClient identifier (PasswordHash "configured-secret" :| []) [sharedRead] [sharedRead, sharedRead]) `shouldBe` True,
+                 configurationErrorIs ApiClientDefaultScopeNotAllowed (mkApiClient identifier (PasswordHash "configured-secret" :| []) [sharedRead] [selfRead]) `shouldBe` True
                ]
         )
 
@@ -40,7 +41,7 @@ requiredClientId :: Text -> ApiClientId
 requiredClientId value =
   case mkApiClientId value of
     Right clientId -> clientId
-    Left identifierError -> error ("expected valid API client id: " <> show identifierError)
+    Left _ -> error "expected valid API client id"
 
 requiredScope :: Text -> OAuth2Scope
 requiredScope value =
@@ -52,22 +53,34 @@ requiredClient :: Either ApiClientConfigurationError ApiClient -> ApiClient
 requiredClient result =
   case result of
     Right client -> client
-    Left invalidConfiguration -> error ("expected valid API client: " <> show invalidConfiguration)
+    Left _ -> error "expected valid API client"
 
-configurationError :: Either ApiClientConfigurationError ApiClient -> Maybe ApiClientConfigurationError
-configurationError result =
-  case result of
-    Left errorValue -> Just errorValue
-    Right _ -> Nothing
+configurationErrorIs :: ApiClientConfigurationError -> Either ApiClientConfigurationError ApiClient -> Bool
+configurationErrorIs expected actual =
+  case (expected, actual) of
+    (ApiClientAllowedScopesEmpty, Left ApiClientAllowedScopesEmpty) -> True
+    (ApiClientAllowedScopesDuplicate, Left ApiClientAllowedScopesDuplicate) -> True
+    (ApiClientDefaultScopesDuplicate, Left ApiClientDefaultScopesDuplicate) -> True
+    (ApiClientDefaultScopeNotAllowed, Left ApiClientDefaultScopeNotAllowed) -> True
+    _ -> False
 
-clientIdError :: Either ApiClientIdError ApiClientId -> Maybe ApiClientIdError
-clientIdError result =
-  case result of
-    Left errorValue -> Just errorValue
-    Right _ -> Nothing
+clientIdErrorIs :: ApiClientIdError -> Either ApiClientIdError ApiClientId -> Bool
+clientIdErrorIs expected actual =
+  case (expected, actual) of
+    (ApiClientIdEmpty, Left ApiClientIdEmpty) -> True
+    (ApiClientIdTooLong, Left ApiClientIdTooLong) -> True
+    (ApiClientIdInvalidCharacter, Left ApiClientIdInvalidCharacter) -> True
+    _ -> False
 
-scopeError :: Either ApiClientScopeError [OAuth2Scope] -> Maybe ApiClientScopeError
-scopeError result =
+scopeErrorIs :: ApiClientScopeError -> Either ApiClientScopeError [OAuth2Scope] -> Bool
+scopeErrorIs expected actual =
+  case (expected, actual) of
+    (ApiClientRequestedScopeDuplicate, Left ApiClientRequestedScopeDuplicate) -> True
+    (ApiClientRequestedScopeNotAllowed, Left ApiClientRequestedScopeNotAllowed) -> True
+    _ -> False
+
+selectedScopeTextsAre :: [Text] -> Either ApiClientScopeError [OAuth2Scope] -> Bool
+selectedScopeTextsAre expected result =
   case result of
-    Left errorValue -> Just errorValue
-    Right _ -> Nothing
+    Right scopes -> (oauth2ScopeText <$> scopes) == expected
+    Left _ -> False

@@ -38,15 +38,14 @@ import Data.Char (digitToInt, isHexDigit)
 import Data.Either (fromRight)
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import HarchWeb.Api.HeaderName (apiHeaderNameLiteral)
 import HarchWeb.Api.Request
   ( ApiFieldValue,
     ApiHeaderName,
     RequestCodec,
-    apiHeaderName,
     formField,
     headerField,
     optionalField,
@@ -66,7 +65,6 @@ import HarchWeb.Password (Password, mkPassword)
 -- has no 'Show' instance: client identities are application data and must not
 -- become diagnostics merely because a malformed or unknown client is handled.
 newtype OAuth2ClientId = OAuth2ClientId Text
-  deriving (Eq)
 
 -- | The Basic client ID and secret after strict Base64 and form decoding.  The
 -- secret uses Harch's existing opaque 'Password' type so a later adapter can
@@ -77,7 +75,6 @@ data OAuth2ClientCredentials = OAuth2ClientCredentials OAuth2ClientId Password
 -- | A positive byte ceiling applied to the complete Basic value and to its
 -- decoded credentials before either becomes application input.
 newtype OAuth2ClientCredentialsMaximumBytes = OAuth2ClientCredentialsMaximumBytes Int
-  deriving (Eq, Show)
 
 mkOAuth2ClientCredentialsMaximumBytes :: Int -> Either Text OAuth2ClientCredentialsMaximumBytes
 mkOAuth2ClientCredentialsMaximumBytes value
@@ -124,10 +121,7 @@ oauth2ClientSecretBasicCodec maximumBytes =
   requiredField (headerField authorizationHeader (parseApiField (decodeClientCredentials maximumBytes)))
 
 authorizationHeader :: ApiHeaderName
-authorizationHeader =
-  fromMaybe
-    (error "invalid fixed Authorization header declaration")
-    (apiHeaderName "Authorization")
+authorizationHeader = apiHeaderNameLiteral "Authorization"
 
 decodeClientCredentials :: OAuth2ClientCredentialsMaximumBytes -> Text -> Maybe OAuth2ClientCredentials
 decodeClientCredentials (OAuth2ClientCredentialsMaximumBytes maximumBytes) headerValue = do
@@ -136,9 +130,9 @@ decodeClientCredentials (OAuth2ClientCredentialsMaximumBytes maximumBytes) heade
   guard (not (Text.null encodedValue || Text.isInfixOf " " encodedValue || ByteString.length (TextEncoding.encodeUtf8 headerValue) > maximumBytes))
   guard (Text.toCaseFold scheme == "basic")
   decoded <- either (const Nothing) Just (Base64.decode (TextEncoding.encodeUtf8 encodedValue))
-  if ByteString.length decoded > maximumBytes
-    then Nothing
-    else splitCredentials decoded
+  -- The bounded complete header is always larger than its Base64-decoded
+  -- credentials, so the first byte limit also bounds this value.
+  splitCredentials decoded
 
 splitCredentials :: ByteString -> Maybe OAuth2ClientCredentials
 splitCredentials decoded = do
