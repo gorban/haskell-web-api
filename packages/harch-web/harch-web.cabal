@@ -184,6 +184,9 @@ library
   -- other-extensions:
   -- Other library packages from which modules are imported.
   build-depends:
+    -- `tls ^>=2.4.3` is the current public baseline. Its Serialise/Cborg
+    -- base-4.22 compatibility exceptions are explicit in cabal.project and
+    -- the frozen runtime plan; validate any change with the TLS stack script.
     aeson ^>=2.3.1.0,
     base ^>=4.22.0.0,
     base16-bytestring ^>=1.0.2.0,
@@ -329,13 +332,16 @@ test-suite harch-web-tests
   -- Other library packages from which modules are imported.
   build-depends:
     -- For testing framework:
-    -- The receiver-timeout lifecycle regression imports HTTP2 internals. Keep
-    -- its public runtime version aligned with cabal.project.freeze; the
-    -- isolated HTTP2-5.4.4 source repair in the compatibility script is never
-    -- a dependency of Harch or an application built with it.
-    -- HTTP2-5.4.0 depends on this public pre-0.3 API.  Do not widen the bound
-    -- as a warning workaround: the lifecycle repair must first ship in a
-    -- public HTTP2 release and pass tools/test-tls-compatibility-stack.sh.
+    -- `http2 >=5.4.0 && <5.4.1` lets the receiver-timeout lifecycle
+    -- regression import its internals while retaining the public runtime
+    -- version in cabal.project.freeze. HTTP2-5.4.4's source repair is tested
+    -- only in a disposable tree and is never a Harch/application dependency.
+    -- Its `time-manager >=0.2.4 && <0.3` pairing uses the public pre-0.3 API.
+    -- Do not widen either bound as a warning workaround: a public HTTP2
+    -- release must restore callback cleanup and pass
+    -- tools/test-tls-compatibility-stack.sh first.
+    -- `tls ^>=2.4.3` keeps this test graph aligned with the library and
+    -- cabal.project.freeze; do not substitute an isolated test-source patch.
     aeson ^>=2.3.1.0,
     base ^>=4.22.0.0,
     base64-bytestring ^>=1.2.1.0,
