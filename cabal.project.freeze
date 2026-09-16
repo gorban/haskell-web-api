@@ -23,6 +23,8 @@ constraints: any.Cabal ==3.16.0.0,
              any.attoparsec ==0.14.4,
              attoparsec -developer,
              any.auto-update ==0.2.7,
+             -- GHC-9.14.1 supplies base-4.22. The Cborg and Serialise pins
+             -- below need explicit, reviewed upper-bound exceptions for it.
              any.base ==4.22.0.0,
              any.base-orphans ==0.9.4,
              any.base16 ==1.0,
@@ -112,9 +114,10 @@ constraints: any.Cabal ==3.16.0.0,
              any.http-date ==0.0.11,
              any.http-semantics ==0.4.1,
              any.http-types ==0.12.6,
-             -- Keep the runtime graph on public HTTP2-5.4.0. The compatible
-             -- 5.4.4 lifecycle repair is tested only in a disposable source
-             -- tree; see tools/test-tls-compatibility-stack.sh.
+             -- Keep the runtime graph on public HTTP2-5.4.0 with
+             -- time-manager-0.2.4. The 5.4.4 lifecycle repair is tested only
+             -- in a disposable source tree; track HTTP2 #175 and see
+             -- tools/test-tls-compatibility-stack.sh before changing either.
              any.http2 ==5.4.0,
              http2 -devel -h2spec,
              any.indexed-traversable ==0.1.5,
@@ -212,12 +215,14 @@ constraints: any.Cabal ==3.16.0.0,
              any.time ==1.15,
              any.time-compat ==1.9.9,
              any.time-hourglass ==0.3.0,
-             -- Pair this public version with HTTP2-5.4.0. HTTP2's cleanup
-             -- behavior must be repaired upstream before either pin changes.
+             -- Pair this public pre-0.3 version with HTTP2-5.4.0. HTTP2's
+             -- cleanup behavior must be repaired upstream before either pin
+             -- changes; see the HTTP2 note beside the matching pin above.
              any.time-manager ==0.2.4,
              -- TLS-2.4.3 selects the Serialise/Cborg compatibility stack
-             -- above. Its released public packages are the runtime graph.
-            any.tls ==2.4.3,
+             -- above. Its released public packages are the runtime graph;
+             -- disposable compatibility-test patches never enter this plan.
+             any.tls ==2.4.3,
              tls -devel,
              any.tls-session-manager ==0.1.0,
              any.transformers ==0.6.1.2,

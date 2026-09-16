@@ -184,9 +184,9 @@ library
   -- other-extensions:
   -- Other library packages from which modules are imported.
   build-depends:
-    -- `tls ^>=2.4.3` is the current public baseline. Its Serialise/Cborg
-    -- base-4.22 compatibility exceptions are explicit in cabal.project and
-    -- the frozen runtime plan; validate any change with the TLS stack script.
+    -- Public TLS 2.4.3 selects the reviewed Serialise/Cborg compatibility
+    -- stack for base-4.22. Keep this aligned with cabal.project.freeze and
+    -- validate an update with tools/test-tls-compatibility-stack.sh.
     aeson ^>=2.3.1.0,
     base ^>=4.22.0.0,
     base16-bytestring ^>=1.0.2.0,
@@ -332,16 +332,16 @@ test-suite harch-web-tests
   -- Other library packages from which modules are imported.
   build-depends:
     -- For testing framework:
-    -- `http2 >=5.4.0 && <5.4.1` lets the receiver-timeout lifecycle
-    -- regression import its internals while retaining the public runtime
-    -- version in cabal.project.freeze. HTTP2-5.4.4's source repair is tested
-    -- only in a disposable tree and is never a Harch/application dependency.
-    -- Its `time-manager >=0.2.4 && <0.3` pairing uses the public pre-0.3 API.
-    -- Do not widen either bound as a warning workaround: a public HTTP2
-    -- release must restore callback cleanup and pass
-    -- tools/test-tls-compatibility-stack.sh first.
-    -- `tls ^>=2.4.3` keeps this test graph aligned with the library and
-    -- cabal.project.freeze; do not substitute an isolated test-source patch.
+    -- The lifecycle regression imports HTTP2 internals, so keep the test
+    -- graph on the public runtime pin. HTTP2-5.4.4's repair is tested only
+    -- in a disposable source tree; a public release must restore callback
+    -- cleanup and pass tools/test-tls-compatibility-stack.sh before widening.
+    -- This is the public pre-0.3 API paired with HTTP2-5.4.0. Do not widen it
+    -- merely to avoid warnings: newer HTTP2 also needs the callback-cleanup
+    -- repair documented by the HTTP2 lifecycle regression.
+    -- Keep tests on the same public TLS baseline as the library and frozen
+    -- plan. The compatibility script's source patches are test-only and are
+    -- never Harch/application dependencies.
     aeson ^>=2.3.1.0,
     base ^>=4.22.0.0,
     base64-bytestring ^>=1.2.1.0,
