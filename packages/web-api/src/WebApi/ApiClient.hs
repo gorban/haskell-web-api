@@ -26,6 +26,7 @@ module WebApi.ApiClient
     intersectEstablishedApiClientScopes,
     mkApiClient,
     mkApiClientId,
+    mkEstablishedApiClient,
     selectApiClientScopes,
   )
 where
@@ -121,6 +122,16 @@ establishApiClient client =
     { establishedApiClientId = apiClientId client,
       establishedApiClientAllowedScopes = apiClientAllowedScopes client
     }
+
+-- | Validate the current bearer view reconstructed by a durable store.  This
+-- deliberately has no secret-hash argument: established bearer tokens remain
+-- valid through secret rotation, while a disabled client or removed scope is
+-- decided from the current durable row on every request.
+mkEstablishedApiClient :: ApiClientId -> [OAuth2Scope] -> Either ApiClientConfigurationError EstablishedApiClient
+mkEstablishedApiClient clientId allowedScopes
+  | null allowedScopes = Left ApiClientAllowedScopesEmpty
+  | hasDuplicateScopes allowedScopes = Left ApiClientAllowedScopesDuplicate
+  | otherwise = Right (EstablishedApiClient clientId allowedScopes)
 
 -- | Restrict scopes carried by an issued bearer token to the client's current
 -- durable allowance.  The result retains token order: removing a durable

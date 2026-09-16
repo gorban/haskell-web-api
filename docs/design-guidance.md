@@ -3517,6 +3517,28 @@ This extends the current principal-establisher seam rather than adding a
 second authentication dispatcher; the next slice supplies the concrete OAuth
 workflow and PostgreSQL adapter.
 
+### Decision record — AHI-4D slice 4: durable PostgreSQL API-client adapter (2026-09-16)
+
+**Decision: make each PostgreSQL API-client lookup one read-only statement
+over the active client, secret, and scope rows.** The adapter returns a client
+marker alongside typed secret and scope rows so an enabled client without an
+active secret is distinguishable from an unknown or disabled client. The
+statement has one PostgreSQL snapshot: disabling a client, retiring a secret,
+or removing a scope therefore cannot be masked by combining values from
+separate reads. Its bearer path does not read secrets and reconstructs the
+secret-free established view directly, preserving token-scope intersection at
+the existing application policy boundary.
+
+The new tables are forward-only database changes. The runtime role has only
+`SELECT` on them; owner-side provisioning, rotation, and disablement remain
+outside request handling. A database constraint requires the stored secret
+form to start with the Argon2id encoding prefix, and the adapter independently
+parses each hash using Harch's complete bounded Argon2 validator. A malformed
+row and an unavailable database both map to the existing safe dependency
+failure, so neither raw stored data nor client existence reaches a public OAuth
+response. This establishes persistence only; the following AHI-4D task still
+connects the adapter to client-credentials verification and token issuance.
+
 ### Decision record — AHI-4D slice 3: OAuth Basic credential decoding (2026-09-16)
 
 **Decision: extend the existing typed API request codec with the strict HTTP

@@ -111,7 +111,9 @@ webApiDatabaseChanges =
     change "account-audit-session-issue-conflict-fix-v1" accountAuditSessionIssueConflictFixStatements,
     change "account-audit-session-issue-insert-privilege-fix-v1" accountAuditSessionIssueInsertPrivilegeFixStatements,
     change "account-audit-registration-delivery-v1" accountAuditRegistrationDeliveryStatements,
-    change "account-audit-verification-resend-delivery-v1" accountAuditVerificationResendDeliveryStatements
+    change "account-audit-verification-resend-delivery-v1" accountAuditVerificationResendDeliveryStatements,
+    change "api-clients-v1" apiClientMigrationStatements,
+    change "api-client-secret-hash-format-v1" apiClientSecretHashFormatMigrationStatements
   ]
   where
     change changeId statements =
@@ -298,7 +300,10 @@ applicationTableNames =
     "login_attempts",
     "login_attempt_groups",
     "verification_resend_claims",
-    "verification_resend_deliveries"
+    "verification_resend_deliveries",
+    "api_clients",
+    "api_client_secret_hashes",
+    "api_client_scopes"
   ]
 
 tablePrivileges :: Text -> [Text]
@@ -306,7 +311,20 @@ tablePrivileges runtimeOwner =
   let revoke tableName = "REVOKE ALL ON TABLE " <> qualifiedTableName tableName <> " FROM PUBLIC;"
       readOnly tableName = "GRANT SELECT ON TABLE " <> qualifiedTableName tableName <> " TO " <> runtimeOwner <> ";"
       readWrite tableName = "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " <> qualifiedTableName tableName <> " TO " <> runtimeOwner <> ";"
-   in [revoke "page_content", revoke "page_highlights", revoke "accounts", revoke "email_verifications", revoke "account_totp", revoke "account_recovery_codes", revoke "account_sessions", revoke "mfa_enrollment_sessions", revoke "login_attempts", revoke "login_attempt_groups", revoke "verification_resend_claims", revoke "verification_resend_deliveries", readOnly "page_content", readOnly "page_highlights", readWrite "accounts", readWrite "email_verifications", readWrite "account_totp", readWrite "account_recovery_codes", readWrite "account_sessions", readWrite "mfa_enrollment_sessions", readWrite "login_attempts", readWrite "login_attempt_groups", readWrite "verification_resend_claims", readWrite "verification_resend_deliveries", "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA " <> appSchemaName <> " TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.reserve_login_attempt_group(JSONB, BIGINT, BIGINT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.reserve_login_attempt_group(JSONB, BIGINT, BIGINT, BIGINT) TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.stage_pending_registration(TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, TEXT, BIGINT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.stage_pending_registration(TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, TEXT, BIGINT, BIGINT) TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.reserve_verification_resend(TEXT, TEXT, TEXT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.reserve_verification_resend(TEXT, TEXT, TEXT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.complete_verification_resend(TEXT, TEXT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.complete_verification_resend(TEXT, TEXT, BIGINT) TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.release_verification_resend(TEXT, TEXT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.release_verification_resend(TEXT, TEXT) TO " <> runtimeOwner <> ";"]
+   in [revoke "page_content", revoke "page_highlights", revoke "accounts", revoke "email_verifications", revoke "account_totp", revoke "account_recovery_codes", revoke "account_sessions", revoke "mfa_enrollment_sessions", revoke "login_attempts", revoke "login_attempt_groups", revoke "verification_resend_claims", revoke "verification_resend_deliveries", revoke "api_clients", revoke "api_client_secret_hashes", revoke "api_client_scopes", readOnly "page_content", readOnly "page_highlights", readOnly "api_clients", readOnly "api_client_secret_hashes", readOnly "api_client_scopes", readWrite "accounts", readWrite "email_verifications", readWrite "account_totp", readWrite "account_recovery_codes", readWrite "account_sessions", readWrite "mfa_enrollment_sessions", readWrite "login_attempts", readWrite "login_attempt_groups", readWrite "verification_resend_claims", readWrite "verification_resend_deliveries", "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA " <> appSchemaName <> " TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.reserve_login_attempt_group(JSONB, BIGINT, BIGINT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.reserve_login_attempt_group(JSONB, BIGINT, BIGINT, BIGINT) TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.stage_pending_registration(TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, TEXT, BIGINT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.stage_pending_registration(TEXT, TEXT, TEXT, TEXT, BIGINT, BIGINT, TEXT, TEXT, BIGINT, BIGINT) TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.reserve_verification_resend(TEXT, TEXT, TEXT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.reserve_verification_resend(TEXT, TEXT, TEXT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.complete_verification_resend(TEXT, TEXT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.complete_verification_resend(TEXT, TEXT, BIGINT) TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.release_verification_resend(TEXT, TEXT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.release_verification_resend(TEXT, TEXT) TO " <> runtimeOwner <> ";"]
+
+apiClientMigrationStatements :: [Text]
+apiClientMigrationStatements =
+  [ "CREATE TABLE web_api.api_clients (client_id TEXT PRIMARY KEY, disabled_at_nanoseconds BIGINT);",
+    "CREATE TABLE web_api.api_client_secret_hashes (client_id TEXT NOT NULL REFERENCES web_api.api_clients (client_id) ON DELETE CASCADE, secret_hash TEXT NOT NULL, created_at_nanoseconds BIGINT NOT NULL, disabled_at_nanoseconds BIGINT, PRIMARY KEY (client_id, secret_hash));",
+    "CREATE INDEX api_client_secret_hashes_active_client ON web_api.api_client_secret_hashes (client_id) WHERE disabled_at_nanoseconds IS NULL;",
+    "CREATE TABLE web_api.api_client_scopes (client_id TEXT NOT NULL REFERENCES web_api.api_clients (client_id) ON DELETE CASCADE, scope_text TEXT NOT NULL, scope_position INTEGER NOT NULL CHECK (scope_position >= 0), is_default BOOLEAN NOT NULL, PRIMARY KEY (client_id, scope_text), UNIQUE (client_id, scope_position));"
+  ]
+
+apiClientSecretHashFormatMigrationStatements :: [Text]
+apiClientSecretHashFormatMigrationStatements =
+  [ "ALTER TABLE web_api.api_client_secret_hashes ADD CONSTRAINT api_client_secret_hashes_argon2id_check CHECK (secret_hash LIKE '$argon2id$v=19$m=%');"
+  ]
 
 seedStatements :: [Text]
 seedStatements =

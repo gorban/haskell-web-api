@@ -2,6 +2,7 @@ module WebApi.Postgres.Testing
   ( module WebApi.Postgres.ActivityAuditMigration,
     module WebApi.Postgres.ActivityAuditRepository,
     module WebApi.Postgres.ActivityAuditScheduler,
+    module WebApi.Postgres.ApiClientRepository,
     module WebApi.Postgres.AccountRepository,
     module WebApi.Postgres.AccountSessionAuditRepository,
     module WebApi.Postgres.LoginAttemptRepository,
@@ -21,6 +22,7 @@ import WebApi.Postgres.AccountSessionAuditRepository
 import WebApi.Postgres.ActivityAuditMigration
 import WebApi.Postgres.ActivityAuditRepository
 import WebApi.Postgres.ActivityAuditScheduler
+import WebApi.Postgres.ApiClientRepository
 import WebApi.Postgres.LoginAttemptRepository
 import WebApi.Postgres.MfaEnrollmentSessionRepository
 import WebApi.Postgres.MfaRepository
