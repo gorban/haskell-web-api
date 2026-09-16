@@ -184,9 +184,11 @@ library
   -- other-extensions:
   -- Other library packages from which modules are imported.
   build-depends:
-    -- Public TLS 2.4.3 selects the reviewed Serialise/Cborg compatibility
-    -- stack for base-4.22. Keep this aligned with cabal.project.freeze and
-    -- validate an update with tools/test-tls-compatibility-stack.sh.
+    -- Compatibility dependencies: tls ^>=2.4.3 selects the reviewed
+    -- Serialise/Cborg stack for base-4.22; test its upgrades with
+    -- tools/test-tls-compatibility-stack.sh. warp ^>=3.4.15 and warp-tls
+    -- ^>=3.4.14 supply the public setAccept/setFork handoff that prevents
+    -- pre-TLS remote-IP cross-attribution; keep their frozen pair aligned.
     aeson ^>=2.3.1.0,
     base ^>=4.22.0.0,
     base16-bytestring ^>=1.0.2.0,
@@ -332,16 +334,12 @@ test-suite harch-web-tests
   -- Other library packages from which modules are imported.
   build-depends:
     -- For testing framework:
-    -- The lifecycle regression imports HTTP2 internals, so keep the test
-    -- graph on the public runtime pin. HTTP2-5.4.4's repair is tested only
-    -- in a disposable source tree; a public release must restore callback
-    -- cleanup and pass tools/test-tls-compatibility-stack.sh before widening.
-    -- This is the public pre-0.3 API paired with HTTP2-5.4.0. Do not widen it
-    -- merely to avoid warnings: newer HTTP2 also needs the callback-cleanup
-    -- repair documented by the HTTP2 lifecycle regression.
-    -- Keep tests on the same public TLS baseline as the library and frozen
-    -- plan. The compatibility script's source patches are test-only and are
-    -- never Harch/application dependencies.
+    -- Compatibility dependencies: http2 >=5.4.0 && <5.4.1 and
+    -- time-manager >=0.2.4 && <0.3 retain the public callback-cleanup pair;
+    -- HTTP2-5.4.4's repair remains test-only until a public release passes
+    -- tools/test-tls-compatibility-stack.sh. tls ^>=2.4.3 is the frozen
+    -- public baseline. warp ^>=3.4.15 and warp-tls ^>=3.4.14 exercise the
+    -- same accepted-peer handoff as the library.
     aeson ^>=2.3.1.0,
     base ^>=4.22.0.0,
     base64-bytestring ^>=1.2.1.0,

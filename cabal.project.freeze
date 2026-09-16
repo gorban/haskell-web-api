@@ -242,6 +242,9 @@ constraints: any.Cabal ==3.16.0.0,
              vector +boundschecks -internalchecks -unsafechecks -wall,
              any.vector-stream ==0.1.0.1,
              any.wai ==3.2.5,
+             -- Harch relies on Warp's public setAccept/setFork hooks to carry
+             -- an accepted peer into the WarpTLS worker. Keep this pair aligned
+             -- with the transport regressions; see docs/decisions/dq-pre-tls-peer-address-attribution.md.
              any.warp ==3.4.15,
              warp +allow-sendfilefd +include-warp-version -network-bytestring -warp-debug +x509,
              any.warp-tls ==3.4.14,
