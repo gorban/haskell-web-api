@@ -16,6 +16,7 @@ spec =
           selfRead = requiredScope "profile:read:self"
           configured = mkApiClient identifier (PasswordHash "configured-secret" :| [PasswordHash "rotating-secret"]) [sharedRead, selfRead] [sharedRead]
           configuredClient = requiredClient configured
+          establishedClient = establishApiClient configuredClient
           scopeTexts = fmap oauth2ScopeText
       expectAll
         ( (apiClientIdText identifier `shouldBe` "automation-client")
@@ -23,6 +24,8 @@ spec =
                  scopeTexts (apiClientAllowedScopes configuredClient) `shouldBe` ["resource:read", "profile:read:self"],
                  scopeTexts (apiClientDefaultScopes configuredClient) `shouldBe` ["resource:read"],
                  (passwordHashText <$> apiClientSecretHashes configuredClient) `shouldBe` ("configured-secret" :| ["rotating-secret"]),
+                 apiClientIdText (establishedApiClientId establishedClient) `shouldBe` "automation-client",
+                 scopeTexts (establishedApiClientAllowedScopes establishedClient) `shouldBe` ["resource:read", "profile:read:self"],
                  selectedScopeTextsAre ["resource:read"] (selectApiClientScopes configuredClient []) `shouldBe` True,
                  selectedScopeTextsAre ["profile:read:self"] (selectApiClientScopes configuredClient [selfRead]) `shouldBe` True,
                  scopeErrorIs ApiClientRequestedScopeDuplicate (selectApiClientScopes configuredClient [sharedRead, sharedRead]) `shouldBe` True,

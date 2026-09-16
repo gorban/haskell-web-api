@@ -3507,7 +3507,9 @@ discovery needs active secret hashes for client authentication, whereas bearer
 establishment needs the current enabled principal and scopes without requiring
 an active secret. This prevents a secret-rotation implementation from making
 an otherwise valid issued bearer token unrepresentable at the capability
-boundary. The unit contract instantiates the two views with distinct types.
+boundary. 'WebApi.ApiClient' mirrors the distinction with its secret-bearing
+'ApiClient' issuance view and secret-free 'EstablishedApiClient' bearer view;
+the unit contract instantiates the storage capability with distinct types.
 This extends the current principal-establisher seam rather than adding a
 second authentication dispatcher; the next slice supplies the concrete OAuth
 workflow and PostgreSQL adapter.

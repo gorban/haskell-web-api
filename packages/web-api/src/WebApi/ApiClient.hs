@@ -14,11 +14,15 @@ module WebApi.ApiClient
     ApiClientId,
     ApiClientIdError (..),
     ApiClientScopeError (..),
+    EstablishedApiClient,
     apiClientAllowedScopes,
     apiClientDefaultScopes,
     apiClientId,
     apiClientIdText,
     apiClientSecretHashes,
+    establishApiClient,
+    establishedApiClientAllowedScopes,
+    establishedApiClientId,
     mkApiClient,
     mkApiClientId,
     selectApiClientScopes,
@@ -51,6 +55,15 @@ data ApiClient = ApiClient
     apiClientSecretHashes :: NonEmpty PasswordHash,
     apiClientAllowedScopes :: [OAuth2Scope],
     apiClientDefaultScopes :: [OAuth2Scope]
+  }
+
+-- | The current durable principal established for a bearer token.  It omits
+-- secret hashes because a bearer token remains valid through secret rotation;
+-- request authorization instead intersects its granted scopes with this
+-- client's current allowed scopes.
+data EstablishedApiClient = EstablishedApiClient
+  { establishedApiClientId :: ApiClientId,
+    establishedApiClientAllowedScopes :: [OAuth2Scope]
   }
 
 data ApiClientConfigurationError
@@ -96,6 +109,17 @@ selectApiClientScopes client requestedScopes
   | hasDuplicateScopes requestedScopes = Left ApiClientRequestedScopeDuplicate
   | not (all (`containsScope` apiClientAllowedScopes client) requestedScopes) = Left ApiClientRequestedScopeNotAllowed
   | otherwise = Right requestedScopes
+
+-- | Discard client-authentication material after it has been used to issue a
+-- token.  PostgreSQL establishment constructs the same bearer view directly
+-- from current enabled-client rows, so an inactive secret can never reject an
+-- otherwise valid bearer token.
+establishApiClient :: ApiClient -> EstablishedApiClient
+establishApiClient client =
+  EstablishedApiClient
+    { establishedApiClientId = apiClientId client,
+      establishedApiClientAllowedScopes = apiClientAllowedScopes client
+    }
 
 containsScope :: OAuth2Scope -> [OAuth2Scope] -> Bool
 containsScope scope = any ((== oauth2ScopeText scope) . oauth2ScopeText)
