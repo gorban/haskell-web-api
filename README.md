@@ -405,7 +405,11 @@ To upgrade dependencies in a dedicated change:
    This updates the whole plan. For a focused upgrade, retain the other reviewed
    constraints and regenerate with an explicit index timestamp and the selected
    version constraints. Inspect transitive versions and flags as well as direct
-   dependencies. Do not hand-label an untested plan as a passing baseline.
+   dependencies. Recreate or update the rationale comments beside every known
+   compatibility version in the relevant `.cabal` file and in
+   `cabal.project.freeze`; those comments link a surprising pin to its source
+   proof and retirement condition. Do not hand-label an untested plan as a
+   passing baseline.
 3. When changing TLS, Serialise, Cborg, Primitive, HTTP2, or time-manager, run
    `tools/test-tls-compatibility-stack.sh`. It tests released Cborg, Serialise,
    Primitive, and HTTP2 source in an isolated store. It temporarily patches

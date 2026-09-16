@@ -39,6 +39,9 @@ constraints: any.Cabal ==3.16.0.0,
              any.bytestring ==0.12.2.0,
              any.call-stack ==0.4.0,
              any.case-insensitive ==1.2.1.0,
+             -- Released Cborg's base bounds predate base-4.22. Its exact
+             -- allow-newer exception and retirement criteria are documented
+             -- in cabal.project and docs/build-diagnostics.md.
              any.cborg ==0.2.10.0,
              cborg +optimize-gmp,
              any.cereal ==0.5.8.3,
@@ -109,6 +112,9 @@ constraints: any.Cabal ==3.16.0.0,
              any.http-date ==0.0.11,
              any.http-semantics ==0.4.1,
              any.http-types ==0.12.6,
+             -- Keep the runtime graph on public HTTP2-5.4.0. The compatible
+             -- 5.4.4 lifecycle repair is tested only in a disposable source
+             -- tree; see tools/test-tls-compatibility-stack.sh.
              any.http2 ==5.4.0,
              http2 -devel -h2spec,
              any.indexed-traversable ==0.1.5,
@@ -151,6 +157,9 @@ constraints: any.Cabal ==3.16.0.0,
              prettyprinter -buildreadme +text,
              any.prettyprinter-ansi-terminal ==1.1.4,
              prettyprinter-ansi-terminal +text,
+             -- This is the unmodified public Primitive release selected by
+             -- TLS. Its upstream test-source-only compatibility patch must
+             -- never enter this runtime graph; see docs/build-diagnostics.md.
              any.primitive ==0.9.1.0,
              any.process ==1.6.26.1,
              any.profunctors ==5.6.3,
@@ -169,6 +178,9 @@ constraints: any.Cabal ==3.16.0.0,
              semialign +semigroupoids,
              any.semigroupoids ==6.0.2,
              semigroupoids +comonad +containers +contravariant +tagged +unordered-containers,
+             -- Released Serialise's base bounds predate base-4.22. Keep its
+             -- five reviewed allow-newer edges and strict upstream proof until
+             -- public releases make them unnecessary; see cabal.project.
              any.serialise ==0.2.6.1,
              serialise +newtime15,
              any.simple-sendfile ==0.2.32,
@@ -200,8 +212,12 @@ constraints: any.Cabal ==3.16.0.0,
              any.time ==1.15,
              any.time-compat ==1.9.9,
              any.time-hourglass ==0.3.0,
+             -- Pair this public version with HTTP2-5.4.0. HTTP2's cleanup
+             -- behavior must be repaired upstream before either pin changes.
              any.time-manager ==0.2.4,
-             any.tls ==2.4.3,
+             -- TLS-2.4.3 selects the Serialise/Cborg compatibility stack
+             -- above. Its released public packages are the runtime graph.
+            any.tls ==2.4.3,
              tls -devel,
              any.tls-session-manager ==0.1.0,
              any.transformers ==0.6.1.2,
