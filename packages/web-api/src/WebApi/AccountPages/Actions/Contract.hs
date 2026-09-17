@@ -37,7 +37,7 @@ import HarchWeb.Action
     textValue,
   )
 import WebApi.AccountPages.Forms (LoginProofChoice (..))
-import WebApi.Route (AppRequestContext, AppRoute (..), accountAuthenticationProfileName, renderRoutePath)
+import WebApi.Route (AppAuthorization, AppRequestContext, AppRoute (..), accountAuthenticationProfileName, renderRoutePath)
 
 data AccountActionTarget
   = RegisterAccountTarget
@@ -80,10 +80,10 @@ data LoginSubmission = LoginSubmission
 
 newtype ProfileSubmission = ProfileSubmission {profileIntentValue :: Text}
 
-accountActions :: ActionCodec AccountActionTarget AppRequestContext () AccountAction
+accountActions :: ActionCodec AccountActionTarget AppRequestContext AppAuthorization AccountAction
 accountActions = buildActionCodecOrDie accountActionEndpoints
 
-accountActionEndpointMetadata :: Text -> Text -> AppRequestContext -> Maybe (HarchWeb.EndpointMetadata ())
+accountActionEndpointMetadata :: Text -> Text -> AppRequestContext -> Maybe (HarchWeb.EndpointMetadata AppAuthorization)
 accountActionEndpointMetadata methodValue pathValue requestContext =
   actionEndpointMetadata accountActions requestContext methodValue pathValue
 
@@ -110,13 +110,13 @@ accountActionTargetRoute target =
 -- crash naming the offending declaration. @accountActionEndpoints@ is
 -- reviewed to never trigger the error branch, so it is exercised directly
 -- (with a deliberately duplicate list) by a dedicated unit test instead.
-buildActionCodecOrDie :: [ActionEndpoint target context () action] -> ActionCodec target context () action
+buildActionCodecOrDie :: [ActionEndpoint target context AppAuthorization action] -> ActionCodec target context AppAuthorization action
 buildActionCodecOrDie endpoints =
   case actionCodec endpoints of
     Left codecError -> error (show codecError)
     Right codec -> codec
 
-accountActionEndpoints :: [ActionEndpoint AccountActionTarget AppRequestContext () AccountAction]
+accountActionEndpoints :: [ActionEndpoint AccountActionTarget AppRequestContext AppAuthorization AccountAction]
 accountActionEndpoints =
   [ declaredAccountAction
       RegisterAccountTarget
@@ -145,7 +145,7 @@ accountActionEndpoints =
 -- preserving their separate CSRF/session checks. AHI-4C replaces these
 -- declarations with the account-backed authentication/authorization policy;
 -- none rely on an implicit public default.
-declaredAccountAction :: AccountActionTarget -> ActionPath AppRequestContext -> ActionDecoder action -> ActionEndpoint AccountActionTarget AppRequestContext () action
+declaredAccountAction :: AccountActionTarget -> ActionPath AppRequestContext -> ActionDecoder action -> ActionEndpoint AccountActionTarget AppRequestContext AppAuthorization action
 declaredAccountAction target path =
   actionWithMetadata target (reauthenticationPolicy target) (completionPolicy target) path (accountActionMetadata target)
 
@@ -169,7 +169,7 @@ completionPolicy target =
     UpdateProfileTarget -> ApplyActionResponse
     LogoutAccountTarget -> ApplyActionResponse
 
-accountActionMetadata :: AccountActionTarget -> HarchWeb.EndpointMetadata ()
+accountActionMetadata :: AccountActionTarget -> HarchWeb.EndpointMetadata AppAuthorization
 accountActionMetadata target =
   applyAccountProfile target $
     HarchWeb.mkEndpointMetadata
@@ -192,7 +192,7 @@ accountActionMetadata target =
         LogoutAccountTarget -> HarchWeb.RequireAuthenticated
         _ -> HarchWeb.AllowUnauthenticated
 
-applyAccountProfile :: AccountActionTarget -> HarchWeb.EndpointMetadata () -> HarchWeb.EndpointMetadata ()
+applyAccountProfile :: AccountActionTarget -> HarchWeb.EndpointMetadata AppAuthorization -> HarchWeb.EndpointMetadata AppAuthorization
 applyAccountProfile target metadata =
   case target of
     UpdateProfileTarget -> HarchWeb.withAuthenticationProfile accountAuthenticationProfileName metadata

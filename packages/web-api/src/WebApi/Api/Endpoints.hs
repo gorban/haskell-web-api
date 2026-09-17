@@ -130,7 +130,7 @@ import WebApi.Response
     toHarchDatabaseOperation,
     tokenApiSuccessBody,
   )
-import WebApi.Route (AppRequestContext (requestAccountPrincipal), AppRoute (MeApiRoute, SecondApiRoute, StatusApiRoute, TokenApiRoute), endpointMetadata, requestLocale)
+import WebApi.Route (AppAuthorization, AppRequestContext (requestAccountPrincipal), AppRoute (MeApiRoute, SecondApiRoute, StatusApiRoute, TokenApiRoute), endpointMetadata, requestLocale)
 import WebApi.RouteData (SecondRouteData (..))
 
 -- | Neither @\/api\/status@ nor @\/api\/second@ decodes any query, header, or
@@ -146,7 +146,7 @@ import WebApi.RouteData (SecondRouteData (..))
 noApiRequestFields :: RequestCodec ()
 noApiRequestFields = pure ()
 
-statusApiRouteDefinition :: RouteDefinition AppRoute AppRequestContext ()
+statusApiRouteDefinition :: RouteDefinition AppRoute AppRequestContext AppAuthorization
 statusApiRouteDefinition =
   apiRouteDefinitionWithContextNeverFailing
     ( ApiEndpointContract
@@ -167,7 +167,7 @@ statusApiRouteDefinition =
 -- than partially unwrapping it, since nothing here can re-prove the guard
 -- ran. See the AHI-4D decision record in @docs\/design-guidance.md@ for why
 -- this reuses the account profile instead of a new authorization payload.
-meApiRouteDefinition :: AccountProfileStore -> RouteDefinition AppRoute AppRequestContext ()
+meApiRouteDefinition :: AccountProfileStore -> RouteDefinition AppRoute AppRequestContext AppAuthorization
 meApiRouteDefinition profileStore =
   apiRouteDefinitionWithContext
     ( ApiEndpointContract
@@ -219,7 +219,7 @@ meApiFailureResponse MeApiUnavailable =
     { apiEndpointResponseStatus = HttpTypes.status503
     }
 
-secondApiRouteDefinition :: PageRepository -> RouteDefinition AppRoute AppRequestContext ()
+secondApiRouteDefinition :: PageRepository -> RouteDefinition AppRoute AppRequestContext AppAuthorization
 secondApiRouteDefinition pageRepository =
   apiRouteDefinitionWithContext
     ( ApiEndpointContract
@@ -294,7 +294,7 @@ tokenApiMissingContentTypePolicy = RejectMissingContentType
 -- store), not through the account session/bearer-JWT rail every other
 -- protected route uses; see the AHI-4D decision record in
 -- @docs\/design-guidance.md@.
-tokenApiRouteDefinition :: ApiClientTokenEnvironment -> RouteDefinition AppRoute AppRequestContext ()
+tokenApiRouteDefinition :: ApiClientTokenEnvironment -> RouteDefinition AppRoute AppRequestContext AppAuthorization
 tokenApiRouteDefinition environment =
   apiRouteDefinitionWithContext
     ( ApiEndpointContract

@@ -73,7 +73,8 @@ import Network.HTTP.Types qualified as Http
 import Text.Show (showListWith)
 import WebApi.AccountPrincipal (AccountPrincipal, mkAccountPrincipal)
 import WebApi.Route
-  ( AppRequestContext (..),
+  ( AppAuthorization,
+    AppRequestContext (..),
     AppRoute (LoginRoute),
     RequestAuthenticationTransport (..),
   )
@@ -420,7 +421,7 @@ numericDate instant =
 -- runtime. A successful signature is only an intermediate fact: this
 -- establishment step resolves the current durable session and checks both its
 -- subject and expiration before a principal reaches the request context.
-accountJwtAuthenticationPipeline :: AccountSessionStore -> IO UnixTimeNanoseconds -> AccountJwtRuntime -> HarchWeb.AuthenticationPipeline AppRoute AppRequestContext () HarchWeb.JwtProof (HarchWeb.JwtProofSource, AccountJwtClaims) (HarchWeb.JwtProofSource, AccountPrincipal) ()
+accountJwtAuthenticationPipeline :: AccountSessionStore -> IO UnixTimeNanoseconds -> AccountJwtRuntime -> HarchWeb.AuthenticationPipeline AppRoute AppRequestContext AppAuthorization HarchWeb.JwtProof (HarchWeb.JwtProofSource, AccountJwtClaims) (HarchWeb.JwtProofSource, AccountPrincipal) ()
 accountJwtAuthenticationPipeline sessionStore readClock runtime =
   HarchWeb.AuthenticationPipeline
     { HarchWeb.authenticationProofExtractor =
@@ -468,7 +469,7 @@ requestTransport source =
     HarchWeb.JwtProofFromBearer -> AccountJwtFromBearer
     HarchWeb.JwtProofFromCookieAndBearer -> AccountJwtFromCookieAndBearer
 
-accountAuthenticationChallenge :: HarchWeb.EndpointRequest AppRoute AppRequestContext () -> HarchWeb.AuthenticationFailure -> HarchWeb.NonPageResponse AppRoute AppRequestContext
+accountAuthenticationChallenge :: HarchWeb.EndpointRequest AppRoute AppRequestContext AppAuthorization -> HarchWeb.AuthenticationFailure -> HarchWeb.NonPageResponse AppRoute AppRequestContext
 accountAuthenticationChallenge endpointRequest _ =
   HarchWeb.authenticationChallengeForAction endpointRequest ordinaryChallenge
   where

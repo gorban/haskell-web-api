@@ -1170,7 +1170,7 @@ spec =
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
             readIORef deliveryCountReference `shouldReturn` 0
 
-challengedBrowserApp :: AppConfig -> HarchWeb.Application AppRoute AccountAction WebApi.Route.AppRequestContext ()
+challengedBrowserApp :: AppConfig -> HarchWeb.Application AppRoute AccountAction WebApi.Route.AppRequestContext WebApi.Route.AppAuthorization
 challengedBrowserApp appConfig =
   buildAppWithDatabaseAndAccountWorkflowAndSecurity
     appConfig
@@ -1178,7 +1178,7 @@ challengedBrowserApp appConfig =
     unavailableAccountWorkflow
     unauthenticatedProfileChallengeSecurity
 
-unauthenticatedProfileChallengeSecurity :: HarchWeb.ApplicationSecurity AppRoute WebApi.Route.AppRequestContext ()
+unauthenticatedProfileChallengeSecurity :: HarchWeb.ApplicationSecurity AppRoute WebApi.Route.AppRequestContext WebApi.Route.AppAuthorization
 unauthenticatedProfileChallengeSecurity =
   HarchWeb.AuthenticationEnabled
     []
@@ -1241,7 +1241,7 @@ pendingProfileWorkflow =
 -- revocation. This browser fixture starts after that admission boundary with a
 -- known principal so it can exercise the protected profile action's capture
 -- and patch behavior without putting test signing keys in browser state.
-pendingProfileE2eSecurity :: HarchWeb.ApplicationSecurity AppRoute WebApi.Route.AppRequestContext ()
+pendingProfileE2eSecurity :: HarchWeb.ApplicationSecurity AppRoute WebApi.Route.AppRequestContext WebApi.Route.AppAuthorization
 pendingProfileE2eSecurity =
   HarchWeb.AuthenticationEnabled
     []
@@ -1423,14 +1423,14 @@ requiredAdmissionCookieName :: Session.SessionCookieName
 requiredAdmissionCookieName =
   fromMaybe (error "expected static required-admission cookie name") (Session.mkSessionCookieName "__Host-required-admission")
 
-accountJwtSecurityWithRequiredAdmission :: AccountJwtRuntime -> AccountSessionStore -> Session.SessionId -> IORef RequiredAdmissionGrantState -> HarchWeb.ApplicationSecurity AppRoute WebApi.Route.AppRequestContext ()
+accountJwtSecurityWithRequiredAdmission :: AccountJwtRuntime -> AccountSessionStore -> Session.SessionId -> IORef RequiredAdmissionGrantState -> HarchWeb.ApplicationSecurity AppRoute WebApi.Route.AppRequestContext WebApi.Route.AppAuthorization
 accountJwtSecurityWithRequiredAdmission runtime sessionStore admissionSessionId admissionState =
   case accountJwtSecurity runtime sessionStore of
     HarchWeb.AuthenticationEnabled preGuards accountGuard postGuards ->
       HarchWeb.AuthenticationEnabled preGuards accountGuard (requiredAdmissionGuard admissionSessionId admissionState : postGuards)
     _ -> error "account JWT security must install its authentication guard"
 
-requiredAdmissionGuard :: Session.SessionId -> IORef RequiredAdmissionGrantState -> HarchWeb.EndpointGuard AppRoute WebApi.Route.AppRequestContext ()
+requiredAdmissionGuard :: Session.SessionId -> IORef RequiredAdmissionGrantState -> HarchWeb.EndpointGuard AppRoute WebApi.Route.AppRequestContext WebApi.Route.AppAuthorization
 requiredAdmissionGuard admissionSessionId admissionState =
   HarchWeb.EndpointGuard $ \endpointRequest ->
     case HarchWeb.endpointAccess (HarchWeb.endpointMetadata endpointRequest) of
@@ -1451,7 +1451,7 @@ requiredAdmissionGuard admissionSessionId admissionState =
     requestContext = HarchWeb.requestContext . HarchWeb.endpointRouteRequest
     admissionDestination = HarchWeb.RouteRequest LoginRoute . requestContext
 
-accountJwtSecurity :: AccountJwtRuntime -> AccountSessionStore -> HarchWeb.ApplicationSecurity AppRoute WebApi.Route.AppRequestContext ()
+accountJwtSecurity :: AccountJwtRuntime -> AccountSessionStore -> HarchWeb.ApplicationSecurity AppRoute WebApi.Route.AppRequestContext WebApi.Route.AppAuthorization
 accountJwtSecurity runtime sessionStore =
   HarchWeb.AuthenticationEnabled
     []

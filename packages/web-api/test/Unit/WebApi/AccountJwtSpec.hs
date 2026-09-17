@@ -29,7 +29,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import TestCore.Wai (waiRequest)
 import WebApi.AccountJwt
 import WebApi.AccountPrincipal (mkAccountPrincipal)
-import WebApi.Route (AppRequestContext (..), AppRoute (LoginRoute, ProfileRoute), RequestAuthenticationTransport (..), defaultRequestContext)
+import WebApi.Route (AppAuthorization, AppRequestContext (..), AppRoute (LoginRoute, ProfileRoute), RequestAuthenticationTransport (..), defaultRequestContext)
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (AccountSessionStoreUnavailable))
 
 spec =
@@ -401,7 +401,7 @@ isAccepted result =
     Right _ -> True
     Left _ -> False
 
-establishIssuedPrincipal :: HarchWeb.AuthenticationPipeline AppRoute AppRequestContext () HarchWeb.JwtProof verified principal denial -> HarchWeb.EncodedJwt -> IO (Either HarchWeb.PrincipalEstablishmentFailure principal)
+establishIssuedPrincipal :: HarchWeb.AuthenticationPipeline AppRoute AppRequestContext AppAuthorization HarchWeb.JwtProof verified principal denial -> HarchWeb.EncodedJwt -> IO (Either HarchWeb.PrincipalEstablishmentFailure principal)
 establishIssuedPrincipal pipeline token = do
   let HarchWeb.AuthenticationProofVerifier verifyProof = HarchWeb.authenticationProofVerifier pipeline
       HarchWeb.PrincipalEstablisher establishPrincipal = HarchWeb.authenticationPrincipalEstablisher pipeline
@@ -510,20 +510,26 @@ validRawConfiguration =
       rawAccountJwtCookieMaxAgeSeconds = 28800
     }
 
-protectedEndpointRequest :: Text.Text -> HarchWeb.EndpointRequest AppRoute AppRequestContext ()
+protectedEndpointRequest :: Text.Text -> HarchWeb.EndpointRequest AppRoute AppRequestContext AppAuthorization
 protectedEndpointRequest = endpointRequestWithAccess HarchWeb.RequireAuthenticated
 
-authorizedEndpointRequest :: Text.Text -> HarchWeb.EndpointRequest AppRoute AppRequestContext ()
-authorizedEndpointRequest = endpointRequestWithAccess (HarchWeb.RequireAuthorized ())
+authorizedEndpointRequest :: Text.Text -> HarchWeb.EndpointRequest AppRoute AppRequestContext AppAuthorization
+authorizedEndpointRequest = endpointRequestWithAccess (HarchWeb.RequireAuthorized (HarchWeb.RequireAnyScope (testOAuth2Scope :| [])))
 
-endpointRequestWithAccess :: HarchWeb.AccessRequirement () -> Text.Text -> HarchWeb.EndpointRequest AppRoute AppRequestContext ()
+testOAuth2Scope :: HarchWeb.OAuth2Scope
+testOAuth2Scope =
+  case HarchWeb.mkOAuth2Scope "test-scope" of
+    Right scope -> scope
+    Left scopeError -> error ("expected a valid test scope: " <> show scopeError)
+
+endpointRequestWithAccess :: HarchWeb.AccessRequirement AppAuthorization -> Text.Text -> HarchWeb.EndpointRequest AppRoute AppRequestContext AppAuthorization
 endpointRequestWithAccess access cookie =
   protectedEndpointRequestHeadersFor access [("Cookie", TextEncoding.encodeUtf8 cookie)]
 
-protectedEndpointRequestHeaders :: Http.RequestHeaders -> HarchWeb.EndpointRequest AppRoute AppRequestContext ()
+protectedEndpointRequestHeaders :: Http.RequestHeaders -> HarchWeb.EndpointRequest AppRoute AppRequestContext AppAuthorization
 protectedEndpointRequestHeaders = protectedEndpointRequestHeadersFor HarchWeb.RequireAuthenticated
 
-protectedEndpointRequestHeadersFor :: HarchWeb.AccessRequirement () -> Http.RequestHeaders -> HarchWeb.EndpointRequest AppRoute AppRequestContext ()
+protectedEndpointRequestHeadersFor :: HarchWeb.AccessRequirement AppAuthorization -> Http.RequestHeaders -> HarchWeb.EndpointRequest AppRoute AppRequestContext AppAuthorization
 protectedEndpointRequestHeadersFor access headers =
   HarchWeb.EndpointRequest
     { HarchWeb.endpointWaiRequest = (waiRequest ["profile"]) {Wai.requestHeaders = headers},

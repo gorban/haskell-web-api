@@ -59,11 +59,14 @@ data ClientAuthenticationMethod = ClientSecretBasic
 -- | A single OAuth 2.0 scope token.  OAuth's space-delimited wire syntax
 -- belongs to the token endpoint; this value represents one already-separated
 -- token and prevents metadata, grants, and authorization declarations from
--- accepting a space or control character as part of a scope.
+-- accepting a space or control character as part of a scope.  Derives 'Eq'
+-- because 'HarchWeb.Authentication.Pipeline.ScopeRequirement' derives
+-- @(Eq, Show)@ over this type and therefore needs it; see haskell-web-api's
+-- AHI-4D authorization-widening decision record in @docs\/design-guidance.md@.
 newtype OAuth2Scope = OAuth2Scope
   { oauth2ScopeText :: Text
   }
-  deriving (Show)
+  deriving (Eq, Show)
 
 -- | The safe construction failures for an OAuth scope declaration.  These
 -- are configuration or protocol-input outcomes, not a reason to retain a

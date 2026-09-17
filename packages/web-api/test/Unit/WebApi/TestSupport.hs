@@ -173,7 +173,7 @@ import WebApi.Database (DatabaseError (..), DatabaseResult (..), PageRepository 
 import WebApi.Login (LoginAttemptAdmission (..), LoginAttemptReservation (..), LoginAttemptStore (..), LoginThrottleContext (..))
 import WebApi.Page (AppPageModel (..), ProfilePageModel (..), renderPage)
 import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..))
-import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RouteMetadata (..), defaultRequestContext, routeCodec)
+import WebApi.Route (AppAuthorization, AppLocale (..), AppRequestContext (..), AppRoute (..), RouteMetadata (..), defaultRequestContext, routeCodec)
 import WebApi.Route qualified
 import WebApi.Session (MfaEnrollmentSessionStore (..))
 import WebApi.SetupPlan (TcpEndpoint (..))
@@ -242,7 +242,7 @@ opaqueSession =
       sessionExpiresAtNanoseconds = 200
     }
 
-pureApplication :: HarchWeb.Application AppRoute AccountAction AppRequestContext ()
+pureApplication :: HarchWeb.Application AppRoute AccountAction AppRequestContext AppAuthorization
 pureApplication = buildApp defaultAppConfig
 
 type AccountActionRequest = HarchWeb.ClientActionRequest AppRoute AccountAction AppRequestContext
@@ -316,7 +316,7 @@ requiredTestCidrBlock cidrText =
     Just cidrBlock -> cidrBlock
     Nothing -> error ("invalid test CIDR block: " <> Text.unpack cidrText)
 
-trustedForwardedApplication :: HarchWeb.Application AppRoute AccountAction AppRequestContext ()
+trustedForwardedApplication :: HarchWeb.Application AppRoute AccountAction AppRequestContext AppAuthorization
 trustedForwardedApplication =
   buildApp
     defaultAppConfig

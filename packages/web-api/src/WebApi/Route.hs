@@ -2,7 +2,8 @@
 {-# LANGUAGE PatternSynonyms #-}
 
 module WebApi.Route
-  ( AppLocale (..),
+  ( AppAuthorization,
+    AppLocale (..),
     AppRequestContext (..),
     RequestAuthenticationTransport (..),
     AppRoute
@@ -69,6 +70,19 @@ import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import WebApi.AccountPrincipal (AccountPrincipal)
 import WebApi.Session (mfaEnrollmentSessionCookiePolicy)
+
+-- | The one @authorization@ payload every 'AppRoute' endpoint declaration,
+-- application, and authentication pipeline in this module shares.
+-- 'HarchWeb.RequireAuthorized' is not used by any route yet — every existing
+-- declaration still resolves through 'HarchWeb.AllowUnauthenticated' or
+-- 'HarchWeb.RequireAuthenticated', so widening this one shared type
+-- parameter from @()@ is a pure type-signature change with no behavior
+-- difference. It exists ahead of its first user (the AHI-4D combined
+-- account-or-API-client-bearer profile securing @\/api\/second@) so that
+-- follow-up work extends one already-published type instead of widening it
+-- and every call site a second time; see the AHI-4D decision record in
+-- @docs\/design-guidance.md@.
+type AppAuthorization = HarchWeb.ScopeRequirement HarchWeb.OAuth2Scope
 
 data AppLocale
   = English
@@ -461,7 +475,7 @@ routeMetadata route =
 -- | Stable, application-authored endpoint identities for the existing route
 -- table. AHI-4C's configured root guard establishes a principal before the
 -- protected profile/logout handlers run; public routes remain explicit.
-endpointMetadata :: AppRoute -> EndpointMetadata ()
+endpointMetadata :: AppRoute -> EndpointMetadata AppAuthorization
 endpointMetadata route =
   case route of
     HomeRoute -> html "web.home" "/{locale}"
@@ -505,7 +519,7 @@ endpointMetadata route =
         accountAuthenticationProfileName
         (declaredMetadata ApiEndpoint RequireAuthenticated name template)
 
-declaredMetadata :: EndpointProtocol -> AccessRequirement () -> Text -> Text -> EndpointMetadata ()
+declaredMetadata :: EndpointProtocol -> AccessRequirement AppAuthorization -> Text -> Text -> EndpointMetadata AppAuthorization
 declaredMetadata protocol accessRequirement name template =
   mkEndpointMetadata
     (requiredEndpointNameOrDie name)

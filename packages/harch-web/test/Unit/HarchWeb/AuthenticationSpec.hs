@@ -100,6 +100,9 @@ spec = do
       dynamicScope <- newIORef "api/read:second~v1" >>= readIORef
       let accepted = mkOAuth2Scope dynamicScope
           scopeError = either Just (const Nothing)
+          requiredScope label = either (\_ -> error ("expected a valid " <> label <> " scope")) id . mkOAuth2Scope
+          readScope = requiredScope "read" "api/read"
+          writeScope = requiredScope "write" "api/write"
       expectAll
         ( (oauth2ScopeText <$> accepted `shouldBe` Right dynamicScope)
             :| [ oauth2ScopeText <$> mkOAuth2Scope "!#[].~" `shouldBe` Right "!#[].~",
@@ -111,6 +114,8 @@ spec = do
                  scopeError (mkOAuth2Scope "non-ascii-\233") `shouldBe` Just OAuth2ScopeInvalidCharacter,
                  OAuth2ScopeEmpty `shouldBe` OAuth2ScopeEmpty,
                  (OAuth2ScopeEmpty /= OAuth2ScopeInvalidCharacter) `shouldBe` True,
+                 (readScope == readScope) `shouldBe` True,
+                 (readScope /= writeScope) `shouldBe` True,
                  show <$> mkOAuth2Scope "api/read" `shouldBe` Right "OAuth2Scope {oauth2ScopeText = \"api/read\"}",
                  show OAuth2ScopeEmpty `shouldBe` "OAuth2ScopeEmpty",
                  show OAuth2ScopeInvalidCharacter `shouldBe` "OAuth2ScopeInvalidCharacter",

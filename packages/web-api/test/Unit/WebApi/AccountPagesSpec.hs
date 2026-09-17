@@ -59,7 +59,7 @@ import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), ProfilePageModel (..), SignedOutProfilePageDetails (..), buildPageModelFromRouteData, renderPageFromRouteData)
 import WebApi.PendingRegistrationAudit (PendingRegistrationAuditStore (..), PendingRegistrationAuditStoreError (..))
 import WebApi.Postgres.Testing (buildRuntimePostgresAccountCredentialStoreWithRunner, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStoreWithRunner)
-import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), accountAuthenticationProfileName, defaultRequestContext, renderRoutePath, routeCodec)
+import WebApi.Route (AppAuthorization, AppLocale (..), AppRequestContext (..), AppRoute (..), accountAuthenticationProfileName, defaultRequestContext, renderRoutePath, routeCodec)
 import WebApi.RouteData (RouteDataResult (..), RouteDataSelection (..), selectRouteData, selectRouteDataSelectionWithDatabase)
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..), MfaEnrollmentSessionStore (..), MfaEnrollmentSessionStoreError (..))
 import WebApi.VerificationResendAudit (VerificationResendAuditStore (..), VerificationResendAuditStoreError (..))
@@ -975,7 +975,7 @@ spec = do
       accountWorkflowVerificationUrl unavailableAccountWorkflow defaultRequestContext token `shouldBe` "https://invalid.example.test/verify"
 
     it "raises the codec-construction error for a duplicate endpoint declaration" $ do
-      let duplicateEndpoints :: [Action.ActionEndpoint AccountActionTarget () () AccountAction]
+      let duplicateEndpoints :: [Action.ActionEndpoint AccountActionTarget () AppAuthorization AccountAction]
           duplicateEndpoints =
             [ Action.action RegisterAccountTarget Action.DoNotRetain Action.ApplyActionResponse (Action.postAt "/dup" (const "/dup")) (pure LogoutAccount),
               Action.action LoginAccountTarget Action.DoNotRetain Action.ApplyActionResponse (Action.postAt "/dup" (const "/dup")) (pure LogoutAccount)

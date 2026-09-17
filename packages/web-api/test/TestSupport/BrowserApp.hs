@@ -24,7 +24,7 @@ import WebApi.Route qualified
 -- Use aroundAllWith for shared application variants, or aroundWith when each
 -- example must own a fresh application lifetime. Exceptions retain the existing
 -- bracket cleanup; this adapter does not catch failures or restart the server.
-withBrowserServer :: (AppConfig -> HarchWeb.Application AppRoute AccountAction WebApi.Route.AppRequestContext ()) -> ((BrowserConfig, HarchWeb.LocalTestServer) -> IO a) -> (BrowserConfig, AppConfig) -> IO a
+withBrowserServer :: (AppConfig -> HarchWeb.Application AppRoute AccountAction WebApi.Route.AppRequestContext WebApi.Route.AppAuthorization) -> ((BrowserConfig, HarchWeb.LocalTestServer) -> IO a) -> (BrowserConfig, AppConfig) -> IO a
 withBrowserServer makeApplication action (browser, appConfig) =
   HarchWeb.withLocalTestServer (makeApplication appConfig) $ \server ->
     action (browser, server)

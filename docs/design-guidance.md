@@ -3710,6 +3710,52 @@ site currently pinned to `()` across `WebApi.Route`, `WebApi.App`,
 `WebApi.Api.Endpoints`, and `WebApi.AccountJwt`. This is deliberately a
 separate, larger follow-up commit, not folded into this one.
 
+### Follow-up decision — AHI-4D slice 5: `authorization` type-parameter widening (2026-09-17)
+
+**Decision: land the mechanical `authorization` type-parameter widening (from
+`()` to the `AppAuthorization = HarchWeb.ScopeRequirement HarchWeb.OAuth2Scope`
+type alias already declared in `WebApi.Route`, per this document's own
+recommendation above) as its own commit, strictly ahead of the combined
+account-or-API-client-bearer profile that will first construct a
+`RequireAuthorized` value.** Every `EndpointMetadata`/`AccessRequirement`/
+`Application`/`ApplicationSecurity`/`RouteDefinition`/`EndpointGuard`/
+`ActionEndpoint`/`ActionCodec`/`AuthenticationPipeline` site across
+`WebApi.Route`, `WebApi.App`, `WebApi.Api.Endpoints`, `WebApi.AccountJwt`,
+`WebApi.AccountPages.Actions.Contract`, and their test fixtures now carries
+`AppAuthorization` instead of `()`. No route yet constructs
+`HarchWeb.RequireAuthorized`; this is a pure type-signature change, proven by
+the unmodified 517-example `Unit.WebApi`/`Unit.HarchWeb` suite passing
+unchanged and the full coverage gate returning to 100%.
+
+**A latent gap surfaced by this widening, not by the `/api/me` slice:
+`HarchWeb.Authentication.Flow.OAuth2Scope` derived no `Eq` instance**, even
+though `HarchWeb.Authentication.Pipeline.ScopeRequirement` already derives
+`(Eq, Show)` and therefore needs `Eq scope`. Nothing forced this until a test
+needed to compare two `AppAuthorization` (`AccessRequirement`) values via
+`shouldBe`, in `Unit.WebApi.RouteSpec`'s existing `endpointMetadata` table
+test. Per this document's never-mask-a-gate-finding rule, the fix is the
+missing instance, not a substitute comparison or a coverage exclusion:
+`OAuth2Scope` now derives `Eq`. Deriving it created two new zero-argument
+top-level declarations (`==`/`/=`) that the 100% coverage gate then required
+a real caller for; `Unit.HarchWeb.AuthenticationSpec`'s existing "OAuth scope
+declarations" test now compares two constructed `OAuth2Scope` values
+directly (not only through `Either`'s derived `Eq`, whose default `/=` ticks
+only `==`).
+
+**Named module-health consequence: `WebApi.App` now marginally exceeds this
+document's conjunctive line/import threshold (501 lines, 27 imports; the AK
+precedent above established the line threshold as strict `>500`, so 500
+lines did not previously trigger it).** The one added line is the new
+`AppAuthorization` import symbol in the existing `WebApi.Route` import list;
+the module's already-27 imports are unchanged. This crossing is real, not an
+artifact of formatting, so it is named rather than silently absorbed: a
+follow-up task should re-run `tools/haskell-quality-report.sh` when the next
+`WebApi.App` change lands and consider splitting the module (candidate
+boundary: the `buildAppWithDatabase*`/
+`buildAppWithDatabaseAndOptionalReportersAndSecurity` composition ladder
+versus route dispatch) if the margin grows further. No split is done here —
+this commit is scoped to the mechanical widening alone.
+
 **Decision: preserve the existing one-page-rendering and one-JWT-verification
 rails, adding only their missing typed boundary operations.** A route guard
 and a protocol route handler now return `NonPageResponse`, the closed subset

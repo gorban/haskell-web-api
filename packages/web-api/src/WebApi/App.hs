@@ -28,6 +28,16 @@
 -- fact, so only bearer-only account requests omit CSRF; cookie and dual-source
 -- requests retain it. This extends the existing post-match/action lifecycle
 -- rather than adding a token-specific middleware or route matcher.
+--
+-- Decision record (AHI-4D slice 5, 2026-09-17): every 'HarchWeb.Application'
+-- and 'HarchWeb.ApplicationSecurity' signature here now carries
+-- 'WebApi.Route.AppAuthorization' instead of @()@, ahead of the combined
+-- account-or-API-client-bearer profile that will first construct
+-- 'HarchWeb.RequireAuthorized'; see the widening decision record in
+-- @docs\/design-guidance.md@. That same commit named this module as now
+-- marginally over this document's module-health line\/import threshold
+-- (501 lines, 27 imports); no split is done here, see that record for the
+-- named follow-up.
 module WebApi.App
   ( buildAppWithDatabase,
     buildAppWithDatabaseAndAccountWorkflow,
@@ -89,7 +99,8 @@ import WebApi.Postgres.Pool (PostgresPool, closePostgresPool, newPostgresPool)
 import WebApi.Postgres.Runtime (buildRuntimePostgresPageRepository)
 import WebApi.Response (apiNotFoundResponse, renderLocale, selectResponseWithDatabaseAndAccountWorkflow, spacesLocation)
 import WebApi.Route
-  ( AppRequestContext (..),
+  ( AppAuthorization,
+    AppRequestContext (..),
     AppRoute (..),
     RequestAuthenticationTransport (..),
     accountAuthenticationProfileName,
@@ -102,7 +113,7 @@ import WebApi.Route
 buildAppWithDatabase ::
   AppConfig ->
   PageRepository ->
-  HarchWeb.Application AppRoute AccountAction AppRequestContext ()
+  HarchWeb.Application AppRoute AccountAction AppRequestContext AppAuthorization
 buildAppWithDatabase config pageRepository =
   buildAppWithDatabaseAndAccountWorkflow config pageRepository unavailableAccountWorkflow
 
@@ -110,7 +121,7 @@ buildAppWithDatabaseAndAccountWorkflow ::
   AppConfig ->
   PageRepository ->
   AccountWorkflow ->
-  HarchWeb.Application AppRoute AccountAction AppRequestContext ()
+  HarchWeb.Application AppRoute AccountAction AppRequestContext AppAuthorization
 buildAppWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow =
   buildAppWithDatabaseAndOptionalReporters config pageRepository accountWorkflow Nothing
 
@@ -123,8 +134,8 @@ buildAppWithDatabaseAndAccountWorkflowAndSecurity ::
   AppConfig ->
   PageRepository ->
   AccountWorkflow ->
-  HarchWeb.ApplicationSecurity AppRoute AppRequestContext () ->
-  HarchWeb.Application AppRoute AccountAction AppRequestContext ()
+  HarchWeb.ApplicationSecurity AppRoute AppRequestContext AppAuthorization ->
+  HarchWeb.Application AppRoute AccountAction AppRequestContext AppAuthorization
 buildAppWithDatabaseAndAccountWorkflowAndSecurity config pageRepository accountWorkflow =
   buildAppWithDatabaseAndOptionalReportersAndSecurity
     config
@@ -137,7 +148,7 @@ buildAppWithDatabaseAndReporters ::
   PageRepository ->
   AccountWorkflow ->
   RuntimeApplicationReporters ->
-  HarchWeb.Application AppRoute AccountAction AppRequestContext ()
+  HarchWeb.Application AppRoute AccountAction AppRequestContext AppAuthorization
 buildAppWithDatabaseAndReporters config pageRepository !accountWorkflow reporters =
   buildAppWithDatabaseAndOptionalReporters
     config
@@ -150,8 +161,8 @@ buildAppWithDatabaseAndReportersAndSecurity ::
   PageRepository ->
   AccountWorkflow ->
   RuntimeApplicationReporters ->
-  HarchWeb.ApplicationSecurity AppRoute AppRequestContext () ->
-  HarchWeb.Application AppRoute AccountAction AppRequestContext ()
+  HarchWeb.ApplicationSecurity AppRoute AppRequestContext AppAuthorization ->
+  HarchWeb.Application AppRoute AccountAction AppRequestContext AppAuthorization
 buildAppWithDatabaseAndReportersAndSecurity config pageRepository !accountWorkflow reporters =
   buildAppWithDatabaseAndOptionalReportersAndSecurity
     config
@@ -173,7 +184,7 @@ buildAppWithDatabaseAndOptionalReporters ::
   PageRepository ->
   AccountWorkflow ->
   Maybe RuntimeApplicationReporters ->
-  HarchWeb.Application AppRoute AccountAction AppRequestContext ()
+  HarchWeb.Application AppRoute AccountAction AppRequestContext AppAuthorization
 buildAppWithDatabaseAndOptionalReporters config pageRepository !accountWorkflow maybeReporters =
   buildAppWithDatabaseAndOptionalReportersAndSecurity
     config
@@ -187,8 +198,8 @@ buildAppWithDatabaseAndOptionalReportersAndSecurity ::
   PageRepository ->
   AccountWorkflow ->
   Maybe RuntimeApplicationReporters ->
-  HarchWeb.ApplicationSecurity AppRoute AppRequestContext () ->
-  HarchWeb.Application AppRoute AccountAction AppRequestContext ()
+  HarchWeb.ApplicationSecurity AppRoute AppRequestContext AppAuthorization ->
+  HarchWeb.Application AppRoute AccountAction AppRequestContext AppAuthorization
 buildAppWithDatabaseAndOptionalReportersAndSecurity config pageRepository !accountWorkflow maybeReporters applicationSecurity =
   ( Site.buildSiteApplication
       ( configureReporters
@@ -261,7 +272,7 @@ buildAppWithDatabaseAndOptionalReportersAndSecurity config pageRepository !accou
               Site.siteReportApplicationLog = runtimeApplicationReporterLog reporters
             }
 
-buildApp :: AppConfig -> HarchWeb.Application AppRoute AccountAction AppRequestContext ()
+buildApp :: AppConfig -> HarchWeb.Application AppRoute AccountAction AppRequestContext AppAuthorization
 buildApp config =
   buildAppWithDatabase config defaultPageRepository
 
@@ -274,7 +285,7 @@ buildAppRouteDefinition ::
   PageRepository ->
   AccountWorkflow ->
   AppRoute ->
-  Site.RouteDefinition AppRoute AppRequestContext ()
+  Site.RouteDefinition AppRoute AppRequestContext AppAuthorization
 buildAppRouteDefinition config pageRepository accountWorkflow route =
   case route of
     StatusApiRoute -> statusApiRouteDefinition
@@ -298,7 +309,7 @@ buildAppRouteDefinition config pageRepository accountWorkflow route =
             \_ -> selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow
         }
 
-protocolRouteDefinition :: AppRoute -> (HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.NonPageResponse AppRoute AppRequestContext)) -> Site.RouteDefinition AppRoute AppRequestContext ()
+protocolRouteDefinition :: AppRoute -> (HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.NonPageResponse AppRoute AppRequestContext)) -> Site.RouteDefinition AppRoute AppRequestContext AppAuthorization
 protocolRouteDefinition route renderProtocol =
   Site.RouteDefinition
     { Site.routeNavigationLabel = routeNavigationLabel route,
@@ -330,7 +341,7 @@ buildRuntimeAppWithAccountJwt ::
   AppConfig ->
   AppEnvironmentConfig ->
   AccountJwtRuntime ->
-  HarchWeb.Application AppRoute AccountAction AppRequestContext ()
+  HarchWeb.Application AppRoute AccountAction AppRequestContext AppAuthorization
 buildRuntimeAppWithAccountJwt pool config environmentConfig jwtRuntime =
   buildAppWithDatabaseAndReportersAndSecurity
     (withPublicBaseUrlRedirectAuthority environmentConfig config)
@@ -355,7 +366,7 @@ buildRuntimeAppWithAccountJwt pool config environmentConfig jwtRuntime =
 -- handler's own failure-response argument through the real dispatcher, the
 -- same requirement 'WebApi.Api.Endpoints.tokenApiFailureResponse's and
 -- 'WebApi.Api.Endpoints.meApiFailureResponse's own coverage already needed.
-runtimeAuthenticationProfiles :: AccountWorkflow -> AccountJwtRuntime -> HarchWeb.ApplicationSecurity AppRoute AppRequestContext ()
+runtimeAuthenticationProfiles :: AccountWorkflow -> AccountJwtRuntime -> HarchWeb.ApplicationSecurity AppRoute AppRequestContext AppAuthorization
 runtimeAuthenticationProfiles accountWorkflow jwtRuntime =
   HarchWeb.AuthenticationProfiles
     []
@@ -383,7 +394,7 @@ buildRuntimeAppWithDatabaseBuilder ::
   AppConfig ->
   (DatabaseConfig -> PageRepository) ->
   AppEnvironmentConfig ->
-  HarchWeb.Application AppRoute AccountAction AppRequestContext ()
+  HarchWeb.Application AppRoute AccountAction AppRequestContext AppAuthorization
 buildRuntimeAppWithDatabaseBuilder config buildPageRepository environmentConfig =
   let pageRepository = buildPageRepository (databaseConfig environmentConfig)
    in buildAppWithDatabaseAndReporters
