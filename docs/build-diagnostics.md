@@ -107,6 +107,17 @@ warning allowance exists. Retire the local patch only after a public HTTP2
 release includes the lifecycle repair, passes its unpatched suite with `-Werror`,
 and the updated frozen plan passes all repository gates.
 
+Every one of these four released packages is unpacked fresh from Hackage on
+each run, then patched by `perl` substitutions anchored on a bare `\n`. A
+Hackage metadata revision can change a package's line endings without
+changing its version (observed on `http2-5.4.4`'s `.cabal` file, which gained
+CRLF endings): the substitutions then silently match nothing, and the later
+exact-count verification reports a constraint-count or module-count mismatch
+that does not explain the real cause. The script normalizes every unpacked
+`.cabal`/`.hs` file to LF immediately after unpacking, before any patch runs,
+so the patches apply the same way regardless of how upstream revises its line
+endings.
+
 ## Documented GHC HPC deprecation
 
 The same GHC 9.14.1 coverage mode can run instrumented custom-Setup and source-preprocessor

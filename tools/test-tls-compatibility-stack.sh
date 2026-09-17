@@ -67,6 +67,16 @@ EOF
 CABAL_DIR="$isolated_cabal_directory" cabal update
 CABAL_DIR="$isolated_cabal_directory" cabal unpack cborg-0.2.10.0 serialise-0.2.6.1 primitive-0.9.1.0 http2-5.4.4 --destdir="$temporary_directory"
 
+# A Hackage cabal-file revision can silently switch a package's line endings
+# to CRLF (observed on http2-5.4.4). Every patch below is a perl substitution
+# anchored on a bare "\n", so CRLF input makes it match nothing instead of
+# failing loudly; only the later exact-count verification catches it, as a
+# constraint-count mismatch that does not explain the real cause. Normalize
+# every unpacked source file to LF immediately after unpacking so the patches
+# below apply the same way regardless of how upstream revised its line endings.
+find "$cborg_directory" "$serialise_directory" "$primitive_directory" "$http2_directory" -type f \( -name '*.cabal' -o -name '*.hs' \) -print0 |
+  xargs -0 sed -i 's/\r$//'
+
 cat > "$cborg_directory/cabal.project.local" <<'EOF'
 allow-newer:
   cborg:base,
