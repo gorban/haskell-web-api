@@ -3618,6 +3618,53 @@ HPC gap as a tooling limitation needing a documented exception, check whether
 a test double is quietly discarding the exact argument the gap is centered
 on.
 
+### Decision record — AHI-4D slice 5: `POST /api/oauth/token` HTTP route (2026-09-17)
+
+**Decision: declare the token route `AllowUnauthenticated`, the same access
+requirement as every other API route, rather than inventing a second
+authentication rail.** Every other protected route establishes its principal
+through the account session/bearer-JWT profile before its handler runs; this
+route's principal is instead the OAuth client itself, and it authenticates
+that client *inside* the handler (`WebApi.ApiClientToken.issueApiClientToken`,
+HTTP Basic verified against the durable API-client store). Routing this
+through `RequireAuthenticated` would require a second, unrelated principal
+kind on the one existing authentication profile, so `AllowUnauthenticated` at
+the route layer plus the handler's own credential check is the one-owner
+extension, not a gap: the route is not actually open to the public, it is
+open to *anyone presenting OAuth client credentials*, which is exactly what
+the endpoint decodes and rejects on before doing anything else.
+
+**Decision: collapse every non-issuance `ApiClientTokenOutcome` other than
+the two RFC 6749 protocol rejections into one generic `TokenApiUnavailable`
+503, rather than a distinct public shape per outcome.**
+`WebApi.ApiClientToken` already documents why a work-budget exhaustion must
+stay indistinguishable from a genuine rejection *internally*; the same
+property has to hold at the public HTTP boundary, or the collapsing done one
+layer down would be undone by a differently-shaped response one layer up. A
+durable-store outage, an exhausted Argon2 work budget, a signing failure, and
+the (practically unreachable, but still real per the type) case where a
+freshly signed compact JWT's own bytes fail UTF-8 decoding therefore all
+render the identical `{"error":"token-issuance-unavailable"}` 503 — nothing
+about which one occurred is observable from outside. `TokenApiInvalidClient`
+(401 + `WWW-Authenticate: Basic`, per RFC 6749 section 5.2) and
+`TokenApiInvalidScope` (400) are named separately because RFC 6749 gives them
+distinct wire shapes a well-behaved client is expected to branch on; nothing
+else in `ApiClientTokenOutcome` gets that treatment.
+
+**Named gap, not a completed slice: field-decode rejections (a missing
+`grant_type`, a malformed or absent `Authorization` header) return the
+existing generic empty-body 400 from `ApiUseGenericFieldFailure`, not an RFC
+6749 `{"error":"invalid_request"}` body.** This matches `/api/second`'s own
+existing precedent for the same generic policy on a `ByteString` response
+type (see `HarchWeb.Api.Endpoint.Runtime.apiFailureProtocolResponse`'s
+`eqT @response @Text` check, which only ever renders a body for a `Text`
+response), so it is not a new inconsistency this endpoint introduces — but it
+is a real, currently-un-closed gap against the full RFC 6749 error yield for
+this one endpoint. Closing it requires an `ApiRenderFieldFailures` policy
+producing the correctly shaped `invalid_request` body from
+`[ApiRequestParseError]`; that is deferred to a follow-up task rather than
+done here, and must not be described as already covered by this slice.
+
 **Decision: preserve the existing one-page-rendering and one-JWT-verification
 rails, adding only their missing typed boundary operations.** A route guard
 and a protocol route handler now return `NonPageResponse`, the closed subset

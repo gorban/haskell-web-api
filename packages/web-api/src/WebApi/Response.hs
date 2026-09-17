@@ -14,6 +14,7 @@ module WebApi.Response
     selectResponseWithDatabase,
     selectResponse,
     statusApiBody,
+    tokenApiSuccessBody,
     toHarchDatabaseOperation,
   )
 where
@@ -24,6 +25,7 @@ import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import Data.Word (Word64)
 import HarchWeb qualified
 import HarchWeb.Database qualified as HarchDatabase
 import HarchWeb.Observability qualified as Observability
@@ -129,6 +131,20 @@ secondRouteApiBody secondRouteData =
 jsonErrorBody :: Text -> JsonEncoding.Encoding
 jsonErrorBody errorCode =
   JsonEncoding.pairs (JsonEncoding.pair "error" (Aeson.toEncoding errorCode))
+
+-- | The RFC 6749 section 5.1 successful token response. @scope@ is always
+-- present (space-joined, empty when the client used its default scopes)
+-- rather than conditionally omitted, since this endpoint's one client is a
+-- typed adapter and gains nothing from the human-readability the spec's
+-- "OPTIONAL if identical to the scope requested" allowance exists for.
+tokenApiSuccessBody :: Text -> [Text] -> Word64 -> JsonEncoding.Encoding
+tokenApiSuccessBody accessToken scopes lifetimeSeconds =
+  JsonEncoding.pairs
+    ( JsonEncoding.pair "access_token" (Aeson.toEncoding accessToken)
+        <> JsonEncoding.pair "token_type" (Aeson.toEncoding ("Bearer" :: Text))
+        <> JsonEncoding.pair "expires_in" (Aeson.toEncoding lifetimeSeconds)
+        <> JsonEncoding.pair "scope" (Aeson.toEncoding (Text.unwords scopes))
+    )
 
 renderLocale :: AppLocale -> Text
 renderLocale locale =

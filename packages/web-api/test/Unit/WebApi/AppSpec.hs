@@ -3,9 +3,10 @@
 {-# SPEC #-}
 
 import Control.Concurrent (forkIO, killThread, newEmptyMVar, putMVar, readMVar, threadDelay)
-import Control.Exception (IOException, SomeException, bracket, displayException, throwIO, try)
-import Control.Monad (forM_)
+import Control.Exception (IOException, SomeException, bracket, bracket_, displayException, throwIO, try)
+import Control.Monad (forM_, void)
 import Data.ByteString qualified as ByteString
+import Data.ByteString.Base64 qualified as Base64
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (isJust, isNothing)
@@ -42,7 +43,7 @@ import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), AppMode (..), D
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), PageRepository (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed, defaultPageRepository)
 import WebApi.Login (AccountCredential (..), AccountCredentialStore (..))
 import WebApi.Page (renderPage)
-import WebApi.Postgres.Testing (closePostgresPool, newPostgresPool, runPostgresMigrationsForRuntime, runPostgresSeed)
+import WebApi.Postgres.Testing (closePostgresPool, newPostgresPool, runPostgresMigrationsForRuntime, runPostgresSeed, runRuntimeParameterizedRowsQuery)
 import WebApi.Response (selectResponse)
 import WebApi.Route (AppRequestContext (..), AppRoute (..), RequestAuthenticationTransport (..), defaultRequestContext, renderRoutePath)
 import WebApi.Route qualified
@@ -617,6 +618,7 @@ spec = do
       HarchWeb.routeMethods WebApi.Route.routeCodec ApiNotFoundRoute `shouldBe` HarchWeb.RouteHidden
       HarchWeb.routeMethods WebApi.Route.routeCodec StatusApiRoute `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet]
       HarchWeb.routeMethods WebApi.Route.routeCodec SecondApiRoute `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet]
+      HarchWeb.routeMethods WebApi.Route.routeCodec TokenApiRoute `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RoutePost]
 
     it "attaches security only after the page selector returns a page result" $ do
       expectedSecondResponse <- selectResponse defaultAppConfig secondRequest
@@ -1000,6 +1002,84 @@ spec = do
                   (HarchWeb.toWaiApplication runtimeApplication)
                   ((waiRequest ["profile"]) {Wai.requestHeaders = [("Cookie", TextEncoding.encodeUtf8 cookie)]})
               Wai.responseStatus profileResponse `shouldBe` Http.status200
+              let oauthClientId = "app-spec-oauth-token-client" :: Text.Text
+                  oauthSecretHash =
+                    case Password.hashPasswordWithSalt testPasswordHashingPolicy "fedcba9876543210" (Password.mkPassword "runtime-token-secret") of
+                      Just value -> value
+                      Nothing -> error "expected a valid test API-client secret hash"
+                  ownerQuery = runRuntimeParameterizedRowsQuery defaultMigrationPostgresConfig
+                  cleanupOauthClient =
+                    void (ownerQuery "DELETE FROM web_api.api_clients WHERE client_id = $1 RETURNING client_id;" [oauthClientId])
+                  setupOauthClient = do
+                    cleanupOauthClient
+                    _ <- ownerQuery "INSERT INTO web_api.api_clients (client_id) VALUES ($1) RETURNING client_id;" [oauthClientId]
+                    _ <- ownerQuery "INSERT INTO web_api.api_client_secret_hashes (client_id, secret_hash, created_at_nanoseconds) VALUES ($1, $2, 1) RETURNING secret_hash;" [oauthClientId, Password.passwordHashText oauthSecretHash]
+                    _ <- ownerQuery "INSERT INTO web_api.api_client_scopes (client_id, scope_text, scope_position, is_default) VALUES ($1, $2, 0, true) RETURNING scope_text;" [oauthClientId, "resource:read"]
+                    pure ()
+                  basicHeaderFor secretValue = "Basic " <> Base64.encode (TextEncoding.encodeUtf8 (oauthClientId <> ":" <> secretValue))
+                  tokenRequestFor maybeHeaderValue bodyBytes = do
+                    chunksReference <- newIORef [bodyBytes]
+                    pure
+                      ( Wai.setRequestBodyChunks
+                          (nextRequestBodyChunk chunksReference)
+                          ( (waiRequest ["api", "oauth", "token"])
+                              { Wai.requestMethod = "POST",
+                                Wai.requestHeaders =
+                                  ("Content-Type", "application/x-www-form-urlencoded")
+                                    : [("Authorization", headerValue) | Just headerValue <- [maybeHeaderValue]]
+                              }
+                          )
+                      )
+              bracket_ setupOauthClient cleanupOauthClient $ do
+                successRequest <- tokenRequestFor (Just (basicHeaderFor "runtime-token-secret")) "grant_type=client_credentials&scope=resource%3Aread"
+                successResponse <- performWaiRequest (HarchWeb.toWaiApplication runtimeApplication) successRequest
+                successBody <- readResponseBody successResponse
+                expectAll
+                  ( (Wai.responseStatus successResponse `shouldBe` Http.status200)
+                      :| [ lookup Http.hContentType (Wai.responseHeaders successResponse) `shouldBe` Just "application/json",
+                           Text.isInfixOf "\"token_type\":\"Bearer\"" successBody `shouldBe` True,
+                           Text.isInfixOf "\"scope\":\"resource:read\"" successBody `shouldBe` True,
+                           Text.isInfixOf "\"access_token\":\"" successBody `shouldBe` True
+                         ]
+                  )
+
+                invalidClientRequest <- tokenRequestFor (Just (basicHeaderFor "wrong-secret")) "grant_type=client_credentials"
+                invalidClientResponse <- performWaiRequest (HarchWeb.toWaiApplication runtimeApplication) invalidClientRequest
+                invalidClientBody <- readResponseBody invalidClientResponse
+                expectAll
+                  ( (Wai.responseStatus invalidClientResponse `shouldBe` Http.status401)
+                      :| [ lookup "WWW-Authenticate" (Wai.responseHeaders invalidClientResponse) `shouldBe` Just "Basic",
+                           invalidClientBody `shouldBe` "{\"error\":\"invalid_client\"}"
+                         ]
+                  )
+
+                missingAuthorizationRequest <- tokenRequestFor Nothing "grant_type=client_credentials"
+                missingAuthorizationResponse <- performWaiRequest (HarchWeb.toWaiApplication runtimeApplication) missingAuthorizationRequest
+                Wai.responseStatus missingAuthorizationResponse `shouldBe` Http.status400
+
+                invalidScopeRequest <- tokenRequestFor (Just (basicHeaderFor "runtime-token-secret")) "grant_type=client_credentials&scope=profile%3Aread%3Aself"
+                invalidScopeResponse <- performWaiRequest (HarchWeb.toWaiApplication runtimeApplication) invalidScopeRequest
+                invalidScopeBody <- readResponseBody invalidScopeResponse
+                expectAll
+                  ( (Wai.responseStatus invalidScopeResponse `shouldBe` Http.status400)
+                      :| [invalidScopeBody `shouldBe` "{\"error\":\"invalid_scope\"}"]
+                  )
+
+                -- RFC 6749 requires this grant's form body to declare
+                -- application/x-www-form-urlencoded; a request that omits
+                -- Content-Type entirely must be rejected rather than assumed
+                -- (see tokenApiMissingContentTypePolicy's Haddock).
+                missingContentTypeChunksReference <- newIORef ["grant_type=client_credentials"]
+                let missingContentTypeRequest =
+                      Wai.setRequestBodyChunks
+                        (nextRequestBodyChunk missingContentTypeChunksReference)
+                        ( (waiRequest ["api", "oauth", "token"])
+                            { Wai.requestMethod = "POST",
+                              Wai.requestHeaders = [("Authorization", basicHeaderFor "runtime-token-secret")]
+                            }
+                        )
+                missingContentTypeResponse <- performWaiRequest (HarchWeb.toWaiApplication runtimeApplication) missingContentTypeRequest
+                Wai.responseStatus missingContentTypeResponse `shouldBe` Http.status415
 
     it "composes startup-validated account JWT admission into the runtime application" $
       withTestAccountJwtFixture $ \runtimeEnvironmentConfig _ ->

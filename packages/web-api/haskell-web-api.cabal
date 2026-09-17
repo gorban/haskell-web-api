@@ -232,6 +232,7 @@ test-suite haskell-web-api-tests
     Unit.WebApi.AccountPagesSpec
     Unit.WebApi.AccountSpec
     Unit.WebApi.ActivityAuditSpec
+    Unit.WebApi.Api.EndpointsSpec
     Unit.WebApi.ApiClientSpec
     Unit.WebApi.ApiClientTokenSpec
     Unit.WebApi.App.EnhancementsSpec

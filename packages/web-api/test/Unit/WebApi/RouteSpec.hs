@@ -63,7 +63,7 @@ spec = do
                      WebApi.Route.HelpPage,
                      WebApi.Route.PageNotFound
                    ]
-      apiRoutes `shouldBe` [StatusApi, SecondApi, ApiNotFound]
+      apiRoutes `shouldBe` [StatusApi, SecondApi, TokenApi, ApiNotFound]
       minBound `shouldBe` WebApi.Route.HomePage
       maxBound `shouldBe` WebApi.Route.PageNotFound
       succ WebApi.Route.HomePage `shouldBe` WebApi.Route.SecondPage
@@ -91,14 +91,15 @@ spec = do
       minBound `shouldBe` StatusApi
       maxBound `shouldBe` ApiNotFound
       succ StatusApi `shouldBe` SecondApi
-      pred ApiNotFound `shouldBe` SecondApi
+      pred ApiNotFound `shouldBe` TokenApi
       StatusApi `shouldNotBe` SecondApi
       enumFrom StatusApi `shouldBe` apiRoutes
       enumFromThen StatusApi SecondApi `shouldBe` apiRoutes
       enumFromThenTo StatusApi SecondApi ApiNotFound `shouldBe` apiRoutes
-      map show apiRoutes `shouldBe` ["StatusApi", "SecondApi", "ApiNotFound"]
-      showList apiRoutes "" `shouldBe` "[StatusApi,SecondApi,ApiNotFound]"
+      map show apiRoutes `shouldBe` ["StatusApi", "SecondApi", "TokenApi", "ApiNotFound"]
+      showList apiRoutes "" `shouldBe` "[StatusApi,SecondApi,TokenApi,ApiNotFound]"
       show SecondApiRoute `shouldBe` "SecondApiRoute"
+      show TokenApiRoute `shouldBe` "TokenApiRoute"
       show ApiNotFoundRoute `shouldBe` "ApiNotFoundRoute"
       show LanguageRoute `shouldBe` "LanguageRoute"
       show HelpRoute `shouldBe` "HelpRoute"
@@ -154,10 +155,13 @@ spec = do
       parseRoute defaultRequestContext "/api/status?fresh=1"
         `shouldBe` Just apiStatusRequest {HarchWeb.requestContext = defaultRequestContext {requestQueryParameters = [("fresh", "1")]}}
       parseRoute defaultRequestContext "/api/second" `shouldBe` Just apiSecondRequest
+      parseRoute defaultRequestContext "/api/oauth/token" `shouldBe` Just apiTokenRequest
       parseRoute defaultRequestContext "/api" `shouldBe` Just apiNotFoundRequest
       parseRoute defaultRequestContext "/api/404" `shouldBe` Just apiNotFoundRequest
       parseRoute defaultRequestContext "/api/missing" `shouldBe` Just apiNotFoundRequest
       parseRoute defaultRequestContext "/api/status/extra" `shouldBe` Just apiNotFoundRequest
+      parseRoute defaultRequestContext "/api/oauth" `shouldBe` Just apiNotFoundRequest
+      parseRoute defaultRequestContext "/api/oauth/token/extra" `shouldBe` Just apiNotFoundRequest
 
     it "parses the second page path" $ parseRoute defaultRequestContext "/second" `shouldBe` Just secondRequest
 
@@ -242,6 +246,7 @@ spec = do
       parseRoute defaultRequestContext (renderRoutePath (HarchWeb.RouteRequest SecondRoute explicitEnglishRequestContext)) `shouldBe` Just (HarchWeb.RouteRequest SecondRoute explicitEnglishRequestContext)
       parseRoute defaultRequestContext (renderRoutePath apiStatusRequest) `shouldBe` Just apiStatusRequest
       parseRoute defaultRequestContext (renderRoutePath apiSecondRequest) `shouldBe` Just apiSecondRequest
+      parseRoute defaultRequestContext (renderRoutePath apiTokenRequest) `shouldBe` Just apiTokenRequest
       parseRoute defaultRequestContext (renderRoutePath apiNotFoundRequest) `shouldBe` Just apiNotFoundRequest
 
     it "renders default and explicit locale prefixes" $ do
@@ -260,6 +265,7 @@ spec = do
       renderRoutePath (HarchWeb.RouteRequest ProfileRoute spanishRequestContext) `shouldBe` "/es/profile"
       renderRoutePath apiStatusRequest `shouldBe` "/api/status"
       renderRoutePath apiSecondRequest `shouldBe` "/api/second"
+      renderRoutePath apiTokenRequest `shouldBe` "/api/oauth/token"
       renderRoutePath apiNotFoundRequest `shouldBe` "/api/404"
       renderRoutePath notFoundRequest `shouldBe` "/404"
       HarchWeb.safeUrlText (renderRouteUrl spanishSpacesRequest) `shouldBe` "/es/spaces"
@@ -293,6 +299,7 @@ spec = do
               (NotFoundRoute, "web.not-found", "/{locale}/404", HarchWeb.HtmlEndpoint),
               (StatusApiRoute, "api.status", "/api/status", HarchWeb.ApiEndpoint),
               (SecondApiRoute, "api.second", "/api/second", HarchWeb.ApiEndpoint),
+              (TokenApiRoute, "api.oauth-token", "/api/oauth/token", HarchWeb.ApiEndpoint),
               (ApiNotFoundRoute, "api.not-found", "/api/404", HarchWeb.ApiEndpoint)
             ]
           expectedAccess route
@@ -320,6 +327,7 @@ spec = do
       ("matches locale-prefixed paths with the merged request context", "/es", spanishHomeRequest),
       ("matches an API status path into the API route family", "/api/status", apiStatusRequest),
       ("matches an API second path into the API route family", "/api/second", apiSecondRequest),
+      ("matches the OAuth token path into the API route family", "/api/oauth/token", apiTokenRequest),
       ("matches an unknown API path into the API route family's not-found outcome", "/api/missing", apiNotFoundRequest),
       ("falls back to the stable not-found route for unknown paths", "/missing", notFoundRequest)
       ]

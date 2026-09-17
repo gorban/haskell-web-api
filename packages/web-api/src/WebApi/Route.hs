@@ -21,6 +21,7 @@ module WebApi.Route
         HelpRoute,
         StatusApiRoute,
         SecondApiRoute,
+        TokenApiRoute,
         NotFoundRoute,
         ApiNotFoundRoute
       ),
@@ -132,6 +133,7 @@ data PageRoute
 data ApiRoute
   = StatusApi
   | SecondApi
+  | TokenApi
   | ApiNotFound
   deriving (Bounded, Enum, Eq, Show)
 
@@ -179,6 +181,9 @@ pattern StatusApiRoute = Api StatusApi
 pattern SecondApiRoute :: AppRoute
 pattern SecondApiRoute = Api SecondApi
 
+pattern TokenApiRoute :: AppRoute
+pattern TokenApiRoute = Api TokenApi
+
 pattern NotFoundRoute :: AppRoute
 pattern NotFoundRoute = Page PageNotFound
 
@@ -200,6 +205,7 @@ pattern ApiNotFoundRoute = Api ApiNotFound
   NotFoundRoute,
   StatusApiRoute,
   SecondApiRoute,
+  TokenApiRoute,
   ApiNotFoundRoute
   #-}
 
@@ -219,6 +225,7 @@ instance Show AppRoute where
       HelpRoute -> "HelpRoute"
       StatusApiRoute -> "StatusApiRoute"
       SecondApiRoute -> "SecondApiRoute"
+      TokenApiRoute -> "TokenApiRoute"
       NotFoundRoute -> "NotFoundRoute"
       ApiNotFoundRoute -> "ApiNotFoundRoute"
 
@@ -263,6 +270,7 @@ appRouteMethods route =
     Page PageNotFound -> []
     Page _ -> [HarchWeb.RouteGet]
     Api ApiNotFound -> []
+    Api TokenApi -> [HarchWeb.RoutePost]
     Api _ -> [HarchWeb.RouteGet]
 
 parseRoute :: AppRequestContext -> HarchWeb.RouteLocation -> HarchWeb.RouteParseResult AppRoute AppRequestContext
@@ -323,6 +331,7 @@ apiRouteSegments apiRoute =
   case apiRoute of
     StatusApi -> pathSegment "api" NonEmpty.:| [pathSegment "status"]
     SecondApi -> pathSegment "api" NonEmpty.:| [pathSegment "second"]
+    TokenApi -> pathSegment "api" NonEmpty.:| [pathSegment "oauth", pathSegment "token"]
     ApiNotFound -> pathSegment "api" NonEmpty.:| [pathSegment "404"]
   where
     pathSegment = HarchWeb.requiredPathSegment
@@ -376,6 +385,7 @@ parseRouteSegments path segments =
     [prefix, segment]
       | prefix == "api" -> parseApiPath segment
     [prefix, segment] -> parsePrefixedPath path prefix segment
+    ["api", "oauth", "token"] -> Right (Nothing, TokenApiRoute)
     apiPrefix : _
       | apiPrefix == "api" -> Right (Nothing, ApiNotFoundRoute)
     _ -> Left (UnsupportedPath path)
@@ -459,6 +469,13 @@ endpointMetadata route =
     NotFoundRoute -> html "web.not-found" "/{locale}/404"
     StatusApiRoute -> api "api.status" "/api/status"
     SecondApiRoute -> api "api.second" "/api/second"
+    -- The token endpoint authenticates its OAuth client itself (HTTP Basic
+    -- client-credentials, verified against the durable API-client store), so
+    -- it declares 'AllowUnauthenticated' like every other API route here: no
+    -- account session or bearer JWT establishes the caller before this
+    -- handler runs. See the AHI-4D decision record in
+    -- @docs/design-guidance.md@.
+    TokenApiRoute -> api "api.oauth-token" "/api/oauth/token"
     ApiNotFoundRoute -> api "api.not-found" "/api/404"
   where
     html = declaredMetadata HtmlEndpoint AllowUnauthenticated

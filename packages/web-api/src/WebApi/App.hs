@@ -62,7 +62,7 @@ import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush)
 import WebApi.AccountJwt (AccountJwtLoadError, AccountJwtRuntime, accountJwtAuthenticationPipeline, loadAccountJwtRuntime)
 import WebApi.AccountPages (AccountAction, accountActionEndpointMetadata, accountActionRoute, accountActions, accountCsrfProtection, handleAccountAction)
-import WebApi.Api.Endpoints (secondApiRouteDefinition, statusApiRouteDefinition)
+import WebApi.Api.Endpoints (secondApiRouteDefinition, statusApiRouteDefinition, tokenApiRouteDefinition)
 import WebApi.App.AccountWorkflow (buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwt, buildRuntimeAccountWorkflowWithJwtRuntime, unavailableAccountWorkflow)
 import WebApi.App.Observability
   ( otlpExportFailureMessage,
@@ -278,6 +278,7 @@ buildAppRouteDefinition config pageRepository accountWorkflow route =
   case route of
     StatusApiRoute -> statusApiRouteDefinition
     SecondApiRoute -> secondApiRouteDefinition pageRepository
+    TokenApiRoute -> tokenApiRouteDefinition (accountWorkflowApiClientTokenEnvironment accountWorkflow)
     HomeRoute ->
       protocolRouteDefinition route $
         \routeRequest -> pure (HarchWeb.nonPageRedirectResponse Http.status302 (spacesLocation routeRequest))
