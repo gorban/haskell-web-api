@@ -63,7 +63,7 @@ spec = do
                      WebApi.Route.HelpPage,
                      WebApi.Route.PageNotFound
                    ]
-      apiRoutes `shouldBe` [StatusApi, SecondApi, TokenApi, ApiNotFound]
+      apiRoutes `shouldBe` [StatusApi, SecondApi, MeApi, TokenApi, ApiNotFound]
       minBound `shouldBe` WebApi.Route.HomePage
       maxBound `shouldBe` WebApi.Route.PageNotFound
       succ WebApi.Route.HomePage `shouldBe` WebApi.Route.SecondPage
@@ -96,9 +96,10 @@ spec = do
       enumFrom StatusApi `shouldBe` apiRoutes
       enumFromThen StatusApi SecondApi `shouldBe` apiRoutes
       enumFromThenTo StatusApi SecondApi ApiNotFound `shouldBe` apiRoutes
-      map show apiRoutes `shouldBe` ["StatusApi", "SecondApi", "TokenApi", "ApiNotFound"]
-      showList apiRoutes "" `shouldBe` "[StatusApi,SecondApi,TokenApi,ApiNotFound]"
+      map show apiRoutes `shouldBe` ["StatusApi", "SecondApi", "MeApi", "TokenApi", "ApiNotFound"]
+      showList apiRoutes "" `shouldBe` "[StatusApi,SecondApi,MeApi,TokenApi,ApiNotFound]"
       show SecondApiRoute `shouldBe` "SecondApiRoute"
+      show MeApiRoute `shouldBe` "MeApiRoute"
       show TokenApiRoute `shouldBe` "TokenApiRoute"
       show ApiNotFoundRoute `shouldBe` "ApiNotFoundRoute"
       show LanguageRoute `shouldBe` "LanguageRoute"
@@ -155,6 +156,7 @@ spec = do
       parseRoute defaultRequestContext "/api/status?fresh=1"
         `shouldBe` Just apiStatusRequest {HarchWeb.requestContext = defaultRequestContext {requestQueryParameters = [("fresh", "1")]}}
       parseRoute defaultRequestContext "/api/second" `shouldBe` Just apiSecondRequest
+      parseRoute defaultRequestContext "/api/me" `shouldBe` Just apiMeRequest
       parseRoute defaultRequestContext "/api/oauth/token" `shouldBe` Just apiTokenRequest
       parseRoute defaultRequestContext "/api" `shouldBe` Just apiNotFoundRequest
       parseRoute defaultRequestContext "/api/404" `shouldBe` Just apiNotFoundRequest
@@ -246,6 +248,7 @@ spec = do
       parseRoute defaultRequestContext (renderRoutePath (HarchWeb.RouteRequest SecondRoute explicitEnglishRequestContext)) `shouldBe` Just (HarchWeb.RouteRequest SecondRoute explicitEnglishRequestContext)
       parseRoute defaultRequestContext (renderRoutePath apiStatusRequest) `shouldBe` Just apiStatusRequest
       parseRoute defaultRequestContext (renderRoutePath apiSecondRequest) `shouldBe` Just apiSecondRequest
+      parseRoute defaultRequestContext (renderRoutePath apiMeRequest) `shouldBe` Just apiMeRequest
       parseRoute defaultRequestContext (renderRoutePath apiTokenRequest) `shouldBe` Just apiTokenRequest
       parseRoute defaultRequestContext (renderRoutePath apiNotFoundRequest) `shouldBe` Just apiNotFoundRequest
 
@@ -265,6 +268,7 @@ spec = do
       renderRoutePath (HarchWeb.RouteRequest ProfileRoute spanishRequestContext) `shouldBe` "/es/profile"
       renderRoutePath apiStatusRequest `shouldBe` "/api/status"
       renderRoutePath apiSecondRequest `shouldBe` "/api/second"
+      renderRoutePath apiMeRequest `shouldBe` "/api/me"
       renderRoutePath apiTokenRequest `shouldBe` "/api/oauth/token"
       renderRoutePath apiNotFoundRequest `shouldBe` "/api/404"
       renderRoutePath notFoundRequest `shouldBe` "/404"
@@ -299,14 +303,15 @@ spec = do
               (NotFoundRoute, "web.not-found", "/{locale}/404", HarchWeb.HtmlEndpoint),
               (StatusApiRoute, "api.status", "/api/status", HarchWeb.ApiEndpoint),
               (SecondApiRoute, "api.second", "/api/second", HarchWeb.ApiEndpoint),
+              (MeApiRoute, "api.me", "/api/me", HarchWeb.ApiEndpoint),
               (TokenApiRoute, "api.oauth-token", "/api/oauth/token", HarchWeb.ApiEndpoint),
               (ApiNotFoundRoute, "api.not-found", "/api/404", HarchWeb.ApiEndpoint)
             ]
           expectedAccess route
-            | route `elem` [LogoutRoute, ProfileRoute] = HarchWeb.RequireAuthenticated
+            | route `elem` [LogoutRoute, ProfileRoute, MeApiRoute] = HarchWeb.RequireAuthenticated
             | otherwise = HarchWeb.AllowUnauthenticated
           expectedProfile route
-            | route `elem` [LogoutRoute, ProfileRoute] = Just WebApi.Route.accountAuthenticationProfileName
+            | route `elem` [LogoutRoute, ProfileRoute, MeApiRoute] = Just WebApi.Route.accountAuthenticationProfileName
             | otherwise = Nothing
       forM_ expectedMetadata $ \(route, expectedName, template, protocol) ->
         endpointDeclarationFields (WebApi.Route.endpointMetadata route)
@@ -327,6 +332,7 @@ spec = do
       ("matches locale-prefixed paths with the merged request context", "/es", spanishHomeRequest),
       ("matches an API status path into the API route family", "/api/status", apiStatusRequest),
       ("matches an API second path into the API route family", "/api/second", apiSecondRequest),
+      ("matches an API me path into the API route family", "/api/me", apiMeRequest),
       ("matches the OAuth token path into the API route family", "/api/oauth/token", apiTokenRequest),
       ("matches an unknown API path into the API route family's not-found outcome", "/api/missing", apiNotFoundRequest),
       ("falls back to the stable not-found route for unknown paths", "/missing", notFoundRequest)

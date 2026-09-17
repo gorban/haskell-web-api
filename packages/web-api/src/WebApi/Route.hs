@@ -21,6 +21,7 @@ module WebApi.Route
         HelpRoute,
         StatusApiRoute,
         SecondApiRoute,
+        MeApiRoute,
         TokenApiRoute,
         NotFoundRoute,
         ApiNotFoundRoute
@@ -133,6 +134,7 @@ data PageRoute
 data ApiRoute
   = StatusApi
   | SecondApi
+  | MeApi
   | TokenApi
   | ApiNotFound
   deriving (Bounded, Enum, Eq, Show)
@@ -181,6 +183,9 @@ pattern StatusApiRoute = Api StatusApi
 pattern SecondApiRoute :: AppRoute
 pattern SecondApiRoute = Api SecondApi
 
+pattern MeApiRoute :: AppRoute
+pattern MeApiRoute = Api MeApi
+
 pattern TokenApiRoute :: AppRoute
 pattern TokenApiRoute = Api TokenApi
 
@@ -205,6 +210,7 @@ pattern ApiNotFoundRoute = Api ApiNotFound
   NotFoundRoute,
   StatusApiRoute,
   SecondApiRoute,
+  MeApiRoute,
   TokenApiRoute,
   ApiNotFoundRoute
   #-}
@@ -225,6 +231,7 @@ instance Show AppRoute where
       HelpRoute -> "HelpRoute"
       StatusApiRoute -> "StatusApiRoute"
       SecondApiRoute -> "SecondApiRoute"
+      MeApiRoute -> "MeApiRoute"
       TokenApiRoute -> "TokenApiRoute"
       NotFoundRoute -> "NotFoundRoute"
       ApiNotFoundRoute -> "ApiNotFoundRoute"
@@ -331,6 +338,7 @@ apiRouteSegments apiRoute =
   case apiRoute of
     StatusApi -> pathSegment "api" NonEmpty.:| [pathSegment "status"]
     SecondApi -> pathSegment "api" NonEmpty.:| [pathSegment "second"]
+    MeApi -> pathSegment "api" NonEmpty.:| [pathSegment "me"]
     TokenApi -> pathSegment "api" NonEmpty.:| [pathSegment "oauth", pathSegment "token"]
     ApiNotFound -> pathSegment "api" NonEmpty.:| [pathSegment "404"]
   where
@@ -422,6 +430,7 @@ parseApiPath :: Text -> Either RouteSelectionError (Maybe AppLocale, AppRoute)
 parseApiPath segment
   | segment == "status" = Right (Nothing, StatusApiRoute)
   | segment == "second" = Right (Nothing, SecondApiRoute)
+  | segment == "me" = Right (Nothing, MeApiRoute)
 parseApiPath _ = Right (Nothing, ApiNotFoundRoute)
 
 routeFromSegment :: Text -> Maybe AppRoute
@@ -469,6 +478,13 @@ endpointMetadata route =
     NotFoundRoute -> html "web.not-found" "/{locale}/404"
     StatusApiRoute -> api "api.status" "/api/status"
     SecondApiRoute -> api "api.second" "/api/second"
+    -- Reuses the account profile's existing 'RequireAuthenticated' guard
+    -- rather than a new authorization payload: an API-client bearer JWT has
+    -- no session ID ('jti') claim, so it already fails this profile's claims
+    -- parse and can never reach this handler merely by presenting a
+    -- similarly named scope. See the AHI-4D decision record in
+    -- @docs/design-guidance.md@.
+    MeApiRoute -> protectedApi "api.me" "/api/me"
     -- The token endpoint authenticates its OAuth client itself (HTTP Basic
     -- client-credentials, verified against the durable API-client store), so
     -- it declares 'AllowUnauthenticated' like every other API route here: no
@@ -484,6 +500,10 @@ endpointMetadata route =
         accountAuthenticationProfileName
         (declaredMetadata HtmlEndpoint RequireAuthenticated name template)
     api = declaredMetadata ApiEndpoint AllowUnauthenticated
+    protectedApi name template =
+      HarchWeb.withAuthenticationProfile
+        accountAuthenticationProfileName
+        (declaredMetadata ApiEndpoint RequireAuthenticated name template)
 
 declaredMetadata :: EndpointProtocol -> AccessRequirement () -> Text -> Text -> EndpointMetadata ()
 declaredMetadata protocol accessRequirement name template =

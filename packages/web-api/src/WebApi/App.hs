@@ -32,6 +32,7 @@ module WebApi.App
   ( buildAppWithDatabase,
     buildAppWithDatabaseAndAccountWorkflow,
     buildAppWithDatabaseAndAccountWorkflowAndSecurity,
+    runtimeAuthenticationProfiles,
     buildApp,
     buildRuntimeAccountWorkflow,
     buildRuntimeAccountWorkflowWithJwt,
@@ -62,7 +63,7 @@ import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush)
 import WebApi.AccountJwt (AccountJwtLoadError, AccountJwtRuntime, accountJwtAuthenticationPipeline, loadAccountJwtRuntime)
 import WebApi.AccountPages (AccountAction, accountActionEndpointMetadata, accountActionRoute, accountActions, accountCsrfProtection, handleAccountAction)
-import WebApi.Api.Endpoints (secondApiRouteDefinition, statusApiRouteDefinition, tokenApiRouteDefinition)
+import WebApi.Api.Endpoints (meApiRouteDefinition, secondApiRouteDefinition, statusApiRouteDefinition, tokenApiRouteDefinition)
 import WebApi.App.AccountWorkflow (buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwt, buildRuntimeAccountWorkflowWithJwtRuntime, unavailableAccountWorkflow)
 import WebApi.App.Observability
   ( otlpExportFailureMessage,
@@ -278,6 +279,7 @@ buildAppRouteDefinition config pageRepository accountWorkflow route =
   case route of
     StatusApiRoute -> statusApiRouteDefinition
     SecondApiRoute -> secondApiRouteDefinition pageRepository
+    MeApiRoute -> meApiRouteDefinition (accountWorkflowProfileStore accountWorkflow)
     TokenApiRoute -> tokenApiRouteDefinition (accountWorkflowApiClientTokenEnvironment accountWorkflow)
     HomeRoute ->
       protocolRouteDefinition route $
@@ -345,6 +347,14 @@ buildRuntimeAppWithAccountJwt pool config environmentConfig jwtRuntime =
 -- | The root keeps public operation as its explicit default and gives only
 -- account declarations the JWT guard. The declaration names are statically validated, distinct literals; no request
 -- can select a credential parser by a path or header value.
+--
+-- Exported alongside 'buildAppWithDatabaseAndAccountWorkflowAndSecurity' so a
+-- test can compose a real, guard-enabled application whose durable stores
+-- are otherwise unavailable-by-construction test doubles: only pairing a
+-- genuinely deployed 'ApplicationSecurity' with a broken store reaches a
+-- handler's own failure-response argument through the real dispatcher, the
+-- same requirement 'WebApi.Api.Endpoints.tokenApiFailureResponse's and
+-- 'WebApi.Api.Endpoints.meApiFailureResponse's own coverage already needed.
 runtimeAuthenticationProfiles :: AccountWorkflow -> AccountJwtRuntime -> HarchWeb.ApplicationSecurity AppRoute AppRequestContext ()
 runtimeAuthenticationProfiles accountWorkflow jwtRuntime =
   HarchWeb.AuthenticationProfiles

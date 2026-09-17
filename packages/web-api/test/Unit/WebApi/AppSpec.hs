@@ -30,15 +30,15 @@ import TestSupport.AccountJwt (withTestAccountJwtFixture)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, withContainerizedPsqlOnPath)
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi (buildApp, run)
-import WebApi.Account (AccountStore (createPendingAccount), CreatePendingAccountOutcome (PendingAccountDeliveryClaimed), PendingAccount (..), defaultPendingRegistrationStoragePolicy)
+import WebApi.Account (AccountProfileStore (AccountProfileStore), AccountStore (createPendingAccount), AccountStoreError (AccountStoreUnavailable), CreatePendingAccountOutcome (PendingAccountDeliveryClaimed), PendingAccount (..), defaultPendingRegistrationStoragePolicy)
 import WebApi.AccountJwt (AccountJwtIssuer (..), AccountJwtRawConfiguration (..), SharedJwtIssuance (sharedJwtActiveKeyId), accountJwtIssuerFromRuntime, accountJwtRuntimeSharedIssuance, loadAccountJwtRuntime, mkAccountJwtConfiguration)
 import WebApi.ActivityAudit (AccountActivity (..), ActivityAuditStore (..), ActivityAuditStoreError (ActivityAuditUnavailable), activityIdFromDatabase)
 import WebApi.Api.Endpoints (noApiRequestFields)
 import WebApi.ApiClient (mkApiClientId)
 import WebApi.ApiClientToken (ApiClientTokenEnvironment (apiClientTokenIssuance, apiClientTokenStore))
-import WebApi.App (buildAppWithDatabase, buildAppWithDatabaseAndAccountWorkflow, buildAppWithDatabaseAndAccountWorkflowAndSecurity, buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwtRuntime, buildRuntimeAppWithAccountJwt, buildRuntimeAppWithDatabaseBuilder, otlpExportFailureMessage, runWithConfig, unavailableAccountWorkflow)
+import WebApi.App (buildAppWithDatabase, buildAppWithDatabaseAndAccountWorkflow, buildAppWithDatabaseAndAccountWorkflowAndSecurity, buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwtRuntime, buildRuntimeAppWithAccountJwt, buildRuntimeAppWithDatabaseBuilder, otlpExportFailureMessage, runWithConfig, runtimeAuthenticationProfiles, unavailableAccountWorkflow)
 import WebApi.App.Observability (requestObservabilityLogContext, runOtlpExportAction, runtimeRequestObservabilityReporterWithLog)
-import WebApi.AppEffect (AccountWorkflow (accountWorkflowActivityAuditStore, accountWorkflowApiClientTokenEnvironment, accountWorkflowCredentialStore, accountWorkflowEmailDelivery, accountWorkflowJwtIssuer, accountWorkflowLoginAttemptStore, accountWorkflowPasswordWorkGate, accountWorkflowSessionStore, accountWorkflowStore))
+import WebApi.AppEffect (AccountWorkflow (accountWorkflowActivityAuditStore, accountWorkflowApiClientTokenEnvironment, accountWorkflowCredentialStore, accountWorkflowEmailDelivery, accountWorkflowJwtIssuer, accountWorkflowLoginAttemptStore, accountWorkflowPasswordWorkGate, accountWorkflowProfileStore, accountWorkflowSessionStore, accountWorkflowStore))
 import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), AppMode (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), TlsCertificateSource (..), TlsConfig (..), databasePoolCapacity, defaultAppConfig, defaultAppEnvironmentConfig, defaultTlsPolicy)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), PageRepository (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed, defaultPageRepository)
 import WebApi.Login (AccountCredential (..), AccountCredentialStore (..))
@@ -1002,6 +1002,49 @@ spec = do
                   (HarchWeb.toWaiApplication runtimeApplication)
                   ((waiRequest ["profile"]) {Wai.requestHeaders = [("Cookie", TextEncoding.encodeUtf8 cookie)]})
               Wai.responseStatus profileResponse `shouldBe` Http.status200
+              meResponse <-
+                performWaiRequest
+                  (HarchWeb.toWaiApplication runtimeApplication)
+                  ((waiRequest ["api", "me"]) {Wai.requestHeaders = [("Cookie", TextEncoding.encodeUtf8 cookie)]})
+              meBody <- readResponseBody meResponse
+              expectAll
+                ( (Wai.responseStatus meResponse `shouldBe` Http.status200)
+                    :| [ lookup Http.hContentType (Wai.responseHeaders meResponse) `shouldBe` Just "application/json",
+                         lookup "Cache-Control" (Wai.responseHeaders meResponse) `shouldBe` Just "private, no-store",
+                         meBody `shouldBe` ("{\"username\":null,\"email\":\"" <> emailAddressText runtimeEmail <> "\"}")
+                       ]
+                )
+              -- The account profile's existing guard is reused as-is (see the
+              -- AHI-4D decision record): an unauthenticated request receives
+              -- the same login-redirect challenge every other
+              -- 'RequireAuthenticated' route already gives, not a JSON 401.
+              unauthenticatedMeResponse <- performWaiRequest (HarchWeb.toWaiApplication runtimeApplication) (waiRequest ["api", "me"])
+              expectAll
+                ( (Wai.responseStatus unauthenticatedMeResponse `shouldBe` Http.status303)
+                    :| [lookup Http.hLocation (Wai.responseHeaders unauthenticatedMeResponse) `shouldBe` Just "/login"]
+                )
+              -- A durable-store failure reaches /api/me's own domain-failure
+              -- rail (not the guard) only when the guard itself succeeds
+              -- against a real session but the profile lookup it hands off
+              -- to is unavailable; composing the same session/JWT guard with
+              -- a broken profile store is the only way to exercise that
+              -- through the real dispatcher rather than a synthetic value.
+              let brokenProfileWorkflow = workflow {accountWorkflowProfileStore = AccountProfileStore (const (pure (Left (AccountStoreUnavailable "test profile store is unavailable"))))}
+                  brokenProfileApplication =
+                    buildAppWithDatabaseAndAccountWorkflowAndSecurity
+                      defaultAppConfig
+                      defaultPageRepository
+                      brokenProfileWorkflow
+                      (runtimeAuthenticationProfiles brokenProfileWorkflow runtime)
+              unavailableMeResponse <-
+                performWaiRequest
+                  (HarchWeb.toWaiApplication brokenProfileApplication)
+                  ((waiRequest ["api", "me"]) {Wai.requestHeaders = [("Cookie", TextEncoding.encodeUtf8 cookie)]})
+              unavailableMeBody <- readResponseBody unavailableMeResponse
+              expectAll
+                ( (Wai.responseStatus unavailableMeResponse `shouldBe` Http.status503)
+                    :| [unavailableMeBody `shouldBe` "{\"error\":\"profile-unavailable\"}"]
+                )
               let oauthClientId = "app-spec-oauth-token-client" :: Text.Text
                   oauthSecretHash =
                     case Password.hashPasswordWithSalt testPasswordHashingPolicy "fedcba9876543210" (Password.mkPassword "runtime-token-secret") of

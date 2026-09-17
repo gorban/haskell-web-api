@@ -9,6 +9,7 @@ module WebApi.Response
     renderLocale,
     spacesLocation,
     apiNotFoundResponse,
+    meApiSuccessBody,
     secondRouteApiBody,
     selectResponseWithDatabaseAndAccountWorkflow,
     selectResponseWithDatabase,
@@ -28,8 +29,11 @@ import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
 import HarchWeb qualified
 import HarchWeb.Database qualified as HarchDatabase
+import HarchWeb.Email (emailAddressText)
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.Username (usernameText)
 import Network.HTTP.Types qualified as Http
+import WebApi.Account (AccountProfile (..))
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppConfig)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), PageRepository, defaultPageRepository)
@@ -144,6 +148,18 @@ tokenApiSuccessBody accessToken scopes lifetimeSeconds =
         <> JsonEncoding.pair "token_type" (Aeson.toEncoding ("Bearer" :: Text))
         <> JsonEncoding.pair "expires_in" (Aeson.toEncoding lifetimeSeconds)
         <> JsonEncoding.pair "scope" (Aeson.toEncoding (Text.unwords scopes))
+    )
+
+-- | The requested account-self resource for @\/api\/me@: the authenticated
+-- account's own username and email. A missing username is an ordinary
+-- account state (registration does not require one), rendered as JSON
+-- @null@ rather than an omitted field, so a client cannot mistake "no
+-- username" for "field not yet implemented".
+meApiSuccessBody :: AccountProfile -> JsonEncoding.Encoding
+meApiSuccessBody profile =
+  JsonEncoding.pairs
+    ( JsonEncoding.pair "username" (maybe JsonEncoding.null_ (Aeson.toEncoding . usernameText) (accountProfileUsername profile))
+        <> JsonEncoding.pair "email" (Aeson.toEncoding (emailAddressText (accountProfileEmail profile)))
     )
 
 renderLocale :: AppLocale -> Text

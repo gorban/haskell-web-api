@@ -24,9 +24,12 @@
 -- route attaches.
 --
 -- @WebApi.Route@'s own path parsing\/rendering, method table, and
--- @\/api\/404@ handling are unchanged for @\/api\/status@ and @\/api\/second@:
--- this module only supplies their response logic, wired in by @WebApi.App@'s
--- per-route dispatch. @\/api\/oauth\/token@ additionally owns its request
+-- @\/api\/404@ handling are unchanged for @\/api\/status@, @\/api\/second@,
+-- and @\/api\/me@: this module only supplies their response logic, wired in
+-- by @WebApi.App@'s per-route dispatch. @\/api\/me@ reuses the existing
+-- account profile's 'HarchWeb.RequireAuthenticated' guard rather than a new
+-- authorization payload; see 'meApiRouteDefinition's own Haddock and the
+-- AHI-4D decision record. @\/api\/oauth\/token@ additionally owns its request
 -- decoding: an RFC 6749 client-credentials grant combines HTTP Basic client
 -- authentication with a bounded URL-encoded form body, both already decoded
 -- by 'HarchWeb.Authentication.oauth2ClientSecretBasicCodec' and
@@ -38,6 +41,10 @@
 -- collapsing were chosen this way.
 module WebApi.Api.Endpoints
   ( noApiRequestFields,
+    meApiRouteDefinition,
+    MeApiFailure (..),
+    meApiOutcomeResponse,
+    meApiFailureResponse,
     secondApiRouteDefinition,
     statusApiRouteDefinition,
     tokenApiRouteDefinition,
@@ -93,6 +100,7 @@ import HarchWeb.Authentication
 import HarchWeb.Site (RouteDefinition)
 import Network.HTTP.Types qualified as HttpTypes
 import Numeric.Natural (Natural)
+import WebApi.Account (AccountProfile, AccountProfileStore)
 import WebApi.ApiClientToken
   ( ApiClientTokenEnvironment,
     ApiClientTokenOutcome (..),
@@ -108,19 +116,21 @@ import WebApi.Database
     secondPageDataHighlights,
     secondPageDataSummary,
   )
+import WebApi.Profile (ProfileLoadError (..), ProfileState (..), loadProfileForPrincipal)
 import WebApi.Response
   ( FailureSurface (ApiFailureSurface),
     diagnosticsDatabaseOperations,
     diagnosticsLogEntries,
     diagnosticsObservabilityAttributes,
     jsonErrorBody,
+    meApiSuccessBody,
     pageFailureDiagnostics,
     secondRouteApiBody,
     statusApiBody,
     toHarchDatabaseOperation,
     tokenApiSuccessBody,
   )
-import WebApi.Route (AppRequestContext, AppRoute (SecondApiRoute, StatusApiRoute, TokenApiRoute), endpointMetadata, requestLocale)
+import WebApi.Route (AppRequestContext (requestAccountPrincipal), AppRoute (MeApiRoute, SecondApiRoute, StatusApiRoute, TokenApiRoute), endpointMetadata, requestLocale)
 import WebApi.RouteData (SecondRouteData (..))
 
 -- | Neither @\/api\/status@ nor @\/api\/second@ decodes any query, header, or
@@ -148,6 +158,66 @@ statusApiRouteDefinition =
     )
     (endpointMetadata StatusApiRoute)
     (\requestContext _endpointRequest -> pure (apiResponse (jsonBytes (statusApiBody (requestLocale requestContext)))))
+
+-- | @\/api\/me@: the requesting account's own username and email.
+-- 'WebApi.Route.endpointMetadata' declares this route through the existing
+-- account profile's 'HarchWeb.RequireAuthenticated' guard, so
+-- 'requestAccountPrincipal' is already established by the time this handler
+-- runs; @loadProfileForPrincipal@ still takes the 'Maybe' honestly rather
+-- than partially unwrapping it, since nothing here can re-prove the guard
+-- ran. See the AHI-4D decision record in @docs\/design-guidance.md@ for why
+-- this reuses the account profile instead of a new authorization payload.
+meApiRouteDefinition :: AccountProfileStore -> RouteDefinition AppRoute AppRequestContext ()
+meApiRouteDefinition profileStore =
+  apiRouteDefinitionWithContext
+    ( ApiEndpointContract
+        ApiGet
+        noApiRequestFields
+        ApiNoRequestBody
+        (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
+        ApiUseGenericFieldFailure
+    )
+    (endpointMetadata MeApiRoute)
+    ( \requestContext _endpointRequest ->
+        meApiOutcomeResponse <$> loadProfileForPrincipal profileStore (requestAccountPrincipal requestContext)
+    )
+    meApiFailureResponse
+
+-- | @\/api\/me@ has one public failure shape: the account-self resource is
+-- momentarily unavailable. A genuinely unauthenticated caller never reaches
+-- this handler (the account profile's guard already halted the request), so
+-- 'ProfileUnauthenticated' here can only mean the durable profile lookup
+-- disagreed with an already-established session — a store inconsistency,
+-- not a public 401/403 outcome.
+data MeApiFailure = MeApiUnavailable
+
+-- | Exported (alongside 'MeApiFailure' and 'meApiFailureResponse') so a test
+-- can exercise every 'ProfileState'\/'ProfileLoadError' outcome directly.
+-- The real end-to-end route can only ever demonstrate the outcome its one
+-- WAI-level fixture account happens to be in; a genuinely unauthenticated
+-- caller and a durable profile-store failure are both guard-boundary or
+-- infrastructure conditions this module cannot manufacture through a real
+-- request, matching the same testing shape already used for
+-- 'tokenApiOutcomeResponse'.
+meApiOutcomeResponse :: Either ProfileLoadError ProfileState -> Either MeApiFailure (ApiResponse ByteString.ByteString)
+meApiOutcomeResponse result =
+  case result of
+    Left (ProfileAccountStoreError _) -> Left MeApiUnavailable
+    Right ProfileUnauthenticated -> Left MeApiUnavailable
+    Right (ProfilePending profile) -> Right (meApiProfileResponse profile)
+    Right (ProfileAuthenticated profile) -> Right (meApiProfileResponse profile)
+
+meApiProfileResponse :: AccountProfile -> ApiResponse ByteString.ByteString
+meApiProfileResponse profile =
+  (apiResponse (jsonBytes (meApiSuccessBody profile)))
+    { apiEndpointResponseHeaders = [(requiredApiHeaderNameOrDie "Cache-Control", requiredApiHeaderValueOrDie "private, no-store")]
+    }
+
+meApiFailureResponse :: MeApiFailure -> ApiResponse ByteString.ByteString
+meApiFailureResponse MeApiUnavailable =
+  (apiResponse (jsonBytes (jsonErrorBody "profile-unavailable")))
+    { apiEndpointResponseStatus = HttpTypes.status503
+    }
 
 secondApiRouteDefinition :: PageRepository -> RouteDefinition AppRoute AppRequestContext ()
 secondApiRouteDefinition pageRepository =

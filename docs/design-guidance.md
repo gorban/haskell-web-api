@@ -3665,6 +3665,51 @@ producing the correctly shaped `invalid_request` body from
 `[ApiRequestParseError]`; that is deferred to a follow-up task rather than
 done here, and must not be described as already covered by this slice.
 
+### Decision record — AHI-4D slice 5 (partial): `GET /api/me` (2026-09-17)
+
+**Decision: `GET /api/me` reuses the existing account profile's
+`RequireAuthenticated` guard as-is; it adds no new `authorization` payload
+type and no account-or-API-client principal sum type.** The task doc requires
+that an API-client identity "cannot satisfy this merely by carrying the same
+text scope" as `profile:read:self`. That property already holds structurally,
+not just behaviorally: `WebApi.AccountJwt.parseAccountJwtClaims` requires a
+session-ID (`jti`) claim, and `WebApi.ApiClientToken.claimsForApiClient`
+never issues one (its claim set is `iss`/`aud`/`sub`/`iat`/`nbf`/`exp`/`scope`
+only). An API-client bearer JWT therefore fails this profile's claims parse
+before any scope is ever inspected, exactly like the existing
+`missingSession` case `Unit.WebApi.AccountJwtSpec` already proves (a valid
+subject, no `jti`, routed through `expectLoginRedirect`). Building a second
+authorization payload or a combined principal type to re-derive a rejection
+the claims shape already guarantees would duplicate that existing boundary
+rather than extend it. `WebApi.Route`'s new `protectedApi` helper mirrors the
+existing `protectedHtml` helper exactly (same profile, same
+`RequireAuthenticated`, only the declared `EndpointProtocol` differs).
+
+**Consequence, named rather than hidden: an unauthenticated `/api/me`
+request receives the same 303 login-redirect challenge every other
+`RequireAuthenticated` route gives, not a JSON 401 body.**
+`WebApi.AccountJwt.accountAuthenticationChallenge` does not branch on
+`endpointProtocol`; it is the one challenge function every profile-guarded
+route shares. A JSON-API-shaped 401 challenge for API routes under this
+profile is a real, currently-un-closed gap against typical REST client
+expectations, proven and documented here rather than assumed away; closing
+it (if ever required) means teaching the challenge function to render
+differently per `EndpointProtocol`, which is a `HarchWeb.EndpointSecurity`
+change affecting every profile-guarded route, not a `web-api`-local one.
+
+**Named gap against the full slice 5 ask: `GET /api/second` is not yet
+secured.** Unlike `/api/me`, `/api/second` must accept *either* an account
+cookie *or* an OAuth bearer token, scope-gating only the bearer case — this
+needs a genuinely new combined authentication profile (a principal sum type,
+a claims-shape-discriminating pipeline, and a custom `AuthorizationInterpreter`
+that authorizes an account principal unconditionally and scope-checks an
+API-client principal), plus threading a real `authorization` payload type
+(recommended: reuse `HarchWeb.Authentication.ScopeRequirement OAuth2Scope`
+directly rather than a wrapper) through every `EndpointMetadata authorization`
+site currently pinned to `()` across `WebApi.Route`, `WebApi.App`,
+`WebApi.Api.Endpoints`, and `WebApi.AccountJwt`. This is deliberately a
+separate, larger follow-up commit, not folded into this one.
+
 **Decision: preserve the existing one-page-rendering and one-JWT-verification
 rails, adding only their missing typed boundary operations.** A route guard
 and a protocol route handler now return `NonPageResponse`, the closed subset

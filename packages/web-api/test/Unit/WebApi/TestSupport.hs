@@ -51,6 +51,7 @@ module Unit.WebApi.TestSupport
     spanishNotFoundRequest,
     apiStatusRequest,
     apiSecondRequest,
+    apiMeRequest,
     apiTokenRequest,
     apiNotFoundRequest,
     expectedApiJsonProtocolResponse,
@@ -421,6 +422,13 @@ apiSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 apiSecondRequest =
   HarchWeb.RouteRequest
     { HarchWeb.requestRoute = SecondApiRoute,
+      HarchWeb.requestContext = defaultRequestContext
+    }
+
+apiMeRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+apiMeRequest =
+  HarchWeb.RouteRequest
+    { HarchWeb.requestRoute = MeApiRoute,
       HarchWeb.requestContext = defaultRequestContext
     }
 

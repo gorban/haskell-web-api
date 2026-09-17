@@ -5,11 +5,17 @@
 
 import Control.Exception (ErrorCall (..), evaluate)
 import Data.ByteString qualified as ByteString
+import Data.Maybe (fromMaybe)
+import HarchWeb.Account (mkAccountId)
 import HarchWeb.Api (ApiResponse (..), MissingContentTypePolicy (RejectMissingContentType))
 import HarchWeb.Authentication (encodedJwtFromBytes)
+import HarchWeb.Email (mkEmailAddress)
+import HarchWeb.Username (mkUsername)
 import Network.HTTP.Types qualified as HttpTypes
-import WebApi.Api.Endpoints (TokenApiFailure (..), requiredApiHeaderNameOrDie, requiredApiHeaderValueOrDie, tokenApiFailureResponse, tokenApiMissingContentTypePolicy, tokenApiOutcomeResponse)
+import WebApi.Account (AccountProfile (..), AccountStoreError (AccountStoreUnavailable))
+import WebApi.Api.Endpoints (MeApiFailure (..), TokenApiFailure (..), meApiFailureResponse, meApiOutcomeResponse, requiredApiHeaderNameOrDie, requiredApiHeaderValueOrDie, tokenApiFailureResponse, tokenApiMissingContentTypePolicy, tokenApiOutcomeResponse)
 import WebApi.ApiClientToken (ApiClientTokenOutcome (..))
+import WebApi.Profile (ProfileLoadError (..), ProfileState (..))
 
 spec =
   describe "WebApi.Api.Endpoints" $ do
@@ -51,3 +57,39 @@ spec =
       evaluate (requiredApiHeaderValueOrDie "not a valid header value\n" `seq` ())
         `shouldThrow` \case
           ErrorCall message -> message == "invalid API header value literal: not a valid header value\n"
+
+    it "reports the account-self resource unavailable for a durable-store failure or a lookup that disagrees with an already-established session" $
+      mapM_
+        ( \outcome -> case meApiOutcomeResponse outcome of
+            Left MeApiUnavailable -> pure ()
+            Right _ -> expectationFailure "expected the generic unavailable outcome, not a rendered profile"
+        )
+        [ Left (ProfileAccountStoreError (AccountStoreUnavailable "test")),
+          Right ProfileUnauthenticated
+        ]
+
+    it "renders the account-self unavailable outcome as a safe 503 body" $ do
+      let response = meApiFailureResponse MeApiUnavailable
+      apiEndpointResponseStatus response `shouldBe` HttpTypes.status503
+      apiEndpointResponseValue response `shouldBe` "{\"error\":\"profile-unavailable\"}"
+
+    it "renders an authenticated (email-verified) account's own username and email, and a pending account's the same way" $
+      mapM_
+        ( \profileState -> case meApiOutcomeResponse (Right profileState) of
+            Right response -> apiEndpointResponseValue response `shouldBe` "{\"username\":\"account-holder\",\"email\":\"me-spec@example.test\"}"
+            Left _ -> expectationFailure "expected a rendered profile, not the generic unavailable outcome"
+        )
+        [ProfileAuthenticated testAccountProfile, ProfilePending testAccountProfile]
+
+testAccountProfile :: AccountProfile
+testAccountProfile =
+  AccountProfile
+    { accountProfileId = required "account id" (mkAccountId "account_01"),
+      accountProfileEmail = required "email address" (mkEmailAddress "me-spec@example.test"),
+      accountProfileUsername = Just (required "username" (mkUsername "account-holder")),
+      accountProfileDisplayName = Nothing,
+      accountProfileEmailVerified = True
+    }
+
+required :: String -> Maybe value -> value
+required label = fromMaybe (error ("expected a valid test " <> label))
