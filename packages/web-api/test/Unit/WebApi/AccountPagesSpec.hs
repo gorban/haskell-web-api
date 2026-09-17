@@ -739,7 +739,8 @@ spec = do
                           HarchWeb.requestContext = requestContext
                         }
                     <> "?token="
-                    <> Account.emailVerificationTokenText verificationToken
+                    <> Account.emailVerificationTokenText verificationToken,
+                accountWorkflowApiClientTokenEnvironment = accountWorkflowApiClientTokenEnvironment unavailableAccountWorkflow
               }
           request method path fields locale = typedAccountActionRequest method path fields (defaultRequestContext {requestLocale = locale, requestCorrelationId = Just testRequestId})
           rawAction method path fields =
@@ -1069,7 +1070,8 @@ spec = do
                 accountWorkflowCsrfSigningKeyring = accountWorkflowCsrfSigningKeyring unavailableAccountWorkflow,
                 accountWorkflowJwtIssuer = accountWorkflowJwtIssuer unavailableAccountWorkflow,
                 accountWorkflowTotpClock = const 0,
-                accountWorkflowVerificationUrl = \_ verificationToken -> "https://account.example.test/verify?token=" <> Account.emailVerificationTokenText verificationToken
+                accountWorkflowVerificationUrl = \_ verificationToken -> "https://account.example.test/verify?token=" <> Account.emailVerificationTokenText verificationToken,
+                accountWorkflowApiClientTokenEnvironment = accountWorkflowApiClientTokenEnvironment unavailableAccountWorkflow
               }
           store createResult lookupResult consumeResult =
             AccountStore

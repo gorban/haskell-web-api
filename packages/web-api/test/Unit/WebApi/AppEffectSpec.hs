@@ -3,8 +3,16 @@
 
 {-# SPEC #-}
 
+import Control.Lens (preview)
+import Crypto.JWT qualified as Jwt
 import Data.Text (Text)
+import HarchWeb.Authentication (ApiClientStore (findApiClient), ApiClientStoreError (ApiClientStoreUnavailable))
+import HarchWeb.Time (unixTimeNanosecondsValue)
+import WebApi.AccountJwt (SharedJwtIssuance (..))
+import WebApi.ApiClient (mkApiClientId)
+import WebApi.ApiClientToken (ApiClientTokenEnvironment (..))
 import WebApi.App (unavailableAccountWorkflow)
+import WebApi.AppEffect (AccountWorkflow (accountWorkflowApiClientTokenEnvironment))
 import WebApi.AppEffect qualified as AppEffect
 
 spec =
@@ -82,3 +90,18 @@ spec =
             AppEffect.failureType (AppEffect.appFailureDiagnostics actualFailure) `shouldBe` "SampleFailure"
             AppEffect.failureLogEntries (AppEffect.appFailureDiagnostics actualFailure) `shouldBe` ["private detail"]
           Right () -> expectationFailure "expected a typed application failure"
+
+    it "keeps the deliberately unavailable API-client token environment genuinely unavailable" $ do
+      let environment = accountWorkflowApiClientTokenEnvironment unavailableAccountWorkflow
+          issuance = apiClientTokenIssuance environment
+      case mkApiClientId "unavailable-workflow-client" of
+        Left _ -> expectationFailure "expected a valid test API client ID"
+        Right clientId ->
+          findApiClient (apiClientTokenStore environment) clientId >>= \case
+            Left (ApiClientStoreUnavailable _) -> pure ()
+            _ -> expectationFailure "expected the unavailable store to reject every lookup"
+      preview Jwt.string (sharedJwtIssuer issuance) `shouldBe` Just ("unavailable-api-client-issuer" :: Text)
+      preview Jwt.string (sharedJwtAudience issuance) `shouldBe` Just ("unavailable-api-client-audience" :: Text)
+      sharedJwtActiveKeyId issuance `shouldBe` "unavailable"
+      clockValue <- apiClientTokenClock environment
+      unixTimeNanosecondsValue clockValue `shouldBe` 0

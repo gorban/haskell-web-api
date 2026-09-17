@@ -27,6 +27,7 @@ import WebApi.Account (AccountProfileStore, AccountStore, RegistrationDeliveryTi
 import WebApi.AccountJwt (AccountJwtIssuer)
 import WebApi.AccountSessionAudit (AccountSessionAuditStore)
 import WebApi.ActivityAudit (ActivityAuditStore)
+import WebApi.ApiClientToken qualified as ApiClientToken
 import WebApi.Login (AccountCredentialStore, LoginAttemptStore)
 import WebApi.Mfa (MfaStore)
 import WebApi.PendingRegistrationAudit (PendingRegistrationAuditStore)
@@ -83,7 +84,16 @@ data AccountWorkflow = AccountWorkflow
     -- instant read for this account operation.  This is pure deliberately:
     -- a second clock read could cross an epoch boundary independently.
     accountWorkflowTotpClock :: UnixTimeNanoseconds -> UnixTimeSeconds,
-    accountWorkflowVerificationUrl :: AppRequestContext -> EmailVerificationToken -> Text
+    accountWorkflowVerificationUrl :: AppRequestContext -> EmailVerificationToken -> Text,
+    -- | The OAuth 2.0 client-credentials workflow's own capability bundle
+    -- (durable API-client store, shared Argon2 work gate, shared JWT
+    -- issuance, and clock). API clients are a principal kind distinct from
+    -- accounts, so this stays its own record field rather than widening any
+    -- account-specific field above; it shares the process-wide password-work
+    -- gate and clock with the rest of this workflow, and the account JWT
+    -- runtime's already-startup-proven signing key, exactly as AHI-4D
+    -- requires one issuer/audience/key for both principal kinds.
+    accountWorkflowApiClientTokenEnvironment :: ApiClientToken.ApiClientTokenEnvironment
   }
 
 newtype AppServices = AppServices

@@ -60,10 +60,10 @@ import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
 import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush)
-import WebApi.AccountJwt (AccountJwtLoadError, AccountJwtRuntime, accountJwtAuthenticationPipeline, accountJwtIssuerFromRuntime, loadAccountJwtRuntime)
+import WebApi.AccountJwt (AccountJwtLoadError, AccountJwtRuntime, accountJwtAuthenticationPipeline, loadAccountJwtRuntime)
 import WebApi.AccountPages (AccountAction, accountActionEndpointMetadata, accountActionRoute, accountActions, accountCsrfProtection, handleAccountAction)
 import WebApi.Api.Endpoints (secondApiRouteDefinition, statusApiRouteDefinition)
-import WebApi.App.AccountWorkflow (buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwt, unavailableAccountWorkflow)
+import WebApi.App.AccountWorkflow (buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwt, buildRuntimeAccountWorkflowWithJwtRuntime, unavailableAccountWorkflow)
 import WebApi.App.Observability
   ( otlpExportFailureMessage,
     runtimeApplicationLogReporter,
@@ -339,7 +339,7 @@ buildRuntimeAppWithAccountJwt pool config environmentConfig jwtRuntime =
     -- The selected issuer is a strict field of 'AccountWorkflow': construct
     -- the record now so application startup cannot defer that validated
     -- security dependency until the first successful login.
-    !accountWorkflow = buildRuntimeAccountWorkflowWithJwtRuntime pool environmentConfig jwtRuntime
+    !accountWorkflow = buildRuntimeAccountWorkflowWithJwtRuntime pool environmentConfig (Just jwtRuntime)
 
 -- | The root keeps public operation as its explicit default and gives only
 -- account declarations the JWT guard. The declaration names are statically validated, distinct literals; no request
@@ -367,13 +367,6 @@ runtimeAuthenticationProfiles accountWorkflow jwtRuntime =
 
 publicAuthenticationProfileName :: HarchWeb.AuthenticationProfileName
 publicAuthenticationProfileName = HarchWeb.requiredAuthenticationProfileNameOrDie "public"
-
--- | Build the runtime workflow from the already startup-validated JWT
--- runtime. Keeping this composition here means the application and its
--- integration tests share exactly one issuer selection path.
-buildRuntimeAccountWorkflowWithJwtRuntime :: PostgresPool -> AppEnvironmentConfig -> AccountJwtRuntime -> AccountWorkflow
-buildRuntimeAccountWorkflowWithJwtRuntime pool environmentConfig =
-  buildRuntimeAccountWorkflowWithJwt pool environmentConfig . accountJwtIssuerFromRuntime
 
 buildRuntimeAppWithDatabaseBuilder ::
   AppConfig ->

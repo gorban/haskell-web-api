@@ -30,12 +30,14 @@ import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPost
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi (buildApp, run)
 import WebApi.Account (AccountStore (createPendingAccount), CreatePendingAccountOutcome (PendingAccountDeliveryClaimed), PendingAccount (..), defaultPendingRegistrationStoragePolicy)
-import WebApi.AccountJwt (AccountJwtIssuer (..), AccountJwtRawConfiguration (..), accountJwtIssuerFromRuntime, loadAccountJwtRuntime, mkAccountJwtConfiguration)
+import WebApi.AccountJwt (AccountJwtIssuer (..), AccountJwtRawConfiguration (..), SharedJwtIssuance (sharedJwtActiveKeyId), accountJwtIssuerFromRuntime, accountJwtRuntimeSharedIssuance, loadAccountJwtRuntime, mkAccountJwtConfiguration)
 import WebApi.ActivityAudit (AccountActivity (..), ActivityAuditStore (..), ActivityAuditStoreError (ActivityAuditUnavailable), activityIdFromDatabase)
 import WebApi.Api.Endpoints (noApiRequestFields)
+import WebApi.ApiClient (mkApiClientId)
+import WebApi.ApiClientToken (ApiClientTokenEnvironment (apiClientTokenIssuance, apiClientTokenStore))
 import WebApi.App (buildAppWithDatabase, buildAppWithDatabaseAndAccountWorkflow, buildAppWithDatabaseAndAccountWorkflowAndSecurity, buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwtRuntime, buildRuntimeAppWithAccountJwt, buildRuntimeAppWithDatabaseBuilder, otlpExportFailureMessage, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Observability (requestObservabilityLogContext, runOtlpExportAction, runtimeRequestObservabilityReporterWithLog)
-import WebApi.AppEffect (AccountWorkflow (accountWorkflowActivityAuditStore, accountWorkflowCredentialStore, accountWorkflowEmailDelivery, accountWorkflowJwtIssuer, accountWorkflowLoginAttemptStore, accountWorkflowPasswordWorkGate, accountWorkflowSessionStore, accountWorkflowStore))
+import WebApi.AppEffect (AccountWorkflow (accountWorkflowActivityAuditStore, accountWorkflowApiClientTokenEnvironment, accountWorkflowCredentialStore, accountWorkflowEmailDelivery, accountWorkflowJwtIssuer, accountWorkflowLoginAttemptStore, accountWorkflowPasswordWorkGate, accountWorkflowSessionStore, accountWorkflowStore))
 import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), AppMode (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), TlsCertificateSource (..), TlsConfig (..), databasePoolCapacity, defaultAppConfig, defaultAppEnvironmentConfig, defaultTlsPolicy)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), PageRepository (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed, defaultPageRepository)
 import WebApi.Login (AccountCredential (..), AccountCredentialStore (..))
@@ -940,7 +942,7 @@ spec = do
                   Just value -> pure value
                   Nothing -> error "expected a valid test password hash"
               runtimeSessionId <- generateSessionId
-              let workflow = buildRuntimeAccountWorkflowWithJwtRuntime pool databaseRuntimeEnvironmentConfig runtime
+              let workflow = buildRuntimeAccountWorkflowWithJwtRuntime pool databaseRuntimeEnvironmentConfig (Just runtime)
                   accountStore = accountWorkflowStore workflow
                   pendingAccount =
                     PendingAccount
@@ -964,6 +966,17 @@ spec = do
                   runtimeApplication = buildRuntimeAppWithAccountJwt pool defaultAppConfig databaseRuntimeEnvironmentConfig runtime
               accountJwtCookie (accountWorkflowJwtIssuer workflow)
                 `shouldBe` accountJwtCookie issuer
+              sharedJwtActiveKeyId (apiClientTokenIssuance (accountWorkflowApiClientTokenEnvironment workflow))
+                `shouldBe` sharedJwtActiveKeyId (accountJwtRuntimeSharedIssuance runtime)
+              unseenApiClientId <-
+                case mkApiClientId "runtime-workflow-unseen-client" of
+                  Right value -> pure value
+                  Left _ -> error "expected a valid test API client ID"
+              notFoundApiClient <- HarchWeb.findApiClient (apiClientTokenStore (accountWorkflowApiClientTokenEnvironment workflow)) unseenApiClientId
+              case notFoundApiClient of
+                Right Nothing -> pure ()
+                Right (Just _) -> expectationFailure "expected no seeded API client to match this test-only ID"
+                Left _ -> expectationFailure "expected the runtime API-client store to be available"
               createdAccount <- createPendingAccount accountStore defaultPendingRegistrationStoragePolicy pendingAccount
               case createdAccount of
                 Right (PendingAccountDeliveryClaimed _) -> pure ()

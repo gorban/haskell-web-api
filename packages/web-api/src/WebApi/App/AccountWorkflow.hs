@@ -8,21 +8,29 @@
 module WebApi.App.AccountWorkflow
   ( buildRuntimeAccountWorkflow,
     buildRuntimeAccountWorkflowWithJwt,
+    buildRuntimeAccountWorkflowWithJwtRuntime,
     unavailableAccountWorkflow,
   )
 where
 
+import Control.Lens (review)
+import Crypto.JOSE.JWA.JWK qualified as JwaJwk
+import Crypto.JOSE.JWK qualified as JoseJwk
+import Crypto.JWT qualified as Jwt
 import Data.Text qualified as Text
 import HarchWeb qualified
 import HarchWeb.Account qualified as HarchAccount
+import HarchWeb.Authentication (ApiClientStore (..), ApiClientStoreError (ApiClientStoreUnavailable), mkAuthenticationDependency, requiredSecurityFailureCodeOrDie)
 import HarchWeb.Email qualified as Email
 import HarchWeb.Password qualified as Password
 import HarchWeb.Time qualified as HarchWebTime
 import System.IO.Unsafe (unsafePerformIO)
 import WebApi.Account (AccountProfileStore (..), AccountStore (..), AccountStoreError (..), defaultRegistrationDeliveryTimeout)
-import WebApi.AccountJwt (AccountJwtIssuer, unavailableAccountJwtIssuer)
+import WebApi.AccountJwt (AccountJwtIssuer, AccountJwtRuntime, SharedJwtIssuance (..), accountJwtIssuerFromRuntime, accountJwtRuntimeSharedIssuance, unavailableAccountJwtIssuer)
 import WebApi.AccountSessionAudit (AccountSessionAuditStore (..), AccountSessionAuditStoreError (..))
 import WebApi.ActivityAudit (ActivityAuditStore (..), ActivityAuditStoreError (..))
+import WebApi.ApiClient (ApiClient, ApiClientId, EstablishedApiClient)
+import WebApi.ApiClientToken (ApiClientTokenEnvironment (..))
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppEnvironmentConfig (..), AppMode (..), SmtpDeliveryConfig (..), defaultAppEnvironmentConfig)
 import WebApi.Login (AccountCredentialStore (..), AccountCredentialStoreError (..), LoginAttemptStore (..), LoginAttemptStoreError (..))
@@ -35,6 +43,7 @@ import WebApi.Postgres.AccountRepository
   )
 import WebApi.Postgres.AccountSessionAuditRepository (buildRuntimePostgresAccountSessionAuditStore)
 import WebApi.Postgres.ActivityAuditRepository (buildRuntimePostgresActivityAuditStore)
+import WebApi.Postgres.ApiClientRepository (buildRuntimePostgresApiClientStore)
 import WebApi.Postgres.LoginAttemptRepository (buildRuntimePostgresLoginAttemptStore)
 import WebApi.Postgres.MfaEnrollmentSessionRepository (buildRuntimePostgresMfaEnrollmentSessionStore)
 import WebApi.Postgres.MfaRepository (buildRuntimePostgresMfaStore)
@@ -48,14 +57,23 @@ import WebApi.VerificationResendAudit (VerificationResendAuditStore (..), Verifi
 
 buildRuntimeAccountWorkflow :: PostgresPool -> AppEnvironmentConfig -> AccountWorkflow
 buildRuntimeAccountWorkflow pool environmentConfig =
-  buildRuntimeAccountWorkflowWithJwt pool environmentConfig unavailableAccountJwtIssuer
+  buildRuntimeAccountWorkflowWithJwtRuntime pool environmentConfig Nothing
 
 -- | Runtime server construction supplies the startup-validated issuer. The
 -- two-argument builder remains useful to storage/SMTP tests, where login
 -- issuance is intentionally unavailable rather than silently generating a
 -- development key.
 buildRuntimeAccountWorkflowWithJwt :: PostgresPool -> AppEnvironmentConfig -> AccountJwtIssuer -> AccountWorkflow
-buildRuntimeAccountWorkflowWithJwt pool !environmentConfig jwtIssuer =
+buildRuntimeAccountWorkflowWithJwt pool environmentConfig jwtIssuer =
+  (buildRuntimeAccountWorkflowWithJwtRuntime pool environmentConfig Nothing) {accountWorkflowJwtIssuer = jwtIssuer}
+
+-- | The runnable server path supplies the one startup-validated JWT runtime
+-- both account cookies and API-client bearer tokens sign with; a caller with
+-- no runtime (storage/SMTP tests, or the deliberately unavailable workflow)
+-- passes 'Nothing' and gets both principal kinds' issuance capabilities
+-- unavailable together, since they share the one key.
+buildRuntimeAccountWorkflowWithJwtRuntime :: PostgresPool -> AppEnvironmentConfig -> Maybe AccountJwtRuntime -> AccountWorkflow
+buildRuntimeAccountWorkflowWithJwtRuntime pool !environmentConfig maybeJwtRuntime =
   AccountWorkflow
     { accountWorkflowStore = buildRuntimePostgresAccountStore pool,
       accountWorkflowEmailDelivery = runtimeEmailDelivery (appMode environmentConfig) (smtpDeliveryConfig environmentConfig),
@@ -75,9 +93,16 @@ buildRuntimeAccountWorkflowWithJwt pool !environmentConfig jwtIssuer =
       accountWorkflowProfileStore = buildRuntimePostgresAccountProfileStore pool,
       accountWorkflowTotpEncryptionKey = totpEncryptionKey environmentConfig,
       accountWorkflowCsrfSigningKeyring = csrfSigningKeyring environmentConfig,
-      accountWorkflowJwtIssuer = jwtIssuer,
+      accountWorkflowJwtIssuer = maybe unavailableAccountJwtIssuer accountJwtIssuerFromRuntime maybeJwtRuntime,
       accountWorkflowTotpClock = HarchWebTime.unixTimeSecondsFromNanoseconds,
-      accountWorkflowVerificationUrl = runtimeVerificationUrl (publicBaseUrl environmentConfig)
+      accountWorkflowVerificationUrl = runtimeVerificationUrl (publicBaseUrl environmentConfig),
+      accountWorkflowApiClientTokenEnvironment =
+        ApiClientTokenEnvironment
+          { apiClientTokenStore = buildRuntimePostgresApiClientStore pool,
+            apiClientTokenWorkGate = runtimePasswordWorkGate,
+            apiClientTokenIssuance = maybe unavailableSharedJwtIssuance accountJwtRuntimeSharedIssuance maybeJwtRuntime,
+            apiClientTokenClock = HarchWebTime.currentUnixTimeNanoseconds
+          }
     }
 
 runtimeEmailDelivery :: AppMode -> SmtpDeliveryConfig -> Email.EmailDelivery
@@ -151,8 +176,39 @@ unavailableAccountWorkflow =
       accountWorkflowCsrfSigningKeyring = csrfSigningKeyring defaultAppEnvironmentConfig,
       accountWorkflowJwtIssuer = unavailableAccountJwtIssuer,
       accountWorkflowTotpClock = const 0,
-      accountWorkflowVerificationUrl = \_ _ -> "https://invalid.example.test/verify"
+      accountWorkflowVerificationUrl = \_ _ -> "https://invalid.example.test/verify",
+      accountWorkflowApiClientTokenEnvironment =
+        ApiClientTokenEnvironment
+          { apiClientTokenStore = unavailableApiClientStore,
+            apiClientTokenWorkGate = runtimePasswordWorkGate,
+            apiClientTokenIssuance = unavailableSharedJwtIssuance,
+            apiClientTokenClock = pure (HarchWebTime.unixTimeNanoseconds 0)
+          }
     }
+
+unavailableApiClientStore :: ApiClientStore ApiClientId ApiClient EstablishedApiClient
+unavailableApiClientStore =
+  ApiClientStore
+    { findApiClient = const (unavailableResult apiClientStoreUnavailable),
+      establishApiClient = const (unavailableResult apiClientStoreUnavailable)
+    }
+  where
+    apiClientStoreUnavailable = ApiClientStoreUnavailable (mkAuthenticationDependency (requiredSecurityFailureCodeOrDie "api-client.workflow-unavailable"))
+
+-- | A throwaway symmetric key for the deliberately unavailable workflow.
+-- 'accountWorkflowApiClientTokenEnvironment' needs some real 'HarchWeb.JWK'
+-- value even when issuance is unavailable ('SharedJwtIssuance' carries no
+-- 'Maybe'); the unavailable store above means no code path ever reaches
+-- 'WebApi.ApiClientToken.issueApiClientToken''s signing step to use it.
+unavailableSharedJwtIssuance :: SharedJwtIssuance
+unavailableSharedJwtIssuance =
+  SharedJwtIssuance
+    { sharedJwtSigningKey = unsafePerformIO (JoseJwk.genJWK (JwaJwk.OctGenParam 32)),
+      sharedJwtIssuer = review Jwt.string ("unavailable-api-client-issuer" :: Text.Text),
+      sharedJwtAudience = review Jwt.string ("unavailable-api-client-audience" :: Text.Text),
+      sharedJwtActiveKeyId = "unavailable"
+    }
+{-# NOINLINE unavailableSharedJwtIssuance #-}
 
 unavailableAccountStore :: AccountStore
 unavailableAccountStore =
