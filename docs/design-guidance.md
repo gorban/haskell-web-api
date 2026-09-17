@@ -3559,7 +3559,64 @@ errors, or add a route: those concerns remain with the later application
 workflow and PostgreSQL adapter. It extends the one API decoding and
 authentication boundary rather than creating a second protocol dispatcher.
 
-### Decision record — AHI-4C: bounded page-security and JWT-claim rails (2026-09-04)
+### Decision record — AHI-4D slice 4/5: client-credentials token-issuance workflow (2026-09-16)
+
+**Decision: connect the durable `ApiClientStore` issuance view to Argon2
+secret verification and token issuance at one workflow module
+(`WebApi.ApiClientToken`), reusing the account JWT runtime's already-proven
+RS256 key instead of loading a second one.** A syntactically invalid client ID
+and a store lookup that finds no active client both resolve to one
+`ResolvedApiClient` outcome (`ResolvedUnknownClient`) rather than a raw
+`Either ApiClientStoreError (Maybe ApiClient)` passed through unchanged;
+naming the three real resolution outcomes directly keeps this a genuine
+interpretation step and, incidentally, avoids the pass-through shape that
+happened to defeat every explicit-`Show`-instance-style restructuring this
+task tried before finding the real fix (below). An unknown client and a known
+client with a wrong secret both run the same Argon2-gated dummy-hash
+verification and reach the same rejection outcome, so response timing and
+shape cannot enumerate client existence; a work-budget exhaustion during that
+dummy check is reported distinctly from a genuine rejection, matching the
+known-client path, so neither path can tell a caller a secret was checked when
+it was not. A client's secret rotation may leave several active hashes; every
+hash is tried in order under the shared work gate, short-circuiting on the
+first match or the first malformed record (fail-closed, not fall-through).
+
+**Decision: reuse the account JWT runtime's signing key via
+`WebApi.AccountJwt.accountJwtRuntimeSharedIssuance`/`SharedJwtIssuance` instead
+of adding a second JWK file or a second module-owned `ToJSON` claims
+instance.** The design requires one issuer, one RS256 key, and one audience
+shared by account and API-client bearer tokens. The token's granted-scope
+claim is therefore built directly as an `Aeson.Value` (`claimsForApiClient`)
+using `jose`'s exact per-claim types (`StringOrURI`, `NumericDate`,
+`Audience`) for each field, rather than either the deprecated
+`Crypto.JWT.unregisteredClaims`/`addClaim` or a bespoke claims subtype with its
+own hand-written `ToJSON` instance — extend `AccountJwtRuntime` with one
+read-only accessor bundle instead of duplicating the startup key-loading and
+cryptographic self-proof it already owns. This is one more field for the
+already-tracked `WebApi.AccountJwt` module-health follow-up (AHI-4D-MH1) to
+carry across when that extraction happens, not a reason to defer it further.
+
+**Decision (build-diagnostic finding, not a design one): a durable-store test
+double built with `const` never forces the argument it discards, which starves
+that argument's own HPC expression box of any tick even though the enclosing
+call unquestionably runs.** `storeReturning`'s original
+`findApiClient = const (pure findResult)` accepted any client ID without ever
+looking at it, so the coverage gate correctly reported the real production
+call `findApiClient store clientId` as partially uncovered — GHC's own
+Core dump (`-ddump-ds` with `--enable-coverage`) showed the enclosing
+application ticked while the bare `clientId` sub-expression's box stayed at
+zero, and the `.tix` counts confirmed it precisely. No amount of restructuring
+`WebApi.ApiClientToken`'s call shape (a direct call, a named wrapper, a
+`where`-bound partial application, `do`-notation, explicit `>>=`, or a named
+continuation function) could move that count off zero, because the gap was
+never in the production code: the fix is that the test double must assert the
+received client ID against the one the test expects, instead of accepting any
+argument via a value-discarding `const`. This is the general lesson behind the
+[never-mask-a-gate-finding
+rule](#never-mask-a-gate-finding-with-an-ignore-pragma): before treating an
+HPC gap as a tooling limitation needing a documented exception, check whether
+a test double is quietly discarding the exact argument the gap is centered
+on.
 
 **Decision: preserve the existing one-page-rendering and one-JWT-verification
 rails, adding only their missing typed boundary operations.** A route guard

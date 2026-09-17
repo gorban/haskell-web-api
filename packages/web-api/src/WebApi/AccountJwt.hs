@@ -34,8 +34,10 @@ module WebApi.AccountJwt
     AccountJwtIssuer (..),
     AccountJwtLoadError (..),
     AccountJwtRuntime,
+    SharedJwtIssuance (..),
     accountJwtAuthenticationPipeline,
     accountJwtIssuerFromRuntime,
+    accountJwtRuntimeSharedIssuance,
     loadAccountJwtRuntime,
     loadAccountJwtRuntimeWithSigner,
     mkAccountJwtConfiguration,
@@ -169,7 +171,12 @@ data AccountJwtIssueError = AccountJwtIssueFailed
 data AccountJwtRuntime = AccountJwtRuntime
   { runtimeAccountJwtConfiguration :: AccountJwtConfiguration,
     runtimeAccountJwtVerificationKeys :: HarchWeb.JWKSet,
-    runtimeAccountJwtSigner :: HarchWeb.JwtSigner AccountJwtIssueError Jwt.ClaimsSet
+    runtimeAccountJwtSigner :: HarchWeb.JwtSigner AccountJwtIssueError Jwt.ClaimsSet,
+    -- | Retained only because AHI-4D's reference profile deliberately issues
+    -- account and API-client bearer tokens from one already-startup-proven
+    -- RS256 key pair (see 'SharedJwtIssuance'). It is never rendered by this
+    -- type's redacted 'Show' instance.
+    runtimeAccountJwtSigningKey :: HarchWeb.JWK
   }
 
 type AccountJwtSignerBuilder = HarchWeb.JWK -> HarchWeb.JwtSigner AccountJwtIssueError Jwt.ClaimsSet
@@ -247,7 +254,8 @@ loadAccountJwtRuntimeWithSigner signerBuilder configuration = runExceptT $ do
     AccountJwtRuntime
       { runtimeAccountJwtConfiguration = configuration,
         runtimeAccountJwtVerificationKeys = validatedVerificationKeys,
-        runtimeAccountJwtSigner = signer
+        runtimeAccountJwtSigner = signer,
+        runtimeAccountJwtSigningKey = structurallyValidSigningKey
       }
 
 defaultAccountJwtSigner :: AccountJwtSignerBuilder
@@ -339,6 +347,39 @@ accountJwtIssuerFromRuntime runtime =
   AccountJwtIssuer
     { accountJwtCookie = accountJwtCookiePolicy configuration,
       issueAccountSessionJwt = issueJwtForSession runtime
+    }
+  where
+    configuration = runtimeAccountJwtConfiguration runtime
+
+-- | The startup-proven RS256 key pair and issuer/audience/key-ID, exposed so
+-- another principal kind can issue its own claims subtype from the exact same
+-- already-validated key instead of loading and re-proving a second key pair.
+--
+-- Decision record (AHI-4D slice 4/5, 2026-09-16): @web-api@ uses one issuer,
+-- one RS256 signing/JWKS key set, and one audience for both account and
+-- API-client bearer tokens, while keeping each principal's claims distinct.
+-- 'AccountJwtRuntime' already retains the one structurally- and
+-- cryptographically-validated signing key; this accessor lets the
+-- API-client token workflow build its own 'HarchWeb.joseJwtSigner' over a
+-- 'Crypto.JWT.ClaimsSet' subtype carrying a scope claim, rather than widening
+-- the account signer's fixed 'Crypto.JWT.ClaimsSet' claims type or using
+-- @jose@'s deprecated 'Crypto.JWT.unregisteredClaims'/'Crypto.JWT.addClaim'.
+-- This does not add a second JWK file, a second startup proof, or a second
+-- authentication dispatcher.
+data SharedJwtIssuance = SharedJwtIssuance
+  { sharedJwtSigningKey :: HarchWeb.JWK,
+    sharedJwtIssuer :: Jwt.StringOrURI,
+    sharedJwtAudience :: Jwt.StringOrURI,
+    sharedJwtActiveKeyId :: Text
+  }
+
+accountJwtRuntimeSharedIssuance :: AccountJwtRuntime -> SharedJwtIssuance
+accountJwtRuntimeSharedIssuance runtime =
+  SharedJwtIssuance
+    { sharedJwtSigningKey = runtimeAccountJwtSigningKey runtime,
+      sharedJwtIssuer = validatedStringOrUriValue (accountJwtIssuer configuration),
+      sharedJwtAudience = validatedStringOrUriValue (accountJwtAudience configuration),
+      sharedJwtActiveKeyId = accountJwtActiveKeyId configuration
     }
   where
     configuration = runtimeAccountJwtConfiguration runtime

@@ -89,6 +89,7 @@ library
     WebApi.ActivityAudit
     WebApi.Api.Endpoints
     WebApi.ApiClient
+    WebApi.ApiClientToken
     WebApi.App
     WebApi.App.Enhancements
     WebApi.App.Observability
@@ -232,6 +233,7 @@ test-suite haskell-web-api-tests
     Unit.WebApi.AccountSpec
     Unit.WebApi.ActivityAuditSpec
     Unit.WebApi.ApiClientSpec
+    Unit.WebApi.ApiClientTokenSpec
     Unit.WebApi.App.EnhancementsSpec
     Unit.WebApi.AppEffectSpec
     Unit.WebApi.AppSpec
@@ -293,6 +295,7 @@ test-suite haskell-web-api-tests
     -- For running the executable in tests:
     aeson ^>=2.3.1.0,
     base ^>=4.22.0.0,
+    base64-bytestring ^>=1.2.1.0,
     bytestring ^>=0.12.2.0,
     core ^>=0.1.2.0,
     crypton ^>=1.1.5,
