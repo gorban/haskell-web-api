@@ -821,6 +821,71 @@ spec =
             readIORef deliveryCountReference `shouldReturn` 0
             readIORef admissionGrantState `shouldReturn` RequiredAdmissionGrantExpired
 
+        it "rejects a retry after another tab logs out and rotates the shared session" $ \(browser, appConfig) ->
+          withTestAccountJwtFixture $ \environmentConfig _ -> do
+            runtime <- requiredAccountJwtRuntime environmentConfig
+            initialNow <- Time.currentUnixTimeNanoseconds
+            initialSessionId <- Session.generateSessionId
+            let initialSession =
+                  Session.OpaqueSession
+                    { Session.sessionId = initialSessionId,
+                      Session.sessionPrincipal = pendingProfileAccountId,
+                      Session.sessionIssuedAtNanoseconds = initialNow,
+                      Session.sessionExpiresAtNanoseconds = initialNow + 86400000000000
+                    }
+                issuer = accountJwtIssuerFromRuntime runtime
+            initialJwt <- issueInitialSessionJwt issuer initialSession
+            sessionsReference <- newIORef [initialSession]
+            profileLoadsReference <- newIORef (0 :: Int)
+            deliveryCountReference <- newIORef (0 :: Int)
+            workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
+            let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+            HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+              let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                  logoutUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/logout"
+                  profileSubmit = byRole Button `named` "Resend verification email"
+                  reauthenticationDialog = css "#reauthentication-dialog"
+                  identifierField = byLabel "Email address or username"
+                  passwordField = byLabel "Password"
+                  authenticatorCodeField = byLabel "Authenticator code"
+                  retryOriginalAction = byRole Button `named` "Retry original action"
+              runBrowserSpec browser do
+                setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+                visit profileUrl
+                click profileSubmit
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])
+                fill identifierField "person@example.test"
+                fill passwordField "correct horse battery staple"
+                fill authenticatorCodeField reauthenticationTotpCode
+                click (byRole Button `named` "Sign in")
+                assertAllObserved do
+                  css "[data-web-api-reauthentication-status]" `shouldHaveText` "Signed in. Confirm to retry the original action."
+                  attributeValue retryOriginalAction "hidden" `shouldEqual` Nothing
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 2}|])
+                -- Another tab shares the same cookie jar; its own sign-out
+                -- invalidates the durable session this tab's own recovery
+                -- login just issued and refreshed its CSRF authority
+                -- against, before this tab's one explicit replay fires.
+                withSharedCookieDocument do
+                  visit logoutUrl
+                  click (byRole Button `named` "Sign out")
+                  assertAllObserved $
+                    byText "You are signed out." `shouldHaveText` "You are signed out."
+                -- The retry replays the original mutation itself, which
+                -- re-validates authentication through its own typed
+                -- rejection rail rather than a page-level redirect: the
+                -- other tab's logout is caught here as an ordinary
+                -- retry-eligible failure, exactly like a rejected password
+                -- above, not a silent success.
+                click retryOriginalAction
+                assertAllObserved do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
+                  css "[data-profile-resend] [data-harch-action-status]" `shouldHaveText` "This action needs your attention."
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
+            readIORef deliveryCountReference `shouldReturn` 0
+
         it "keeps one retained profile action available through corrected password and MFA failures" $ \(browser, appConfig) ->
           withTestAccountJwtFixture $ \environmentConfig _ -> do
             runtime <- requiredAccountJwtRuntime environmentConfig

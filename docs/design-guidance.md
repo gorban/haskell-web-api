@@ -584,6 +584,30 @@ fixture proves that a newly issued account session cannot bypass an expired
 independent durable grant; the composed admission guard uses this primitive
 with its own public admission destination.
 
+**Cross-tab session-rotation coverage gap closed (AHI-4C, 2026-09-18):** the
+recovery-matrix acceptance criteria call for proving "another tab's security
+rotation" against the signed account-session flow specifically (the composed
+admission/synchronizer backends already had this coverage). Added
+`Unit.WebApi.AppSpec`'s real-browser `"rejects a retry after another tab logs
+out and rotates the shared session"` test: after this tab's own recovery login
+succeeds and refreshes its session-bound CSRF authority, a second document
+sharing the same cookie jar (`TestCore.Browser.Scenario.withSharedCookieDocument`)
+signs out, invalidating that just-issued session. This tab's one explicit
+replay then re-validates authentication through the retry's own typed
+rejection rail — the same recoverable "needs your attention" patch an
+ordinary rejected credential already produces — rather than trusting the
+earlier successful sign-in or silently succeeding against a now-invalid
+session. No production code changed; this closes a real, previously-unproven
+security property with existing framework primitives. Three narrower items
+from the same acceptance bullet — "simultaneous" account-session/CSRF
+expiry, the full close/reopen/complete-recovery round trip (found already
+covered by the existing "recovers one retained profile action after its
+signed durable session expires" test on closer reading), and the
+`beforeunload`/`ConditionalLeaveConfirmation` draft-loss warning (implemented
+in `HarchWeb.Document` but never wired to any reference-app action, so
+currently unexercisable end to end) — remain open follow-ups, named here
+rather than claimed done.
+
 ### Decision record — bounded application-declared browser-storage cleanup (AHI-4C, 2026-09-09)
 
 **Decision: begin the client-state cleanup path with an opaque, validated
