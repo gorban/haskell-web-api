@@ -1075,16 +1075,36 @@ spec = do
                     case Password.hashPasswordWithSalt testPasswordHashingPolicy "fedcba9876543210" (Password.mkPassword "runtime-token-secret") of
                       Just value -> value
                       Nothing -> error "expected a valid test API-client secret hash"
+                  -- AHI-4D's PRD requires proving an API-client principal
+                  -- cannot satisfy /api/me merely by carrying a same-named
+                  -- "profile:read:self" scope. That scope must stay off the
+                  -- main 'oauthClientId' fixture above, or the
+                  -- 'invalidScopeRequest' assertion below (which relies on
+                  -- that exact scope being unauthorized for that client)
+                  -- would stop proving what it claims to.
+                  wrongPrincipalClientId = "app-spec-me-wrong-principal-client" :: Text.Text
+                  wrongPrincipalSecretHash =
+                    case Password.hashPasswordWithSalt testPasswordHashingPolicy "0123456789fedcba" (Password.mkPassword "wrong-principal-secret") of
+                      Just value -> value
+                      Nothing -> error "expected a valid test API-client secret hash"
                   ownerQuery = runRuntimeParameterizedRowsQuery defaultMigrationPostgresConfig
                   cleanupOauthClient =
                     void (ownerQuery "DELETE FROM web_api.api_clients WHERE client_id = $1 RETURNING client_id;" [oauthClientId])
+                  cleanupWrongPrincipalClient =
+                    void (ownerQuery "DELETE FROM web_api.api_clients WHERE client_id = $1 RETURNING client_id;" [wrongPrincipalClientId])
                   setupOauthClient = do
                     cleanupOauthClient
+                    cleanupWrongPrincipalClient
                     _ <- ownerQuery "INSERT INTO web_api.api_clients (client_id) VALUES ($1) RETURNING client_id;" [oauthClientId]
                     _ <- ownerQuery "INSERT INTO web_api.api_client_secret_hashes (client_id, secret_hash, created_at_nanoseconds) VALUES ($1, $2, 1) RETURNING secret_hash;" [oauthClientId, Password.passwordHashText oauthSecretHash]
                     _ <- ownerQuery "INSERT INTO web_api.api_client_scopes (client_id, scope_text, scope_position, is_default) VALUES ($1, $2, 0, true) RETURNING scope_text;" [oauthClientId, "resource:read"]
+                    _ <- ownerQuery "INSERT INTO web_api.api_clients (client_id) VALUES ($1) RETURNING client_id;" [wrongPrincipalClientId]
+                    _ <- ownerQuery "INSERT INTO web_api.api_client_secret_hashes (client_id, secret_hash, created_at_nanoseconds) VALUES ($1, $2, 1) RETURNING secret_hash;" [wrongPrincipalClientId, Password.passwordHashText wrongPrincipalSecretHash]
+                    _ <- ownerQuery "INSERT INTO web_api.api_client_scopes (client_id, scope_text, scope_position, is_default) VALUES ($1, $2, 0, true) RETURNING scope_text;" [wrongPrincipalClientId, "profile:read:self"]
                     pure ()
+                  cleanupOauthFixtures = cleanupOauthClient >> cleanupWrongPrincipalClient
                   basicHeaderFor secretValue = "Basic " <> Base64.encode (TextEncoding.encodeUtf8 (oauthClientId <> ":" <> secretValue))
+                  wrongPrincipalBasicHeader = "Basic " <> Base64.encode (TextEncoding.encodeUtf8 (wrongPrincipalClientId <> ":wrong-principal-secret"))
                   tokenRequestFor maybeHeaderValue bodyBytes = do
                     chunksReference <- newIORef [bodyBytes]
                     pure
@@ -1098,7 +1118,7 @@ spec = do
                               }
                           )
                       )
-              bracket_ setupOauthClient cleanupOauthClient $ do
+              bracket_ setupOauthClient cleanupOauthFixtures $ do
                 successRequest <- tokenRequestFor (Just (basicHeaderFor "runtime-token-secret")) "grant_type=client_credentials&scope=resource%3Aread"
                 successResponse <- performWaiRequest (HarchWeb.toWaiApplication runtimeApplication) successRequest
                 successBody <- readResponseBody successResponse
@@ -1130,6 +1150,32 @@ spec = do
                 expectAll
                   ( (Wai.responseStatus secondApiBearerResponse `shouldBe` Http.status200)
                       :| [lookup Http.hContentType (Wai.responseHeaders secondApiBearerResponse) `shouldBe` Just "application/json"]
+                  )
+
+                -- AHI-4D's PRD: "API-client identity cannot satisfy this
+                -- [/api/me] merely by carrying the same text scope." /api/me
+                -- stays on the account-only profile (WebApi.Route keeps its
+                -- access requirement 'RequireAuthenticated', not the
+                -- combined resource profile), whose claims parser requires
+                -- 'jti' — never present on an API-client-issued token — so a
+                -- structurally valid, correctly-scoped bearer token is
+                -- rejected the same way a missing credential already is
+                -- above, not admitted because its scope text happens to
+                -- read "profile:read:self".
+                wrongPrincipalTokenRequest <- tokenRequestFor (Just wrongPrincipalBasicHeader) "grant_type=client_credentials&scope=profile%3Aread%3Aself"
+                wrongPrincipalTokenResponse <- performWaiRequest (HarchWeb.toWaiApplication runtimeApplication) wrongPrincipalTokenRequest
+                wrongPrincipalTokenBody <- readResponseBody wrongPrincipalTokenResponse
+                Wai.responseStatus wrongPrincipalTokenResponse `shouldBe` Http.status200
+                let wrongPrincipalAccessToken = case Text.splitOn "\"access_token\":\"" wrongPrincipalTokenBody of
+                      _ : rest : _ -> Text.takeWhile (/= '"') rest
+                      _ -> error "expected an access_token field in the token response body"
+                wrongPrincipalMeResponse <-
+                  performWaiRequest
+                    (HarchWeb.toWaiApplication runtimeApplication)
+                    ((waiRequest ["api", "me"]) {Wai.requestHeaders = [("Authorization", TextEncoding.encodeUtf8 ("Bearer " <> wrongPrincipalAccessToken))]})
+                expectAll
+                  ( (Wai.responseStatus wrongPrincipalMeResponse `shouldBe` Http.status303)
+                      :| [lookup Http.hLocation (Wai.responseHeaders wrongPrincipalMeResponse) `shouldBe` Just "/login"]
                   )
 
                 invalidClientRequest <- tokenRequestFor (Just (basicHeaderFor "wrong-secret")) "grant_type=client_credentials"
