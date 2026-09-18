@@ -2,6 +2,7 @@
 
 {-# SPEC #-}
 
+import Control.Exception (ErrorCall (..), evaluate)
 import Control.Monad (forM_)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
@@ -279,7 +280,7 @@ spec = do
       renderRoutePath prefixedSpanishSecondRequest `shouldBe` "/app/es/second"
       renderRoutePath prefixedApiStatusRequest `shouldBe` "/app/api/status"
 
-  describe "endpointMetadata" $
+  describe "endpointMetadata" $ do
     it "gives every closed route a stable public endpoint identity" $ do
       let endpointDeclarationFields endpointMetadataValue =
             ( HarchWeb.endpointNameText (HarchWeb.endpointName endpointMetadataValue),
@@ -309,13 +310,20 @@ spec = do
             ]
           expectedAccess route
             | route `elem` [LogoutRoute, ProfileRoute, MeApiRoute] = HarchWeb.RequireAuthenticated
+            | route == SecondApiRoute = HarchWeb.RequireAuthorized (HarchWeb.RequireAnyScope (WebApi.Route.resourceReadScope :| []))
             | otherwise = HarchWeb.AllowUnauthenticated
           expectedProfile route
             | route `elem` [LogoutRoute, ProfileRoute, MeApiRoute] = Just WebApi.Route.accountAuthenticationProfileName
+            | route == SecondApiRoute = Just WebApi.Route.resourceAuthenticationProfileName
             | otherwise = Nothing
       forM_ expectedMetadata $ \(route, expectedName, template, protocol) ->
         endpointDeclarationFields (WebApi.Route.endpointMetadata route)
           `shouldBe` (expectedName, template, protocol, expectedAccess route, expectedProfile route)
+
+    it "raises the offending literal for an invalid OAuth scope declaration" $
+      evaluate (WebApi.Route.requiredOAuth2ScopeOrDie "invalid scope" `seq` ())
+        `shouldThrow` \case
+          ErrorCall message -> "invalid scope" `Text.isInfixOf` Text.pack message
 
   describe "matchRoute" $ do
     it "remains available separately from HarchWeb.matchRoute" $

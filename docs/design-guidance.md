@@ -3756,6 +3756,229 @@ boundary: the `buildAppWithDatabase*`/
 versus route dispatch) if the margin grows further. No split is done here —
 this commit is scoped to the mechanical widening alone.
 
+### Decision record — AHI-4D slice 5: securing `GET /api/second` (2026-09-17)
+
+**Decision: a new `WebApi.ResourceAuthentication` module owns the combined
+account-or-API-client-bearer profile, as its own authentication profile
+alongside `public`/`account` rather than folded into either.** It is a
+genuinely new capability — a principal sum type spanning two distinct
+principal kinds sharing one JWT proof type — not an extension of the
+single-principal-kind account pipeline, so the extend-vs-new-abstraction rule
+favors a new module over growing the already-tracked-oversized
+`WebApi.AccountJwt` (AHI-4D-MH1) further. `WebApi.AccountJwt` gained two new
+exported reuse points instead — `accountJwtRuntimeProofExtractor` (the
+cookie-or-bearer extractor built from this runtime's own cookie policy) and
+`accountJwtRuntimeProofVerifier` (JWT signature/standard-claims verification
+against this runtime's proven RS256 keys, parameterized only by the caller's
+own claims projection) — mirroring the existing `accountJwtRuntimeSharedIssuance`
+precedent that already lets `WebApi.ApiClientToken` reuse the same runtime's
+signing key. `accountJwtAuthenticationPipeline` itself now calls these two
+accessors instead of duplicating their bodies, so there is exactly one JWT
+verification-key/cookie-policy wiring site, used by both pipelines. Four more
+of `WebApi.AccountJwt`'s previously-private declarations
+(`AccountJwtClaims`, `parseAccountJwtClaims`, `establishAccountPrincipal`,
+`authenticationErrorResponse`) are exported for the same reuse reason,
+bringing its export count to 22 — still comfortably under the 40-export
+module-health threshold.
+
+**Decision: discriminate the combined claims shape by an ordered parse try
+(account shape first), exactly as the `/api/me` decision record already
+established the two shapes are structurally disjoint.** An account claim has
+`jti`; an API-client claim (`WebApi.ApiClientToken.claimsForApiClient`) never
+does. `WebApi.ResourceAuthentication.parseResourceJwtClaims` therefore tries
+`parseAccountJwtClaims` first and falls through to an API-client parse only
+on its failure — no new claim field or discriminator tag was added to either
+shape.
+
+**Framework-capability-gap decision, following this document's own protocol
+(option 2 — application-layer workaround), after testing option 1 and finding
+it infeasible:** reading the API-client claim's `scope` field back out of the
+JWT verifier's fixed `Crypto.JWT.ClaimsSet` result requires the
+upstream-deprecated `Crypto.JWT.unregisteredClaims` lens. Option 1 (widen
+`HarchWeb.jwtProofVerifier` to decode a caller-chosen `HasClaimsSet`
+subtype, as @jose@ itself recommends in place of `unregisteredClaims`) was
+tested directly against the pinned @jose@ version in a REPL: its
+`Crypto.JWT.verifyClaims` fixes its result type to bare `ClaimsSet` via a
+`VerificationKeyStore m (h RequiredProtection) ClaimsSet k` constraint
+naming `ClaimsSet` explicitly, not a free type variable — so honoring a
+subtype would mean reimplementing `verifyClaims`'s own standard-claims
+validation outside it, which is not the "small, general" framework primitive
+the protocol's option 1 requires. `WebApi.ResourceAuthentication` therefore
+reads `scope` via `unregisteredClaims` with a file-scoped
+`{-# OPTIONS_GHC -Wno-deprecations #-}`, documented in its own Haddock
+alongside this record. Nothing here weakens a security property: the claim
+is read only after `HarchWeb.jwtProofVerifier`'s unmodified signature and
+standard-claims verification already succeeded.
+
+**Decision: an API-client principal's granted scopes are re-intersected with
+its current durable allowance on every request, never trusted from the token
+alone — reusing `WebApi.ApiClient.intersectEstablishedApiClientScopes`,
+already built for exactly this purpose, rather than re-deriving the same
+narrowing.** `WebApi.ResourceAuthentication.resourcePrincipalEstablisher`
+calls `establishApiClient` (the store's per-request, no-cross-request-cache
+operation Harch's own Haddock already requires) for every API-client-shaped
+claim, so a client disabled or rescoped since token issuance takes effect on
+its very next resource request, exactly like durable account-session
+revocation already does for the account path.
+
+**Decision: an account principal is authorized unconditionally; an
+API-client principal reuses `HarchWeb.scopeAuthorizationInterpreter`'s exact
+`RequireAllScopes`/`RequireAnyScope` matching against its already-intersected
+effective scopes, rather than re-deriving that match.**
+`resourceAuthorizationInterpreter` branches on principal kind first, then
+delegates the API-client branch to the existing scope interpreter with a
+`const effectiveScopes` projection — this is the one new `AuthorizationInterpreter`
+the AHI-4D task doc asked for, built by composition rather than duplication.
+
+**Decision: `GET /api/second`'s access requirement changes from
+`AllowUnauthenticated` to `RequireAuthorized (RequireAnyScope (resourceReadScope :| []))`
+under the new `resource` profile, declared in `WebApi.Route` beside
+`endpointMetadata`'s other cases — the handler itself is unchanged.** The
+handler already ignored any principal; only the guard changes. The new
+`resourceReadScope`/`resourceAuthenticationProfileName` values live in
+`WebApi.Route`, not `WebApi.ResourceAuthentication`, specifically to avoid an
+import cycle: the profile module already imports `WebApi.Route` for
+`AppRoute`/`AppRequestContext`/`AppAuthorization`, so defining the name/scope
+constants there instead mirrors how `accountAuthenticationProfileName`
+already lives in `WebApi.Route` rather than in `WebApi.AccountJwt`.
+
+**Decision: the combined principal is not attached to `AppRequestContext`.**
+No current `/api/second` handler reads caller identity, so
+`authenticationAttachPrincipal = \_ context -> context` is a deliberate no-op
+rather than a speculative new context field. A future need to expose which
+principal kind served a request is real, later work, named here rather than
+built preemptively.
+
+**Consequence, named rather than hidden, extending the same gap `/api/me`
+already named: every failure mode on this route — missing credentials,
+denied authorization, an unknown API client — collapses to the same
+303-to-login redirect (`resourceLoginRedirect`, reusing
+`accountAuthenticationChallenge`'s exact response shape) rather than a
+JSON 401/403 body.** A machine client cannot follow a redirect; distinguishing
+API-shaped challenges by `HarchWeb.EndpointProtocol` remains the same
+`HarchWeb.EndpointSecurity`-wide gap named for `/api/me`, not a new one.
+
+**Build-diagnostic finding, not a design one, discovered directly rather
+than assumed: `Crypto.JWT.verifyClaims`'s `nbf`/`exp` standard-claims check
+validates against the real wall clock (`Control.Monad.Time.MonadTime`'s `IO`
+instance), never against whatever clock value an application supplied to
+compute those embedded claim values at issuance.** A first attempt at
+`Unit.WebApi.ResourceAuthenticationSpec`'s API-client tests used a fixed
+1970-epoch-relative clock for both `WebApi.ApiClientToken.issueApiClientToken`
+and the resource pipeline's own clock parameter; every minted token
+verified as already-expired, because `exp` landed only ~1900 seconds after
+the Unix epoch while `verifyClaims` checked it against the real 2026
+wall-clock time. The fix is `HarchWeb.Time.currentUnixTimeNanoseconds` for
+both clocks, not a workaround: this pipeline's own `readClock` parameter
+governs only the *account*-session establishment step's own expiry
+comparison (`WebApi.AccountJwt.establishAccountPrincipal`, an
+application-owned check), while JWT-standard-claims validation is Harch's
+own fixed real-clock behavior and cannot be pointed at a test clock at all.
+This is the same category of finding this document's never-mask-a-gate rule
+already covers for coverage gaps: read the actual consuming code path before
+concluding a fixed test clock is safe to reuse across both concerns.
+
+Real WAI-level coverage lives in `Unit.WebApi.ResourceAuthenticationSpec`
+(account-cookie admission regardless of scope, API-client bearer admission
+with a sufficient scope, rejection for an insufficient or since-narrowed
+scope, and rejection for an unknown/disabled client), built the same way
+`Unit.WebApi.ApiClientTokenSpec` already builds its own throwaway RSA
+runtime — no Postgres or full application composition is required to prove
+this pipeline's behavior directly via `HarchWeb.runAuthenticationPipeline`.
+`Unit.WebApi.AppSpec`'s pre-existing real-socket runtime test ("serves
+database-backed runtime routes from the supplied environment config") moved
+its assertion from `/api/second` to the still-public `/second` page route,
+which renders the exact same environment-config-driven `SecondRouteData`:
+that test's actual subject is database-backed routing, not this slice's new
+authorization layer, and minting either credential kind over a real raw
+socket would have tested the credential-minting machinery a second time
+rather than this test's own stated purpose.
+
+**Consequence discovered directly (a genuine framework behavior, not a test
+bug), fixed rather than worked around: `HarchWeb.toWaiApplication` fails a
+protected endpoint closed under `HarchWeb.AuthenticationDisabled`, while
+`HarchWeb.renderResponse` bypasses guard resolution entirely regardless of
+security mode.** `Unit.WebApi.AppSpec`'s pre-existing "adapts the pure
+application to WAI without changing rendered pages" test asserted a 200 JSON
+body for `/api/second` through `pureApplication` (`AuthenticationDisabled`)
+via `toWaiApplication` specifically; once `/api/second` requires
+authorization, the real WAI-level post-match pipeline (`HarchWeb.Server.PostMatch`)
+finds no configured guard for a `RequireAuthorized` endpoint and fails closed
+with Harch's own `disabledSecurityResponse` (503, "Authentication is
+unavailable"), independent of anything this task's own pipeline code
+controls. Every other `apiSecondRequest`-using test in that file dispatches
+through `HarchWeb.renderResponse` instead, which never consults
+`resolveAuthenticationProfile` at all regardless of `AuthenticationDisabled`/
+`AuthenticationProfiles`, so none of them were affected — only the one test
+exercising the real WAI adapter. The fix updates that one assertion to the
+new (still meaningful) 503 shape rather than dropping the check: it still
+proves a non-2xx typed-API response also survives WAI adaptation without
+losing its status/content-type/body, just for a different response shape
+than before.
+
+**Named module-health consequence: `WebApi.Route` now exceeds this
+document's 40-export threshold (43 exports).** Three new symbols,
+`resourceAuthenticationProfileName`, `resourceReadScope`, and
+`requiredOAuth2ScopeOrDie` (the last exported so its error rail can be
+exercised directly, per the never-mask-a-gate-finding rule, rather than
+relying on `resourceReadScope`'s own reviewed-never-invalid literal), are all
+genuinely needed outside this module (`WebApi.App` for profile registration,
+and `Unit.WebApi.ResourceAuthenticationSpec`/`Unit.WebApi.RouteSpec` to
+construct and test real values matching production) and are declared here
+rather than in `WebApi.ResourceAuthentication` specifically to avoid an
+import cycle (see above). Most of this module's export count is
+`AppRoute`'s own seventeen named route constructors, not top-level bindings;
+a facade split (route identity/parsing versus endpoint-metadata
+declarations) is a real future readability improvement but is not done
+here — this task is scoped to securing one route, not restructuring the
+module. A follow-up task should re-run `tools/haskell-quality-report.sh` the
+next time `WebApi.Route` grows
+and reconsider that split if the margin widens further, matching how the AK
+module-health entry above already handled `HarchWeb.Api.Endpoint`'s own
+crossing.
+
+**Coverage-gap finding, closed by exercising the real composition rather than
+a synthetic value: `WebApi.App`'s `runtimeAuthenticationProfiles` passes
+`ApiClientToken.apiClientTokenStore (accountWorkflowApiClientTokenEnvironment
+accountWorkflow)` as `resourceAuthenticationPipeline`'s fourth argument, and
+that thunk stayed permanently unforced ("never executed" in the HPC report)
+until a test actually routed an API-client bearer request through the real,
+Postgres-backed runtime application.** `Unit.WebApi.ResourceAuthenticationSpec`
+proves the pipeline's API-client branch directly, but it builds its own
+throwaway `ApiClientStore` and never touches `WebApi.App`'s own wiring
+expression; `Unit.WebApi.AppSpec`'s account-cookie `/api/second` assertion
+only forces the account branch, which never reads the `apiClientStore`
+argument at all. The fix reuses the same real API client this file's existing
+`POST /api/oauth/token` test already provisions in Postgres
+(`app-spec-oauth-token-client`, granted `resource:read`): after that test
+mints a real access token, it now also replays that exact token as an
+`Authorization: Bearer` header against `/api/second` on the same
+`runtimeApplication`, forcing `resourcePrincipalEstablisher`'s
+`establishApiClient apiClientStore clientId` call through the genuine
+`WebApi.App` composition instead of a hand-built pipeline value. This is the
+same lesson this document's never-mask-a-gate rule already generalizes: the
+gap was a real, unexercised production wiring path, not a coverage-tool
+artifact, and the fix is a test that exercises it, not an ignore pragma.
+
+**Build-diagnostic finding, unrelated to this task's own code but costly
+enough to record: `cabal run <test-suite>` does not change the process's
+working directory to the owning package's directory the way `cabal test
+<test-suite>` does, so any test relying on a package-relative static
+directory (`WebApi.Config`'s `StaticAssetsConfig`, whose `staticDirectory`
+field is a bare relative `FilePath` resolved at request time, per
+`HarchWeb.Server.StaticAssets.serveStaticAssetResponse`) 404s under `cabal
+run` from the repository root while passing under `cabal test` or in CI.**
+This surfaced as `Unit.WebApi.App.EnhancementsSpec`'s pre-existing "serves
+bundled style, font, and resource assets through configured static roots"
+test failing locally with a 404 on `/assets/styles/app.css`, reproduced
+identically against the stashed pre-task baseline, and confirmed green on
+this exact commit's already-passing `pull_request` `CI` run
+(`gh pr checks`) — proving the failure was this session's own `cabal run`
+invocation habit, not a repository regression. `cabal test` is the correct
+local substitute for CI's own test invocation going forward; this document
+records it here so a future session does not re-diagnose the same false
+alarm.
+
 **Decision: preserve the existing one-page-rendering and one-JWT-verification
 rails, adding only their missing typed boundary operations.** A route guard
 and a protocol route handler now return `NonPageResponse`, the closed subset

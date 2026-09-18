@@ -38,6 +38,20 @@
 -- marginally over this document's module-health line\/import threshold
 -- (501 lines, 27 imports); no split is done here, see that record for the
 -- named follow-up.
+--
+-- Decision record (AHI-4D slice 5, 2026-09-17): 'runtimeAuthenticationProfiles'
+-- registers a third profile, 'WebApi.Route.resourceAuthenticationProfileName',
+-- built from 'WebApi.ResourceAuthentication.resourceAuthenticationPipeline'
+-- and reusing this module's already-wired account session store/clock plus
+-- the durable API-client store already owned by
+-- 'WebApi.AppEffect.accountWorkflowApiClientTokenEnvironment' (the same store
+-- 'WebApi.Api.Endpoints.tokenApiRouteDefinition' issues bearer tokens
+-- against). It secures @GET \/api\/second@; see the full decision record in
+-- @docs\/design-guidance.md@. The API-client store argument here stayed
+-- unforced under HPC until 'Unit.WebApi.AppSpec' replayed a real minted
+-- bearer token against @GET \/api\/second@ on the composed runtime
+-- application; see that document's coverage-gap finding for the same
+-- decision record.
 module WebApi.App
   ( buildAppWithDatabase,
     buildAppWithDatabaseAndAccountWorkflow,
@@ -74,6 +88,7 @@ import System.IO (Handle, hFlush)
 import WebApi.AccountJwt (AccountJwtLoadError, AccountJwtRuntime, accountJwtAuthenticationPipeline, loadAccountJwtRuntime)
 import WebApi.AccountPages (AccountAction, accountActionEndpointMetadata, accountActionRoute, accountActions, accountCsrfProtection, handleAccountAction)
 import WebApi.Api.Endpoints (meApiRouteDefinition, secondApiRouteDefinition, statusApiRouteDefinition, tokenApiRouteDefinition)
+import WebApi.ApiClientToken qualified as ApiClientToken
 import WebApi.App.AccountWorkflow (buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwt, buildRuntimeAccountWorkflowWithJwtRuntime, unavailableAccountWorkflow)
 import WebApi.App.Observability
   ( otlpExportFailureMessage,
@@ -97,6 +112,7 @@ import WebApi.Config
 import WebApi.Database (PageRepository, defaultPageRepository)
 import WebApi.Postgres.Pool (PostgresPool, closePostgresPool, newPostgresPool)
 import WebApi.Postgres.Runtime (buildRuntimePostgresPageRepository)
+import WebApi.ResourceAuthentication qualified as ResourceAuthentication
 import WebApi.Response (apiNotFoundResponse, renderLocale, selectResponseWithDatabaseAndAccountWorkflow, spacesLocation)
 import WebApi.Route
   ( AppAuthorization,
@@ -107,6 +123,7 @@ import WebApi.Route
     defaultRequestContext,
     endpointMetadata,
     requestContextFromWaiRequest,
+    resourceAuthenticationProfileName,
     routeCodec,
   )
 
@@ -379,6 +396,18 @@ runtimeAuthenticationProfiles accountWorkflow jwtRuntime =
                            (accountWorkflowSessionStore accountWorkflow)
                            (accountWorkflowClock accountWorkflow)
                            jwtRuntime
+                       )
+                   )
+               ),
+             HarchWeb.mkAuthenticationProfile
+               resourceAuthenticationProfileName
+               ( Just
+                   ( HarchWeb.authenticationGuardFromPipeline
+                       ( ResourceAuthentication.resourceAuthenticationPipeline
+                           (accountWorkflowSessionStore accountWorkflow)
+                           (accountWorkflowClock accountWorkflow)
+                           jwtRuntime
+                           (ApiClientToken.apiClientTokenStore (accountWorkflowApiClientTokenEnvironment accountWorkflow))
                        )
                    )
                )

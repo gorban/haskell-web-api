@@ -771,11 +771,22 @@ spec = do
       readResponseBody apiStatusResponse
         `shouldReturn` "{\"status\":\"ok\",\"locale\":\"en\"}"
 
+      -- 'pureApplication' has 'HarchWeb.AuthenticationDisabled' security, and
+      -- '/api/second' now requires the AHI-4D resource authentication
+      -- profile: through the real WAI adapter (unlike the lower-level
+      -- 'HarchWeb.renderResponse' the dispatch/hostile-content/database-
+      -- failure tests below use, which bypasses guard resolution entirely),
+      -- a protected endpoint under disabled security fails closed with
+      -- Harch's own 'disabledSecurityResponse' rather than silently admitting
+      -- every caller. This still proves this test's actual subject — a
+      -- non-2xx typed-API response also adapts to WAI without losing its
+      -- status/content-type/body — just for a different response shape than
+      -- before.
       apiSecondResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["api", "second"])
-      Wai.responseStatus apiSecondResponse `shouldBe` Http.status200
-      lookup Http.hContentType (Wai.responseHeaders apiSecondResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "application/json")
-      readResponseBody apiSecondResponse
-        `shouldReturn` "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
+      Wai.responseStatus apiSecondResponse `shouldBe` Http.status503
+      lookup Http.hContentType (Wai.responseHeaders apiSecondResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "text/plain; charset=utf-8")
+      renderedApiSecondResponse <- readResponseBody apiSecondResponse
+      Text.isInfixOf "Authentication is unavailable." renderedApiSecondResponse `shouldBe` True
 
       missingResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["missing"])
       Wai.responseStatus missingResponse `shouldBe` Http.status404
@@ -1014,6 +1025,20 @@ spec = do
                          meBody `shouldBe` ("{\"username\":null,\"email\":\"" <> emailAddressText runtimeEmail <> "\"}")
                        ]
                 )
+              -- AHI-4D slice 5's combined resource profile admits the same
+              -- account cookie unconditionally (no scope required), through
+              -- the real 'runtimeAuthenticationProfiles' registration this
+              -- runtime application composes with — not a synthetic
+              -- pipeline value, exercising the actual registered "resource"
+              -- profile entry end to end.
+              secondApiResponse <-
+                performWaiRequest
+                  (HarchWeb.toWaiApplication runtimeApplication)
+                  ((waiRequest ["api", "second"]) {Wai.requestHeaders = [("Cookie", TextEncoding.encodeUtf8 cookie)]})
+              expectAll
+                ( (Wai.responseStatus secondApiResponse `shouldBe` Http.status200)
+                    :| [lookup Http.hContentType (Wai.responseHeaders secondApiResponse) `shouldBe` Just "application/json"]
+                )
               -- The account profile's existing guard is reused as-is (see the
               -- AHI-4D decision record): an unauthenticated request receives
               -- the same login-redirect challenge every other
@@ -1084,6 +1109,27 @@ spec = do
                            Text.isInfixOf "\"scope\":\"resource:read\"" successBody `shouldBe` True,
                            Text.isInfixOf "\"access_token\":\"" successBody `shouldBe` True
                          ]
+                  )
+
+                -- The account-cookie /api/second check above only exercises
+                -- 'resourceAuthenticationPipeline's account branch; the
+                -- API-client bearer branch (and the real, Postgres-backed
+                -- 'ApiClientToken.apiClientTokenStore' argument
+                -- 'runtimeAuthenticationProfiles' composes it with) stays
+                -- unforced without a genuine bearer request. Minting a real
+                -- token from the client just provisioned above and replaying
+                -- it here closes that gap through the actual runtime wiring
+                -- rather than a synthetic pipeline value.
+                let accessToken = case Text.splitOn "\"access_token\":\"" successBody of
+                      _ : rest : _ -> Text.takeWhile (/= '"') rest
+                      _ -> error "expected an access_token field in the token response body"
+                secondApiBearerResponse <-
+                  performWaiRequest
+                    (HarchWeb.toWaiApplication runtimeApplication)
+                    ((waiRequest ["api", "second"]) {Wai.requestHeaders = [("Authorization", TextEncoding.encodeUtf8 ("Bearer " <> accessToken))]})
+                expectAll
+                  ( (Wai.responseStatus secondApiBearerResponse `shouldBe` Http.status200)
+                      :| [lookup Http.hContentType (Wai.responseHeaders secondApiBearerResponse) `shouldBe` Just "application/json"]
                   )
 
                 invalidClientRequest <- tokenRequestFor (Just (basicHeaderFor "wrong-secret")) "grant_type=client_credentials"
@@ -1816,8 +1862,16 @@ spec = do
             serverThreadId <- forkIO $ do
               result <- try (runWithConfig outputHandle runtimeAppConfig runtimeEnvironmentConfig) :: IO (Either SomeException ())
               writeIORef completionReference (Just result)
-            responseText <- waitForRuntimeServerResponse completionReference (tcpEndpointPort unusedEndpoint) "/api/second"
-            responseText `shouldBe` "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
+            -- '/api/second' now requires the AHI-4D resource authentication
+            -- profile (account cookie/bearer or a scoped API-client bearer
+            -- token); minting either credential over a real socket is
+            -- covered by the focused resource-profile tests instead. The
+            -- rendered '/second' page consumes the exact same environment-
+            -- config-driven 'SecondRouteData', stays 'AllowUnauthenticated',
+            -- and therefore still proves this test's actual subject: runtime
+            -- routes backed by the supplied environment's database config.
+            responseText <- waitForRuntimeServerResponse completionReference (tcpEndpointPort unusedEndpoint) "/second"
+            responseText `shouldSatisfy` Text.isInfixOf "Second page content with stubbed data ready for future loaders."
             completionResult <- readIORef completionReference
             completionResult `shouldSatisfy` isNothing
             killThread serverThreadId

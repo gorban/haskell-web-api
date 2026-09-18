@@ -32,6 +32,9 @@ module WebApi.Route
     RouteMetadata (..),
     RouteSelectionError (..),
     accountAuthenticationProfileName,
+    resourceAuthenticationProfileName,
+    resourceReadScope,
+    requiredOAuth2ScopeOrDie,
     defaultRequestContext,
     endpointMetadata,
     matchRoute,
@@ -124,6 +127,34 @@ data RequestAuthenticationTransport
 -- public root profile.
 accountAuthenticationProfileName :: HarchWeb.AuthenticationProfileName
 accountAuthenticationProfileName = HarchWeb.requiredAuthenticationProfileNameOrDie "account"
+
+-- | The AHI-4D combined account-or-API-client-bearer profile
+-- ('WebApi.ResourceAuthentication.resourceAuthenticationPipeline'), declared
+-- here rather than in that module: the pipeline itself never needs its own
+-- registered name (mirroring 'accountAuthenticationProfileName', which
+-- 'WebApi.AccountJwt' likewise never references), and 'WebApi.ResourceAuthentication'
+-- already imports this module for 'AppRoute'\/'AppRequestContext'\/
+-- 'AppAuthorization' — defining the name there too would import this module
+-- back into it.
+resourceAuthenticationProfileName :: HarchWeb.AuthenticationProfileName
+resourceAuthenticationProfileName = HarchWeb.requiredAuthenticationProfileNameOrDie "resource"
+
+-- | The scope an API-client bearer token must carry (directly, or via a
+-- current durable allowance that still intersects it; see
+-- 'WebApi.ApiClient.intersectEstablishedApiClientScopes') to reach
+-- @GET \/api\/second@. An authenticated account principal needs no scope at
+-- all; see 'WebApi.ResourceAuthentication's authorization interpreter.
+resourceReadScope :: HarchWeb.OAuth2Scope
+resourceReadScope = requiredOAuth2ScopeOrDie "resource:read"
+
+-- | Unwrap a statically-known-valid OAuth scope literal, or crash naming the
+-- offending declaration. Exported (like 'HarchWeb.requiredEndpointNameOrDie')
+-- so its error rail can be exercised directly against a genuinely invalid
+-- literal instead of only through 'resourceReadScope', which is reviewed to
+-- never trigger it.
+requiredOAuth2ScopeOrDie :: Text -> HarchWeb.OAuth2Scope
+requiredOAuth2ScopeOrDie value =
+  either (\scopeError -> error ("invalid OAuth scope declaration " <> show value <> ": " <> show scopeError)) id (HarchWeb.mkOAuth2Scope value)
 
 data RouteSelectionError
   = UnsupportedLocalePrefix Text
@@ -491,7 +522,15 @@ endpointMetadata route =
     HelpRoute -> html "web.help" "/{locale}/help"
     NotFoundRoute -> html "web.not-found" "/{locale}/404"
     StatusApiRoute -> api "api.status" "/api/status"
-    SecondApiRoute -> api "api.second" "/api/second"
+    -- AHI-4D slice 5: an account cookie/bearer session is authorized
+    -- unconditionally; an API-client bearer token must carry the
+    -- 'resourceReadScope' scope (directly, or via its current durable
+    -- allowance). See 'WebApi.ResourceAuthentication' and the AHI-4D
+    -- decision record in @docs/design-guidance.md@.
+    SecondApiRoute ->
+      HarchWeb.withAuthenticationProfile
+        resourceAuthenticationProfileName
+        (declaredMetadata ApiEndpoint (HarchWeb.RequireAuthorized (HarchWeb.RequireAnyScope (resourceReadScope NonEmpty.:| []))) "api.second" "/api/second")
     -- Reuses the account profile's existing 'RequireAuthenticated' guard
     -- rather than a new authorization payload: an API-client bearer JWT has
     -- no session ID ('jti') claim, so it already fails this profile's claims

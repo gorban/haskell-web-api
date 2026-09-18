@@ -26,7 +26,8 @@
 -- @:@; they therefore occupy the JWT subject's explicit string form rather
 -- than being dynamically re-parsed as a possible URI.
 module WebApi.AccountJwt
-  ( AccountJwtConfiguration,
+  ( AccountJwtClaims,
+    AccountJwtConfiguration,
     AccountJwtRawConfiguration (..),
     AccountJwtSignerBuilder,
     AccountJwtConfigurationError (..),
@@ -35,12 +36,18 @@ module WebApi.AccountJwt
     AccountJwtLoadError (..),
     AccountJwtRuntime,
     SharedJwtIssuance (..),
+    accountAuthenticationChallenge,
     accountJwtAuthenticationPipeline,
     accountJwtIssuerFromRuntime,
+    accountJwtRuntimeProofExtractor,
+    accountJwtRuntimeProofVerifier,
     accountJwtRuntimeSharedIssuance,
+    authenticationErrorResponse,
+    establishAccountPrincipal,
     loadAccountJwtRuntime,
     loadAccountJwtRuntimeWithSigner,
     mkAccountJwtConfiguration,
+    parseAccountJwtClaims,
     unavailableAccountJwtIssuer,
   )
 where
@@ -424,21 +431,10 @@ numericDate instant =
 accountJwtAuthenticationPipeline :: AccountSessionStore -> IO UnixTimeNanoseconds -> AccountJwtRuntime -> HarchWeb.AuthenticationPipeline AppRoute AppRequestContext AppAuthorization HarchWeb.JwtProof (HarchWeb.JwtProofSource, AccountJwtClaims) (HarchWeb.JwtProofSource, AccountPrincipal) ()
 accountJwtAuthenticationPipeline sessionStore readClock runtime =
   HarchWeb.AuthenticationPipeline
-    { HarchWeb.authenticationProofExtractor =
-        HarchWeb.cookieOrBearerJwtExtractor
-          (HarchWeb.authenticationCookieName cookiePolicy)
-          authenticationProofMaximumBytes,
+    { HarchWeb.authenticationProofExtractor = accountJwtRuntimeProofExtractor runtime,
       HarchWeb.authenticationProofVerifier =
         HarchWeb.AuthenticationProofVerifier $ \proof -> do
-          verified <-
-            HarchWeb.verifyAuthenticationProof
-              ( HarchWeb.jwtProofVerifier
-                  validationSettings
-                  (HarchWeb.mkJwtAllowedAlgorithms (HarchWeb.JwtRs256 :| []))
-                  (runtimeAccountJwtVerificationKeys runtime)
-                  parseAccountJwtClaims
-              )
-              (HarchWeb.jwtProofEncodedJwt proof)
+          verified <- HarchWeb.verifyAuthenticationProof (accountJwtRuntimeProofVerifier runtime parseAccountJwtClaims) proof
           pure ((HarchWeb.jwtProofSource proof,) <$> verified),
       HarchWeb.authenticationPrincipalEstablisher =
         HarchWeb.PrincipalEstablisher $ \(source, claims) -> do
@@ -455,9 +451,39 @@ accountJwtAuthenticationPipeline sessionStore readClock runtime =
       HarchWeb.authenticationChallenge = accountAuthenticationChallenge,
       HarchWeb.authenticationUnavailable = \endpointRequest _ -> authenticationErrorResponse (HarchWeb.requestContext (HarchWeb.endpointRouteRequest endpointRequest)) Http.status503 "Authentication is temporarily unavailable."
     }
+
+-- | The cookie-or-bearer JWT proof extractor built from this runtime's own
+-- deployment-authored cookie policy. Exposed so the AHI-4D combined
+-- account-or-API-client-bearer profile (securing @\/api\/second@) accepts the
+-- exact same session cookie as every account-protected page/action, instead
+-- of a second cookie declaration.
+accountJwtRuntimeProofExtractor :: AccountJwtRuntime -> HarchWeb.AuthenticationProofExtractor route context authorization HarchWeb.JwtProof
+accountJwtRuntimeProofExtractor runtime =
+  HarchWeb.cookieOrBearerJwtExtractor
+    (HarchWeb.authenticationCookieName (accountJwtCookiePolicy (runtimeAccountJwtConfiguration runtime)))
+    authenticationProofMaximumBytes
+
+-- | Verify a compact JWT against this runtime's already-startup-proven RS256
+-- verification keys and validated issuer/audience, parameterized only by the
+-- caller's own claims projection. Mirrors 'accountJwtRuntimeSharedIssuance':
+-- a second principal kind reuses this runtime's verification material
+-- instead of loading and re-proving a second key set. The account pipeline
+-- above is this accessor's own first caller, with 'parseAccountJwtClaims';
+-- the AHI-4D combined profile is its second, with a claims-shape-
+-- discriminating projection of its own.
+accountJwtRuntimeProofVerifier :: AccountJwtRuntime -> (Jwt.ClaimsSet -> Either HarchWeb.JwtClaimsError claims) -> HarchWeb.AuthenticationProofVerifier HarchWeb.JwtProof claims
+accountJwtRuntimeProofVerifier runtime claimsProjection =
+  HarchWeb.AuthenticationProofVerifier $ \proof ->
+    HarchWeb.verifyAuthenticationProof
+      ( HarchWeb.jwtProofVerifier
+          validationSettings
+          (HarchWeb.mkJwtAllowedAlgorithms (HarchWeb.JwtRs256 :| []))
+          (runtimeAccountJwtVerificationKeys runtime)
+          claimsProjection
+      )
+      (HarchWeb.jwtProofEncodedJwt proof)
   where
     configuration = runtimeAccountJwtConfiguration runtime
-    cookiePolicy = accountJwtCookiePolicy configuration
     validationSettings =
       Jwt.defaultJWTValidationSettings (== validatedStringOrUriValue (accountJwtAudience configuration))
         & Jwt.jwtValidationSettingsIssuerPredicate .~ (== validatedStringOrUriValue (accountJwtIssuer configuration))

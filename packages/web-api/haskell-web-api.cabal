@@ -110,6 +110,7 @@ library
     WebApi.Postgres
     WebApi.Postgres.Testing
     WebApi.Profile
+    WebApi.ResourceAuthentication
     WebApi.Response
     WebApi.Route
     WebApi.RouteData
@@ -163,6 +164,7 @@ library
     aeson ^>=2.3.1.0,
     base ^>=4.22.0.0,
     bytestring ^>=0.12.2.0,
+    containers ^>=0.8,
     core ^>=0.1.2.0,
     crypton ^>=1.1.5,
     directory ^>=1.3.10.0,
@@ -262,6 +264,7 @@ test-suite haskell-web-api-tests
     Unit.WebApi.Postgres.VerificationResendAuditRepositorySpec
     Unit.WebApi.PostgresSpec
     Unit.WebApi.ProfileSpec
+    Unit.WebApi.ResourceAuthenticationSpec
     Unit.WebApi.ResponseSpec
     Unit.WebApi.RouteDataSpec
     Unit.WebApi.RouteSpec
