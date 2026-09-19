@@ -78,6 +78,7 @@ library
     HarchWeb.ClientStorage
     HarchWeb.Controls
     HarchWeb.Csrf
+    HarchWeb.Csrf.Signed
     HarchWeb.Database
     HarchWeb.DevSmtp
     HarchWeb.Document
@@ -137,7 +138,6 @@ library
     HarchWeb.Authentication.Transport
     HarchWeb.Cookie
     HarchWeb.Csrf.Lifecycle
-    HarchWeb.Csrf.Signed
     HarchWeb.Markup.Attributes
     HarchWeb.Markup.Elements
     HarchWeb.Markup.Implementation

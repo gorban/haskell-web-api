@@ -17,6 +17,7 @@ import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
 import HarchWeb
 import HarchWeb.Csrf qualified as Csrf
+import HarchWeb.Csrf.Signed qualified as Signed
 import HarchWeb.LoginProtection (defaultLoginProtectionPolicy)
 import HarchWeb.RequestContext (RequestContext (..), RequestIdentity (..))
 import HarchWeb.Secret (encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
@@ -668,31 +669,31 @@ browserDependencies csrfProtection =
 
 browserCsrfProtection :: Csrf.CsrfProtection ComposedContext
 browserCsrfProtection =
-  Csrf.signedCsrfProtection
-    Csrf.SignedCsrfDependencies
-      { Csrf.signedCsrfDependenciesKeyring = keyring,
-        Csrf.signedCsrfDependenciesPolicy = Csrf.defaultSignedCsrfPolicy,
-        Csrf.signedCsrfDependenciesCurrentTime = pure 1000000000,
-        Csrf.signedCsrfDependenciesResolveBinding = const (pure Csrf.AnonymousCsrfBinding)
+  Signed.signedCsrfProtection
+    Signed.SignedCsrfDependencies
+      { Signed.signedCsrfDependenciesKeyring = keyring,
+        Signed.signedCsrfDependenciesPolicy = Signed.defaultSignedCsrfPolicy,
+        Signed.signedCsrfDependenciesCurrentTime = pure 1000000000,
+        Signed.signedCsrfDependenciesResolveBinding = const (pure Csrf.AnonymousCsrfBinding)
       }
   where
-    keyId = requiredCsrf "browser CSRF key id" (Csrf.mkCsrfKeyId "composed-browser-v1")
-    signingKey = requiredCsrf "browser CSRF signing key" (Csrf.mkCsrfSigningKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-    keyring = requiredCsrf "browser CSRF keyring" (Csrf.mkSignedCsrfKeyring keyId ((keyId, signingKey) :| []))
+    keyId = requiredCsrf "browser CSRF key id" (Signed.mkCsrfKeyId "composed-browser-v1")
+    signingKey = requiredCsrf "browser CSRF signing key" (Signed.mkCsrfSigningKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+    keyring = requiredCsrf "browser CSRF keyring" (Signed.mkSignedCsrfKeyring keyId ((keyId, signingKey) :| []))
 
 admissionBrowserCsrfProtection :: Csrf.CsrfProtection ComposedContext
 admissionBrowserCsrfProtection =
-  Csrf.signedCsrfProtection
-    Csrf.SignedCsrfDependencies
-      { Csrf.signedCsrfDependenciesKeyring = keyring,
-        Csrf.signedCsrfDependenciesPolicy = Csrf.defaultSignedCsrfPolicy,
-        Csrf.signedCsrfDependenciesCurrentTime = pure 1000000000,
-        Csrf.signedCsrfDependenciesResolveBinding = resolveAdmissionCsrfBinding
+  Signed.signedCsrfProtection
+    Signed.SignedCsrfDependencies
+      { Signed.signedCsrfDependenciesKeyring = keyring,
+        Signed.signedCsrfDependenciesPolicy = Signed.defaultSignedCsrfPolicy,
+        Signed.signedCsrfDependenciesCurrentTime = pure 1000000000,
+        Signed.signedCsrfDependenciesResolveBinding = resolveAdmissionCsrfBinding
       }
   where
-    keyId = requiredCsrf "admission browser CSRF key id" (Csrf.mkCsrfKeyId "composed-browser-v1")
-    signingKey = requiredCsrf "admission browser CSRF signing key" (Csrf.mkCsrfSigningKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-    keyring = requiredCsrf "admission browser CSRF keyring" (Csrf.mkSignedCsrfKeyring keyId ((keyId, signingKey) :| []))
+    keyId = requiredCsrf "admission browser CSRF key id" (Signed.mkCsrfKeyId "composed-browser-v1")
+    signingKey = requiredCsrf "admission browser CSRF signing key" (Signed.mkCsrfSigningKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+    keyring = requiredCsrf "admission browser CSRF keyring" (Signed.mkSignedCsrfKeyring keyId ((keyId, signingKey) :| []))
 
 requiredCsrf :: String -> Maybe value -> value
 requiredCsrf label = fromMaybe (error ("expected " <> label))

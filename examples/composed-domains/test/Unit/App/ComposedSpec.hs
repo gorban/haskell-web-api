@@ -22,6 +22,7 @@ import HarchWeb.ApplicationModule (ApplicationModule (..), mountApplicationModul
 import HarchWeb.ClientStorage (noClientStorageCleanup)
 import HarchWeb.Csrf (PageSecurity, mkCsrfToken, mkPageCsrf, mkPageSecurity)
 import HarchWeb.Csrf qualified as Csrf
+import HarchWeb.Csrf.Signed qualified as Signed
 import HarchWeb.Document (NavigationItem (..), Page (..), PageShell (..), testRuntimeNonce)
 import HarchWeb.EndpointMetadata
   ( AccessRequirement (AllowUnauthenticated, RequireAuthorized),
@@ -1684,31 +1685,31 @@ requiredComposedSite =
 
 testCsrfProtection :: Csrf.CsrfProtection ComposedContext
 testCsrfProtection =
-  Csrf.signedCsrfProtection
-    Csrf.SignedCsrfDependencies
-      { Csrf.signedCsrfDependenciesKeyring = keyring,
-        Csrf.signedCsrfDependenciesPolicy = Csrf.defaultSignedCsrfPolicy,
-        Csrf.signedCsrfDependenciesCurrentTime = pure 1000000000,
-        Csrf.signedCsrfDependenciesResolveBinding = const (pure Csrf.AnonymousCsrfBinding)
+  Signed.signedCsrfProtection
+    Signed.SignedCsrfDependencies
+      { Signed.signedCsrfDependenciesKeyring = keyring,
+        Signed.signedCsrfDependenciesPolicy = Signed.defaultSignedCsrfPolicy,
+        Signed.signedCsrfDependenciesCurrentTime = pure 1000000000,
+        Signed.signedCsrfDependenciesResolveBinding = const (pure Csrf.AnonymousCsrfBinding)
       }
   where
-    keyId = requiredCsrf "test CSRF key id" (Csrf.mkCsrfKeyId "composed-test-v1")
-    signingKey = requiredCsrf "test CSRF signing key" (Csrf.mkCsrfSigningKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-    keyring = requiredCsrf "test CSRF keyring" (Csrf.mkSignedCsrfKeyring keyId ((keyId, signingKey) :| []))
+    keyId = requiredCsrf "test CSRF key id" (Signed.mkCsrfKeyId "composed-test-v1")
+    signingKey = requiredCsrf "test CSRF signing key" (Signed.mkCsrfSigningKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+    keyring = requiredCsrf "test CSRF keyring" (Signed.mkSignedCsrfKeyring keyId ((keyId, signingKey) :| []))
 
 admissionCsrfProtection :: Csrf.CsrfProtection ComposedContext
 admissionCsrfProtection =
-  Csrf.signedCsrfProtection
-    Csrf.SignedCsrfDependencies
-      { Csrf.signedCsrfDependenciesKeyring = keyring,
-        Csrf.signedCsrfDependenciesPolicy = Csrf.defaultSignedCsrfPolicy,
-        Csrf.signedCsrfDependenciesCurrentTime = pure 1000000000,
-        Csrf.signedCsrfDependenciesResolveBinding = resolveAdmissionCsrfBinding
+  Signed.signedCsrfProtection
+    Signed.SignedCsrfDependencies
+      { Signed.signedCsrfDependenciesKeyring = keyring,
+        Signed.signedCsrfDependenciesPolicy = Signed.defaultSignedCsrfPolicy,
+        Signed.signedCsrfDependenciesCurrentTime = pure 1000000000,
+        Signed.signedCsrfDependenciesResolveBinding = resolveAdmissionCsrfBinding
       }
   where
-    keyId = requiredCsrf "admission CSRF key id" (Csrf.mkCsrfKeyId "composed-test-v1")
-    signingKey = requiredCsrf "admission CSRF signing key" (Csrf.mkCsrfSigningKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-    keyring = requiredCsrf "admission CSRF keyring" (Csrf.mkSignedCsrfKeyring keyId ((keyId, signingKey) :| []))
+    keyId = requiredCsrf "admission CSRF key id" (Signed.mkCsrfKeyId "composed-test-v1")
+    signingKey = requiredCsrf "admission CSRF signing key" (Signed.mkCsrfSigningKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+    keyring = requiredCsrf "admission CSRF keyring" (Signed.mkSignedCsrfKeyring keyId ((keyId, signingKey) :| []))
 
 requiredCsrf :: String -> Maybe value -> value
 requiredCsrf label = fromMaybe (error ("expected " <> label))

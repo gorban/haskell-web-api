@@ -1,11 +1,27 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Private signed-CSRF backend. It owns signed-token parsing, issuance, and
--- verification; the shared page/action lifecycle remains in
--- 'HarchWeb.Csrf.Lifecycle'.
+-- | Signed CSRF authority configuration.
+--
+-- Import this module with 'HarchWeb.Csrf' to configure the supplied signed
+-- authority.  It groups deployment-owned signing material, rotation policy,
+-- clock, and binding resolution in 'SignedCsrfDependencies'; page preparation
+-- and transport validation remain the single lifecycle owned by
+-- 'HarchWeb.Csrf'.  The token parser and HMAC mechanics stay private, so this
+-- API cannot bypass the framework's opaque-token and mandatory transport
+-- checks.
 module HarchWeb.Csrf.Signed
-  ( SignedCsrfDependencies (..),
+  ( CsrfKeyId,
+    CsrfSigningKey,
+    SignedCsrfKeyring (..),
+    SignedCsrfPolicy (..),
+    defaultSignedCsrfPolicy,
+    generateCsrfSigningKey,
+    mkCsrfKeyId,
+    mkCsrfSigningKey,
+    mkSignedCsrfKeyring,
+    mkSignedCsrfPolicy,
+    SignedCsrfDependencies (..),
     signedCsrfProtection,
   )
 where
@@ -40,7 +56,12 @@ import HarchWeb.Csrf.Lifecycle
     csrfBindingBytes,
     csrfBindingFromCanonicalBytes,
     csrfTokenText,
+    defaultSignedCsrfPolicy,
+    generateCsrfSigningKey,
     mkCsrfKeyId,
+    mkCsrfSigningKey,
+    mkSignedCsrfKeyring,
+    mkSignedCsrfPolicy,
   )
 import HarchWeb.Security.ConstantTime (constantWorkEquals)
 import HarchWeb.Time (UnixTimeNanoseconds, addUnixTimeNanoseconds, unixTimeNanoseconds, unixTimeNanosecondsValue)

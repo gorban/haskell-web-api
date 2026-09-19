@@ -15,7 +15,7 @@ cabal run composed-domains
 ```
 
 Then open <http://127.0.0.1:8080/>. It uses in-process development capabilities
-and a fresh process-local CSRF signing key, so it is a runnable composition
+and a fresh process-local CSRF signing key through `HarchWeb.Csrf.Signed`, so it is a runnable composition
 example rather than a production admission deployment.
 
 The reference includes:

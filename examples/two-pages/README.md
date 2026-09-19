@@ -13,8 +13,9 @@ This is the smallest application to copy first. It demonstrates:
 
 It deliberately has no database, telemetry collector, HTTPS, or reverse-proxy prerequisite.
 
-The executable creates a fresh, process-local CSRF signing key at startup and
-injects that authority into its site composition. This makes the example safe
+The executable creates a fresh, process-local CSRF signing key at startup with
+`HarchWeb.Csrf.Signed` and injects that authority into its site composition.
+This makes the example safe
 to run locally without compiling a reusable secret, but existing browser
 tokens become invalid on restart and it does not model production key rotation.
 An application deployment supplies its own immutable configured key ring.

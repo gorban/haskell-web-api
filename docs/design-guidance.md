@@ -4596,6 +4596,16 @@ and signed parsing details. Existing signed issuance, expiry, binding, key
 rotation, and synchronizer-unavailability tests therefore exercise the same
 single lifecycle rather than a replacement implementation.
 
+**Q-F7 amendment (2026-09-19): expose `HarchWeb.Csrf.Signed` as the focused
+public configuration module, while retaining `HarchWeb.Csrf` as a
+source-compatible façade.** A signed authority needs the key-ring constructors,
+bounded policy, clock, and binding resolver, but it does not need the parser or
+HMAC mechanics. Moving those existing names out of `HarchWeb.Csrf` would break
+established imports without strengthening the opaque key/token boundary. The
+new module therefore makes the canonical dependency boundary explicit; the
+legacy façade remains available and the private lifecycle and parser owners do
+not become application-importable.
+
 ### Decision record — cohesive post-match endpoint execution (PR-F2, 2026-09-05)
 
 **Decision: extract the existing post-match endpoint selection and guard

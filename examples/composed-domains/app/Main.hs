@@ -13,6 +13,7 @@ import HarchWeb
     runServer,
   )
 import HarchWeb qualified
+import HarchWeb.Csrf.Signed qualified as Signed
 import HarchWeb.Site qualified as Site
 import HarchWeb.Time (currentUnixTimeNanoseconds)
 import Orders.Domain
@@ -20,11 +21,11 @@ import System.IO (stdout)
 
 main :: IO ()
 main = do
-  signingKey <- HarchWeb.generateCsrfSigningKey
-  case HarchWeb.mkCsrfKeyId "composed-domains-development-v1" of
+  signingKey <- Signed.generateCsrfSigningKey
+  case Signed.mkCsrfKeyId "composed-domains-development-v1" of
     Nothing -> ioError (userError "invalid composed-domains development CSRF key identifier")
     Just keyId ->
-      case HarchWeb.mkSignedCsrfKeyring keyId ((keyId, signingKey) :| []) of
+      case Signed.mkSignedCsrfKeyring keyId ((keyId, signingKey) :| []) of
         Nothing -> ioError (userError "invalid composed-domains development CSRF key ring")
         Just keyring -> do
           let site =
@@ -32,7 +33,7 @@ main = do
                   ComposedSiteDependencies
                     { composedStaticAssets = defaultComposedStaticAssets,
                       composedLocalePolicy = defaultLocalePolicy,
-                      composedCsrfProtection = HarchWeb.signedCsrfProtection HarchWeb.SignedCsrfDependencies {HarchWeb.signedCsrfDependenciesKeyring = keyring, HarchWeb.signedCsrfDependenciesPolicy = HarchWeb.defaultSignedCsrfPolicy, HarchWeb.signedCsrfDependenciesCurrentTime = currentUnixTimeNanoseconds, HarchWeb.signedCsrfDependenciesResolveBinding = const (pure HarchWeb.AnonymousCsrfBinding)},
+                      composedCsrfProtection = Signed.signedCsrfProtection Signed.SignedCsrfDependencies {Signed.signedCsrfDependenciesKeyring = keyring, Signed.signedCsrfDependenciesPolicy = Signed.defaultSignedCsrfPolicy, Signed.signedCsrfDependenciesCurrentTime = currentUnixTimeNanoseconds, Signed.signedCsrfDependenciesResolveBinding = const (pure HarchWeb.AnonymousCsrfBinding)},
                       composedDomainCapabilities = ComposedDomainCapabilities catalogQueries catalogCommands ordersQueries ordersCommands
                     }
               catalogQueries = CatalogQueries (const (pure "Catalog"))
