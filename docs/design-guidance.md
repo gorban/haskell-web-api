@@ -598,15 +598,30 @@ rejection rail — the same recoverable "needs your attention" patch an
 ordinary rejected credential already produces — rather than trusting the
 earlier successful sign-in or silently succeeding against a now-invalid
 session. No production code changed; this closes a real, previously-unproven
-security property with existing framework primitives. Three narrower items
-from the same acceptance bullet — "simultaneous" account-session/CSRF
-expiry, the full close/reopen/complete-recovery round trip (found already
-covered by the existing "recovers one retained profile action after its
-signed durable session expires" test on closer reading), and the
-`beforeunload`/`ConditionalLeaveConfirmation` draft-loss warning (implemented
-in `HarchWeb.Document` but never wired to any reference-app action, so
-currently unexercisable end to end) — remain open follow-ups, named here
+security property with existing framework primitives. Two narrower items from
+the same acceptance bullet — "simultaneous" account-session/CSRF expiry and
+the full close/reopen/complete-recovery round trip (found already covered by
+the existing "recovers one retained profile action after its signed durable
+session expires" test on closer reading) — remain open follow-ups, named here
 rather than claimed done.
+
+**Conditional-leave-confirmation refinement (AHI-4C, 2026-09-19):** treat a
+retained action as unresolved for the existing declarative
+`ConditionalLeaveConfirmation` capability. The capture kernel already warns
+for pending, claimed, and recoverable eligible actions; excluding `Retained`
+left the user free to leave while the only in-memory resend envelope awaited
+their reauthentication. Expanding the existing closed action-state predicate
+keeps listener installation and removal in the capture kernel, rather than
+giving the recovery modal a second navigation guard. The reference application
+declares the capability only for its pending-profile resend action. Its
+real-browser test verifies the listener is absent initially, present while the
+action is retained and while explicit replay is offered, removed when dialog
+close cancels recovery and when replay settles, and correctly installed again
+after a new capture. Native browser confirmation cannot be asserted by the
+runner, so the test dispatches a cancelable `beforeunload` event and observes
+whether the handler prevents it. Other actions remain opt-in through the same
+capability; their product-specific loss semantics still require a separate
+declaration and browser proof.
 
 ### Decision record — bounded application-declared browser-storage cleanup (AHI-4C, 2026-09-09)
 

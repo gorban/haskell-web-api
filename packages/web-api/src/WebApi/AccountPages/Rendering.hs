@@ -307,7 +307,16 @@ pendingProfileRegion context target form =
                 accountActions
                 context
                 target
+                -- An in-progress or retained resend request would be lost by
+                -- navigation. In particular, retention keeps the request
+                -- available while the user reauthenticates, so warn before
+                -- they leave the page. See the AHI-4C decision record in
+                -- docs/design-guidance.md.
                 Controls.defaultActionFormAttributes
+                  { Controls.actionFormCapabilities =
+                      Controls.ConditionalLeaveConfirmation
+                        : Controls.actionFormCapabilities Controls.defaultActionFormAttributes
+                  }
                 [hiddenInput "intent" "resend-verification", submitButton (pendingProfileFormResendLabel form)]
             )
         ]

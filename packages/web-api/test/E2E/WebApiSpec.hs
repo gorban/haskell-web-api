@@ -886,6 +886,75 @@ spec =
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 3}|])
             readIORef deliveryCountReference `shouldReturn` 0
 
+        it "warns before leaving the page while a profile action is retained for recovery" $ \(browser, appConfig) ->
+          withTestAccountJwtFixture $ \environmentConfig _ -> do
+            runtime <- requiredAccountJwtRuntime environmentConfig
+            initialNow <- Time.currentUnixTimeNanoseconds
+            initialSessionId <- Session.generateSessionId
+            let initialSession =
+                  Session.OpaqueSession
+                    { Session.sessionId = initialSessionId,
+                      Session.sessionPrincipal = pendingProfileAccountId,
+                      Session.sessionIssuedAtNanoseconds = initialNow,
+                      Session.sessionExpiresAtNanoseconds = initialNow + 86400000000000
+                    }
+                issuer = accountJwtIssuerFromRuntime runtime
+            initialJwt <- issueInitialSessionJwt issuer initialSession
+            sessionsReference <- newIORef [initialSession]
+            profileLoadsReference <- newIORef (0 :: Int)
+            deliveryCountReference <- newIORef (0 :: Int)
+            workflow <- reauthenticationProfileWorkflow ReauthenticationExpiresInitialSession permissiveReauthenticationLoginAttemptStore environmentConfig issuer (ReauthenticationProfileFixture sessionsReference profileLoadsReference deliveryCountReference)
+            let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
+            HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
+              let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
+                  profileSubmit = byRole Button `named` "Resend verification email"
+                  reauthenticationDialog = css "#reauthentication-dialog"
+                  identifierField = byLabel "Email address or username"
+                  passwordField = byLabel "Password"
+                  authenticatorCodeField = byLabel "Authenticator code"
+                  retryOriginalAction = byRole Button `named` "Retry original action"
+                  -- Dispatching a synthetic, cancelable 'beforeunload' event
+                  -- and reading back 'defaultPrevented' is the standard way
+                  -- to prove a handler is armed without a real navigation
+                  -- (which the runner cannot observe a native dialog for).
+                  dispatchBeforeUnload = "const beforeUnloadEvent = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(beforeUnloadEvent); beforeUnloadEvent.defaultPrevented"
+              runBrowserSpec browser do
+                setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
+                visit profileUrl
+                beforeAnyAction <- runPageScript dispatchBeforeUnload
+                liftScenarioIO $ beforeAnyAction `shouldBe` Aeson.Bool False
+                click profileSubmit
+                assertAllObserved $
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
+                whileDialogOpen <- runPageScript dispatchBeforeUnload
+                liftScenarioIO $ whileDialogOpen `shouldBe` Aeson.Bool True
+                press reauthenticationDialog "Escape"
+                assertAllObserved $ do
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Nothing
+                  isFocused profileSubmit `satisfies` id
+                  css "[data-profile-resend] [data-harch-action-status]" `shouldHaveText` "Action cancelled."
+                afterCancellation <- runPageScript dispatchBeforeUnload
+                liftScenarioIO $ afterCancellation `shouldBe` Aeson.Bool False
+                click profileSubmit
+                assertAllObserved $
+                  attributeValue reauthenticationDialog "open" `shouldEqual` Just ""
+                afterRecapture <- runPageScript dispatchBeforeUnload
+                liftScenarioIO $ afterRecapture `shouldBe` Aeson.Bool True
+                fill identifierField "person@example.test"
+                fill passwordField "correct horse battery staple"
+                fill authenticatorCodeField reauthenticationTotpCode
+                click (byRole Button `named` "Sign in")
+                assertAllObserved $
+                  attributeValue retryOriginalAction "hidden" `shouldEqual` Nothing
+                whileAwaitingReplay <- runPageScript dispatchBeforeUnload
+                liftScenarioIO $ whileAwaitingReplay `shouldBe` Aeson.Bool True
+                click retryOriginalAction
+                assertAllObserved $
+                  byText "Check your inbox for a verification link." `shouldHaveText` "Check your inbox for a verification link."
+                afterSettled <- runPageScript dispatchBeforeUnload
+                liftScenarioIO $ afterSettled `shouldBe` Aeson.Bool False
+            readIORef deliveryCountReference `shouldReturn` 1
+
         it "keeps one retained profile action available through corrected password and MFA failures" $ \(browser, appConfig) ->
           withTestAccountJwtFixture $ \environmentConfig _ -> do
             runtime <- requiredAccountJwtRuntime environmentConfig
