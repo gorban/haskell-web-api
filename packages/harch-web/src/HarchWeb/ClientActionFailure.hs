@@ -1,0 +1,148 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+-- | The closed, browser-observable failures in Harch's enhanced client-action
+-- lifecycle.
+--
+-- Applications never construct these failures from browser exception text.
+-- A failure page can safely decode their stable tag and display its opaque
+-- 'FailureReference', while detailed causes remain private diagnostics.
+--
+-- Decision record (AHI-4C, 2026-09-10): this extends the existing
+-- 'RequestId' boundary with an opaque display/correlation reference rather
+-- than introducing another UUID parser or an application-defined query-string
+-- convention. The closed failure sum is deliberately separate from the
+-- server-detected application terminal failure: browser-discovered failures
+-- cannot safely carry application values back to the server. The terminal
+-- result keeps an application value only inside its server-side renderer
+-- closure. The AHI-4C transport maps this value to an application-declared
+-- route and the navigation runtime either visits that route or clears the
+-- document with this safe fallback's message.
+module HarchWeb.ClientActionFailure
+  ( FailureReference,
+    HarchClientFailure (..),
+    defaultClientActionFailurePage,
+    defaultClientActionTerminalFailure,
+    failureReference,
+    failureReferenceRequestId,
+    failureReferenceText,
+    harchClientFailureCode,
+    parseFailureReference,
+    parseHarchClientFailure,
+  )
+where
+
+import Data.Text (Text)
+import HarchWeb.Document (Page (..))
+import HarchWeb.Markup (element, headingOneTag, paragraphTag, sectionTag, text)
+import HarchWeb.RequestId (RequestId, mkRequestId, requestIdText)
+import HarchWeb.Routing (RouteRequest (..))
+import HarchWeb.Server.Response
+  ( ClientActionFailurePresentation (..),
+    ClientActionTerminalFailure (..),
+  )
+
+-- | Browser failures which the framework can classify without exposing an
+-- exception, a storage key, a route, or session-related data.  The rendered
+-- codes are a stable, low-cardinality wire vocabulary.
+data HarchClientFailure
+  = StorageCleanupFailed
+  | ActionResponseProtocolFailed
+  | ResponseApplicationFailed
+  deriving (Eq, Show)
+
+-- | A validated reference to the original action's framework-minted request
+-- identifier.  It is display/correlation-only: possession never authorizes a
+-- session, audit lookup, or error lookup.
+newtype FailureReference = FailureReference RequestId
+  deriving (Eq, Show)
+
+-- | Convert the trusted original action request ID into a display-only
+-- reference for a later public failure route.
+failureReference :: RequestId -> FailureReference
+failureReference = FailureReference
+
+-- | Recover the original trusted action request ID for server-side response
+-- construction.  Route decoders use 'parseFailureReference' instead.
+failureReferenceRequestId :: FailureReference -> RequestId
+failureReferenceRequestId (FailureReference requestId) = requestId
+
+-- | Canonical text for a route parameter.  The only accepted input form is
+-- the UUIDv4 representation already owned by 'HarchWeb.RequestId'.
+failureReferenceText :: FailureReference -> Text
+failureReferenceText = requestIdText . failureReferenceRequestId
+
+-- | Stable, low-cardinality tag for a browser-discovered framework failure.
+harchClientFailureCode :: HarchClientFailure -> Text
+harchClientFailureCode clientFailure =
+  case clientFailure of
+    StorageCleanupFailed -> "storage-cleanup-failed"
+    ActionResponseProtocolFailed -> "action-response-protocol-failed"
+    ResponseApplicationFailed -> "response-application-failed"
+
+-- | Decode only the framework's closed browser-failure vocabulary. Unknown
+-- values remain untrusted route input and deliberately receive no fallback.
+parseHarchClientFailure :: Text -> Maybe HarchClientFailure
+parseHarchClientFailure failureCode =
+  case failureCode of
+    "storage-cleanup-failed" -> Just StorageCleanupFailed
+    "action-response-protocol-failed" -> Just ActionResponseProtocolFailed
+    "response-application-failed" -> Just ResponseApplicationFailed
+    _ -> Nothing
+
+-- | Validate an original-action reference received through a public failure
+-- route. The private constructor prevents arbitrary application text becoming
+-- a reference without the existing exact UUIDv4 validation.
+parseFailureReference :: Text -> Maybe FailureReference
+parseFailureReference = fmap FailureReference . mkRequestId
+
+-- | A complete SSR fallback page for a browser-detected client-action
+-- failure. It displays only the validated original action reference using
+-- text markup, never the closed failure tag, a storage key, or exception
+-- detail. Applications normally use this in their dedicated public failure
+-- route and may replace it with an equivalently safe branded page.
+defaultClientActionFailurePage :: FailureReference -> RouteRequest route context -> Page route context
+defaultClientActionFailurePage reference routeRequest =
+  Page
+    { pageTitle = "Request could not be completed",
+      pageRoute = requestRoute routeRequest,
+      pageContext = requestContext routeRequest,
+      pageBody =
+        element
+          sectionTag
+          []
+          [ element headingOneTag [] [text "Request could not be completed"],
+            element paragraphTag [] [text "The page was cleared to protect your account. Please contact support and provide this request ID."],
+            element paragraphTag [] [text (failureReferenceText reference)]
+          ],
+      pageBootstrapHooks = []
+    }
+
+-- | Harch's self-contained terminal presentation for a server-detected action
+-- failure.  It receives only the framework-minted request ID and the declared
+-- action owner; application-specific terminal values can instead close over
+-- their own safe renderer in 'ClientActionTerminalFailure'.
+defaultClientActionTerminalFailure :: ClientActionTerminalFailure route context
+defaultClientActionTerminalFailure =
+  ClientActionTerminalFailure
+    { clientActionTerminalFailurePage = defaultTerminalPage,
+      clientActionTerminalFailureObservabilityAttributes = [],
+      clientActionTerminalFailureLogEntries = []
+    }
+
+defaultTerminalPage :: ClientActionFailurePresentation route context -> Page route context
+defaultTerminalPage presentation =
+  let routeRequest = clientActionFailureRoute presentation
+   in Page
+        { pageTitle = "Request could not be completed",
+          pageRoute = requestRoute routeRequest,
+          pageContext = requestContext routeRequest,
+          pageBody =
+            element
+              sectionTag
+              []
+              [ element headingOneTag [] [text "Request could not be completed"],
+                element paragraphTag [] [text "The request could not be completed safely. Please contact support and provide this request ID."],
+                element paragraphTag [] [text (requestIdText (clientActionFailureRequestId presentation))]
+              ],
+          pageBootstrapHooks = []
+        }

@@ -1,0 +1,302 @@
+import Control.Exception (evaluate)
+import Control.Monad (forM_)
+import Control.Monad.Except (runExceptT)
+import Data.List (intercalate, isInfixOf)
+import System.Directory (createDirectoryIfMissing)
+import System.FilePath (takeFileName, (</>))
+import System.IO.Temp (withSystemTempDirectory)
+import Test.Hspec
+import TestSpecPreprocessor (run, runPure)
+
+main :: IO ()
+main = hspec spec
+
+spec :: Spec
+spec = do
+  describe "Unit.TestSpecPreprocessor.run" $ do
+    it "fails with missing output argument" $ do
+      result <- runExceptT $ run ["inputOnly.hs"]
+      err <- expectLeft result
+      err `shouldContain'` missingArgsError
+
+    it "fails with missing input and output arguments" $ do
+      result <- runExceptT $ run []
+      err <- expectLeft result
+      err `shouldContain'` missingArgsError
+
+    it "fails with too many file arguments" $ do
+      result <- runExceptT $ run ["file1.hs", "file2.hs", "file3.hs"]
+      err <- expectLeft result
+      err `shouldContain'` missingArgsError
+
+    it "fails when input file is missing" $
+      withTempFile "tst-missing" [] "MissingSpec.hs" $ \(_, missingFile) -> do
+        result <- runExceptT $ run [missingFile, missingFile ++ ".out"]
+        err <- expectLeft result
+        err `shouldSatisfy` ("does not exist" `isInfixOf`)
+
+    it "fails when output path is too long" $
+      withExampleSpecTemp [] "LongOutputSpec" $ \(tempDir, tempFile) -> do
+        writeFile tempFile pureSpecContents
+        let longFileNameLength = 4000
+            longFileName = replicate longFileNameLength 'o' ++ ".out"
+            outputPath = tempDir </> longFileName
+        result <- runExceptT $ run [tempFile, outputPath]
+        err <- expectLeft result
+        err `shouldSatisfy` ("invalid" `isInfixOf`)
+
+    it "ignores files without SPEC pragma" $
+      withExampleSpecTemp defaultModuleSegments exampleModuleBase $ \(_, tempFile) -> do
+        let outputFile = getOutputFile tempFile
+        writeFile tempFile "module Foo where"
+        result <- runExceptT $ run [tempFile, outputFile]
+        result `shouldBe` Right ()
+        outputContents <- readFile outputFile
+        _ <- evaluate (length outputContents)
+        outputContents `shouldBe` "module Foo where\n"
+
+    [ "{-# SPECC #-}",
+      "}-# SPEC #-}",
+      "{-# SPEC #-{",
+      "{-# SPEC #-} extra",
+      "{-# E2E_SPECC #-}",
+      "{-# E2E_SPEC #-} extra"
+      ]
+      `forM_` \malformedPragma ->
+        it ("ignores files with malformed spec pragma: " ++ show malformedPragma) $
+          withExampleSpecTemp defaultModuleSegments exampleModuleBase $ \(_, tempFile) -> do
+            let outputFile = getOutputFile tempFile
+            writeFile tempFile malformedPragma
+            result <- runExceptT $ run [tempFile, outputFile]
+            result `shouldBe` Right ()
+            outputContents <- readFile outputFile
+            _ <- evaluate (length outputContents)
+            outputContents `shouldBe` malformedPragma ++ "\n"
+
+    around (withExampleSpecTemp defaultModuleSegments exampleModuleBase) $
+      it "processes a simple spec file (default hs-source-dir)" $ \(_, tempFile) -> do
+        let expectedHeader =
+              getModuleHeader $ getModuleName {- "test" -> empty segments: -} [] exampleModuleBase
+            outputFile = getOutputFile tempFile
+        writeFile tempFile "  {-#   SPEC   #-}  "
+        result <- runExceptT $ run [tempFile, outputFile]
+        result `shouldBe` Right ()
+        outputContents <- readFile outputFile
+        _ <- evaluate (length outputContents)
+        outputContents `shouldContain'` expectedHeader
+
+    around (withExampleSpecTemp nestedModuleSegments exampleModuleBase) $ do
+      it "processes a simple spec file (2 file args)" $ \(tempDir, tempFile) -> do
+        let expectedHeader = getModuleHeader $ getModuleName nestedModuleSegments exampleModuleBase
+            hsSourceDir = takeFileName tempDir
+            outputFile = getOutputFile tempFile
+        writeFile tempFile "{-# SPEC   #-}  "
+        result <- runExceptT $ run ["hs-source-dir=" ++ hsSourceDir, tempFile, outputFile]
+        result `shouldBe` Right ()
+        outputContents <- readFile outputFile
+        _ <- evaluate (length outputContents)
+        outputContents `shouldContain'` expectedHeader
+        outputContents `shouldContain'` "import TestCore.Prelude"
+
+      it "uses a configured standard SPEC prelude" $ \(tempDir, tempFile) -> do
+        let hsSourceDir = takeFileName tempDir
+            outputFile = getOutputFile tempFile
+        writeFile tempFile "{-# SPEC #-}"
+        result <-
+          runExceptT $ run ["hs-source-dir=" ++ hsSourceDir, "spec-prelude=Test.Hspec", tempFile, outputFile]
+        result `shouldBe` Right ()
+        outputContents <- readFile outputFile
+        _ <- evaluate (length outputContents)
+        outputContents `shouldContain'` "import Test.Hspec"
+
+    around (withExampleSpecTemp nestedModuleSegments exampleModuleBase) $
+      it "processes a simple e2e spec file (2 file args)" $ \(tempDir, tempFile) -> do
+        let expectedHeader = getModuleHeader $ getModuleName nestedModuleSegments exampleModuleBase
+            hsSourceDir = takeFileName tempDir
+            outputFile = getOutputFile tempFile
+        writeFile tempFile "{-# E2E_SPEC #-}"
+        result <- runExceptT $ run ["hs-source-dir=" ++ hsSourceDir, tempFile, outputFile]
+        result `shouldBe` Right ()
+        outputContents <- readFile outputFile
+        _ <- evaluate (length outputContents)
+        outputContents `shouldContain'` expectedHeader
+        outputContents `shouldContain'` "import TestCore.E2EPrelude"
+
+    around (withExampleSpecTemp defaultModuleSegments exampleModuleBase) $
+      it "processes a simple spec file (3 file args like GHC calls it)" $ \(tempDir, tempFile) -> do
+        let expectedHeader = getModuleHeader $ getModuleName defaultModuleSegments exampleModuleBase
+            hsSourceDir = takeFileName tempDir
+            outputFile = getOutputFile tempFile
+        writeFile tempFile "  {-#   SPEC #-}"
+        result <- runExceptT $ run ["hs-source-dir=" ++ hsSourceDir, tempFile, tempFile, outputFile]
+        result `shouldBe` Right ()
+        outputContents <- readFile outputFile
+        _ <- evaluate (length outputContents)
+        outputContents `shouldContain'` expectedHeader
+        outputContents `shouldContain'` "import TestCore.Prelude"
+
+  describe "Unit.TestSpecPreprocessor.runPure" $ do
+    it "keeps standard SPEC preprocessing unchanged" $ do
+      let moduleBase = "PureSpec"
+          hsRoot = "test-spec"
+          inputPath = hsRoot </> getRelativePath nestedModuleSegments moduleBase
+          absolutePath = "" </> "abs" </> inputPath
+          expectedHeader = getModuleHeader (getModuleName nestedModuleSegments moduleBase)
+          output = runPure hsRoot absolutePath pureSpecContents
+      output `shouldContain'` expectedHeader
+      output `shouldContain'` "import TestCore.Prelude"
+
+    it "emits the e2e prelude for E2E_SPEC" $ do
+      let moduleBase = "PureSpec"
+          hsRoot = "test-spec"
+          inputPath = hsRoot </> getRelativePath nestedModuleSegments moduleBase
+          absolutePath = "" </> "abs" </> inputPath
+          expectedHeader = getModuleHeader (getModuleName nestedModuleSegments moduleBase)
+          output = runPure hsRoot absolutePath e2ePureSpecContents
+      output `shouldContain'` expectedHeader
+      output `shouldContain'` "import TestCore.E2EPrelude"
+
+    it "normalizes a Windows source path in the generated LINE pragma" $ do
+      let absolutePath = "C:\\work\\test\\PureSpec.hs"
+          output = runPure "test" absolutePath pureSpecContents
+      output `shouldContain'` "{-# LINE 2 \"C:/work/test/PureSpec.hs\" #-}"
+
+    forM_
+      [ ("SPEC", pureSpecContents, "import TestCore.Prelude"),
+        ("E2E_SPEC", e2ePureSpecContents, "import TestCore.E2EPrelude")
+      ]
+      $ \(label, specPragma, preludeImport) ->
+        forM_
+          [ ([], []),
+            ([], ["-- comment"]),
+            (["{-# LANGUAGE TemplateHaskell #-}"], ["-- comment"]),
+            (["{-# LANGUAGE TemplateHaskell #-}", ""], [])
+          ]
+          $ \(topSegments, importSegments) ->
+            it
+              ( label
+                  ++ " preserves imports, module naming, and LINE pragmas (line "
+                  ++ show (length topSegments + length importSegments + 4)
+                  ++ ")"
+              )
+              $ let moduleBase = "PureSpec"
+                    hsRoot = "test"
+                    inputPath = hsRoot </> getRelativePath nestedModuleSegments moduleBase
+                    absolutePath = "" </> "abs" </> inputPath
+                    contents =
+                      unlines $
+                        topSegments
+                          ++ [ specPragma,
+                               "import Data.List (nub)"
+                             ]
+                          ++ importSegments
+                          ++ [ "",
+                               "spec = describe \"example\" $ do",
+                               "  pure ()"
+                             ]
+                    expectedFragments =
+                      topSegments
+                        ++ [ buildModuleHeader nestedModuleSegments moduleBase,
+                             "",
+                             preludeImport,
+                             "import Data.List (nub)"
+                           ]
+                        ++ importSegments
+                        ++ [ "",
+                             "spec :: Spec",
+                             "{-# LINE "
+                               ++ show (length topSegments + length importSegments + 4)
+                               ++ " \""
+                               ++ map (\c -> if c == '\\' then '/' else c) absolutePath
+                               ++ "\" #-}",
+                             "spec = describe \"example\" $ do",
+                             "  pure ()"
+                           ]
+                    output = runPure hsRoot absolutePath contents
+                 in lines output `shouldBe` expectedFragments
+
+    it "infers modules when hs-source-dir is explicitly fallback value" $ do
+      let moduleBase = "PureSpec"
+          hsRoot = "test"
+          inputPath = hsRoot </> getRelativePath nestedModuleSegments moduleBase
+          absolutePath = "" </> "abs" </> inputPath
+          expectedHeader = buildModuleHeader nestedModuleSegments moduleBase
+          output = runPure hsRoot absolutePath pureSpecContents
+      output `shouldContain'` expectedHeader
+
+    it "infers modules using default hs-source-dir" $ do
+      let moduleBase = "PureSpec"
+          hsRoot = "test"
+          inputPath = hsRoot </> getRelativePath nestedModuleSegments moduleBase
+          absolutePath = "" </> "abs" </> inputPath
+          expectedHeader = buildModuleHeader nestedModuleSegments moduleBase
+          output = runPure "test" absolutePath pureSpecContents
+      output `shouldContain'` expectedHeader
+
+    it "infers modules for deeper nested directories" $ do
+      let moduleSegments = ["Nested", "Deeper"]
+          moduleBase = "DeepSpec"
+          hsRoot = "test"
+          inputPath = hsRoot </> getRelativePath moduleSegments moduleBase
+          absolutePath = "" </> "abs" </> inputPath
+          expectedHeader = buildModuleHeader moduleSegments moduleBase
+          output = runPure hsRoot absolutePath pureSpecContents
+      output `shouldContain'` expectedHeader
+
+    it "falls back to default module when absolute path empty" $ do
+      let hsRoot = "test"
+          output = runPure hsRoot "" pureSpecContents
+      output `shouldContain'` getModuleHeader "Spec"
+
+    it "falls back to default module when absolute path and source dir empty" $ do
+      let output = runPure "" "" pureSpecContents
+      output `shouldContain'` getModuleHeader "Spec"
+
+    it "falls back to basename when hs-source-dir unmatched" $ do
+      let moduleBase = "PureSpec"
+          rootlessDir = "specs"
+          inputPath = rootlessDir </> getRelativePath nestedModuleSegments moduleBase
+          absolutePath = "" </> "abs" </> inputPath
+          expectedHeader = getModuleHeader moduleBase
+          output = runPure "test" absolutePath pureSpecContents
+      output `shouldContain'` expectedHeader
+
+    it "handles files without nested segments" $ do
+      let moduleSegments = []
+          moduleBase = "PureSpec"
+          hsRoot = "test"
+          inputPath = hsRoot </> getRelativePath moduleSegments moduleBase
+          absolutePath = "" </> "abs" </> inputPath
+          expectedHeader = getModuleHeader moduleBase
+          output = runPure hsRoot absolutePath pureSpecContents
+      output `shouldContain'` expectedHeader
+  where
+    getHaskellName baseName = baseName ++ ".hs"
+    getModuleName segments baseName = intercalate "." (segments ++ [baseName])
+    getModuleHeader moduleName = "module " ++ moduleName ++ " (spec) where"
+    buildModuleHeader segments baseName = getModuleHeader (getModuleName segments baseName)
+    getRelativePath segments baseName = intercalate "/" (segments ++ [getHaskellName baseName])
+    withExampleSpecTemp segments baseName = withTempFile "tst" segments (getHaskellName baseName)
+    getOutputFile path = path ++ ".out"
+    pureSpecContents = "{-# SPEC #-}"
+    e2ePureSpecContents = "{-# E2E_SPEC #-}"
+    missingArgsError = "spec-preprocessor: expected input and output file arguments"
+    nestedModuleSegments = ["Nested"]
+    defaultModuleSegments = ["test"]
+    exampleModuleBase = "ExampleSpec"
+
+expectLeft :: Either String () -> IO String
+expectLeft result =
+  case result of
+    Left err -> pure err
+    Right () -> expectationFailure "expected spec preprocessor failure" >> pure ""
+
+shouldContain' :: String -> String -> Expectation
+shouldContain' haystack needle = haystack `shouldSatisfy` isInfixOf needle
+
+withTempFile :: String -> [String] -> String -> ((FilePath, FilePath) -> IO a) -> IO a
+withTempFile directoryTemplate segments filename action =
+  withSystemTempDirectory directoryTemplate $ \tempRoot -> do
+    let directory = foldl (</>) tempRoot segments
+    createDirectoryIfMissing True directory
+    action (tempRoot, directory </> filename)

@@ -5,37 +5,51 @@
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (finally)
-import qualified Data.ByteString as ByteString
-import qualified Data.ByteString.Char8 as ByteStringChar8
-import qualified Data.Text as Text
-import qualified Data.Text.Encoding as TextEncoding
+import Data.ByteString qualified as ByteString
+import Data.ByteString.Char8 qualified as ByteStringChar8
+import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, socket, tupleToHostAddress)
-import qualified Network.Socket as NetworkSocket
-import qualified Network.Socket.ByteString as SocketByteString
+import Network.Socket qualified as NetworkSocket
+import Network.Socket.ByteString qualified as SocketByteString
 import Numeric (readHex)
-import System.Environment (getEnvironment, lookupEnv, setEnv, unsetEnv)
+import System.Directory (doesFileExist)
+import System.Environment (getEnvironment, getExecutablePath, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (ExitSuccess))
-import System.FilePath ((</>))
+import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose)
 import System.IO.Error (tryIOError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (ProcessHandle, StdStream (UseHandle), createProcess, cwd, env, getProcessExitCode, proc, readCreateProcessWithExitCode, readProcessWithExitCode, std_out, terminateProcess, waitForProcess)
+import TestSupport.AccountJwt (withTestAccountJwtFixture)
 import TestSupport.RealPostgres (databaseSetupEnvironment, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, supportedPostgresMajorVersions, withContainerizedPsqlOnPath)
 import WebApi.Config (DatabaseConfig (..))
-import WebApi.Database (DatabaseEffect (..), DatabaseError (..), HomePageData (..), SecondPageData (..))
-import WebApi.Postgres (buildPostgresDatabaseEffect, buildRuntimePostgresDatabaseEffect)
-import WebApi.Route (AppLocale (French), AppRequestContext (..), defaultRequestContext)
+import WebApi.Database (DatabaseError (..), DatabaseResult (..), PageRepository (..), SecondPageData (..))
+import WebApi.Postgres (buildPostgresPageRepository, buildRuntimePostgresPageRepository, newPostgresPool)
+import WebApi.Route (AppLocale (Spanish), AppRequestContext (..), defaultRequestContext)
+
+loadSecondPageValueForRequest :: PageRepository -> AppRequestContext -> IO (Either DatabaseError SecondPageData)
+loadSecondPageValueForRequest pageRepository requestContext =
+  databaseResultValue <$> loadSecondPage pageRepository (requestLocale requestContext)
 
 spec = do
   describe "main" $ do
-    it "stays running while idle, serves real HTTP traffic, and only stops when terminated" $ do
+    it "stays running while idle, serves real HTTP traffic, and only stops when terminated" $ withTestAccountJwtFixture $ \_ jwtConfigLines ->
       withUnusedLoopbackPort $ \unusedPort ->
         withSystemTempDirectory "haskell-web-api-run" $ \workingDirectory -> do
-          writeFile (workingDirectory <> "/.env") ("LISTENER_0_PORT=" <> show unusedPort <> "\n")
+          writeFile
+            (workingDirectory <> "/.env")
+            ( "LISTENER_0_PORT="
+                <> show unusedPort
+                <> "\nDATABASE_PASSWORD=web_api\nSMTP_PASSWORD=password\nTOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nCSRF_SIGNING_ACTIVE_KEY_ID=development-v1\nCSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+                <> unlines jwtConfigLines
+            )
+          webApiExecutable <- testBuildToolPath "haskell-web-api"
           withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
             (_, _, _, processHandle) <-
               createProcess
-                ( (proc "haskell-web-api" [])
+                ( (proc webApiExecutable [])
                     { cwd = Just workingDirectory,
                       std_out = UseHandle outputHandle
                     }
@@ -53,77 +67,28 @@ spec = do
                   terminateProcess processHandle
                   _ <- waitForProcess processHandle
                   hClose outputHandle
-            responseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
-            runningExitCode `shouldBe` Nothing
-            readFile outputPath
-              `shouldReturn` unlines
-                [ "Loaded config file: ./.env",
-                  "Config file missing: ./.env.local",
-                  "Parsed listener config: http://127.0.0.1:" <> show unusedPort,
-                  "HTTP Server listening at http://127.0.0.1:" <> show unusedPort
-                ]
+            output <- readFile outputPath
+            expectAll
+              ( (responseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}")
+                  :| [ runningExitCode `shouldBe` Nothing,
+                       output
+                         `shouldBe` unlines
+                           [ "Loaded config file: ./.env",
+                             "Config file missing: ./.env.local",
+                             "Parsed listener config: http://127.0.0.1:" <> show unusedPort,
+                             "HTTP Server listening at http://127.0.0.1:" <> show unusedPort
+                           ]
+                     ]
+              )
 
-    it "defaults plain HTTP traffic to HTTPS redirects when both HTTP and manual TLS listeners are configured" $
-      withUnusedLoopbackPort $ \httpPort ->
-        withUnusedLoopbackPort $ \httpsPort ->
-          withManualTlsFiles $ \certificatePath privateKeyPath ->
-            withSystemTempDirectory "haskell-web-api-https-redirect" $ \workingDirectory -> do
-              writeFile
-                (workingDirectory <> "/.env")
-                ( unlines
-                    [ "LISTENER_0_HOST=127.0.0.1",
-                      "LISTENER_0_PORT=" <> show httpPort,
-                      "LISTENER_0_SCHEME=http",
-                      "LISTENER_1_HOST=127.0.0.1",
-                      "LISTENER_1_PORT=" <> show httpsPort,
-                      "LISTENER_1_SCHEME=https",
-                      "LISTENER_1_TLS_SOURCE=manual",
-                      "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
-                      "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath
-                    ]
-                )
-              withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
-                (_, _, _, processHandle) <-
-                  createProcess
-                    ( (proc "haskell-web-api" [])
-                        { cwd = Just workingDirectory,
-                          std_out = UseHandle outputHandle
-                        }
-                    )
-                (redirectHeaders, httpsResponseText, runningExitCode) <-
-                  ( do
-                      readyRedirectHeaders <- waitForProcessHttpHeaders processHandle httpPort "/api/status"
-                      readyHttpsResponse <- waitForProcessTrustedHttpsResponse processHandle certificatePath httpsPort "/api/status"
-                      stillRunningExitCode <- getProcessExitCode processHandle
-                      pure (readyRedirectHeaders, readyHttpsResponse, stillRunningExitCode)
-                  )
-                    `finally` do
-                      terminateProcess processHandle
-                      _ <- waitForProcess processHandle
-                      hClose outputHandle
-                redirectHeaders `shouldContain` "308 Permanent Redirect"
-                redirectHeaders `shouldContain` ("Location: https://127.0.0.1:" <> show httpsPort <> "/api/status")
-                httpsResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
-                runningExitCode `shouldBe` Nothing
-                readFile outputPath
-                  `shouldReturn` unlines
-                    [ "Loaded config file: ./.env",
-                      "Config file missing: ./.env.local",
-                      "Parsed listener config: http://127.0.0.1:" <> show httpPort,
-                      "Parsed listener config: https://127.0.0.1:" <> show httpsPort,
-                      "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
-                      "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
-                    ]
-
-    it "lets REDIRECT_HTTP_TO_HTTPS=false keep both HTTP and HTTPS listeners serving traffic" $
-      withUnusedLoopbackPort $ \httpPort ->
-        withUnusedLoopbackPort $ \httpsPort ->
-          withManualTlsFiles $ \certificatePath privateKeyPath ->
-            withSystemTempDirectory "haskell-web-api-dual-listener" $ \workingDirectory -> do
-              writeFile
-                (workingDirectory <> "/.env")
-                ( unlines
-                    [ "LISTENER_0_HOST=127.0.0.1",
+    it "defaults plain HTTP traffic to HTTPS redirects when both HTTP and manual TLS listeners are configured" $ withTestAccountJwtFixture $ \_ jwtConfigLines ->
+      withDistinctUnusedLoopbackPorts $ \httpPort httpsPort ->
+        withManualTlsFiles $ \certificatePath privateKeyPath ->
+          withSystemTempDirectory "haskell-web-api-https-redirect" $ \workingDirectory -> do
+            writeFile
+              (workingDirectory <> "/.env")
+              ( unlines
+                  ( [ "LISTENER_0_HOST=127.0.0.1",
                       "LISTENER_0_PORT=" <> show httpPort,
                       "LISTENER_0_SCHEME=http",
                       "LISTENER_1_HOST=127.0.0.1",
@@ -132,40 +97,115 @@ spec = do
                       "LISTENER_1_TLS_SOURCE=manual",
                       "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
                       "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath,
-                      "REDIRECT_HTTP_TO_HTTPS=false"
+                      "DATABASE_PASSWORD=web_api",
+                      "SMTP_PASSWORD=password",
+                      "TOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                      "CSRF_SIGNING_ACTIVE_KEY_ID=development-v1",
+                      "CSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                     ]
-                )
-              withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
-                (_, _, _, processHandle) <-
-                  createProcess
-                    ( (proc "haskell-web-api" [])
-                        { cwd = Just workingDirectory,
-                          std_out = UseHandle outputHandle
-                        }
-                    )
-                (httpResponseText, httpsResponseText, runningExitCode) <-
-                  ( do
-                      readyHttpResponse <- waitForProcessResponse processHandle httpPort "/api/status"
-                      readyHttpsResponse <- waitForProcessTrustedHttpsResponse processHandle certificatePath httpsPort "/api/status"
-                      stillRunningExitCode <- getProcessExitCode processHandle
-                      pure (readyHttpResponse, readyHttpsResponse, stillRunningExitCode)
+                      <> jwtConfigLines
                   )
-                    `finally` do
-                      terminateProcess processHandle
-                      _ <- waitForProcess processHandle
-                      hClose outputHandle
-                httpResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
-                httpsResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
-                runningExitCode `shouldBe` Nothing
-                readFile outputPath
-                  `shouldReturn` unlines
-                    [ "Loaded config file: ./.env",
-                      "Config file missing: ./.env.local",
-                      "Parsed listener config: http://127.0.0.1:" <> show httpPort,
-                      "Parsed listener config: https://127.0.0.1:" <> show httpsPort,
-                      "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
-                      "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
+              )
+            webApiExecutable <- testBuildToolPath "haskell-web-api"
+            withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
+              (_, _, _, processHandle) <-
+                createProcess
+                  ( (proc webApiExecutable [])
+                      { cwd = Just workingDirectory,
+                        std_out = UseHandle outputHandle
+                      }
+                  )
+              (redirectHeaders, httpsResponseText, runningExitCode) <-
+                ( do
+                    readyRedirectHeaders <- waitForProcessHttpHeaders processHandle httpPort "/api/status"
+                    readyHttpsResponse <- waitForProcessTrustedHttpsResponse processHandle certificatePath httpsPort "/api/status"
+                    stillRunningExitCode <- getProcessExitCode processHandle
+                    pure (readyRedirectHeaders, readyHttpsResponse, stillRunningExitCode)
+                )
+                  `finally` do
+                    terminateProcess processHandle
+                    _ <- waitForProcess processHandle
+                    hClose outputHandle
+              output <- readFile outputPath
+              expectAll
+                ( (redirectHeaders `shouldContain` "308 Permanent Redirect")
+                    :| [ redirectHeaders `shouldContain` ("Location: https://127.0.0.1:" <> show httpsPort <> "/api/status"),
+                         httpsResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}",
+                         runningExitCode `shouldBe` Nothing,
+                         output
+                           `shouldBe` unlines
+                             [ "Loaded config file: ./.env",
+                               "Config file missing: ./.env.local",
+                               "Parsed listener config: http://127.0.0.1:" <> show httpPort,
+                               "Parsed listener config: https://127.0.0.1:" <> show httpsPort,
+                               "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
+                               "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
+                             ]
+                       ]
+                )
+
+    it "lets REDIRECT_HTTP_TO_HTTPS=false keep both HTTP and HTTPS listeners serving traffic" $ withTestAccountJwtFixture $ \_ jwtConfigLines ->
+      withDistinctUnusedLoopbackPorts $ \httpPort httpsPort ->
+        withManualTlsFiles $ \certificatePath privateKeyPath ->
+          withSystemTempDirectory "haskell-web-api-dual-listener" $ \workingDirectory -> do
+            writeFile
+              (workingDirectory <> "/.env")
+              ( unlines
+                  ( [ "LISTENER_0_HOST=127.0.0.1",
+                      "LISTENER_0_PORT=" <> show httpPort,
+                      "LISTENER_0_SCHEME=http",
+                      "LISTENER_1_HOST=127.0.0.1",
+                      "LISTENER_1_PORT=" <> show httpsPort,
+                      "LISTENER_1_SCHEME=https",
+                      "LISTENER_1_TLS_SOURCE=manual",
+                      "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
+                      "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath,
+                      "REDIRECT_HTTP_TO_HTTPS=false",
+                      "DATABASE_PASSWORD=web_api",
+                      "SMTP_PASSWORD=password",
+                      "TOTP_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                      "CSRF_SIGNING_ACTIVE_KEY_ID=development-v1",
+                      "CSRF_SIGNING_VERIFICATION_KEYS=development-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                     ]
+                      <> jwtConfigLines
+                  )
+              )
+            webApiExecutable <- testBuildToolPath "haskell-web-api"
+            withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
+              (_, _, _, processHandle) <-
+                createProcess
+                  ( (proc webApiExecutable [])
+                      { cwd = Just workingDirectory,
+                        std_out = UseHandle outputHandle
+                      }
+                  )
+              (httpResponseText, httpsResponseText, runningExitCode) <-
+                ( do
+                    readyHttpResponse <- waitForProcessResponse processHandle httpPort "/api/status"
+                    readyHttpsResponse <- waitForProcessTrustedHttpsResponse processHandle certificatePath httpsPort "/api/status"
+                    stillRunningExitCode <- getProcessExitCode processHandle
+                    pure (readyHttpResponse, readyHttpsResponse, stillRunningExitCode)
+                )
+                  `finally` do
+                    terminateProcess processHandle
+                    _ <- waitForProcess processHandle
+                    hClose outputHandle
+              output <- readFile outputPath
+              expectAll
+                ( (httpResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}")
+                    :| [ httpsResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}",
+                         runningExitCode `shouldBe` Nothing,
+                         output
+                           `shouldBe` unlines
+                             [ "Loaded config file: ./.env",
+                               "Config file missing: ./.env.local",
+                               "Parsed listener config: http://127.0.0.1:" <> show httpPort,
+                               "Parsed listener config: https://127.0.0.1:" <> show httpsPort,
+                               "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
+                               "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
+                             ]
+                       ]
+                )
 
   describe "database integration" $ do
     it
@@ -176,9 +216,10 @@ spec = do
           exitCode <-
             withSystemTempDirectory "haskell-web-api-db" $ \workingDirectory ->
               withSystemTempFile "haskell-web-api-db-stdout.txt" $ \outputPath outputHandle -> do
+                databaseSetupExecutable <- testBuildToolPath "haskell-web-api-db"
                 (_, _, _, processHandle) <-
                   createProcess
-                    ( (proc "haskell-web-api-db" ["migrate-and-seed"])
+                    ( (proc databaseSetupExecutable ["migrate-and-seed"])
                         { cwd = Just workingDirectory,
                           env = Just (databaseSetupEnvironment inheritedEnvironment),
                           std_out = UseHandle outputHandle
@@ -200,53 +241,39 @@ spec = do
           supportedVersionResult
             `shouldSatisfy` (`elem` fmap (\majorVersion -> (ExitSuccess, show majorVersion <> "\n", "")) supportedPostgresMajorVersions)
 
-          let postgresEffect = buildPostgresDatabaseEffect defaultRealPostgresConfig
-              frenchRequestContext = defaultRequestContext {requestLocale = French}
-          loadHomePageData postgresEffect defaultRequestContext
-            `shouldReturn` Right
-              HomePageData
-                { homePageDataSummary = "Server-rendered home page with stubbed content."
-                }
-          loadSecondPageData postgresEffect defaultRequestContext
+          let postgresEffect = buildPostgresPageRepository defaultRealPostgresConfig
+              spanishRequestContext = defaultRequestContext {requestLocale = Spanish}
+          loadSecondPageValueForRequest postgresEffect defaultRequestContext
             `shouldReturn` Right
               SecondPageData
                 { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
                   secondPageDataHighlights = []
                 }
-          loadHomePageData postgresEffect frenchRequestContext
-            `shouldReturn` Right
-              HomePageData
-                { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
-                }
-          loadSecondPageData postgresEffect frenchRequestContext
+          loadSecondPageValueForRequest postgresEffect spanishRequestContext
             `shouldReturn` Right
               SecondPageData
-                { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
+                { secondPageDataSummary = "Contenido de la segunda pagina con datos de ejemplo listos para futuros cargadores.",
                   secondPageDataHighlights = []
                 }
 
           withTemporaryEnvironment "PATH" (Just "") $ do
-            let runtimePostgresEffect = buildRuntimePostgresDatabaseEffect defaultRealPostgresConfig
-            loadHomePageData runtimePostgresEffect defaultRequestContext
-              `shouldReturn` Right
-                HomePageData
-                  { homePageDataSummary = "Server-rendered home page with stubbed content."
-                  }
-            loadSecondPageData runtimePostgresEffect frenchRequestContext
+            runtimePool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
+            let runtimePostgresEffect = buildRuntimePostgresPageRepository runtimePool
+            loadSecondPageValueForRequest runtimePostgresEffect spanishRequestContext
               `shouldReturn` Right
                 SecondPageData
-                  { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
+                  { secondPageDataSummary = "Contenido de la segunda pagina con datos de ejemplo listos para futuros cargadores.",
                     secondPageDataHighlights = []
                   }
 
           allowedSelect <-
             readCreateProcessWithExitCode
-              ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_runtime", "--no-password", "--set", "ON_ERROR_STOP=1", "--tuples-only", "--no-align", "--quiet", "--command", "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';"])
+              ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_runtime", "--no-password", "--set", "ON_ERROR_STOP=1", "--tuples-only", "--no-align", "--quiet", "--command", "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';"])
                   { env = Just (("PGPASSWORD", "web_api") : inheritedEnvironment)
                   }
               )
               ""
-          allowedSelect `shouldBe` (ExitSuccess, "Server-rendered home page with stubbed content.\n", "")
+          allowedSelect `shouldBe` (ExitSuccess, "Second page content with stubbed data ready for future loaders.\n", "")
 
           forbiddenInsert <-
             readCreateProcessWithExitCode
@@ -279,26 +306,358 @@ spec = do
           thd3 forbiddenRoleCreate `shouldContain` "permission denied"
       )
 
+    it
+      "installs controlled account-audit append, RLS scope reads, and deterministic partition maintenance on real PostgreSQL"
+      ( withContainerizedPsqlOnPath $ do
+          ensureDefaultPostgresAvailable
+          inheritedEnvironment <- getEnvironment
+          databaseSetupExecutable <- testBuildToolPath "haskell-web-api-db"
+          withSystemTempDirectory "haskell-web-api-audit-db" $ \workingDirectory -> do
+            let runMigrate = do
+                  (_, _, _, processHandle) <-
+                    createProcess
+                      ( (proc databaseSetupExecutable ["migrate"])
+                          { cwd = Just workingDirectory,
+                            env = Just (databaseSetupEnvironment inheritedEnvironment)
+                          }
+                      )
+                  waitForProcess processHandle
+            runMigrate `shouldReturn` ExitSuccess
+            -- The second installation must update the same named pg_cron jobs,
+            -- rather than creating another active maintenance schedule.
+            runMigrate `shouldReturn` ExitSuccess
+
+          scheduledJobs <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT jobname || '|' || database || '|' || username || '|' || active::TEXT || '|' || schedule || '|' || command FROM cron.job WHERE jobname IN ('account-audit-maintenance', 'web-api-cron-run-details-retention') ORDER BY jobname;"
+          scheduledJobs
+            `shouldBe` ( ExitSuccess,
+                         "account-audit-maintenance|web_api_dev|web_api_audit_scheduler|true|0 3 * * *|SELECT account_audit.maintain_activity_partitions();\nweb-api-cron-run-details-retention|web_api_dev|web_api_audit_scheduler|true|41 3 * * *|DELETE FROM cron.job_run_details WHERE username = current_user AND end_time IS NOT NULL AND end_time < statement_timestamp() - interval '30 days';\n",
+                         ""
+                       )
+
+          schedulerMaintenance <-
+            runPsql
+              inheritedEnvironment
+              "web_api_audit_scheduler"
+              "web_api_audit_scheduler"
+              "SELECT account_audit.maintain_activity_partitions();"
+          case schedulerMaintenance of
+            (ExitSuccess, _, "") -> pure ()
+            _ -> expectationFailure "expected the scheduler to invoke only the safe no-argument maintenance wrapper"
+
+          runPsql
+            inheritedEnvironment
+            "web_api_audit_scheduler"
+            "web_api_audit_scheduler"
+            "DELETE FROM cron.job_run_details WHERE username = current_user AND end_time IS NOT NULL AND end_time < statement_timestamp() - interval '30 days';"
+            `shouldReturn` (ExitSuccess, "", "")
+
+          runPsql
+            inheritedEnvironment
+            "web_api_owner"
+            "web_api_owner"
+            "DO $$ DECLARE registry_row RECORD; BEGIN FOR registry_row IN SELECT partition_name FROM account_audit.partition_registry LOOP EXECUTE format('DROP TABLE account_audit.%I', registry_row.partition_name); END LOOP; DELETE FROM account_audit.partition_registry; PERFORM account_audit.maintain_activity_partitions_at('2026-09-15 12:00:00+00', interval '12 months'); END $$;"
+            `shouldReturn` (ExitSuccess, "", "")
+
+          runPsql
+            inheritedEnvironment
+            "web_api_owner"
+            "web_api_owner"
+            "ALTER ROLE web_api_audit_reader LOGIN PASSWORD 'audit-reader'; ALTER ROLE web_api_audit_scheduler LOGIN PASSWORD 'audit-scheduler'; DELETE FROM account_audit.reader_scope_grant WHERE reader_role_name = 'web_api_audit_reader'; INSERT INTO account_audit.reader_scope_grant (reader_role_name, audit_scope_id) VALUES ('web_api_audit_reader', 'default');"
+            `shouldReturn` (ExitSuccess, "", "")
+
+          initialPartitions <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT partition_name || '|' || lower_bound || '|' || upper_bound FROM account_audit.partition_registry ORDER BY lower_bound;"
+          initialPartitions
+            `shouldBe` ( ExitSuccess,
+                         "activity_2026_09|2026-09-01 00:00:00+00|2026-10-01 00:00:00+00\nactivity_2026_10|2026-10-01 00:00:00+00|2026-11-01 00:00:00+00\n",
+                         ""
+                       )
+
+          runtimeAppend <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "SELECT activity_id::TEXT || '|' || utilization_percent::TEXT FROM account_audit.append_activity('account_audit_test', '550e8400-e29b-41d4-a716-446655440000', 'account-session-issued', 1::SMALLINT, 'password', NULL, NULL, NULL, NULL);"
+          case runtimeAppend of
+            (ExitSuccess, resultText, "") -> resultText `shouldContain` "|0\n"
+            _ -> expectationFailure "expected the controlled audit append to return one committed ID"
+
+          -- Request IDs correlate a request, not an activity identity. A
+          -- second committed event may legitimately share the ID, and the
+          -- scoped reader lookup below must return both permitted records
+          -- while still hiding an equal-ID record in another scope.
+          secondRuntimeAppend <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "SELECT activity_id::TEXT || '|' || utilization_percent::TEXT FROM account_audit.append_activity('account_audit_test_second', '550e8400-e29b-41d4-a716-446655440000', 'account-session-issued', 1::SMALLINT, 'password', NULL, NULL, NULL, NULL);"
+          case secondRuntimeAppend of
+            (ExitSuccess, resultText, "") -> resultText `shouldContain` "|0\n"
+            _ -> expectationFailure "expected a second controlled append with the same request ID"
+
+          -- AHI-5's first AuditRequired mutation is deliberately a separate
+          -- controlled operation, not a best-effort append after the old
+          -- session insert.  The runtime role sees one function result only;
+          -- the security-definer function owns the session insert and appends
+          -- the closed audit event in that same statement transaction.
+          runPsql
+            inheritedEnvironment
+            "web_api_owner"
+            "web_api_owner"
+            "DELETE FROM web_api.accounts WHERE account_id = 'account_audit_atomic_test'; INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds) VALUES ('account_audit_atomic_test', 'account-audit-atomic@example.test', 'test-hash', 1);"
+            `shouldReturn` (ExitSuccess, "", "")
+          atomicSessionIssue <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "SELECT session_id FROM account_audit.issue_account_session_with_activity('account-audit-atomic-session', 'account_audit_atomic_test', 100, 200, 'account_audit_atomic_test', '550e8400-e29b-41d4-a716-446655440001', 'account-session-issued', 1::SMALLINT, 'password', NULL, NULL, NULL, NULL);"
+          atomicSessionIssue `shouldBe` (ExitSuccess, "account-audit-atomic-session\n", "")
+          committedAtomicRows <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT (SELECT count(*)::TEXT FROM web_api.account_sessions WHERE session_id = 'account-audit-atomic-session') || '|' || (SELECT count(*)::TEXT FROM account_audit.activity WHERE account_id = 'account_audit_atomic_test' AND event_code = 'account-session-issued');"
+          committedAtomicRows `shouldBe` (ExitSuccess, "1|1\n", "")
+
+          -- The invalid event reaches append_activity only after the function
+          -- has attempted its session insert. PostgreSQL must roll that insert
+          -- back with the rejected append; we test our transaction contract,
+          -- rather than any scheduler behavior.
+          rejectedAtomicSessionIssue <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "SELECT session_id FROM account_audit.issue_account_session_with_activity('account-audit-rejected-session', 'account_audit_atomic_test', 101, 201, 'account_audit_atomic_test', '550e8400-e29b-41d4-a716-446655440002', 'not-an-account-audit-event', 1::SMALLINT, 'password', NULL, NULL, NULL, NULL);"
+          fst3 rejectedAtomicSessionIssue `shouldNotBe` ExitSuccess
+          thd3 rejectedAtomicSessionIssue `shouldContain` "account audit append received invalid typed fields"
+          rolledBackAtomicSession <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT count(*)::TEXT FROM web_api.account_sessions WHERE session_id = 'account-audit-rejected-session';"
+          rolledBackAtomicSession `shouldBe` (ExitSuccess, "0\n", "")
+
+          -- A registration email was already accepted by SMTP before this
+          -- controlled operation.  Its durable delivery settlement is still
+          -- AuditRequired: the state change and closed event commit together,
+          -- and an invalid event leaves the claim available for a later
+          -- registration retry rather than asserting delivery without proof.
+          runPsql
+            inheritedEnvironment
+            "web_api_owner"
+            "web_api_owner"
+            "DELETE FROM web_api.accounts WHERE account_id = 'account_audit_delivery_test'; INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds) VALUES ('account_audit_delivery_test', 'account-audit-delivery@example.test', 'test-hash', 1); INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds, delivery_state, delivery_claimed_at_nanoseconds) VALUES ('account-audit-delivery-digest', 'account_audit_delivery_test', 'account-audit-delivery@example.test', 200, 'claimed', 1);"
+            `shouldReturn` (ExitSuccess, "", "")
+          atomicDeliverySettlement <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "SELECT account_id FROM account_audit.complete_pending_registration_delivery_with_activity('account_audit_delivery_test', 'account-audit-delivery-digest', 'account_audit_delivery_test', '550e8400-e29b-41d4-a716-446655440003', 'pending-registration-delivered', 1::SMALLINT, 'created', NULL, NULL, NULL, NULL);"
+          atomicDeliverySettlement `shouldBe` (ExitSuccess, "account_audit_delivery_test\n", "")
+          committedAtomicDelivery <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT (SELECT delivery_state FROM web_api.email_verifications WHERE account_id = 'account_audit_delivery_test') || '|' || (SELECT count(*)::TEXT FROM account_audit.activity WHERE account_id = 'account_audit_delivery_test' AND event_code = 'pending-registration-delivered');"
+          committedAtomicDelivery `shouldBe` (ExitSuccess, "delivered|1\n", "")
+          runPsql
+            inheritedEnvironment
+            "web_api_owner"
+            "web_api_owner"
+            "UPDATE web_api.email_verifications SET delivery_state = 'claimed', delivery_claimed_at_nanoseconds = 1 WHERE account_id = 'account_audit_delivery_test';"
+            `shouldReturn` (ExitSuccess, "", "")
+          rejectedAtomicDelivery <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "SELECT account_id FROM account_audit.complete_pending_registration_delivery_with_activity('account_audit_delivery_test', 'account-audit-delivery-digest', 'account_audit_delivery_test', '550e8400-e29b-41d4-a716-446655440004', 'not-an-account-audit-event', 1::SMALLINT, 'created', NULL, NULL, NULL, NULL);"
+          fst3 rejectedAtomicDelivery `shouldNotBe` ExitSuccess
+          thd3 rejectedAtomicDelivery `shouldContain` "account audit append received invalid typed fields"
+          rolledBackAtomicDelivery <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT (SELECT delivery_state FROM web_api.email_verifications WHERE account_id = 'account_audit_delivery_test') || '|' || (SELECT count(*)::TEXT FROM account_audit.activity WHERE account_id = 'account_audit_delivery_test' AND request_id = '550e8400-e29b-41d4-a716-446655440004');"
+          rolledBackAtomicDelivery `shouldBe` (ExitSuccess, "claimed|0\n", "")
+
+          -- Verification resend uses the generic claim-promotion lifecycle
+          -- inside a separate audit-owner operation. An invalid closed event
+          -- must roll back its candidate promotion, rolling delivery record,
+          -- and audit row together, preserving the currently delivered token
+          -- and retryable candidate claim.
+          runPsql
+            inheritedEnvironment
+            "web_api_owner"
+            "web_api_owner"
+            "DELETE FROM web_api.accounts WHERE account_id = 'account_audit_resend_test'; INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds) VALUES ('account_audit_resend_test', 'account-audit-resend@example.test', 'test-hash', 1); INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds, delivery_state, delivery_claimed_at_nanoseconds) VALUES ('account-audit-resend-old-digest', 'account_audit_resend_test', 'account-audit-resend@example.test', 200, 'delivered', NULL); INSERT INTO web_api.verification_resend_claims (account_id, token_digest, email_normalized, expires_at_nanoseconds, claimed_at_nanoseconds) VALUES ('account_audit_resend_test', 'account-audit-resend-candidate-digest', 'account-audit-resend@example.test', 300, 1);"
+            `shouldReturn` (ExitSuccess, "", "")
+          atomicResendSettlement <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "SELECT outcome || '|' || value FROM account_audit.complete_verification_resend_with_activity('account_audit_resend_test', 'account-audit-resend-candidate-digest', 100, 'account_audit_resend_test', '550e8400-e29b-41d4-a716-446655440005', 'verification-resend-delivered', 1::SMALLINT, NULL, NULL, NULL, NULL, NULL);"
+          atomicResendSettlement `shouldBe` (ExitSuccess, "settled|account_audit_resend_test\n", "")
+          committedAtomicResend <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT (SELECT token_digest FROM web_api.email_verifications WHERE account_id = 'account_audit_resend_test') || '|' || (SELECT count(*)::TEXT FROM web_api.verification_resend_claims WHERE account_id = 'account_audit_resend_test') || '|' || (SELECT count(*)::TEXT FROM web_api.verification_resend_deliveries WHERE account_id = 'account_audit_resend_test') || '|' || (SELECT count(*)::TEXT FROM account_audit.activity WHERE account_id = 'account_audit_resend_test' AND event_code = 'verification-resend-delivered');"
+          committedAtomicResend `shouldBe` (ExitSuccess, "account-audit-resend-candidate-digest|0|1|1\n", "")
+          runPsql
+            inheritedEnvironment
+            "web_api_owner"
+            "web_api_owner"
+            "DELETE FROM web_api.accounts WHERE account_id = 'account_audit_resend_rollback_test'; INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds) VALUES ('account_audit_resend_rollback_test', 'account-audit-resend-rollback@example.test', 'test-hash', 1); INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds, delivery_state, delivery_claimed_at_nanoseconds) VALUES ('account-audit-resend-rollback-old-digest', 'account_audit_resend_rollback_test', 'account-audit-resend-rollback@example.test', 200, 'delivered', NULL); INSERT INTO web_api.verification_resend_claims (account_id, token_digest, email_normalized, expires_at_nanoseconds, claimed_at_nanoseconds) VALUES ('account_audit_resend_rollback_test', 'account-audit-resend-rollback-candidate-digest', 'account-audit-resend-rollback@example.test', 300, 1);"
+            `shouldReturn` (ExitSuccess, "", "")
+          rejectedAtomicResend <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "SELECT outcome || '|' || value FROM account_audit.complete_verification_resend_with_activity('account_audit_resend_rollback_test', 'account-audit-resend-rollback-candidate-digest', 100, 'account_audit_resend_rollback_test', '550e8400-e29b-41d4-a716-446655440006', 'not-an-account-audit-event', 1::SMALLINT, NULL, NULL, NULL, NULL, NULL);"
+          fst3 rejectedAtomicResend `shouldNotBe` ExitSuccess
+          thd3 rejectedAtomicResend `shouldContain` "account audit append received invalid typed fields"
+          rolledBackAtomicResend <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT (SELECT token_digest FROM web_api.email_verifications WHERE account_id = 'account_audit_resend_rollback_test') || '|' || (SELECT count(*)::TEXT FROM web_api.verification_resend_claims WHERE account_id = 'account_audit_resend_rollback_test') || '|' || (SELECT count(*)::TEXT FROM web_api.verification_resend_deliveries WHERE account_id = 'account_audit_resend_rollback_test') || '|' || (SELECT count(*)::TEXT FROM account_audit.activity WHERE account_id = 'account_audit_resend_rollback_test' AND request_id = '550e8400-e29b-41d4-a716-446655440006');"
+          rolledBackAtomicResend `shouldBe` (ExitSuccess, "account-audit-resend-rollback-old-digest|1|0|0\n", "")
+
+          directRuntimeRead <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "SELECT account_id FROM account_audit.activity;"
+          fst3 directRuntimeRead `shouldNotBe` ExitSuccess
+          thd3 directRuntimeRead `shouldContain` "permission denied"
+
+          directRuntimeInsert <-
+            runPsql
+              inheritedEnvironment
+              "web_api_runtime"
+              "web_api"
+              "INSERT INTO account_audit.activity (occurred_at, audit_scope_id, account_id, request_id, event_code, payload_version, payload_detail) VALUES (statement_timestamp(), 'default', 'forbidden', '550e8400-e29b-41d4-a716-446655440000', 'account-session-issued', 1, 'password');"
+          fst3 directRuntimeInsert `shouldNotBe` ExitSuccess
+          thd3 directRuntimeInsert `shouldContain` "permission denied"
+
+          runPsql
+            inheritedEnvironment
+            "web_api_owner"
+            "web_api_owner"
+            "INSERT INTO account_audit.activity (occurred_at, audit_scope_id, account_id, request_id, event_code, payload_version, payload_detail) VALUES (statement_timestamp(), 'other-scope', 'hidden', '550e8400-e29b-41d4-a716-446655440000', 'account-session-issued', 1, 'password');"
+            `shouldReturn` (ExitSuccess, "", "")
+          scopedReaderRows <-
+            runPsql
+              inheritedEnvironment
+              "web_api_audit_reader"
+              "audit-reader"
+              "SELECT audit_scope_id || '|' || account_id FROM account_audit.activity WHERE request_id = '550e8400-e29b-41d4-a716-446655440000' ORDER BY audit_scope_id, account_id;"
+          scopedReaderRows
+            `shouldBe` ( ExitSuccess,
+                         "default|account_audit_test\ndefault|account_audit_test_second\n",
+                         ""
+                       )
+
+          schedulerExplicitTime <-
+            runPsql
+              inheritedEnvironment
+              "web_api_audit_scheduler"
+              "audit-scheduler"
+              "SELECT * FROM account_audit.maintain_activity_partitions_at('2026-09-15 12:00:00+00', interval '12 months');"
+          fst3 schedulerExplicitTime `shouldNotBe` ExitSuccess
+          thd3 schedulerExplicitTime `shouldContain` "permission denied"
+
+          maintenanceNoOp <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT created_partition_count::TEXT || '|' || dropped_partition_count::TEXT FROM account_audit.maintain_activity_partitions_at('2026-09-15 12:00:00+00', interval '12 months');"
+          maintenanceNoOp `shouldBe` (ExitSuccess, "0|0\n", "")
+          createdOneExpiredPair <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT * FROM account_audit.maintain_activity_partitions_at('2025-08-15 12:00:00+00', interval '12 months');"
+          case createdOneExpiredPair of
+            (ExitSuccess, _, "") -> pure ()
+            _ -> expectationFailure "expected deterministic maintenance to prepare the first expired pair"
+          maintenanceOneDrop <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT created_partition_count::TEXT || '|' || dropped_partition_count::TEXT FROM account_audit.maintain_activity_partitions_at('2026-09-15 12:00:00+00', interval '12 months');"
+          maintenanceOneDrop `shouldBe` (ExitSuccess, "0|1\n", "")
+          createdTwoExpiredPairs <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT * FROM account_audit.maintain_activity_partitions_at('2025-07-15 12:00:00+00', interval '12 months');"
+          case createdTwoExpiredPairs of
+            (ExitSuccess, _, "") -> pure ()
+            _ -> expectationFailure "expected deterministic maintenance to prepare the second expired pair"
+          maintenanceTwoDrops <-
+            runPsql
+              inheritedEnvironment
+              "web_api_owner"
+              "web_api_owner"
+              "SELECT created_partition_count::TEXT || '|' || dropped_partition_count::TEXT FROM account_audit.maintain_activity_partitions_at('2026-09-15 12:00:00+00', interval '12 months');"
+          maintenanceTwoDrops `shouldBe` (ExitSuccess, "0|2\n", "")
+      )
+
     it "maps runtime PostgreSQL connection failures into database errors without shelling out to psql" $
       withUnusedLoopbackPort $ \unusedPort ->
         withTemporaryEnvironment "PATH" (Just "") $ do
-          let runtimePostgresEffect =
-                buildRuntimePostgresDatabaseEffect
-                  defaultRealPostgresConfig
-                    { databasePort = unusedPort
-                    }
-          loadHomePageData runtimePostgresEffect defaultRequestContext
+          let unreachableDatabaseConfig = defaultRealPostgresConfig {databasePort = unusedPort}
+          unreachablePool <- newPostgresPool (databasePoolCapacity unreachableDatabaseConfig) unreachableDatabaseConfig
+          let runtimePostgresEffect = buildRuntimePostgresPageRepository unreachablePool
+          loadSecondPageValueForRequest runtimePostgresEffect defaultRequestContext
             >>= \case
-              Left (HomePageDataError errorMessage) -> do
-                errorMessage `shouldSatisfy` (not . Text.null)
-                errorMessage `shouldSatisfy` (not . Text.isInfixOf "posix_spawnp")
-              Left otherError ->
-                expectationFailure ("expected HomePageDataError, got " <> show otherError)
-              Right homePageData ->
-                expectationFailure ("expected runtime connection failure, got " <> show homePageData)
+              Left (SecondPageDataError errorMessage) ->
+                expectAll
+                  ( (errorMessage `shouldSatisfy` (not . Text.null))
+                      :| [errorMessage `shouldSatisfy` (not . Text.isInfixOf "posix_spawnp")]
+                  )
+              Right secondPageData ->
+                expectationFailure ("expected runtime connection failure, got " <> show secondPageData)
   where
     fst3 (firstValue, _, _) = firstValue
     thd3 (_, _, thirdValue) = thirdValue
+
+    runPsql inheritedEnvironment username password sql =
+      readCreateProcessWithExitCode
+        ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", username, "--no-password", "--set", "ON_ERROR_STOP=1", "--tuples-only", "--no-align", "--quiet", "--command", sql])
+            { env = Just (("PGPASSWORD", password) : inheritedEnvironment)
+            }
+        )
+        ""
 
 withUnusedLoopbackPort :: (Int -> IO a) -> IO a
 withUnusedLoopbackPort action = do
@@ -312,6 +671,25 @@ withUnusedLoopbackPort action = do
     _ ->
       close reservedSocket
         >> error "expected IPv4 loopback reservation socket"
+
+-- | Reserve two loopback ports concurrently so the kernel cannot hand the
+-- same ephemeral port to both listeners.  Release both immediately before
+-- starting the child process, which is the shortest practical hand-off for
+-- the real multi-listener integration test.
+withDistinctUnusedLoopbackPorts :: (Int -> Int -> IO a) -> IO a
+withDistinctUnusedLoopbackPorts action = do
+  firstSocket <- socket AF_INET Stream defaultProtocol
+  secondSocket <- socket AF_INET Stream defaultProtocol
+  bind firstSocket (SockAddrInet 0 (tupleToHostAddress (127, 0, 0, 1)))
+  bind secondSocket (SockAddrInet 0 (tupleToHostAddress (127, 0, 0, 1)))
+  firstAddress <- getSocketName firstSocket
+  secondAddress <- getSocketName secondSocket
+  close firstSocket
+  close secondSocket
+  case (firstAddress, secondAddress) of
+    (SockAddrInet firstPort _, SockAddrInet secondPort _)
+      | firstPort /= secondPort -> action (fromIntegral firstPort) (fromIntegral secondPort)
+    _ -> error "expected distinct IPv4 loopback reservation sockets"
 
 waitForProcessResponse :: ProcessHandle -> Int -> Text.Text -> IO Text.Text
 waitForProcessResponse processHandle port path =
@@ -447,6 +825,18 @@ decodeChunkedBody chunkedBytes =
                    in chunk <> decodeChunkedBody (ByteString.drop 2 withChunkSuffix)
             _ ->
               chunkedBytes
+
+-- | Cabal's build-tool path is available during compilation but some test
+-- runners do not preserve it in the child process environment.  Resolve the
+-- sibling executable built for this package and retain the normal PATH name
+-- for installed-suite runs.
+testBuildToolPath :: FilePath -> IO FilePath
+testBuildToolPath executableName = do
+  testExecutable <- getExecutablePath
+  let buildDirectory = takeDirectory (takeDirectory testExecutable)
+      siblingExecutable = buildDirectory </> executableName </> executableName
+  exists <- doesFileExist siblingExecutable
+  pure (if exists then siblingExecutable else executableName)
 
 withManualTlsFiles :: (FilePath -> FilePath -> IO a) -> IO a
 withManualTlsFiles action =
