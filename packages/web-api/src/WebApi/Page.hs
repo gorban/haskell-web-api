@@ -11,7 +11,7 @@ module WebApi.Page
     ProfilePageModel (..),
     SecondPageModel (..),
     SignedOutProfilePageDetails (..),
-    SpacesPageModel (..),
+    TodoPageModel (..),
     UnavailableProfilePageDetails (..),
     buildPageModelFromRouteData,
     buildPageModelWithDatabase,

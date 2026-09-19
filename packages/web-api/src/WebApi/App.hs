@@ -113,7 +113,7 @@ import WebApi.Database (PageRepository, defaultPageRepository)
 import WebApi.Postgres.Pool (PostgresPool, closePostgresPool, newPostgresPool)
 import WebApi.Postgres.Runtime (buildRuntimePostgresPageRepository)
 import WebApi.ResourceAuthentication qualified as ResourceAuthentication
-import WebApi.Response (apiNotFoundResponse, renderLocale, selectResponseWithDatabaseAndAccountWorkflow, spacesLocation)
+import WebApi.Response (apiNotFoundResponse, renderLocale, selectResponseWithDatabaseAndAccountWorkflow, todoLocation)
 import WebApi.Route
   ( AppAuthorization,
     AppRequestContext (..),
@@ -295,7 +295,7 @@ buildApp config =
 
 appNavigationRoutes :: [AppRoute]
 appNavigationRoutes =
-  [HomeRoute, SecondRoute, SpacesRoute, RegistrationRoute, LoginRoute, ProfileRoute]
+  [HomeRoute, SecondRoute, TodoRoute, RegistrationRoute, LoginRoute, ProfileRoute]
 
 buildAppRouteDefinition ::
   AppConfig ->
@@ -311,7 +311,7 @@ buildAppRouteDefinition config pageRepository accountWorkflow route =
     TokenApiRoute -> tokenApiRouteDefinition (accountWorkflowApiClientTokenEnvironment accountWorkflow)
     HomeRoute ->
       protocolRouteDefinition route $
-        \routeRequest -> pure (HarchWeb.nonPageRedirectResponse Http.status302 (spacesLocation routeRequest))
+        \routeRequest -> pure (HarchWeb.nonPageRedirectResponse Http.status302 (todoLocation routeRequest))
     ApiNotFoundRoute ->
       protocolRouteDefinition route $
         \_ ->
@@ -342,7 +342,7 @@ routeNavigationLabel route = lookup route navigationLabels
     navigationLabels =
       [ (HomeRoute, "Home"),
         (SecondRoute, "Second"),
-        (SpacesRoute, "Spaces"),
+        (TodoRoute, "TODO"),
         (RegistrationRoute, "Create account"),
         (LoginRoute, "Sign in"),
         (ProfileRoute, "Profile")

@@ -39,7 +39,7 @@ appNavigationItems :: [HarchWeb.NavigationItem AppRoute]
 appNavigationItems =
   [ HarchWeb.NavigationItem "Home" HomeRoute,
     HarchWeb.NavigationItem "Second" SecondRoute,
-    HarchWeb.NavigationItem "Spaces" SpacesRoute,
+    HarchWeb.NavigationItem "TODO" TodoRoute,
     HarchWeb.NavigationItem "Create account" RegistrationRoute,
     HarchWeb.NavigationItem "Sign in" LoginRoute,
     HarchWeb.NavigationItem "Profile" ProfileRoute

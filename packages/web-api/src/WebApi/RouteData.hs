@@ -37,7 +37,7 @@ data SecondRouteData = SecondRouteData
 
 data RouteDataResult
   = SecondRouteDataResult (Either DatabaseError SecondRouteData)
-  | SpacesRouteDataResult
+  | TodoRouteDataResult
   | RegistrationRouteDataResult
   | EmailVerificationRouteDataResult
   | MfaEnrollmentRouteDataResult
@@ -93,7 +93,7 @@ routeDataPlan route =
       case pageRoute of
         HomePage -> UseStaticRouteData NotFoundRouteDataResult
         SecondPage -> LoadSecondRouteData
-        SpacesPage -> UseStaticRouteData SpacesRouteDataResult
+        TodoPage -> UseStaticRouteData TodoRouteDataResult
         RegistrationPage -> UseStaticRouteData RegistrationRouteDataResult
         EmailVerificationPage -> UseStaticRouteData EmailVerificationRouteDataResult
         MfaEnrollmentPage -> UseStaticRouteData MfaEnrollmentRouteDataResult

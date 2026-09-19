@@ -7,7 +7,7 @@ module WebApi.Response
     jsonText,
     pageFailureDiagnostics,
     renderLocale,
-    spacesLocation,
+    todoLocation,
     apiNotFoundResponse,
     meApiSuccessBody,
     secondRouteApiBody,
@@ -89,11 +89,11 @@ selectProfileResponse config accountWorkflow routeRequest = do
           (pageErrorResponseMetadata profileFailureDiagnostics)
           (renderUnavailableProfilePage config routeRequest)
 
-spacesLocation :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Text
-spacesLocation routeRequest =
+todoLocation :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Text
+todoLocation routeRequest =
   renderRoutePath
     HarchWeb.RouteRequest
-      { HarchWeb.requestRoute = SpacesRoute,
+      { HarchWeb.requestRoute = TodoRoute,
         HarchWeb.requestContext = HarchWeb.requestContext routeRequest
       }
 

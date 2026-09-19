@@ -49,12 +49,12 @@ renderPageBodyForLocale context locale pageModel =
                 renderCallToAction (secondPrimaryAction secondPage)
               ]
           }
-    SpacesPage spacesPage ->
+    TodoPage todoPage ->
       pageFrame
         PageFrameProps
-          { pageFrameKind = SpacesPageFrame,
-            pageFrameHeading = spacesHeading spacesPage,
-            pageFrameSummary = Just (spacesSummary spacesPage),
+          { pageFrameKind = TodoPageFrame,
+            pageFrameHeading = todoHeading todoPage,
+            pageFrameSummary = Just (todoSummary todoPage),
             pageFrameContent = []
           }
     RegistrationPage _ registrationForm ->

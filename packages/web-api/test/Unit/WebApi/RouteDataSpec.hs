@@ -81,10 +81,10 @@ spec =
         `shouldBe` "SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = [\"Shared loader\"]}))"
       show (SecondRouteDataResult (Right secondRouteData))
         `shouldBe` "SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = [\"Shared loader\"]}))"
-      show SpacesRouteDataResult `shouldBe` "SpacesRouteDataResult"
+      show TodoRouteDataResult `shouldBe` "TodoRouteDataResult"
       show [secondRouteData]
         `shouldBe` "[SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = [\"Shared loader\"]}]"
-      show [SpacesRouteDataResult] `shouldBe` "[SpacesRouteDataResult]"
+      show [TodoRouteDataResult] `shouldBe` "[TodoRouteDataResult]"
       show [NotFoundRouteDataResult] `shouldBe` "[NotFoundRouteDataResult]"
 
     it "selects default stubbed route data without extra wiring" $ do
@@ -96,7 +96,7 @@ spec =
                   secondRouteHighlights = []
                 }
           )
-      selectRouteData spacesRequest `shouldReturn` SpacesRouteDataResult
-      selectRouteDataSelectionWithDatabase (buildSeededPageRepository defaultDatabaseSeed) spacesRequest
-        `shouldReturn` RouteDataSelection SpacesRouteDataResult []
+      selectRouteData todoRequest `shouldReturn` TodoRouteDataResult
+      selectRouteDataSelectionWithDatabase (buildSeededPageRepository defaultDatabaseSeed) todoRequest
+        `shouldReturn` RouteDataSelection TodoRouteDataResult []
       selectRouteData apiNotFoundRequest `shouldReturn` NotFoundRouteDataResult

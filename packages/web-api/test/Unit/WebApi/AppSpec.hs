@@ -622,9 +622,9 @@ spec = do
 
     it "attaches security only after the page selector returns a page result" $ do
       expectedSecondResponse <- selectResponse defaultAppConfig secondRequest
-      expectedSpacesResponse <- selectResponse defaultAppConfig spacesRequest
+      expectedTodoResponse <- selectResponse defaultAppConfig todoRequest
       expectedNotFoundResponse <- selectResponse defaultAppConfig notFoundRequest
-      HarchWeb.renderResponse pureApplication homeRequest `shouldReturn` HarchWeb.redirectResponse Http.status302 "/spaces"
+      HarchWeb.renderResponse pureApplication homeRequest `shouldReturn` HarchWeb.redirectResponse Http.status302 "/todo"
       HarchWeb.renderResponse pureApplication apiNotFoundRequest
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
@@ -636,7 +636,7 @@ spec = do
               HarchWeb.responseDatabaseOperations = []
             }
       assertRenderedPageResult expectedSecondResponse =<< HarchWeb.renderResponse pureApplication secondRequest
-      assertRenderedPageResult expectedSpacesResponse =<< HarchWeb.renderResponse pureApplication spacesRequest
+      assertRenderedPageResult expectedTodoResponse =<< HarchWeb.renderResponse pureApplication todoRequest
       assertRenderedPageResult expectedNotFoundResponse =<< HarchWeb.renderResponse pureApplication notFoundRequest
 
     it "dispatches /api/status and /api/second through the typed endpoint boundary, not the shared page/API selector" $ do
@@ -760,10 +760,10 @@ spec = do
       Text.isInfixOf "<h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Segunda</h1>" renderedSecondResponse `shouldBe` True
       Text.isInfixOf "<script nonce=\"" renderedSecondResponse `shouldBe` True
 
-      spacesResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["spaces"])
-      Wai.responseStatus spacesResponse `shouldBe` Http.status200
-      renderedSpacesResponse <- readResponseBody spacesResponse
-      Text.isInfixOf "<h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Site under construction</h1>" renderedSpacesResponse `shouldBe` True
+      todoResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["todo"])
+      Wai.responseStatus todoResponse `shouldBe` Http.status200
+      renderedTodoResponse <- readResponseBody todoResponse
+      Text.isInfixOf "<h1 data-page-title=\"true\" class=\"harch-page-frame-title\">TODO</h1>" renderedTodoResponse `shouldBe` True
 
       apiStatusResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["api", "status"])
       Wai.responseStatus apiStatusResponse `shouldBe` Http.status200
@@ -897,7 +897,7 @@ spec = do
 
       homeResponse <- performWaiRequest (HarchWeb.toWaiApplication failingApplication) (waiRequest [])
       Wai.responseStatus homeResponse `shouldBe` Http.status302
-      lookup Http.hLocation (Wai.responseHeaders homeResponse) `shouldBe` Just "/spaces"
+      lookup Http.hLocation (Wai.responseHeaders homeResponse) `shouldBe` Just "/todo"
 
     it "is structurally complete enough to render supported and not-found shells" $ do
       secondPage <- renderPage defaultAppConfig secondRequest

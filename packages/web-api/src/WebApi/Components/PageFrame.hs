@@ -21,7 +21,7 @@ import HarchWeb qualified
 -- selector and test contracts.
 data PageKind
   = SecondPageFrame
-  | SpacesPageFrame
+  | TodoPageFrame
   | RegistrationPageFrame
   | EmailVerificationPageFrame
   | MfaEnrollmentPageFrame
@@ -75,7 +75,7 @@ pageKindText :: PageKind -> Text
 pageKindText pageKind =
   case pageKind of
     SecondPageFrame -> "second"
-    SpacesPageFrame -> "spaces"
+    TodoPageFrame -> "todo"
     RegistrationPageFrame -> "registration"
     EmailVerificationPageFrame -> "email-verification"
     MfaEnrollmentPageFrame -> "mfa-enrollment"

@@ -9,7 +9,7 @@ module WebApi.Page.Model
     ProfilePageModel (..),
     SecondPageModel (..),
     SignedOutProfilePageDetails (..),
-    SpacesPageModel (..),
+    TodoPageModel (..),
     UnavailableProfilePageDetails (..),
   )
 where
@@ -41,9 +41,9 @@ data SecondPageModel = SecondPageModel
   }
   deriving (Eq, Show)
 
-data SpacesPageModel = SpacesPageModel
-  { spacesHeading :: Text,
-    spacesSummary :: Text
+data TodoPageModel = TodoPageModel
+  { todoHeading :: Text,
+    todoSummary :: Text
   }
   deriving (Eq, Show)
 
@@ -122,7 +122,7 @@ data UnavailableProfilePageDetails = UnavailableProfilePageDetails
 
 data AppPageModel
   = SecondPage SecondPageModel
-  | SpacesPage SpacesPageModel
+  | TodoPage TodoPageModel
   | RegistrationPage AccountActionTarget RegistrationForm
   | EmailVerificationPage AccountActionTarget VerificationForm
   | MfaEnrollmentPage AccountActionTarget MfaEnrollmentForm

@@ -53,7 +53,7 @@ spec = do
       pageRoutes
         `shouldBe` [ WebApi.Route.HomePage,
                      WebApi.Route.SecondPage,
-                     WebApi.Route.SpacesPage,
+                     WebApi.Route.TodoPage,
                      WebApi.Route.RegistrationPage,
                      WebApi.Route.EmailVerificationPage,
                      WebApi.Route.MfaEnrollmentPage,
@@ -76,7 +76,7 @@ spec = do
       map show pageRoutes
         `shouldBe` [ "HomePage",
                      "SecondPage",
-                     "SpacesPage",
+                     "TodoPage",
                      "RegistrationPage",
                      "EmailVerificationPage",
                      "MfaEnrollmentPage",
@@ -88,7 +88,7 @@ spec = do
                      "PageNotFound"
                    ]
       showList pageRoutes ""
-        `shouldBe` "[HomePage,SecondPage,SpacesPage,RegistrationPage,EmailVerificationPage,MfaEnrollmentPage,LoginPage,LogoutPage,ProfilePage,LanguagePage,HelpPage,PageNotFound]"
+        `shouldBe` "[HomePage,SecondPage,TodoPage,RegistrationPage,EmailVerificationPage,MfaEnrollmentPage,LoginPage,LogoutPage,ProfilePage,LanguagePage,HelpPage,PageNotFound]"
       minBound `shouldBe` StatusApi
       maxBound `shouldBe` ApiNotFound
       succ StatusApi `shouldBe` SecondApi
@@ -168,9 +168,9 @@ spec = do
 
     it "parses the second page path" $ parseRoute defaultRequestContext "/second" `shouldBe` Just secondRequest
 
-    it "parses the app-home spaces path with its typed locale" $ do
-      parseRoute defaultRequestContext "/spaces" `shouldBe` Just spacesRequest
-      parseRoute defaultRequestContext "/es/spaces" `shouldBe` Just spanishSpacesRequest
+    it "parses the TODO path with its typed locale" $ do
+      parseRoute defaultRequestContext "/todo" `shouldBe` Just todoRequest
+      parseRoute defaultRequestContext "/es/todo" `shouldBe` Just spanishTodoRequest
 
     it "parses SSR account routes and preserves email-verification query values" $ do
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/register") `shouldBe` Just RegistrationRoute
@@ -243,9 +243,9 @@ spec = do
       parseRoute defaultRequestContext (renderRoutePath homeRequest) `shouldBe` Just homeRequest
       parseRoute defaultRequestContext (renderRoutePath secondRequest) `shouldBe` Just secondRequest
       parseRoute defaultRequestContext (renderRoutePath spanishSecondRequest) `shouldBe` Just spanishSecondRequest
-      parseRoute defaultRequestContext (renderRoutePath spacesRequest) `shouldBe` Just spacesRequest
+      parseRoute defaultRequestContext (renderRoutePath todoRequest) `shouldBe` Just todoRequest
       parseRoute defaultRequestContext (renderRoutePath profileRequest) `shouldBe` Just profileRequest
-      parseRoute defaultRequestContext (renderRoutePath spanishSpacesRequest) `shouldBe` Just spanishSpacesRequest
+      parseRoute defaultRequestContext (renderRoutePath spanishTodoRequest) `shouldBe` Just spanishTodoRequest
       parseRoute defaultRequestContext (renderRoutePath (HarchWeb.RouteRequest SecondRoute explicitEnglishRequestContext)) `shouldBe` Just (HarchWeb.RouteRequest SecondRoute explicitEnglishRequestContext)
       parseRoute defaultRequestContext (renderRoutePath apiStatusRequest) `shouldBe` Just apiStatusRequest
       parseRoute defaultRequestContext (renderRoutePath apiSecondRequest) `shouldBe` Just apiSecondRequest
@@ -258,8 +258,8 @@ spec = do
       renderRoutePath spanishHomeRequest `shouldBe` "/es"
       renderRoutePath secondRequest `shouldBe` "/second"
       renderRoutePath spanishSecondRequest `shouldBe` "/es/second"
-      renderRoutePath spacesRequest `shouldBe` "/spaces"
-      renderRoutePath spanishSpacesRequest `shouldBe` "/es/spaces"
+      renderRoutePath todoRequest `shouldBe` "/todo"
+      renderRoutePath spanishTodoRequest `shouldBe` "/es/todo"
       renderRoutePath (HarchWeb.RouteRequest HomeRoute explicitEnglishRequestContext) `shouldBe` "/en"
       renderRoutePath (HarchWeb.RouteRequest SecondRoute explicitEnglishRequestContext) `shouldBe` "/en/second"
       renderRoutePath (HarchWeb.RouteRequest RegistrationRoute defaultRequestContext) `shouldBe` "/register"
@@ -273,7 +273,7 @@ spec = do
       renderRoutePath apiTokenRequest `shouldBe` "/api/oauth/token"
       renderRoutePath apiNotFoundRequest `shouldBe` "/api/404"
       renderRoutePath notFoundRequest `shouldBe` "/404"
-      HarchWeb.safeUrlText (renderRouteUrl spanishSpacesRequest) `shouldBe` "/es/spaces"
+      HarchWeb.safeUrlText (renderRouteUrl spanishTodoRequest) `shouldBe` "/es/todo"
 
     it "prepends the forwarded request path prefix to page and API routes" $ do
       renderRoutePath prefixedHomeRequest `shouldBe` "/app"
@@ -292,7 +292,7 @@ spec = do
           expectedMetadata =
             [ (HomeRoute, "web.home", "/{locale}", HarchWeb.HtmlEndpoint),
               (SecondRoute, "web.second", "/{locale}/second", HarchWeb.HtmlEndpoint),
-              (SpacesRoute, "web.spaces", "/{locale}/spaces", HarchWeb.HtmlEndpoint),
+              (TodoRoute, "web.todo", "/{locale}/todo", HarchWeb.HtmlEndpoint),
               (RegistrationRoute, "account.registration", "/{locale}/register", HarchWeb.HtmlEndpoint),
               (EmailVerificationRoute, "account.email-verification", "/{locale}/verify", HarchWeb.HtmlEndpoint),
               (MfaEnrollmentRoute, "account.mfa-enrollment", "/{locale}/mfa", HarchWeb.HtmlEndpoint),
@@ -336,7 +336,7 @@ spec = do
     -- three-per-'it'; each now reports individually.
     [ ("matches the home path", "/", homeRequest),
       ("matches the second page path", "/second", secondRequest),
-      ("matches the app-home spaces path", "/spaces", spacesRequest),
+      ("matches the TODO path", "/todo", todoRequest),
       ("matches locale-prefixed paths with the merged request context", "/es", spanishHomeRequest),
       ("matches an API status path into the API route family", "/api/status", apiStatusRequest),
       ("matches an API second path into the API route family", "/api/second", apiSecondRequest),

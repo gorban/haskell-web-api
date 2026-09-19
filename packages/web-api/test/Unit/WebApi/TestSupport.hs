@@ -33,7 +33,7 @@ module Unit.WebApi.TestSupport
     navigationAppConfig,
     homeRequest,
     secondRequest,
-    spacesRequest,
+    todoRequest,
     profileRequest,
     spanishRequestContext,
     testPathPrefix,
@@ -41,7 +41,7 @@ module Unit.WebApi.TestSupport
     explicitEnglishRequestContext,
     spanishHomeRequest,
     spanishSecondRequest,
-    spanishSpacesRequest,
+    spanishTodoRequest,
     prefixedHomeRequest,
     prefixedSecondRequest,
     prefixedSpanishSecondRequest,
@@ -343,8 +343,8 @@ homeRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb
 secondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 secondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, HarchWeb.requestContext = defaultRequestContext}
 
-spacesRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
-spacesRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SpacesRoute, HarchWeb.requestContext = defaultRequestContext}
+todoRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+todoRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = TodoRoute, HarchWeb.requestContext = defaultRequestContext}
 
 profileRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 profileRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = ProfileRoute, HarchWeb.requestContext = defaultRequestContext}
@@ -379,8 +379,8 @@ spanishHomeRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, H
 spanishSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 spanishSecondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, HarchWeb.requestContext = spanishRequestContext}
 
-spanishSpacesRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
-spanishSpacesRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SpacesRoute, HarchWeb.requestContext = spanishRequestContext}
+spanishTodoRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+spanishTodoRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = TodoRoute, HarchWeb.requestContext = spanishRequestContext}
 
 prefixedHomeRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 prefixedHomeRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb.requestContext = prefixedRequestContext}

@@ -8,7 +8,7 @@ import Data.List (isInfixOf)
 import HarchWeb qualified
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi.Database (DatabaseError (..), DatabaseSeed (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed)
-import WebApi.Page (AppPageModel (..), CallToAction (..), HelpPageModel (..), LanguagePageModel (..), SecondPageModel (..), SpacesPageModel (..), buildCallToActionHref, buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase)
+import WebApi.Page (AppPageModel (..), CallToAction (..), HelpPageModel (..), LanguagePageModel (..), SecondPageModel (..), TodoPageModel (..), buildCallToActionHref, buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase)
 import WebApi.Route (AppRoute (..), defaultRequestContext)
 import WebApi.RouteData (RouteDataResult (..), SecondRouteData (..))
 
@@ -36,12 +36,12 @@ spec = do
                   }
             }
 
-    it "ports the spaces placeholder with its source-app English and Spanish copy" $
-      buildPageModel spacesRequest
-        `shouldReturn` SpacesPage
-          SpacesPageModel
-            { spacesHeading = "Site under construction",
-              spacesSummary = "Follow this space."
+    it "renders the TODO placeholder with English and Spanish copy" $
+      buildPageModel todoRequest
+        `shouldReturn` TodoPage
+          TodoPageModel
+            { todoHeading = "TODO",
+              todoSummary = "Placeholder page."
             }
 
     it "builds localized language and Help reference pages from static route data" $ do
@@ -61,11 +61,11 @@ spec = do
               helpSignInAction = CallToAction "Sign in" LoginRoute "/login",
               helpRegistrationAction = CallToAction "Create account" RegistrationRoute "/register"
             }
-      buildPageModel spanishSpacesRequest
-        `shouldReturn` SpacesPage
-          SpacesPageModel
-            { spacesHeading = "Sitio en construcción",
-              spacesSummary = "Sigan este espacio."
+      buildPageModel spanishTodoRequest
+        `shouldReturn` TodoPage
+          TodoPageModel
+            { todoHeading = "TODO",
+              todoSummary = "Página provisional."
             }
 
     it "renders selected route data into a page model" $ do

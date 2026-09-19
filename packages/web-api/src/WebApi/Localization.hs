@@ -59,8 +59,8 @@ data AppMessage
   | EmailVerifiedEnrollAuthenticator
   | ProfileUnavailable
   | ProfileStateChanged
-  | SiteUnderConstruction
-  | FollowThisSpace
+  | TodoPageHeading
+  | TodoPageSummary
   | NotFound
   | NotFoundSummary
   | ReturnHome
@@ -200,10 +200,10 @@ messageTemplateFor messageKey appLocale =
     (ProfileUnavailable, Spanish) -> [message|Tu perfil no esta disponible temporalmente.|]
     (ProfileStateChanged, English) -> [message|Your profile state changed. Reload the page before trying again.|]
     (ProfileStateChanged, Spanish) -> [message|El estado de tu perfil ha cambiado. Recarga la pagina antes de intentarlo de nuevo.|]
-    (SiteUnderConstruction, English) -> [message|Site under construction|]
-    (SiteUnderConstruction, Spanish) -> [message|Sitio en construcción|]
-    (FollowThisSpace, English) -> [message|Follow this space.|]
-    (FollowThisSpace, Spanish) -> [message|Sigan este espacio.|]
+    (TodoPageHeading, English) -> [message|TODO|]
+    (TodoPageHeading, Spanish) -> [message|TODO|]
+    (TodoPageSummary, English) -> [message|Placeholder page.|]
+    (TodoPageSummary, Spanish) -> [message|Página provisional.|]
     (NotFound, English) -> [message|Not Found|]
     (NotFound, Spanish) -> [message|No encontrado|]
     (NotFoundSummary, English) -> [message|The requested page could not be found.|]

@@ -118,18 +118,18 @@ spec =
         ( (Text.isInfixOf "<nav data-navigation-region=\"primary\" class=\"harch-app-shell-navigation\">" secondShell `shouldBe` True)
             :| [ Text.isInfixOf "href=\"/\" data-page-link=\"true\">Home" secondShell `shouldBe` True,
                  Text.isInfixOf "href=\"/second\" data-page-link=\"true\" aria-current=\"page\">Second" secondShell `shouldBe` True,
-                 Text.isInfixOf "href=\"/spaces\" data-page-link=\"true\">Spaces" secondShell `shouldBe` True,
+                 Text.isInfixOf "href=\"/todo\" data-page-link=\"true\">TODO" secondShell `shouldBe` True,
                  Text.isInfixOf "<main id=\"app-main\" data-navigation-content=\"true\" class=\"harch-app-shell-main\" tabindex=\"-1\" data-navigation-focus-target=\"true\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
                ]
         )
 
-    it "renders the app-home spaces surface without requiring client code" $ do
-      spacesPageModel <- buildPageModel spacesRequest
-      renderPageBody spacesPageModel
-        `shouldBe` "<section data-page=\"spaces\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Site under construction</h1><p class=\"harch-page-frame-summary\">Follow this space.</p><div class=\"harch-page-frame-content\"></div></section>"
-      spanishSpacesPageModel <- buildPageModel spanishSpacesRequest
-      renderPageBody spanishSpacesPageModel
-        `shouldBe` "<section data-page=\"spaces\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Sitio en construcción</h1><p class=\"harch-page-frame-summary\">Sigan este espacio.</p><div class=\"harch-page-frame-content\"></div></section>"
+    it "renders the TODO placeholder page without requiring client code" $ do
+      todoPageModel <- buildPageModel todoRequest
+      renderPageBody todoPageModel
+        `shouldBe` "<section data-page=\"todo\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">TODO</h1><p class=\"harch-page-frame-summary\">Placeholder page.</p><div class=\"harch-page-frame-content\"></div></section>"
+      spanishTodoPageModel <- buildPageModel spanishTodoRequest
+      renderPageBody spanishTodoPageModel
+        `shouldBe` "<section data-page=\"todo\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">TODO</h1><p class=\"harch-page-frame-summary\">Página provisional.</p><div class=\"harch-page-frame-content\"></div></section>"
 
     it "preserves page-body HTML invariants needed for later navigation enhancement" $ do
       secondPageModel <- buildPageModel secondRequest

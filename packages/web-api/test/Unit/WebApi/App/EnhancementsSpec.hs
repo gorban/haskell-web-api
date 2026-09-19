@@ -21,10 +21,10 @@ import WebApi.Route (AppRoute (..), defaultRequestContext, routeMetadata)
 spec =
   describe "page shell integration" $ do
     it "keeps every page route's path, title, and enhancements in one metadata table" $
-      map (metadataFields . routeMetadata) [HomeRoute, SecondRoute, SpacesRoute, RegistrationRoute, EmailVerificationRoute, MfaEnrollmentRoute, LoginRoute, LogoutRoute, ProfileRoute, LanguageRoute, HelpRoute, NotFoundRoute, StatusApiRoute]
+      map (metadataFields . routeMetadata) [HomeRoute, SecondRoute, TodoRoute, RegistrationRoute, EmailVerificationRoute, MfaEnrollmentRoute, LoginRoute, LogoutRoute, ProfileRoute, LanguageRoute, HelpRoute, NotFoundRoute, StatusApiRoute]
         `shouldBe` [ (Nothing, "", "Home", []),
                      (Just "second", "/second", "Second", ["second-page"]),
-                     (Just "spaces", "/spaces", "Spaces", []),
+                     (Just "todo", "/todo", "TODO", []),
                      (Just "register", "/register", "Create account", []),
                      (Just "verify", "/verify", "Verify email", []),
                      (Just "mfa", "/mfa", "Set up authenticator", []),
@@ -40,18 +40,18 @@ spec =
     it "keeps client-only enhancement hooks in the app seam instead of page rendering" $ do
       pageEnhancementHooks HomeRoute `shouldBe` []
       pageEnhancementHooks SecondRoute `shouldBe` ["second-page"]
-      pageEnhancementHooks SpacesRoute `shouldBe` []
+      pageEnhancementHooks TodoRoute `shouldBe` []
       pageEnhancementHooks StatusApiRoute `shouldBe` []
       pageEnhancementHooks NotFoundRoute `shouldBe` []
 
     it "marks the active navigation item for each routed page" $ do
       homeShell <- renderedShell defaultAppConfig HomeRoute
       secondShell <- renderedShell defaultAppConfig SecondRoute
-      spacesShell <- renderedShell defaultAppConfig SpacesRoute
+      todoShell <- renderedShell defaultAppConfig TodoRoute
       notFoundShell <- renderedShell defaultAppConfig NotFoundRoute
-      Text.isInfixOf "<a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a><a href=\"/spaces\" data-page-link=\"true\">Spaces</a>" homeShell `shouldBe` True
-      Text.isInfixOf "<a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\" aria-current=\"page\">Second</a><a href=\"/spaces\" data-page-link=\"true\">Spaces</a>" secondShell `shouldBe` True
-      Text.isInfixOf "<a href=\"/spaces\" data-page-link=\"true\" aria-current=\"page\">Spaces</a>" spacesShell `shouldBe` True
+      Text.isInfixOf "<a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a><a href=\"/todo\" data-page-link=\"true\">TODO</a>" homeShell `shouldBe` True
+      Text.isInfixOf "<a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\" aria-current=\"page\">Second</a><a href=\"/todo\" data-page-link=\"true\">TODO</a>" secondShell `shouldBe` True
+      Text.isInfixOf "<a href=\"/todo\" data-page-link=\"true\" aria-current=\"page\">TODO</a>" todoShell `shouldBe` True
       Text.isInfixOf "<a href=\"/profile\" data-page-link=\"true\">Profile</a></nav>" notFoundShell `shouldBe` True
 
     it "emits deterministic navigation hooks and script references when assets are configured" $ do

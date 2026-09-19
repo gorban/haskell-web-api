@@ -54,11 +54,11 @@ buildPageModelFromRouteData routeRequest routeData =
   case routeData of
     SecondRouteDataResult secondRouteDataResult ->
       buildSecondPageModel routeRequest secondRouteDataResult
-    SpacesRouteDataResult ->
-      SpacesPage
-        SpacesPageModel
-          { spacesHeading = localizedText routeRequest SiteUnderConstruction,
-            spacesSummary = localizedText routeRequest FollowThisSpace
+    TodoRouteDataResult ->
+      TodoPage
+        TodoPageModel
+          { todoHeading = localizedText routeRequest TodoPageHeading,
+            todoSummary = localizedText routeRequest TodoPageSummary
           }
     RegistrationRouteDataResult ->
       RegistrationPage

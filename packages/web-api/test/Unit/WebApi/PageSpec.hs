@@ -146,13 +146,13 @@ spec = do
             HarchWeb.pageBootstrapHooks = ["second-page"]
           }
 
-    it "renders the app-home spaces page entirely on the server" $
-      renderPage defaultAppConfig spacesRequest
+    it "renders the TODO page entirely on the server" $
+      renderPage defaultAppConfig todoRequest
         `shouldReturn` HarchWeb.Page
-          { HarchWeb.pageTitle = "web-api: Spaces",
-            HarchWeb.pageRoute = SpacesRoute,
+          { HarchWeb.pageTitle = "web-api: TODO",
+            HarchWeb.pageRoute = TodoRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = appPageBody defaultRequestContext SpacesRoute "<section data-page=\"spaces\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Site under construction</h1><p class=\"harch-page-frame-summary\">Follow this space.</p><div class=\"harch-page-frame-content\"></div></section>",
+            HarchWeb.pageBody = appPageBody defaultRequestContext TodoRoute "<section data-page=\"todo\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">TODO</h1><p class=\"harch-page-frame-summary\">Placeholder page.</p><div class=\"harch-page-frame-content\"></div></section>",
             HarchWeb.pageBootstrapHooks = []
           }
 

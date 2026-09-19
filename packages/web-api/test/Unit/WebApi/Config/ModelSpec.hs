@@ -6,7 +6,7 @@ import Data.Text qualified as Text
 import HarchWeb qualified
 import WebApi.AccountPages (AccountActionTarget (..), MfaEnrollmentForm (..), VerificationForm (..), emptyLoginForm, emptyRegistrationForm)
 import WebApi.Config (AcmeConfig (..), AppConfig (..), CertbotConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), SharedTlsCertificateFiles (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), defaultAppConfig, defaultStaticAssetContentTypes, defaultTlsPolicy)
-import WebApi.Page (AppPageModel (..), CallToAction (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), SpacesPageModel (..), UnavailableProfilePageDetails (..))
+import WebApi.Page (AppPageModel (..), CallToAction (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), TodoPageModel (..), UnavailableProfilePageDetails (..))
 import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), RequestAuthenticationTransport (..), RouteSelectionError (..), defaultRequestContext)
 import WebApi.Route qualified
 
@@ -469,10 +469,10 @@ spec =
                 secondErrorMessage = Nothing,
                 secondPrimaryAction = callToAction
               }
-          spacesPageModel =
-            SpacesPageModel
-              { spacesHeading = "Site under construction",
-                spacesSummary = "Follow this space."
+          todoPageModel =
+            TodoPageModel
+              { todoHeading = "TODO",
+                todoSummary = "Placeholder page."
               }
           notFoundPageModel =
             NotFoundPageModel
@@ -502,10 +502,10 @@ spec =
       requestContext `shouldNotBe` defaultRequestContext
       callToAction `shouldNotBe` callToAction {callToActionHref = "/es"}
       secondPageModel `shouldNotBe` secondPageModel {secondHighlights = ["Different"]}
-      spacesPageModel `shouldNotBe` spacesPageModel {spacesSummary = "Different"}
+      todoPageModel `shouldNotBe` todoPageModel {todoSummary = "Different"}
       notFoundPageModel `shouldNotBe` notFoundPageModel {notFoundSummary = "Missing"}
       SecondPage secondPageModel `shouldNotBe` NotFoundPage notFoundPageModel
-      SpacesPage spacesPageModel `shouldNotBe` SecondPage secondPageModel
+      TodoPage todoPageModel `shouldNotBe` SecondPage secondPageModel
       RegistrationPage RegisterAccountTarget emptyRegistrationForm `shouldNotBe` SecondPage secondPageModel
       EmailVerificationPage VerifyEmailTarget (VerificationForm Text.empty Nothing False) `shouldNotBe` SecondPage secondPageModel
       MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Nothing [] False Nothing False) `shouldNotBe` SecondPage secondPageModel
@@ -613,10 +613,10 @@ spec =
                 secondErrorMessage = Nothing,
                 secondPrimaryAction = callToAction
               }
-          spacesPageModel =
-            SpacesPageModel
-              { spacesHeading = "Site under construction",
-                spacesSummary = "Follow this space."
+          todoPageModel =
+            TodoPageModel
+              { todoHeading = "TODO",
+                todoSummary = "Placeholder page."
               }
           notFoundPageModel =
             NotFoundPageModel
@@ -628,13 +628,13 @@ spec =
       show Https `shouldBe` "Https"
       show HomeRoute `shouldBe` "HomeRoute"
       show SecondRoute `shouldBe` "SecondRoute"
-      show SpacesRoute `shouldBe` "SpacesRoute"
+      show TodoRoute `shouldBe` "TodoRoute"
       show StatusApiRoute `shouldBe` "StatusApiRoute"
       show NotFoundRoute `shouldBe` "NotFoundRoute"
-      show spacesPageModel
-        `shouldBe` "SpacesPageModel {spacesHeading = \"Site under construction\", spacesSummary = \"Follow this space.\"}"
-      show [spacesPageModel]
-        `shouldBe` "[SpacesPageModel {spacesHeading = \"Site under construction\", spacesSummary = \"Follow this space.\"}]"
+      show todoPageModel
+        `shouldBe` "TodoPageModel {todoHeading = \"TODO\", todoSummary = \"Placeholder page.\"}"
+      show [todoPageModel]
+        `shouldBe` "[TodoPageModel {todoHeading = \"TODO\", todoSummary = \"Placeholder page.\"}]"
       shouldBeParenthesized (showsPrec 11 certbotConfig "")
       shouldBeParenthesized (showsPrec 11 certbotConfig "")
       shouldBeParenthesized (showsPrec 11 acmeConfig "")
@@ -650,10 +650,10 @@ spec =
       shouldBeParenthesized (showsPrec 11 requestContext "")
       shouldBeParenthesized (showsPrec 11 callToAction "")
       shouldBeParenthesized (showsPrec 11 secondPageModel "")
-      shouldBeParenthesized (showsPrec 11 spacesPageModel "")
+      shouldBeParenthesized (showsPrec 11 todoPageModel "")
       shouldBeParenthesized (showsPrec 11 notFoundPageModel "")
       shouldBeParenthesized (showsPrec 11 (SecondPage secondPageModel) "")
-      shouldBeParenthesized (showsPrec 11 (SpacesPage spacesPageModel) "")
+      shouldBeParenthesized (showsPrec 11 (TodoPage todoPageModel) "")
       shouldBeParenthesized (showsPrec 11 (NotFoundPage notFoundPageModel) "")
       shouldBeParenthesized (showsPrec 11 (UnsupportedLocalePrefix "de") "")
       shouldBeParenthesized (showsPrec 11 (UnsupportedPath "/missing") "")

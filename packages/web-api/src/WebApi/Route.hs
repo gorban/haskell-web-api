@@ -11,7 +11,7 @@ module WebApi.Route
         Api,
         HomeRoute,
         SecondRoute,
-        SpacesRoute,
+        TodoRoute,
         RegistrationRoute,
         EmailVerificationRoute,
         MfaEnrollmentRoute,
@@ -164,7 +164,7 @@ data RouteSelectionError
 data PageRoute
   = HomePage
   | SecondPage
-  | SpacesPage
+  | TodoPage
   | RegistrationPage
   | EmailVerificationPage
   | MfaEnrollmentPage
@@ -195,8 +195,8 @@ pattern HomeRoute = Page HomePage
 pattern SecondRoute :: AppRoute
 pattern SecondRoute = Page SecondPage
 
-pattern SpacesRoute :: AppRoute
-pattern SpacesRoute = Page SpacesPage
+pattern TodoRoute :: AppRoute
+pattern TodoRoute = Page TodoPage
 
 pattern RegistrationRoute :: AppRoute
 pattern RegistrationRoute = Page RegistrationPage
@@ -243,7 +243,7 @@ pattern ApiNotFoundRoute = Api ApiNotFound
 {-# COMPLETE
   HomeRoute,
   SecondRoute,
-  SpacesRoute,
+  TodoRoute,
   RegistrationRoute,
   EmailVerificationRoute,
   MfaEnrollmentRoute,
@@ -265,7 +265,7 @@ instance Show AppRoute where
     case route of
       HomeRoute -> "HomeRoute"
       SecondRoute -> "SecondRoute"
-      SpacesRoute -> "SpacesRoute"
+      TodoRoute -> "TodoRoute"
       RegistrationRoute -> "RegistrationRoute"
       EmailVerificationRoute -> "EmailVerificationRoute"
       MfaEnrollmentRoute -> "MfaEnrollmentRoute"
@@ -511,7 +511,7 @@ endpointMetadata route =
   case route of
     HomeRoute -> html "web.home" "/{locale}"
     SecondRoute -> html "web.second" "/{locale}/second"
-    SpacesRoute -> html "web.spaces" "/{locale}/spaces"
+    TodoRoute -> html "web.todo" "/{locale}/todo"
     RegistrationRoute -> html "account.registration" "/{locale}/register"
     EmailVerificationRoute -> html "account.email-verification" "/{locale}/verify"
     MfaEnrollmentRoute -> html "account.mfa-enrollment" "/{locale}/mfa"
@@ -571,7 +571,7 @@ pageRouteMetadata pageRoute =
   case pageRoute of
     HomePage -> RouteMetadata Nothing Text.empty "Home" []
     SecondPage -> RouteMetadata (Just "second") "/second" "Second" ["second-page"]
-    SpacesPage -> RouteMetadata (Just "spaces") "/spaces" "Spaces" []
+    TodoPage -> RouteMetadata (Just "todo") "/todo" "TODO" []
     RegistrationPage -> RouteMetadata (Just "register") "/register" "Create account" []
     EmailVerificationPage -> RouteMetadata (Just "verify") "/verify" "Verify email" []
     MfaEnrollmentPage -> RouteMetadata (Just "mfa") "/mfa" "Set up authenticator" []

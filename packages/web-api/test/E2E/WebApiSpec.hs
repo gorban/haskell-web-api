@@ -57,13 +57,13 @@ spec =
       aroundAllWith (withBrowserServer buildApp) $
         parallel $
           describe "default application" $ do
-            it "redirects the root route to the complete Spaces SSR document" $ \(browser, server) -> do
+            it "redirects the root route to the complete TODO SSR document" $ \(browser, server) -> do
               let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
               runBrowserSpec browser do
                 visit homeUrl
                 assertAllObserved do
-                  currentUrl `shouldEqual` (HarchWeb.localServerBaseUrl server <> "/spaces")
-                  byRole Heading `shouldHaveText` "Site under construction"
+                  currentUrl `shouldEqual` (HarchWeb.localServerBaseUrl server <> "/todo")
+                  byRole Heading `shouldHaveText` "TODO"
 
             it "keeps direct second-page loads and script-disabled root redirects usable" $ \(browser, server) -> do
               let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
@@ -73,38 +73,38 @@ spec =
                 assertAllObserved $ byRole Heading `shouldHaveText` "Second"
                 visitWithoutScripts homeUrl
                 assertAllObserved do
-                  currentUrl `shouldEqual` (HarchWeb.localServerBaseUrl server <> "/spaces")
-                  byRole Heading `shouldHaveText` "Site under construction"
+                  currentUrl `shouldEqual` (HarchWeb.localServerBaseUrl server <> "/todo")
+                  byRole Heading `shouldHaveText` "TODO"
 
-            it "redirects Spanish roots to localized Spaces SSR content while scripts are disabled" $ \(browser, server) -> do
+            it "redirects Spanish roots to localized TODO SSR content while scripts are disabled" $ \(browser, server) -> do
               let spanishHomeUrl = HarchWeb.localServerBaseUrl server <> "/es"
               runBrowserSpec browser do
                 visitWithoutScripts spanishHomeUrl
                 assertAllObserved do
-                  currentUrl `shouldEqual` (HarchWeb.localServerBaseUrl server <> "/es/spaces")
-                  byRole Heading `shouldHaveText` "Sitio en construcción"
+                  currentUrl `shouldEqual` (HarchWeb.localServerBaseUrl server <> "/es/todo")
+                  byRole Heading `shouldHaveText` "TODO"
                   attributeValue (css "html") "lang" `shouldEqual` Just "es"
 
-            it "serves the app-home spaces placeholder through SSR and enhanced navigation" $ \(browser, server) -> do
+            it "serves the TODO placeholder page through SSR and enhanced navigation" $ \(browser, server) -> do
               let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
                   secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
-                  spacesUrl = HarchWeb.localServerBaseUrl server <> "/spaces"
-                  spanishSpacesUrl = HarchWeb.localServerBaseUrl server <> "/es/spaces"
+                  todoUrl = HarchWeb.localServerBaseUrl server <> "/todo"
+                  spanishTodoUrl = HarchWeb.localServerBaseUrl server <> "/es/todo"
               runBrowserSpec browser do
                 visit homeUrl
                 assertAllObserved do
-                  currentUrl `shouldEqual` spacesUrl
-                  byRole Heading `shouldHaveText` "Site under construction"
+                  currentUrl `shouldEqual` todoUrl
+                  byRole Heading `shouldHaveText` "TODO"
                 visit secondUrl
-                click (byRole Link `named` "Spaces")
+                click (byRole Link `named` "TODO")
                 assertAllObserved do
-                  currentUrl `shouldEqual` spacesUrl
-                  byRole Heading `shouldHaveText` "Site under construction"
+                  currentUrl `shouldEqual` todoUrl
+                  byRole Heading `shouldHaveText` "TODO"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
-                visitWithoutScripts spanishSpacesUrl
+                visitWithoutScripts spanishTodoUrl
                 assertAllObserved do
-                  byRole Heading `shouldHaveText` "Sitio en construcción"
-                  byText "Sigan este espacio." `shouldHaveText` "Sigan este espacio."
+                  byRole Heading `shouldHaveText` "TODO"
+                  byText "Página provisional." `shouldHaveText` "Página provisional."
 
             it "opens the language picker accessibly and navigates its typed choices" $ \(browser, server) -> do
               let baseUrl = HarchWeb.localServerBaseUrl server
@@ -204,7 +204,7 @@ spec =
             it "focuses and announces one lifecycle for keyboard navigation, history, and final redirected URLs" $ \(browser, server) -> do
               let baseUrl = HarchWeb.localServerBaseUrl server
                   secondUrl = baseUrl <> "/second"
-                  spacesUrl = baseUrl <> "/spaces"
+                  todoUrl = baseUrl <> "/todo"
                   mainContent = css "#app-main"
                   routeStatus = css "[data-navigation-route-status]"
               runBrowserSpec browser do
@@ -214,18 +214,18 @@ spec =
                 _ <-
                   runPageScript
                     "window.__ahi8HistoryLength = history.length; const status = document.querySelector('[data-navigation-route-status]'); let count = 0; status.dataset.testMutationCount = '0'; new MutationObserver((records) => { count += records.filter((record) => record.type === 'childList' || record.type === 'characterData').length; status.dataset.testMutationCount = String(count); }).observe(status, { childList: true, characterData: true, subtree: true }); document.documentElement.style.zoom = '2'; true"
-                press (byRole Link `named` "Spaces") "Enter"
+                press (byRole Link `named` "TODO") "Enter"
                 assertAllObserved do
-                  currentUrl `shouldEqual` spacesUrl
+                  currentUrl `shouldEqual` todoUrl
                   isFocused mainContent `satisfies` id
                 _ <-
                   runPageScript
                     "const main = document.querySelector('#app-main'); const box = main.getBoundingClientRect(); const sampleX = Math.min(window.innerWidth - 1, Math.max(0, box.left + 1)); const sampleY = Math.min(window.innerHeight - 1, Math.max(0, box.top + 1)); const topElement = document.elementFromPoint(sampleX, sampleY); const style = getComputedStyle(main); main.dataset.testFocusUnobscured = String(document.activeElement === main && box.top >= 0 && box.top < window.innerHeight && (topElement === main || main.contains(topElement)) && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0); true"
                 assertAllObserved do
-                  currentUrl `shouldEqual` spacesUrl
-                  css "title" `shouldHaveText` "web-api: Spaces"
-                  byRole Heading `shouldHaveText` "Site under construction"
-                  routeStatus `shouldHaveText` "web-api: Spaces"
+                  currentUrl `shouldEqual` todoUrl
+                  css "title" `shouldHaveText` "web-api: TODO"
+                  byRole Heading `shouldHaveText` "TODO"
+                  routeStatus `shouldHaveText` "web-api: TODO"
                   isFocused mainContent `satisfies` id
                   attributeValue routeStatus "data-test-mutation-count" `shouldEqual` Just "1"
                   attributeValue mainContent "data-test-focus-unobscured" `shouldEqual` Just "true"
@@ -238,25 +238,25 @@ spec =
                   isFocused mainContent `satisfies` id
                 historyForward
                 assertAllObserved do
-                  currentUrl `shouldEqual` spacesUrl
-                  routeStatus `shouldHaveText` "web-api: Spaces"
+                  currentUrl `shouldEqual` todoUrl
+                  routeStatus `shouldHaveText` "web-api: TODO"
                   attributeValue routeStatus "data-test-mutation-count" `shouldEqual` Just "3"
-                  attributeValue (byRole Link `named` "Spaces") "aria-current" `shouldEqual` Just "page"
+                  attributeValue (byRole Link `named` "TODO") "aria-current" `shouldEqual` Just "page"
                 _ <- runPageScript "document.querySelector('#app-main').dataset.testHistoryStable = String(history.length === window.__ahi8HistoryLength + 1); true"
                 assertAllObserved $ attributeValue mainContent "data-test-history-stable" `shouldEqual` Just "true"
                 visit secondUrl
                 press (byRole Link `named` "Home") "Enter"
                 assertAllObserved do
-                  currentUrl `shouldEqual` spacesUrl
-                  css "title" `shouldHaveText` "web-api: Spaces"
-                  routeStatus `shouldHaveText` "web-api: Spaces"
+                  currentUrl `shouldEqual` todoUrl
+                  css "title" `shouldHaveText` "web-api: TODO"
+                  routeStatus `shouldHaveText` "web-api: TODO"
                   isFocused mainContent `satisfies` id
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
 
             it "falls back natively for failed, incompatible, and unsafe final responses without announcing success" $ \(browser, server) -> do
               let baseUrl = HarchWeb.localServerBaseUrl server
                   secondUrl = baseUrl <> "/second"
-                  spacesUrl = baseUrl <> "/spaces"
+                  todoUrl = baseUrl <> "/todo"
                   routeStatus = byRole Status
                   assertNativeFallback = assertAllObserved do
                     currentUrl `shouldEqual` secondUrl
@@ -264,24 +264,24 @@ spec =
                     routeStatus `shouldHaveText` ""
                     $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 1}|])
               runBrowserSpec browser do
-                visit spacesUrl
+                visit todoUrl
                 blockRequestsMatching "**/second"
                 press (byRole Link `named` "Second") "Enter"
                 failBlockedRequestsMatching "**/second"
                 assertNativeFallback
-                visit spacesUrl
+                visit todoUrl
                 _ <-
                   runPageScript
                     "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: response.url, text: async () => '<!DOCTYPE html><html><head><title>Incompatible</title></head><body><main>Missing lifecycle markers</main></body></html>' }; }; true"
                 press (byRole Link `named` "Second") "Enter"
                 assertNativeFallback
-                visit spacesUrl
+                visit todoUrl
                 _ <-
                   runPageScript
                     "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: 'https://outside.example/redirect', text: () => response.text() }; }; true"
                 press (byRole Link `named` "Second") "Enter"
                 assertNativeFallback
-                visit spacesUrl
+                visit todoUrl
                 _ <-
                   runPageScript
                     "const originalFetch = window.fetch.bind(window); window.fetch = async (...arguments_) => { const response = await originalFetch(...arguments_); return { ok: response.ok, url: '://malformed', text: () => response.text() }; }; true"
@@ -291,14 +291,14 @@ spec =
             it "keeps delayed-runtime and scripts-disabled keyboard navigation native, including the skip link" $ \(browser, server) -> do
               let baseUrl = HarchWeb.localServerBaseUrl server
                   secondUrl = baseUrl <> "/second"
-                  spacesUrl = baseUrl <> "/spaces"
+                  todoUrl = baseUrl <> "/todo"
                   mainContent = css "#app-main"
               runBrowserSpec browser do
                 blockRequestsMatching "**/assets/navigation.js"
                 visit secondUrl
-                press (byRole Link `named` "Spaces") "Enter"
+                press (byRole Link `named` "TODO") "Enter"
                 assertAllObserved do
-                  currentUrl `shouldEqual` spacesUrl
+                  currentUrl `shouldEqual` todoUrl
                   byRole Status `shouldHaveText` ""
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
                 releaseRequestsMatching "**/assets/navigation.js"
@@ -307,10 +307,10 @@ spec =
                 assertAllObserved $ isFocused (byRole Link `named` "Skip to main content") `satisfies` id
                 press (byRole Link `named` "Skip to main content") "Enter"
                 assertAllObserved $ isFocused mainContent `satisfies` id
-                press (byRole Link `named` "Spaces") "Enter"
+                press (byRole Link `named` "TODO") "Enter"
                 assertAllObserved do
-                  currentUrl `shouldEqual` spacesUrl
-                  byRole Heading `shouldHaveText` "Site under construction"
+                  currentUrl `shouldEqual` todoUrl
+                  byRole Heading `shouldHaveText` "TODO"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
 
             it "accepts pasted and autofill-compatible login values, clears secrets, and keeps focus visible when narrow and zoomed" $ \(browser, server) -> do
@@ -436,11 +436,11 @@ spec =
 
             it "keeps only the newest overlapping enhanced navigation lifecycle" $ \(browser, server) -> do
               let baseUrl = HarchWeb.localServerBaseUrl server
-                  spacesUrl = baseUrl <> "/spaces"
+                  todoUrl = baseUrl <> "/todo"
                   loginUrl = baseUrl <> "/login"
                   routeStatus = css "[data-navigation-route-status]"
               runBrowserSpec browser do
-                visit spacesUrl
+                visit todoUrl
                 _ <-
                   runPageScript
                     "new Promise((resolve) => { if (window.__harchNavigationRuntimeReady) { resolve(true); return; } window.addEventListener('harch:navigation-runtime-ready', () => resolve(true), { once: true }); })"
@@ -664,7 +664,7 @@ spec =
             let security = accountJwtSecurity runtime (accountWorkflowSessionStore workflow)
             HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflowAndSecurity appConfig defaultPageRepository workflow security) $ \server -> do
               let profileUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/profile"
-                  spacesUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/spaces"
+                  todoUrl = Text.replace "127.0.0.1" "localhost" (HarchWeb.localServerBaseUrl server) <> "/todo"
                   reauthenticationDialog = css "#reauthentication-dialog"
                   identifierField = byLabel "Email address or username"
                   passwordField = byLabel "Password"
@@ -684,13 +684,13 @@ spec =
                 waitForBlockedRequestsMatching "**/login"
                 _ <- runPageScript "Array.from(document.querySelectorAll('nav a')).find((link) => link.textContent === 'Home')?.click(); true"
                 assertAllObserved do
-                  currentUrl `shouldEqual` spacesUrl
-                  byRole Heading `shouldHaveText` "Site under construction"
+                  currentUrl `shouldEqual` todoUrl
+                  byRole Heading `shouldHaveText` "TODO"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 2}|])
                 releaseRequestsMatching "**/login"
                 assertAllObserved do
-                  currentUrl `shouldEqual` spacesUrl
-                  byRole Heading `shouldHaveText` "Site under construction"
+                  currentUrl `shouldEqual` todoUrl
+                  byRole Heading `shouldHaveText` "TODO"
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 2}|])
             readIORef deliveryCountReference `shouldReturn` 0
 
