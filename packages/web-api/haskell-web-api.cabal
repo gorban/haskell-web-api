@@ -158,6 +158,7 @@ library
     WebApi.Postgres.Runtime
     WebApi.Postgres.SessionRepository
     WebApi.Postgres.VerificationResendAuditRepository
+    WebApi.Route.Context
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
