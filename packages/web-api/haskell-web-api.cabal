@@ -120,6 +120,7 @@ library
     WebApi.VerificationResendAudit
 
   other-modules:
+    WebApi.AccountJwt.Runtime
     WebApi.AccountPages.Actions.Login
     WebApi.AccountPages.Actions.LoginSubmission
     WebApi.AccountPages.Actions.Profile
