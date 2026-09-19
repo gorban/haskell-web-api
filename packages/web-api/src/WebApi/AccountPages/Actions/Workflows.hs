@@ -23,56 +23,35 @@ module WebApi.AccountPages.Actions.Workflows
   )
 where
 
-import Control.Applicative ((<|>))
 import Control.Monad.IO.Class (liftIO)
 import Crypto.Error (maybeCryptoError)
 import Data.Foldable (toList)
-import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
 import HarchWeb.Account qualified as Account
-import HarchWeb.Email qualified as Email
-import HarchWeb.LoginProtection qualified as LoginProtection
-import HarchWeb.Observability qualified as Observability
 import HarchWeb.Password qualified as Password
 import HarchWeb.RecoveryCode qualified as RecoveryCode
 import HarchWeb.Secret (encryptSecret)
-import HarchWeb.Session
-  ( OpaqueSession (..),
-    SessionId,
-    renderSessionCookie,
-    sessionId,
-  )
+import HarchWeb.Session (OpaqueSession (..), SessionId)
 import HarchWeb.Time (UnixTimeNanoseconds)
 import HarchWeb.Totp qualified as Totp
-import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
 import WebApi.AccountJwt (AccountJwtIssuer (..))
 import WebApi.AccountPages.Actions.Common
 import WebApi.AccountPages.Actions.Contract
-import WebApi.AccountPages.Actions.Login qualified as Login
+import WebApi.AccountPages.Actions.LoginSubmission qualified as LoginSubmission
 import WebApi.AccountPages.Actions.Profile qualified as Profile
 import WebApi.AccountPages.Actions.Registration qualified as Registration
-import WebApi.AccountPages.FieldIds
-  ( loginAuthenticatorCodeId,
-    loginIdentifierId,
-    loginPasswordId,
-    loginProofId,
-    loginRecoveryCodeId,
-    loginSummaryId,
-    mfaCodeId,
-  )
+import WebApi.AccountPages.FieldIds (mfaCodeId)
 import WebApi.AccountPages.Forms
-import WebApi.AccountPages.Validation (Validation, invalid, valid, validate3, validationResult)
 import WebApi.AccountPrincipal (accountPrincipalAccountId, accountPrincipalSessionId)
 import WebApi.ActivityAudit
   ( AccountActivity (..),
-    AccountAuditEvent (AccountSessionEnded, AuthenticationRejected),
+    AccountAuditEvent (AccountSessionEnded),
     ActivityAuditStore (..),
     ActivityAuditStoreError (..),
-    AuditAuthenticationStage (..),
     AuditSessionEndReason (ExplicitLogout),
     auditRouteObservationFromTrusted,
   )
@@ -85,17 +64,6 @@ import WebApi.AppEffect
     throwAppFailure,
   )
 import WebApi.Localization (AppMessage (..))
-import WebApi.Login
-  ( LoginIdentifier (..),
-    LoginStage (..),
-    LoginThrottleContext (..),
-    MfaLoginProof (..),
-    PasswordLoginEnvironment (..),
-    PasswordMfaLoginResult (..),
-    SecondFactorContext (..),
-    completePasswordLoginWithIdentifier,
-    defaultPasswordRehasher,
-  )
 import WebApi.MfaEnrollment
   ( MfaConfirmationEnvironment (..),
     MfaEnrollmentConfirmation (..),
@@ -111,7 +79,6 @@ import WebApi.Session
     MfaEnrollmentSessionStore (..),
     MfaEnrollmentSessionStoreError,
     invalidateAccountSession,
-    mfaEnrollmentSessionCookiePolicy,
   )
 
 handleRegistrationSubmission :: AccountActionRequest -> RegistrationSubmission -> AccountActionWorkflow
@@ -263,188 +230,11 @@ mfaEnrollmentFailureDiagnostics failureCodeValue errorValue =
 
 handleLoginSubmission :: AccountActionRequest -> LoginSubmission -> AccountActionWorkflow
 handleLoginSubmission actionRequest submission =
-  case parseLoginForm actionRequest submission of
-    Left response -> pure response
-    Right (identifierValue, proofChoice, passwordValue, identifier, proof) -> do
-      (nowNanoseconds, loginResult) <- completePasswordLoginNow actionRequest identifier passwordValue proof
-      interpretLoginResult actionRequest identifierValue proofChoice nowNanoseconds loginResult
-
-completePasswordLoginNow :: AccountActionRequest -> LoginIdentifier -> Text -> MfaLoginProof -> AppM publicFailure (UnixTimeNanoseconds, PasswordMfaLoginResult)
-completePasswordLoginNow actionRequest identifier passwordValue proof = do
-  workflow <- accountWorkflow
-  liftIO $ do
-    nowNanoseconds <- accountWorkflowClock workflow
-    loginResult <-
-      completePasswordLoginWithIdentifier
-        SecondFactorContext
-          { secondFactorPasswordLoginEnvironment =
-              PasswordLoginEnvironment
-                { passwordLoginCredentialStore = accountWorkflowCredentialStore workflow,
-                  passwordLoginMfaStore = accountWorkflowMfaStore workflow,
-                  passwordLoginThrottle =
-                    LoginThrottleContext
-                      { loginThrottleStore = accountWorkflowLoginAttemptStore workflow,
-                        loginThrottlePolicy = LoginProtection.defaultLoginProtectionPolicy,
-                        loginThrottleClientAddress = requestClientAddress (HarchWeb.clientActionContext actionRequest),
-                        loginThrottleNow = nowNanoseconds
-                      },
-                  passwordLoginWorkGate = accountWorkflowPasswordWorkGate workflow,
-                  passwordLoginRehasher = defaultPasswordRehasher
-                },
-            secondFactorEncryptionKey = accountWorkflowTotpEncryptionKey workflow,
-            secondFactorNowNanoseconds = nowNanoseconds,
-            secondFactorNowSeconds = accountWorkflowTotpClock workflow nowNanoseconds,
-            secondFactorProof = proof
-          }
-        identifier
-        (Password.mkPassword passwordValue)
-    pure (nowNanoseconds, loginResult)
-
-parseLoginForm ::
-  AccountActionRequest ->
-  LoginSubmission ->
-  Either AccountActionResponse (Text, LoginProofChoice, Text, LoginIdentifier, MfaLoginProof)
-parseLoginForm actionRequest submission =
-  let identifierValue = loginIdentifierValue submission
-      proofChoice = loginProofChoiceValue submission
-      parsed =
-        validate3
-          (\identifier password (selectedChoice, proof) -> (identifierValue, selectedChoice, password, identifier, proof))
-          (validateLoginIdentifier identifierValue)
-          (validateLoginPassword (loginPasswordValue submission))
-          (validateLoginProof submission)
-   in case validationResult parsed of
-        Left errors ->
-          Left
-            ( loginResponse
-                (accountActionResponseContext actionRequest Http.status422 (Just (loginValidationFocus errors)) [])
-                (LoginForm identifierValue proofChoice (FormRejected errors))
-            )
-        Right validLogin -> Right validLogin
-
-validateLoginIdentifier :: Text -> Validation LoginValidationError LoginIdentifier
-validateLoginIdentifier identifierValue =
-  case (LoginEmailAddress <$> Email.mkEmailAddress identifierValue) <|> (LoginUsername <$> Username.mkUsername identifierValue) of
-    Nothing -> invalid LoginIdentifierInvalid
-    Just identifier -> valid identifier
-
-validateLoginPassword :: Text -> Validation LoginValidationError Text
-validateLoginPassword passwordValue =
-  if validPassword passwordValue then valid passwordValue else invalid LoginPasswordMissing
-
-validateLoginProof :: LoginSubmission -> Validation LoginValidationError (LoginProofChoice, MfaLoginProof)
-validateLoginProof submission =
-  case loginProofChoiceValue submission of
-    Nothing -> invalid LoginProofMissing
-    Just LoginAuthenticatorProof ->
-      case Totp.mkTotpCode (loginTotpCodeValue submission) of
-        Nothing -> invalid LoginAuthenticatorCodeInvalid
-        Just code -> valid (LoginAuthenticatorProof, TotpLoginProof code)
-    Just LoginRecoveryProof ->
-      case RecoveryCode.mkRecoveryCode (loginRecoveryCodeValue submission) of
-        Nothing -> invalid LoginRecoveryCodeInvalid
-        Just code -> valid (LoginRecoveryProof, RecoveryCodeLoginProof code)
-
-loginValidationFocus :: NonEmpty LoginValidationError -> HarchWeb.ElementId
-loginValidationFocus (single :| []) = loginValidationErrorId single
-loginValidationFocus _ = loginSummaryId
-
-loginValidationErrorId :: LoginValidationError -> HarchWeb.ElementId
-loginValidationErrorId validationError =
-  case validationError of
-    LoginIdentifierInvalid -> loginIdentifierId
-    LoginPasswordMissing -> loginPasswordId
-    LoginProofMissing -> loginProofId
-    LoginAuthenticatorCodeInvalid -> loginAuthenticatorCodeId
-    LoginRecoveryCodeInvalid -> loginRecoveryCodeId
-
-interpretLoginResult ::
-  AccountActionRequest ->
-  Text ->
-  LoginProofChoice ->
-  UnixTimeNanoseconds ->
-  PasswordMfaLoginResult ->
-  AccountActionWorkflow
-interpretLoginResult actionRequest identifierValue proofChoice nowNanoseconds loginResult =
-  let loginForm message statusKind = LoginForm identifierValue (Just proofChoice) (FormStatusMessage (FormStatus message statusKind))
-      response status message statusKind focusId headers = loginResponse (accountActionResponseContext actionRequest status focusId headers) (loginForm message statusKind)
-      unavailable focusId = response Http.status503 (localized actionRequest SignInUnavailable) FormStatusFailure focusId []
-      proofFocus = loginProofFocusId proofChoice
-   in case loginResult of
-        PasswordMfaLoginAccepted accountId ->
-          Login.handleAcceptedLogin
-            Login.AcceptedLoginInput
-              { Login.acceptedLoginRequest = actionRequest,
-                Login.acceptedLoginIdentifier = identifierValue,
-                Login.acceptedLoginProof = proofChoice,
-                Login.acceptedLoginNowNanoseconds = nowNanoseconds,
-                Login.acceptedLoginAccountId = accountId
-              }
-        PasswordMfaLoginEmailVerificationRequired _ -> pure (response Http.status403 (localized actionRequest VerifyEmailBeforeSignIn) FormStatusFailure Nothing [])
-        PasswordMfaLoginEnrollmentRequired accountId -> issueLoginEnrollmentSession actionRequest identifierValue proofChoice nowNanoseconds accountId
-        PasswordMfaLoginRejected -> pure (response Http.status422 (localized actionRequest SignInRejected) FormStatusFailure (Just proofFocus) [])
-        PasswordMfaLoginKnownAccountRejected accountId loginStage ->
-          appendKnownLoginRejection
-            actionRequest
-            accountId
-            loginStage
-            (response Http.status422 (localized actionRequest SignInRejected) FormStatusFailure (Just proofFocus) [])
-        PasswordMfaLoginThrottled _retryAfterNanoseconds -> pure (response Http.status429 (localized actionRequest SignInThrottled) FormStatusFailure (Just loginIdentifierId) [])
-        PasswordMfaLoginCredentialStoreError storeError -> throwClientActionFailure (unavailable (Just loginIdentifierId)) LoginCredentialStoreFailure "AccountCredentialStoreError" (credentialStoreErrorMessage storeError)
-        PasswordMfaLoginMfaStoreError storeError -> throwClientActionFailure (unavailable (Just proofFocus)) LoginMfaStoreFailure "MfaStoreError" (mfaStoreErrorMessage storeError)
-        PasswordMfaLoginAttemptStoreError storeError -> throwClientActionFailure (unavailable (Just loginIdentifierId)) LoginAttemptStoreFailure "LoginAttemptStoreError" (loginAttemptStoreErrorMessage storeError)
-        PasswordMfaLoginPasswordWorkBudgetExhausted -> throwClientActionFailure (unavailable (Just loginIdentifierId)) LoginPasswordWorkBudgetFailure "PasswordWorkBudgetExhausted" "password work budget is exhausted"
-        PasswordMfaLoginCorruptEnrollment -> throwClientActionFailure (unavailable (Just proofFocus)) LoginCorruptEnrollmentFailure "CorruptTotpEnrollment" "stored MFA enrollment could not be decoded"
-
-loginProofFocusId :: LoginProofChoice -> HarchWeb.ElementId
-loginProofFocusId proofChoice =
-  case proofChoice of
-    LoginAuthenticatorProof -> loginAuthenticatorCodeId
-    LoginRecoveryProof -> loginRecoveryCodeId
-
-appendKnownLoginRejection :: AccountActionRequest -> Account.AccountId -> LoginStage -> AccountActionResponse -> AccountActionWorkflow
-appendKnownLoginRejection actionRequest accountId loginStage deniedResponse =
-  case knownLoginRejectionActivity actionRequest accountId loginStage of
-    Left activityError -> pure (attachBestEffortAuditFailure KnownAuthenticationRejectionAudit activityError deniedResponse)
-    Right activity -> do
-      workflow <- accountWorkflow
-      appendResult <- liftIO (appendAccountActivity (accountWorkflowActivityAuditStore workflow) activity)
-      pure (either (\storeError -> attachBestEffortAuditFailure KnownAuthenticationRejectionAudit storeError deniedResponse) (const deniedResponse) appendResult)
-
-knownLoginRejectionActivity :: AccountActionRequest -> Account.AccountId -> LoginStage -> Either ActivityAuditStoreError AccountActivity
-knownLoginRejectionActivity actionRequest accountId loginStage = do
-  requestId <- maybe (Left ActivityAuditCorruptResult) Right (requestCorrelationId context)
-  route <- traverse (either (const (Left ActivityAuditCorruptResult)) Right . auditRouteObservationFromTrusted) (requestRouteObservation context)
-  pure
-    AccountActivity
-      { activitySubject = accountId,
-        activityRequestId = requestId,
-        activityEvent = AuthenticationRejected (auditAuthenticationStage loginStage),
-        activityRoute = route
+  LoginSubmission.handleLoginWorkflow
+    LoginSubmission.LoginWorkflowInput
+      { LoginSubmission.loginWorkflowRequest = actionRequest,
+        LoginSubmission.loginWorkflowSubmission = submission
       }
-  where
-    context = HarchWeb.clientActionContext actionRequest
-
-auditAuthenticationStage :: LoginStage -> AuditAuthenticationStage
-auditAuthenticationStage loginStage =
-  case loginStage of
-    PasswordLoginStage -> PasswordAuthenticationStage
-    SecondFactorLoginStage -> SecondFactorAuthenticationStage
-
--- | A correct password already proves account ownership even though MFA
--- enrollment is still outstanding, so this is the second legitimate place
--- (with email verification, above) to grant an 'issueMfaEnrollmentSession'
--- instead of a dead-end rejection with no path forward — see the AM
--- decision record on 'handleMfaEnrollmentSubmission' for why this session
--- is deliberately not the same 'issueAccountSession' full login grants.
-issueLoginEnrollmentSession :: AccountActionRequest -> Text -> LoginProofChoice -> UnixTimeNanoseconds -> Account.AccountId -> AccountActionWorkflow
-issueLoginEnrollmentSession actionRequest identifierValue proofChoice nowNanoseconds accountId = do
-  let form message = LoginForm identifierValue (Just proofChoice) (FormStatusMessage (FormStatus message FormStatusFailure))
-      response headers = loginResponse (accountActionResponseContext actionRequest Http.status403 Nothing headers) (form (localized actionRequest EnrollAuthenticatorBeforeSignIn))
-  issued <- issueMfaEnrollmentSessionNow accountId nowNanoseconds
-  case issued of
-    Right opaqueSession -> pure (response [HarchWeb.csrfClearCookieHeader, setCookieHeader (renderSessionCookie mfaEnrollmentSessionCookiePolicy (sessionId opaqueSession))])
-    Left storeError -> throwClientActionFailure (response []) MfaEnrollmentSessionFailure "MfaEnrollmentSessionStoreError" (mfaEnrollmentSessionStoreErrorMessage storeError)
 
 handleLogout :: AccountActionRequest -> AccountActionWorkflow
 handleLogout actionRequest =
@@ -507,65 +297,6 @@ logoutSuccessResponse actionRequest auditFailure = do
 
 attachLogoutAuditFailure :: ActivityAuditStoreError -> AccountActionResponse -> AccountActionResponse
 attachLogoutAuditFailure = attachBestEffortAuditFailure LogoutAuditAppend
-
-data BestEffortAuditOperation
-  = LogoutAuditAppend
-  | KnownAuthenticationRejectionAudit
-
-attachBestEffortAuditFailure :: BestEffortAuditOperation -> ActivityAuditStoreError -> AccountActionResponse -> AccountActionResponse
-attachBestEffortAuditFailure operation storeError response =
-  response
-    { HarchWeb.clientActionObservabilityAttributes =
-        HarchWeb.clientActionObservabilityAttributes response
-          <> [ Observability.ObservabilityAttribute (bestEffortAuditSignalName operation) (Observability.TextAttribute "true"),
-               Observability.ObservabilityAttribute "account.audit.operation" (Observability.TextAttribute (bestEffortAuditOperationName operation)),
-               Observability.ObservabilityAttribute "account.audit.failure-kind" (Observability.TextAttribute (auditFailureKind storeError))
-             ]
-          <> capacityExceededSignal storeError,
-      HarchWeb.clientActionLogEntries =
-        HarchWeb.clientActionLogEntries response
-          <> ["[" <> bestEffortAuditLogName operation <> "] audit.operation=" <> bestEffortAuditOperationName operation <> " audit.failure-kind=" <> auditFailureKind storeError]
-          <> capacityExceededLog storeError
-    }
-
-bestEffortAuditSignalName :: BestEffortAuditOperation -> Text
-bestEffortAuditSignalName operation =
-  case operation of
-    LogoutAuditAppend -> "app.operational.signal.account.logout.audit-append-failed"
-    KnownAuthenticationRejectionAudit -> "app.operational.signal.account.authentication-rejection.audit-append-failed"
-
-bestEffortAuditLogName :: BestEffortAuditOperation -> Text
-bestEffortAuditLogName operation =
-  case operation of
-    LogoutAuditAppend -> "account.logout.audit-append-failed"
-    KnownAuthenticationRejectionAudit -> "account.authentication-rejection.audit-append-failed"
-
-bestEffortAuditOperationName :: BestEffortAuditOperation -> Text
-bestEffortAuditOperationName operation =
-  case operation of
-    LogoutAuditAppend -> "append"
-    KnownAuthenticationRejectionAudit -> "authentication-rejection"
-
-auditFailureKind :: ActivityAuditStoreError -> Text
-auditFailureKind storeError =
-  case storeError of
-    ActivityAuditUnavailable -> "unavailable"
-    ActivityAuditCapacityExceeded -> "capacity-exhausted"
-    ActivityAuditCorruptResult -> "corrupt-result"
-
-capacityExceededSignal :: ActivityAuditStoreError -> [Observability.ObservabilityAttribute]
-capacityExceededSignal storeError =
-  case storeError of
-    ActivityAuditCapacityExceeded -> [Observability.ObservabilityAttribute "app.operational.signal.audit_capacity_exceeded" (Observability.TextAttribute "true")]
-    ActivityAuditUnavailable -> []
-    ActivityAuditCorruptResult -> []
-
-capacityExceededLog :: ActivityAuditStoreError -> [Text]
-capacityExceededLog storeError =
-  case storeError of
-    ActivityAuditCapacityExceeded -> ["[audit_capacity_exceeded] audit.operation=append"]
-    ActivityAuditUnavailable -> []
-    ActivityAuditCorruptResult -> []
 
 setCookieHeader :: Text -> Http.Header
 setCookieHeader cookie = ("Set-Cookie", TextEncoding.encodeUtf8 cookie)

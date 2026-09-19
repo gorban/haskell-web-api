@@ -23,6 +23,8 @@ module WebApi.AccountPages.Actions.Common
     actionLocale,
     mfaErrorMessage,
     RequiredAuditOperation (..),
+    BestEffortAuditOperation (..),
+    attachBestEffortAuditFailure,
     RequiredAuditFailure (..),
     throwClientActionFailure,
     throwRequiredAuditFailure,
@@ -63,6 +65,7 @@ import WebApi.Account (AccountProfile (..), AccountStoreError (..))
 import WebApi.AccountPages.Actions.Contract (AccountAction, AccountActionTarget (UpdateProfileTarget))
 import WebApi.AccountPages.Forms
 import WebApi.AccountPages.Rendering
+import WebApi.ActivityAudit (ActivityAuditStoreError (..))
 import WebApi.AppEffect
   ( AccountWorkflow (..),
     AppFailure (..),
@@ -199,6 +202,65 @@ accountStoreErrorDetail storeError =
     AccountStoreRequiredAuditUnavailable -> "required audit append failed: unavailable"
     AccountStoreRequiredAuditCapacityExceeded -> "required audit append failed: capacity-exhausted"
     AccountStoreRequiredAuditCorruptResult -> "required audit append failed: corrupt-result"
+
+data BestEffortAuditOperation
+  = LogoutAuditAppend
+  | KnownAuthenticationRejectionAudit
+
+attachBestEffortAuditFailure :: BestEffortAuditOperation -> ActivityAuditStoreError -> AccountActionResponse -> AccountActionResponse
+attachBestEffortAuditFailure operation storeError response =
+  response
+    { HarchWeb.clientActionObservabilityAttributes =
+        HarchWeb.clientActionObservabilityAttributes response
+          <> [ Observability.ObservabilityAttribute (bestEffortAuditSignalName operation) (Observability.TextAttribute "true"),
+               Observability.ObservabilityAttribute "account.audit.operation" (Observability.TextAttribute (bestEffortAuditOperationName operation)),
+               Observability.ObservabilityAttribute "account.audit.failure-kind" (Observability.TextAttribute (auditFailureKind storeError))
+             ]
+          <> capacityExceededSignal storeError,
+      HarchWeb.clientActionLogEntries =
+        HarchWeb.clientActionLogEntries response
+          <> ["[" <> bestEffortAuditLogName operation <> "] audit.operation=" <> bestEffortAuditOperationName operation <> " audit.failure-kind=" <> auditFailureKind storeError]
+          <> capacityExceededLog storeError
+    }
+
+bestEffortAuditSignalName :: BestEffortAuditOperation -> Text
+bestEffortAuditSignalName operation =
+  case operation of
+    LogoutAuditAppend -> "app.operational.signal.account.logout.audit-append-failed"
+    KnownAuthenticationRejectionAudit -> "app.operational.signal.account.authentication-rejection.audit-append-failed"
+
+bestEffortAuditLogName :: BestEffortAuditOperation -> Text
+bestEffortAuditLogName operation =
+  case operation of
+    LogoutAuditAppend -> "account.logout.audit-append-failed"
+    KnownAuthenticationRejectionAudit -> "account.authentication-rejection.audit-append-failed"
+
+bestEffortAuditOperationName :: BestEffortAuditOperation -> Text
+bestEffortAuditOperationName operation =
+  case operation of
+    LogoutAuditAppend -> "append"
+    KnownAuthenticationRejectionAudit -> "authentication-rejection"
+
+auditFailureKind :: ActivityAuditStoreError -> Text
+auditFailureKind storeError =
+  case storeError of
+    ActivityAuditUnavailable -> "unavailable"
+    ActivityAuditCapacityExceeded -> "capacity-exhausted"
+    ActivityAuditCorruptResult -> "corrupt-result"
+
+capacityExceededSignal :: ActivityAuditStoreError -> [Observability.ObservabilityAttribute]
+capacityExceededSignal storeError =
+  case storeError of
+    ActivityAuditCapacityExceeded -> [Observability.ObservabilityAttribute "app.operational.signal.audit_capacity_exceeded" (Observability.TextAttribute "true")]
+    ActivityAuditUnavailable -> []
+    ActivityAuditCorruptResult -> []
+
+capacityExceededLog :: ActivityAuditStoreError -> [Text]
+capacityExceededLog storeError =
+  case storeError of
+    ActivityAuditCapacityExceeded -> ["[audit_capacity_exceeded] audit.operation=append"]
+    ActivityAuditUnavailable -> []
+    ActivityAuditCorruptResult -> []
 
 data RequiredAuditOperation
   = AccountSessionIssueAudit

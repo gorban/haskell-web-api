@@ -121,6 +121,7 @@ library
 
   other-modules:
     WebApi.AccountPages.Actions.Login
+    WebApi.AccountPages.Actions.LoginSubmission
     WebApi.AccountPages.Actions.Profile
     WebApi.AccountPages.Actions.Registration
     WebApi.AccountPages.FieldIds
