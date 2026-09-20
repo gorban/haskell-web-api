@@ -9,6 +9,7 @@ packages:
   examples/two-pages/
   packages/core/
   packages/harch-web/
+  packages/harch-web-openapi/
   packages/hspec-expectations-match/
   packages/postgres-database-changes/
   packages/test-core/
@@ -43,7 +44,25 @@ allow-newer:
   serialise:containers,
   serialise:time,
   cborg:base,
-  cborg:containers
+  cborg:containers,
+  -- OpenAPI compatibility exception (AHI-4E, 2026-09-20): the public
+  -- openapi3-3.2.5 and insert-ordered-containers-0.3.0 releases both cap
+  -- Aeson below 2.3, though their released suites pass against frozen
+  -- aeson-2.3.1.0. tools/test-openapi3-compatibility-stack.sh rebuilds both
+  -- official Hackage sources and their full suites. Keep this exact pair
+  -- until releases widen the bounds; do not add a package-wide exception.
+  openapi3:aeson,
+  insert-ordered-containers:aeson
+
+-- openapi3-3.2.5 is the sole current ^>=3.2.5 release. GHC 9.14 reports one
+-- -Wx-partial warning for its sketchSchema use of tail. Keep the warning
+-- visible: the diagnostic gate admits only its exact source header, while
+-- this package-local flag prevents -Werror from rejecting that one upstream
+-- diagnostic. tools/test-openapi3-compatibility-stack.sh proves the unmodified
+-- official release and both upstream suites. Remove this stanza and its
+-- classifier allowance after an upstream release fixes the source.
+package openapi3
+  ghc-options: -Wno-error=x-partial
 
 -- We do not need to capture coverage from third party packages (also, it fails if we try)
 package hspec-expectations-match

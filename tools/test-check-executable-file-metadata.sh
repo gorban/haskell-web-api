@@ -30,6 +30,7 @@ expected_executables=(
   tools/seed-test-database.sh
   tools/test-check-build-diagnostics.sh
   tools/test-tls-compatibility-stack.sh
+  tools/test-openapi3-compatibility-stack.sh
   tools/test-dockerfile-manifest-layer.sh
   tools/test-check-executable-file-metadata.sh
   tools/test-ci-workflow-policy.sh

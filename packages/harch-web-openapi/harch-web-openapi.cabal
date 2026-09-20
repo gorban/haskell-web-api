@@ -1,0 +1,65 @@
+cabal-version: 3.14
+name: harch-web-openapi
+version: 0.1.2.0
+synopsis: Optional OpenAPI interpreter support for Harch Web
+description:
+  Optional OpenAPI data-model support for typed Harch Web API declarations.
+
+homepage: https://github.com/gorban/haskell-web-api
+license: BSD-2-Clause-Patent
+license-file: LICENSE
+author: David Bruck
+maintainer: 1393236+gorban@users.noreply.github.com
+copyright: (c) David Bruck
+category: Web
+build-type: Simple
+
+common common
+  ghc-options:
+    -Wall
+    -Wcompat
+    -Wincomplete-uni-patterns
+    -Wincomplete-record-updates
+    -Wpartial-fields
+    -Wredundant-constraints
+    -Wunused-packages
+
+  default-language: GHC2024
+
+library
+  import: common
+  exposed: True
+  exposed-modules: HarchWeb.OpenApi
+  hs-source-dirs: src
+  build-depends:
+    base ^>=4.22.0.0,
+    openapi3 ^>=3.2.5,
+
+test-suite harch-web-openapi-tests
+  import: common
+  type: exitcode-stdio-1.0
+  hs-source-dirs: test
+  -- hspec-discover imports every test module. Keep this complete and let the
+  -- manifest check verify it against test/ rather than suppress Cabal warnings.
+  other-modules:
+    Unit.HarchWeb.OpenApiSpec
+
+  ghc-options:
+    -F
+    -pgmF=spec-preprocessor
+    -rtsopts
+    -threaded
+    -with-rtsopts=-N
+
+  build-tool-depends:
+    hspec-discover:hspec-discover ^>=2.11.17,
+    test-spec-preprocessor:spec-preprocessor ^>=0.1.2.0,
+
+  main-is: Main.hs
+  build-depends:
+    aeson ^>=2.3.1.0,
+    base ^>=4.22.0.0,
+    bytestring ^>=0.12.2.0,
+    harch-web-openapi ^>=0.1.2.0,
+    hspec ^>=2.11.17,
+    test-core ^>=0.1.2.0,

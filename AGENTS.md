@@ -71,6 +71,7 @@ dependencies from `packages/test-core/playwright-runner` with `npm ci` and
 cabal run haskell-web-api-db -- migrate-and-seed
 ./tools/check-cabal-packages.sh
 ./tools/test-tls-compatibility-stack.sh
+./tools/test-openapi3-compatibility-stack.sh
 ./tools/test-check-executable-file-metadata.sh
 ./tools/check-executable-file-metadata.sh
 ./tools/test-ci-workflow-policy.sh

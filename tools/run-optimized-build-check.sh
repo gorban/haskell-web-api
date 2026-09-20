@@ -26,6 +26,7 @@ cat "$build_log"
 "$repo_root/tools/check-build-diagnostics.sh" \
   --allow-ghc-9-14-tls-compatibility-stack=cborg-0.2.10.0 \
   --allow-ghc-9-14-tls-compatibility-stack=serialise-0.2.6.1 \
+  --allow-ghc-9-14-openapi3-partial=openapi3-3.2.5 \
   "$build_log"
 
 if [ "$build_exit" != 0 ]; then

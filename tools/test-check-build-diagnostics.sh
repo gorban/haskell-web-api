@@ -50,6 +50,29 @@ expect_scoped_tls_compatibility_success() {
   fi
 }
 
+expect_scoped_openapi3_partial_success() {
+  local description="$1"
+  local fixture="$2"
+  local diagnostic_output
+
+  if diagnostic_output="$("$diagnostic_gate" --allow-ghc-9-14-openapi3-partial=openapi3-3.2.5 "$fixture" 2>&1)"; then
+    case "$diagnostic_output" in
+      *'Exact GHC 9.14 openapi3 partial-warning(s) accepted.'*)
+        printf 'PASS: accepts scoped openapi3 partial warning for %s\n' "$description"
+        ;;
+      *)
+        printf 'FAIL: diagnostic gate did not identify the scoped openapi3 partial warning for %s\n' "$description" >&2
+        printf '%s\n' "$diagnostic_output" >&2
+        exit 1
+        ;;
+    esac
+  else
+    printf 'FAIL: diagnostic gate unexpectedly rejected scoped openapi3 partial warning for %s\n' "$description" >&2
+    printf '%s\n' "$diagnostic_output" >&2
+    exit 1
+  fi
+}
+
 expect_failure() {
   local description="$1"
   local fixture="$2"
@@ -76,6 +99,8 @@ unrecognized_deprecation_fixture="$fixture_directory/unrecognized-deprecation.lo
 uppercase_warning_fixture="$fixture_directory/uppercase-warning.log"
 tls_compatibility_warning_fixture="$fixture_directory/tls-compatibility-warning.log"
 unknown_tls_compatibility_warning_fixture="$fixture_directory/unknown-tls-compatibility-warning.log"
+openapi3_partial_warning_fixture="$fixture_directory/openapi3-partial-warning.log"
+unknown_openapi3_partial_warning_fixture="$fixture_directory/unknown-openapi3-partial-warning.log"
 
 : > "$clean_fixture"
 printf '%s\n' "/usr/bin/ld.bfd: warning: type and size of dynamic symbol \`harchzmwebzm0zi1zi2zi0zminplace_HarchWebziEmail_smtpServerHost_closure' are not defined" > "$dynamic_link_warning_fixture"
@@ -96,6 +121,8 @@ printf '%s\n' 'Deprecation warning:' 'An unrecognised deprecation must not be ig
 printf '%s\n' '/usr/bin/ld.bfd: WARNING: libmissing.so, needed by app, not found' > "$uppercase_warning_fixture"
 printf '%s\n' 'src/Codec/CBOR/Read.hs:90:23: warning: [GHC-90584] [-Wderiving-typeable]' > "$tls_compatibility_warning_fixture"
 printf '%s\n' 'src/Codec/CBOR/NewWarning.hs:1:1: warning: [GHC-90177] A new compatibility warning' > "$unknown_tls_compatibility_warning_fixture"
+printf '%s\n' 'src/Data/OpenApi/Internal/Schema.hs:397:43: warning: [GHC-63394] [-Wx-partial]' > "$openapi3_partial_warning_fixture"
+printf '%s\n' 'src/Data/OpenApi/Internal/Schema.hs:398:43: warning: [GHC-63394] [-Wx-partial]' > "$unknown_openapi3_partial_warning_fixture"
 
 expect_success 'a clean build log' "$clean_fixture"
 expect_success \
@@ -116,5 +143,8 @@ expect_failure 'an all-caps WARNING linker diagnostic' "$uppercase_warning_fixtu
 expect_failure 'a TLS compatibility warning without its narrow gate mode' "$tls_compatibility_warning_fixture"
 expect_scoped_tls_compatibility_success 'the explicit upstream compatibility test command' "$tls_compatibility_warning_fixture"
 expect_failure 'an unrecorded warning in the TLS compatibility stack' "$unknown_tls_compatibility_warning_fixture"
+expect_failure 'an openapi3 partial warning without its narrow gate mode' "$openapi3_partial_warning_fixture"
+expect_scoped_openapi3_partial_success 'the explicit OpenAPI compatibility test command' "$openapi3_partial_warning_fixture"
+expect_failure 'a changed source location for the openapi3 partial warning' "$unknown_openapi3_partial_warning_fixture"
 
 printf '%s\n' 'Build diagnostic gate fixture checks passed.'

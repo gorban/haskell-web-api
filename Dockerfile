@@ -76,6 +76,7 @@ COPY examples/two-pages/two-pages-example.cabal examples/two-pages/
 COPY examples/two-pages/Setup.hs examples/two-pages/SetupHooks.hs examples/two-pages/
 COPY packages/core/core.cabal packages/core/
 COPY packages/harch-web/harch-web.cabal packages/harch-web/
+COPY packages/harch-web-openapi/harch-web-openapi.cabal packages/harch-web-openapi/
 COPY packages/hspec-expectations-match/hspec-expectations-match.cabal packages/hspec-expectations-match/
 COPY packages/postgres-database-changes/postgres-database-changes.cabal packages/postgres-database-changes/
 COPY packages/test-core/test-core.cabal packages/test-core/

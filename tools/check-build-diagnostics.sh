@@ -3,6 +3,7 @@
 set -euo pipefail
 
 tls_compatibility_stack_packages=()
+openapi3_partial_packages=()
 while [[ "${1:-}" == --allow-ghc-9-14-tls-compatibility-stack=* ]]; do
   tls_compatibility_stack_package="${1#*=}"
   case "$tls_compatibility_stack_package" in
@@ -17,8 +18,22 @@ while [[ "${1:-}" == --allow-ghc-9-14-tls-compatibility-stack=* ]]; do
   esac
 done
 
+while [[ "${1:-}" == --allow-ghc-9-14-openapi3-partial=* ]]; do
+  openapi3_partial_package="${1#*=}"
+  case "$openapi3_partial_package" in
+    openapi3-3.2.5)
+      openapi3_partial_packages+=("$openapi3_partial_package")
+      shift
+      ;;
+    *)
+      printf 'unsupported OpenAPI partial-warning package: %s\n' "$openapi3_partial_package" >&2
+      exit 2
+      ;;
+  esac
+done
+
 if [ "$#" != 1 ]; then
-  printf 'usage: %s [--allow-ghc-9-14-tls-compatibility-stack=cborg-0.2.10.0|serialise-0.2.6.1] <build-log>\n' "$0" >&2
+  printf 'usage: %s [--allow-ghc-9-14-tls-compatibility-stack=cborg-0.2.10.0|serialise-0.2.6.1] [--allow-ghc-9-14-openapi3-partial=openapi3-3.2.5] <build-log>\n' "$0" >&2
   exit 2
 fi
 
@@ -63,10 +78,30 @@ is_documented_tls_compatibility_warning() {
   return 1
 }
 
+# openapi3-3.2.5 is the only released version selected by the AHI-4E package.
+# The full released OpenAPI and insert-ordered-containers suites are rebuilt by
+# tools/test-openapi3-compatibility-stack.sh. Keep this one source header exact:
+# a changed location, category, or additional warning remains actionable.
+is_documented_openapi3_partial_warning() {
+  local line="$1"
+  local package_name
+
+  for package_name in "${openapi3_partial_packages[@]}"; do
+    case "$package_name:$line" in
+      'openapi3-3.2.5:src/Data/OpenApi/Internal/Schema.hs:397:43: warning: [GHC-63394] [-Wx-partial]')
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
 diagnostic_failure=false
 hpc_deprecation_count=0
 hpc_deprecation_summary=''
 tls_compatibility_warning_count=0
+openapi3_partial_warning_count=0
 mapfile -t lines < "$build_log"
 for ((index = 0; index < ${#lines[@]}; index += 1)); do
   line="${lines[index]}"
@@ -83,6 +118,8 @@ for ((index = 0; index < ${#lines[@]}; index += 1)); do
     *[Ww][Aa][Rr][Nn][Ii][Nn][Gg]:*)
       if is_documented_tls_compatibility_warning "$line"; then
         tls_compatibility_warning_count=$((tls_compatibility_warning_count + 1))
+      elif is_documented_openapi3_partial_warning "$line"; then
+        openapi3_partial_warning_count=$((openapi3_partial_warning_count + 1))
       else
         printf 'Actionable build warning: %s\n' "$line" >&2
         diagnostic_failure=true
@@ -97,6 +134,10 @@ fi
 
 if [ "$tls_compatibility_warning_count" -gt 0 ]; then
   printf 'x%d Exact GHC 9.14 TLS compatibility-stack warning(s) accepted.\n' "$tls_compatibility_warning_count" >&2
+fi
+
+if [ "$openapi3_partial_warning_count" -gt 0 ]; then
+  printf 'x%d Exact GHC 9.14 openapi3 partial-warning(s) accepted.\n' "$openapi3_partial_warning_count" >&2
 fi
 
 if "$diagnostic_failure"; then

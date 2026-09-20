@@ -912,6 +912,33 @@ matcher test suite now declares its existing `hspec-discover` tool dependency, s
 the frozen plan owns that tool instead of an independent global installation.
 It does not freeze OS packages or claim bit-for-bit binary reproducibility.
 
+### Decision record — optional released OpenAPI compatibility boundary (AHI-4E, 2026-09-20)
+
+**Decision: add a separate `harch-web-openapi` package that re-exports the
+selected public `OpenApi` data model, while retaining the existing API dispatcher
+and using exact, visible compatibility exceptions for its two stale Aeson
+bounds and one GHC 9.14 warning.** OpenAPI documentation is an optional
+interpretation of typed endpoint declarations; making `harch-web` itself
+depend on a data model, renderer, or Swagger assets would impose that cost on
+every application. A second WAI dispatcher would duplicate method, path,
+authorization, and availability ownership. The bootstrap package therefore
+contains only the selected model facade and its encoding proof; its following
+slice adds the generic extension to the existing endpoint contract and
+interprets explicitly supplied families without crawling a completed `Site`.
+
+The public `openapi3-3.2.5` and `insert-ordered-containers-0.3.0` releases
+build and pass their complete upstream suites on the frozen GHC/Aeson/lens
+plan, but both metadata bounds exclude Aeson 2.3.1.0. `openapi3` also emits
+one exact `-Wx-partial` header. The project permits only those two Aeson edges
+and changes `-Werror` only for that source warning, leaving it visible to an
+exact-header diagnostic classifier. The isolated verifier rebuilds the
+unmodified Hackage sources and applies the classifier. This is a time-bounded
+compatibility decision, not a general third-party warning policy: remove all
+three exceptions when public releases widen the bounds and repair the source.
+No API-family interpretation, schema generation, document provider, Swagger
+renderer, asset route, or documentation security mapping ships in this slice;
+the next AHI-4E slices close those concrete gaps.
+
 **Follow-up decision — verified TLS compatibility exception (2026-09-12): use
 the current public TLS/Warp releases, with the smallest source-compatible bound
 exceptions and an executable proof of their limits.** The warning-clean TLS-1.x
@@ -921,8 +948,9 @@ WarpTLS 3.4.14 accepts Warp 3.4.15 but requires TLS 2.x. TLS 2.4.3 reaches
 `serialise-0.2.6.1` and `cborg-0.2.10.0`, whose released bounds predate GHC
 9.14.1's `base-4.22`.
 
-The project therefore permits only the five `allow-newer` pairs in
-`cabal.project`: `serialise` with `base`, `containers`, and `time`, and `cborg`
+The project therefore permits only the seven reviewed `allow-newer` pairs in
+`cabal.project`; the two OpenAPI Aeson edges are documented separately above. The
+TLS portion is: `serialise` with `base`, `containers`, and `time`, and `cborg`
 with `base` and `containers`. This is not a general resolver override. The frozen
 plan fixes TLS 2.4.3, Warp 3.4.15, WarpTLS 3.4.14, HTTP2 5.4.0, and
 time-manager 0.2.4. HTTP2 5.4.4 calls the now-no-op `killManager`, leaving

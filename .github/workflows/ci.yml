@@ -191,8 +191,14 @@ jobs:
         run: |
           tools/test-tls-compatibility-stack.sh
 
-      - name: Check executable-file metadata
+      - name: Verify released OpenAPI compatibility stack
         if: steps.tls_compatibility.outcome == 'success'
+        id: openapi_compatibility
+        run: |
+          tools/test-openapi3-compatibility-stack.sh
+
+      - name: Check executable-file metadata
+        if: steps.openapi_compatibility.outcome == 'success'
         id: executable_file_metadata
         run: |
           tools/test-check-executable-file-metadata.sh

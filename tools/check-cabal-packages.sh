@@ -24,6 +24,7 @@ package_directories=(
   examples/two-pages
   packages/core
   packages/harch-web
+  packages/harch-web-openapi
   packages/postgres-database-changes
   packages/test-core
   packages/test-spec-preprocessor
@@ -32,6 +33,7 @@ package_directories=(
 simple_setup_packages=(
   packages/core
   packages/harch-web
+  packages/harch-web-openapi
   packages/test-core
 )
 
@@ -97,6 +99,7 @@ done
 # complete home-module graph used by hspec-discover. Keep it in manifests and
 # fail the manifest gate on either a missing or stale entry.
 check_test_module_metadata packages/harch-web harch-web-tests test
+check_test_module_metadata packages/harch-web-openapi harch-web-openapi-tests test
 check_test_module_metadata packages/postgres-database-changes postgres-database-changes-tests test
 check_test_module_metadata packages/web-api haskell-web-api-tests test
 check_test_module_metadata packages/test-core test-core-tests test

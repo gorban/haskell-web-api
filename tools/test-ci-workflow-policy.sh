@@ -39,6 +39,10 @@ tls_compatibility_fixture="$fixture_root/missing-tls-compatibility.yml"
 awk 'index($0, "tools/test-tls-compatibility-stack.sh") == 0' "$workflow" > "$tls_compatibility_fixture"
 expect_rejection 'a missing released TLS compatibility verification' "$tls_compatibility_fixture"
 
+openapi_compatibility_fixture="$fixture_root/missing-openapi-compatibility.yml"
+awk 'index($0, "tools/test-openapi3-compatibility-stack.sh") == 0' "$workflow" > "$openapi_compatibility_fixture"
+expect_rejection 'a missing released OpenAPI compatibility verification' "$openapi_compatibility_fixture"
+
 cache_hit_fixture="$fixture_root/skip-frozen-on-hit.yml"
 sed "s/if: steps.cabal_cache.outcome == 'success'$/if: steps.cabal_cache.outcome == 'success' \&\& steps.cabal_cache.outputs.cache-hit != 'true'/" "$workflow" > "$cache_hit_fixture"
 expect_rejection 'skipping frozen resolution on cache hits' "$cache_hit_fixture"

@@ -348,6 +348,7 @@ renderer and map it over a collection without framework-specific template regist
 The main packages are:
 
 - `harch-web`: typed markup, site dispatch, server adapter, actions, regions, and progressive runtime.
+- `harch-web-openapi`: optional OpenAPI data-model and documentation interpreter support.
 - `web-api`: the full-stack reference application and composition root.
 - `core`: shared generation, setup, and utility code.
 - `test-core`: Haskell-authored unit, integration, and Playwright browser support.
@@ -380,12 +381,16 @@ To upgrade dependencies in a dedicated change:
 
 1. Start from a clean checkout. Review the intended packages' release notes and any
    required `.cabal` bound changes, especially TLS, protocol, or public-type changes.
-   Respect the complete dependency graph's published bounds. The only current
-   exception is the five-pair TLS compatibility list in `cabal.project`; it exists
-   because released Serialise and Cborg bounds predate GHC 9.14's `base-4.22`.
-   Do not add to it, use `allow-older`, or select older metadata to evade an
-   incompatibility. A proposed new exception needs an explicit compatibility
-   decision and an executable source-package proof.
+   Respect the complete dependency graph's published bounds. The reviewed
+   exceptions are the five-pair TLS compatibility list and the AHI-4E
+   `openapi3:aeson`/`insert-ordered-containers:aeson` pair in `cabal.project`.
+   The latter keeps official OpenAPI releases on frozen Aeson 2.3.1.0 and is
+   proved by `tools/test-openapi3-compatibility-stack.sh`; its sole visible
+   GHC 9.14 partial-function warning has an exact-header allowance documented
+   in `docs/build-diagnostics.md`. Do not add another exception, use
+   `allow-older`, or select older metadata to evade an incompatibility. A
+   proposed new exception needs an explicit compatibility decision and an
+   executable source-package proof.
 2. Refresh Hackage, back up the current freeze file outside the repository, then
    resolve a candidate with the freeze constraints temporarily removed:
 
@@ -428,7 +433,7 @@ To upgrade dependencies in a dedicated change:
    by skipping compilation. Run the complete local gate sequence in
    [AGENTS.md](AGENTS.md#ci-equivalent-checks), including 100% coverage and browser
    tests, with the candidate plan. Fix warnings instead of adding exemptions; the
-   compatibility script is the sole package-version-specific GHC 9.14 exception.
+   compatibility scripts are the only package-version-specific GHC 9.14 exceptions.
 4. Commit the reviewed manifest/freeze changes and any required adaptations together.
    Before release, require successful CI for that exact full commit SHA, including
    the PR's required checks. Keep an unrelated fixture fix in a separate commit.

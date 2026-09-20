@@ -78,6 +78,29 @@ application regressions; adapt classifier fixtures to reject the formerly allowe
 warnings. This does not retire the HTTP2 pin, Warp peer hooks, or findings in
 other dependencies.
 
+## Exact GHC 9.14 OpenAPI compatibility warning
+
+The optional `harch-web-openapi` package selects the released
+`openapi3-3.2.5` and `insert-ordered-containers-0.3.0` sources. Both declare
+an Aeson upper bound below the frozen `aeson-2.3.1.0`, although their released
+full suites pass against that version. `openapi3` also emits one GHC 9.14
+`-Wx-partial` warning for `tail` at
+`src/Data/OpenApi/Internal/Schema.hs:397:43`. Its package-local
+`-Wno-error=x-partial` setting leaves the diagnostic visible; the optimized
+and coverage wrappers accept only that exact header when explicitly invoked.
+
+This is not a package-wide warning exemption. A changed source path, warning
+category, or any second warning remains fatal. The verifier downloads the two
+official Hackage sources into an isolated Cabal store, runs both complete
+upstream suites with `-Werror` except for the exact visible OpenAPI header,
+then applies the same classifier and dry-runs the frozen repository plan.
+Track [openapi3 PR #120](https://github.com/biocad/openapi3/pull/120) and
+[insert-ordered-containers issue #10](https://github.com/erikd/insert-ordered-containers/issues/10).
+When released versions widen both Aeson bounds and remove the partial call,
+remove the two `allow-newer` entries, the package-local GHC setting, this
+classifier mode and its fixtures, and the verifier's exception logic; retain
+the ordinary upstream-suite and repository gates.
+
 The frozen plan's public `primitive-0.9.1.0` library remains unmodified. Its
 released `test-qc` source is verified only in the TLS compatibility script's
 disposable source tree. That tree applies [#447](https://github.com/haskell/primitive/issues/447)'s
