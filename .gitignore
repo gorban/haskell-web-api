@@ -18,6 +18,7 @@ cabal.project.local~
 !/examples/two-pages/LICENSE
 !/packages/core/LICENSE
 !/packages/harch-web/LICENSE
+!/packages/harch-web-openapi/LICENSE
 !/packages/hspec-expectations-match/LICENSE
 !/packages/test-core/LICENSE
 !/packages/web-api/LICENSE
