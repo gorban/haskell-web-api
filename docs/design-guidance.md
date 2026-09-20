@@ -3496,9 +3496,10 @@ ambient and require the normal CSRF transport; unknown actions and absent
 metadata retain that secure default. This preserves one route matcher,
 authentication rail, action decoder, and response interpreter.
 
-The remaining AHI-4D work is OAuth authorization-code/PKCE validation and
-durable API-client authentication; this slice intentionally provides only the
-account JWT source and client-action CSRF selection needed by the reference
+The next AHI-4D work was durable API-client authentication and the
+client-credentials flow; authorization-code/PKCE validation remains outside
+this task's approved scope. This slice intentionally provides only the account
+JWT source and client-action CSRF selection needed by the reference
 application.
 
 ### Decision record — AHI-4D slice 3: authentication-flow vocabulary (2026-09-13)
@@ -3691,19 +3692,13 @@ about which one occurred is observable from outside. `TokenApiInvalidClient`
 distinct wire shapes a well-behaved client is expected to branch on; nothing
 else in `ApiClientTokenOutcome` gets that treatment.
 
-**Named gap, not a completed slice: field-decode rejections (a missing
-`grant_type`, a malformed or absent `Authorization` header) return the
-existing generic empty-body 400 from `ApiUseGenericFieldFailure`, not an RFC
-6749 `{"error":"invalid_request"}` body.** This matches `/api/second`'s own
-existing precedent for the same generic policy on a `ByteString` response
-type (see `HarchWeb.Api.Endpoint.Runtime.apiFailureProtocolResponse`'s
-`eqT @response @Text` check, which only ever renders a body for a `Text`
-response), so it is not a new inconsistency this endpoint introduces — but it
-is a real, currently-un-closed gap against the full RFC 6749 error yield for
-this one endpoint. Closing it requires an `ApiRenderFieldFailures` policy
-producing the correctly shaped `invalid_request` body from
-`[ApiRequestParseError]`; that is deferred to a follow-up task rather than
-done here, and must not be described as already covered by this slice.
+**Completion (AHI-4D, 2026-09-20): field-decode rejections now use the
+endpoint's existing `ApiRenderFieldFailures` policy to produce the RFC 6749
+`{"error":"invalid_request"}` 400 body.** The renderer receives the private
+`[ApiRequestParseError]` value but deliberately discards it: missing,
+malformed, and duplicate Basic/header/form inputs remain indistinguishable to
+the client and never enter a public diagnostic. A real PostgreSQL-backed WAI
+test proves an absent Basic credential returns that exact opaque body.
 
 ### Decision record — AHI-4D slice 5 (partial): `GET /api/me` (2026-09-17)
 

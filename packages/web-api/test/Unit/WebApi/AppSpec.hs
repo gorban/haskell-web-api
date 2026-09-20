@@ -1190,7 +1190,19 @@ spec = do
 
                 missingAuthorizationRequest <- tokenRequestFor Nothing "grant_type=client_credentials"
                 missingAuthorizationResponse <- performWaiRequest (HarchWeb.toWaiApplication runtimeApplication) missingAuthorizationRequest
-                Wai.responseStatus missingAuthorizationResponse `shouldBe` Http.status400
+                missingAuthorizationBody <- readResponseBody missingAuthorizationResponse
+                expectAll
+                  ( (Wai.responseStatus missingAuthorizationResponse `shouldBe` Http.status400)
+                      :| [missingAuthorizationBody `shouldBe` "{\"error\":\"invalid_request\"}"]
+                  )
+
+                missingGrantRequest <- tokenRequestFor (Just (basicHeaderFor "runtime-token-secret")) ""
+                missingGrantResponse <- performWaiRequest (HarchWeb.toWaiApplication runtimeApplication) missingGrantRequest
+                missingGrantBody <- readResponseBody missingGrantResponse
+                expectAll
+                  ( (Wai.responseStatus missingGrantResponse `shouldBe` Http.status400)
+                      :| [missingGrantBody `shouldBe` "{\"error\":\"invalid_request\"}"]
+                  )
 
                 invalidScopeRequest <- tokenRequestFor (Just (basicHeaderFor "runtime-token-secret")) "grant_type=client_credentials&scope=profile%3Aread%3Aself"
                 invalidScopeResponse <- performWaiRequest (HarchWeb.toWaiApplication runtimeApplication) invalidScopeRequest

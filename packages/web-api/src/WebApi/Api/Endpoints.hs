@@ -67,12 +67,13 @@ import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Api
   ( ApiEndpointContract (..),
     ApiEndpointRequest (..),
-    ApiFieldFailurePolicy (ApiUseGenericFieldFailure),
+    ApiFieldFailurePolicy (ApiRenderFieldFailures, ApiUseGenericFieldFailure),
     ApiHeaderName,
     ApiHeaderValue,
     ApiMethod (ApiGet, ApiPost),
     ApiRequestBody (ApiNoRequestBody, ApiUrlEncodedFormRequestBody),
     ApiRequestBodyByteLimit,
+    ApiRequestParseError,
     ApiResponse (..),
     MissingContentTypePolicy (RejectMissingContentType),
     RequestCodec,
@@ -306,7 +307,7 @@ tokenApiRouteDefinition environment =
             tokenApiRequestMaximumFields
         )
         (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
-        ApiUseGenericFieldFailure
+        (ApiRenderFieldFailures tokenApiInvalidRequestResponse)
     )
     (endpointMetadata TokenApiRoute)
     ( \_requestContext endpointRequest ->
@@ -314,6 +315,16 @@ tokenApiRouteDefinition environment =
          in tokenApiOutcomeResponse <$> issueApiClientToken environment credentials (oauth2ClientCredentialsScopes tokenRequest)
     )
     tokenApiFailureResponse
+
+-- | RFC 6749 clients need a stable @invalid_request@ body for a rejected
+-- token request, but parse failures can include the missing or malformed
+-- credential source.  Keep those details private and render every field
+-- rejection as the same opaque 400 response.
+tokenApiInvalidRequestResponse :: [ApiRequestParseError] -> ApiResponse ByteString.ByteString
+tokenApiInvalidRequestResponse _ =
+  (tokenApiFailureResponse TokenApiInvalidScope)
+    { apiEndpointResponseValue = jsonBytes (jsonErrorBody "invalid_request")
+    }
 
 -- | The three public shapes an OAuth client can be told: a successful token,
 -- an RFC 6749 section 5.2 protocol rejection ('TokenApiInvalidClient',
