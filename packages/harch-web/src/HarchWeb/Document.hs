@@ -1016,7 +1016,14 @@ data PageShell route context = PageShell
 -- invalidate outstanding claims before later transport completions can affect
 -- the document.  A new capture from one control supersedes its older claim;
 -- captures from distinct controls remain independent.  This cancels client
--- presentation, not a mutation the server may already have performed.
+-- presentation, not a mutation the server may already have performed. A
+-- captured form must contain only string 'FormData' values: the kernel has no
+-- ownership of a selected file or other binary body and never serializes one
+-- into its bounded envelope. A form with an explicit native fallback is left
+-- to the browser so that it performs its declared native submission.
+-- An exclusive action instead remains on the current document; it neither
+-- submits a partial request nor retains the selected value for retry or
+-- reauthentication.
 defaultCaptureKernel :: RuntimeDescriptor
 defaultCaptureKernel =
   InlineBootstrap
@@ -1183,13 +1190,12 @@ defaultCaptureKernelScript =
       "      return null;",
       "    }",
       "    const submitter = event.submitter instanceof HTMLElement ? event.submitter : undefined;",
-      "    const fields = [];",
-      "    new FormData(target, submitter).forEach((value, name) => {",
-      "      if (typeof value === 'string' && name !== '_harch_csrf') {",
-      "        fields.push([name, value]);",
-      "      }",
-      "    });",
-      "    return { type: CapturedEvent.Submit, action: target.dataset.harchActionPath || target.action, method: target.dataset.harchActionMethod || target.method, idempotencyKey: target.dataset.harchActionIdempotencyKey, reauth: target.dataset.harchActionReauthenticationPolicy, completion: target.dataset.harchActionCompletion, fields };",
+      -- Keep the binary-value guard compact: this inline first-fold script has
+      -- a tested 12 KiB CSP/bootstrap budget below.
+      "    const f=[];let s=true;",
+      "    new FormData(target, submitter).forEach((v,n)=>{if(typeof v!='string')s=false;else if(n!='_harch_csrf')f.push([n,v]);});",
+      "    if(!s){if(target.method==='dialog')event.preventDefault();return null;}",
+      "    return { type: CapturedEvent.Submit, action: target.dataset.harchActionPath || target.action, method: target.dataset.harchActionMethod || target.method, idempotencyKey: target.dataset.harchActionIdempotencyKey, reauth: target.dataset.harchActionReauthenticationPolicy, completion: target.dataset.harchActionCompletion, fields: f };",
       "  };",
       "  const captureDialogTrigger = (event) => {",
       "    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) { return null; }",

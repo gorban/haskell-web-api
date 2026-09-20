@@ -624,6 +624,29 @@ whether the handler prevents it. Other actions remain opt-in through the same
 capability; their product-specific loss semantics still require a separate
 declaration and browser proof.
 
+**File-bearing action refinement (AHI-4C, 2026-09-20): keep binary bodies out
+of the capture envelope and use the existing native-fallback boundary.** The
+capture kernel can safely retain only the ordered string fields that its typed
+action transport owns. Treating a `File` as an omitted field while still
+claiming the submit event silently changed the request and made a later retry
+or reauthentication replay unsafe. Teaching the kernel to serialize file
+bytes, retain browser handles, or create a second multipart dispatcher would
+violate the bounded in-document ownership rule and duplicate the existing
+typed multipart/native request boundary.
+
+The kernel therefore scans one `FormData` instance before claiming an action.
+If every value is a string, its existing capture lifecycle applies. If a
+non-string value is present, an action declared with `NativeFallback` is left
+entirely to the browser: its typed endpoint receives the declared native
+submission and owns its CSRF validation and parsing. An exclusive action
+prevents its inert native default and retains no action envelope; the selected
+file stays only in the current form so the person can remove or replace it.
+The two-pages browser tests prove both paths, while multipart-upload continues
+to prove complete native multipart delivery, discard on CSRF rejection, and
+explicit reselection. This extends the existing capture/native protocol split
+and adds neither a binary replay channel nor an application-specific action
+router.
+
 ### Decision record — bounded application-declared browser-storage cleanup (AHI-4C, 2026-09-09)
 
 **Decision: begin the client-state cleanup path with an opaque, validated

@@ -124,6 +124,46 @@ spec =
                 byRole Heading `named` "Subscription received" `shouldHaveText` "Subscription received"
                 $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 2, mutationRequestCount = 0}|])
 
+          it "uses a native fallback for a file-bearing action form" $ \(browser, server) ->
+            withTempFile "two-pages-file-action" [] "attachment.txt" $ \(_tempRoot, filePath) -> do
+              writeFile filePath "native fallback attachment"
+              let homeUrl = localServerBaseUrl server <> "/"
+                  fallbackForm = byRole Form `named` "Native fallback subscription"
+                  fallbackEmail = byLabel "Native fallback email address"
+                  attachmentField = css "#native-fallback-attachment"
+                  addAttachmentField =
+                    "const form = document.querySelector('form[aria-label=\"Native fallback subscription\"]'); const input = document.createElement('input'); input.id = 'native-fallback-attachment'; input.name = 'attachment'; input.type = 'file'; form.append(input); true;"
+              runBrowserSpec browser do
+                visit homeUrl
+                _ <- runPageScript addAttachmentField
+                setInputFiles attachmentField filePath
+                fill fallbackEmail "file@example.com"
+                submit fallbackForm
+                assertAllObserved do
+                  byRole Heading `named` "Subscription received" `shouldHaveText` "Subscription received"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 2, mutationRequestCount = 0}|])
+
+          it "keeps an unsupported file-bearing action local without retaining its file" $ \(browser, server) ->
+            withTempFile "two-pages-unsupported-file-action" [] "attachment.txt" $ \(_tempRoot, filePath) -> do
+              writeFile filePath "unsupported action attachment"
+              let homeUrl = localServerBaseUrl server <> "/"
+                  subscriptionForm = byRole Form `named` "Subscription"
+                  emailField = byLabel "Email address"
+                  attachmentField = css "#unsupported-action-attachment"
+                  addAttachmentField =
+                    "const form = document.querySelector('form[aria-label=\"Subscription\"]'); const input = document.createElement('input'); input.id = 'unsupported-action-attachment'; input.name = 'attachment'; input.type = 'file'; form.append(input); true;"
+              runBrowserSpec browser do
+                visit homeUrl
+                _ <- runPageScript addAttachmentField
+                setInputFiles attachmentField filePath
+                fill emailField "unsupported@example.com"
+                submit subscriptionForm
+                _ <- runPageScript "document.body.dataset.harchUnsupportedFileCount = String(document.querySelector('#unsupported-action-attachment').files.length); true;"
+                assertAllObserved do
+                  currentUrl `shouldEqual` homeUrl
+                  attributeValue (css "body") "data-harch-unsupported-file-count" `shouldEqual` Just "1"
+                  $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 0, mutationRequestCount = 0}|])
+
           it "keeps a permanently blocked action visibly recoverable until the user cancels it" $ \(browser, server) -> do
             let homeUrl = localServerBaseUrl server <> "/"
                 subscriptionForm = byRole Form `named` "Subscription"
