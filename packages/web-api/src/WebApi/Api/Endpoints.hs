@@ -76,6 +76,7 @@ import HarchWeb.Api
     ApiRequestParseError,
     ApiResponse (..),
     MissingContentTypePolicy (RejectMissingContentType),
+    NoApiExtension (NoApiExtension),
     RequestCodec,
     apiContentType,
     apiHeaderName,
@@ -156,6 +157,7 @@ statusApiRouteDefinition =
         ApiNoRequestBody
         (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
         ApiUseGenericFieldFailure
+        NoApiExtension
     )
     (endpointMetadata StatusApiRoute)
     (\requestContext _endpointRequest -> pure (apiResponse (jsonBytes (statusApiBody (requestLocale requestContext)))))
@@ -177,6 +179,7 @@ meApiRouteDefinition profileStore =
         ApiNoRequestBody
         (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
         ApiUseGenericFieldFailure
+        NoApiExtension
     )
     (endpointMetadata MeApiRoute)
     ( \requestContext _endpointRequest ->
@@ -229,6 +232,7 @@ secondApiRouteDefinition pageRepository =
         ApiNoRequestBody
         (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
         ApiUseGenericFieldFailure
+        NoApiExtension
     )
     (endpointMetadata SecondApiRoute)
     ( \requestContext _endpointRequest -> do
@@ -308,6 +312,7 @@ tokenApiRouteDefinition environment =
         )
         (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
         (ApiRenderFieldFailures tokenApiInvalidRequestResponse)
+        NoApiExtension
     )
     (endpointMetadata TokenApiRoute)
     ( \_requestContext endpointRequest ->

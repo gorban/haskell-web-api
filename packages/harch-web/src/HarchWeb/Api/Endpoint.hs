@@ -18,7 +18,9 @@ module HarchWeb.Api.Endpoint
   ( ApiMethod (..),
     ApiPath,
     ApiFieldFailurePolicy (..),
+    NoApiExtension (..),
     ApiEndpointContract (..),
+    withApiEndpointExtension,
     ApiRouteEndpointDeclaration (..),
     ApiRouteEndpoint,
     SomeApiRouteEndpoint (..),
@@ -67,6 +69,7 @@ import HarchWeb.Api.Endpoint.Internal
     ApiRouteEndpoint,
     ApiRouteEndpointDeclaration (..),
     ApiStreamingRequest (..),
+    NoApiExtension (..),
     RequestBodyReadFailure (..),
     SomeApiRouteEndpoint (..),
     apiMethodText,
@@ -77,6 +80,7 @@ import HarchWeb.Api.Endpoint.Internal
     apiRouteEndpointPath,
     at,
     requireApiRequestBodyByteLimit,
+    withApiEndpointExtension,
     withApiMultipartRequest,
   )
 import HarchWeb.Api.Endpoint.Runtime

@@ -1,6 +1,5 @@
 {-# SPEC #-}
 
-
 import Data.Aeson (encode)
 import Data.ByteString.Lazy qualified as LazyByteString
 import HarchWeb.OpenApi (OpenApi)

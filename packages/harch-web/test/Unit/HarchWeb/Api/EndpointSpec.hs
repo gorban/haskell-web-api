@@ -25,6 +25,8 @@ import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 import Numeric.Natural (Natural)
 
+newtype TestEndpointExtension fields body response = TestEndpointExtension Text
+
 routeLocationForTest :: Text -> HarchWeb.RouteLocation
 routeLocationForTest target =
   case HarchWeb.decodeRouteLocation (HarchWeb.requestTarget (TextEncoding.encodeUtf8 path) (TextEncoding.encodeUtf8 query)) of
@@ -33,7 +35,7 @@ routeLocationForTest target =
   where
     (path, query) = Text.breakOn "?" target
 
-testEndpointTable :: [SomeApiRouteEndpoint]
+testEndpointTable :: [SomeApiRouteEndpoint NoApiExtension]
 testEndpointTable =
   [ SomeApiRouteEndpoint (testEndpoint ApiGet (at "/api/status") "ReadStatus"),
     SomeApiRouteEndpoint (testEndpoint ApiPost (at "/api/status") "WriteStatus"),
@@ -62,34 +64,34 @@ requiredApiRouteTemplate routeTemplateValue =
     Right parsedRouteTemplate -> parsedRouteTemplate
     Left metadataError -> error ("invalid API route-template test literal: " <> show metadataError)
 
-testEndpointFamily :: ApiEndpointFamily
+testEndpointFamily :: ApiEndpointFamily NoApiExtension
 testEndpointFamily = requireApiEndpointFamily testEndpointTable
 
-testEndpoint :: ApiMethod -> ApiPath -> Text -> ApiRouteEndpoint () () () Text
+testEndpoint :: ApiMethod -> ApiPath -> Text -> ApiRouteEndpoint NoApiExtension () () () Text
 testEndpoint method path responseText =
   Api.apiRouteEndpoint
     ( ApiRouteEndpointDeclaration
         path
-        (ApiEndpointContract method (pure ()) ApiNoRequestBody (textResponseEncoder :| []) ApiUseGenericFieldFailure)
+        (ApiEndpointContract method (pure ()) ApiNoRequestBody (textResponseEncoder :| []) ApiUseGenericFieldFailure NoApiExtension)
     )
     (const (pure (Right (apiResponse responseText))))
     (const (apiResponse "unreachable"))
 
-neverFailingEndpoint :: ApiRouteEndpoint () () domainFailure Text
+neverFailingEndpoint :: ApiRouteEndpoint NoApiExtension () () domainFailure Text
 neverFailingEndpoint =
   Api.apiRouteEndpointNeverFailing
     ( ApiRouteEndpointDeclaration
         (at "/api/total")
-        (ApiEndpointContract ApiGet noRequestFields ApiNoRequestBody (textResponseEncoder :| []) ApiUseGenericFieldFailure)
+        (ApiEndpointContract ApiGet noRequestFields ApiNoRequestBody (textResponseEncoder :| []) ApiUseGenericFieldFailure NoApiExtension)
     )
     (const (pure (apiResponse "Total")))
 
-streamEndpoint :: ApiRouteEndpoint () () () ()
+streamEndpoint :: ApiRouteEndpoint NoApiExtension () () () ()
 streamEndpoint =
   Api.apiRouteEndpoint
     ( ApiRouteEndpointDeclaration
         (at "/api/stream")
-        (ApiEndpointContract ApiGet (pure ()) ApiNoRequestBody (streamingResponseEncoder plainTextContentType streamResponse :| []) ApiUseGenericFieldFailure)
+        (ApiEndpointContract ApiGet (pure ()) ApiNoRequestBody (streamingResponseEncoder plainTextContentType streamResponse :| []) ApiUseGenericFieldFailure NoApiExtension)
     )
     (const (pure (Right (apiResponse ()))))
     (const (apiResponse ()))
@@ -104,9 +106,9 @@ testApiRouteEndpoint ::
   NonEmpty (ApiResponseEncoder response) ->
   (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
   (domainFailure -> ApiResponse response) ->
-  ApiRouteEndpoint fields body domainFailure response
+  ApiRouteEndpoint NoApiExtension fields body domainFailure response
 testApiRouteEndpoint method fields body encoders =
-  Api.apiRouteEndpoint (ApiRouteEndpointDeclaration (at "") (ApiEndpointContract method fields body encoders ApiUseGenericFieldFailure))
+  Api.apiRouteEndpoint (ApiRouteEndpointDeclaration (at "") (ApiEndpointContract method fields body encoders ApiUseGenericFieldFailure NoApiExtension))
 
 testApiRouteEndpointWithFieldFailure ::
   (Typeable response) =>
@@ -117,9 +119,9 @@ testApiRouteEndpointWithFieldFailure ::
   ([ApiRequestParseError] -> ApiResponse response) ->
   (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
   (domainFailure -> ApiResponse response) ->
-  ApiRouteEndpoint fields body domainFailure response
+  ApiRouteEndpoint NoApiExtension fields body domainFailure response
 testApiRouteEndpointWithFieldFailure method fields body encoders fieldFailure =
-  Api.apiRouteEndpoint (ApiRouteEndpointDeclaration (at "") (ApiEndpointContract method fields body encoders (ApiRenderFieldFailures fieldFailure)))
+  Api.apiRouteEndpoint (ApiRouteEndpointDeclaration (at "") (ApiEndpointContract method fields body encoders (ApiRenderFieldFailures fieldFailure) NoApiExtension))
 
 testApiRouteEndpointAtNeverFailing ::
   (Typeable response) =>
@@ -129,9 +131,9 @@ testApiRouteEndpointAtNeverFailing ::
   ApiRequestBody body ->
   NonEmpty (ApiResponseEncoder response) ->
   (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
-  ApiRouteEndpoint fields body domainFailure response
+  ApiRouteEndpoint NoApiExtension fields body domainFailure response
 testApiRouteEndpointAtNeverFailing method path fields body encoders =
-  Api.apiRouteEndpointNeverFailing (ApiRouteEndpointDeclaration path (ApiEndpointContract method fields body encoders ApiUseGenericFieldFailure))
+  Api.apiRouteEndpointNeverFailing (ApiRouteEndpointDeclaration path (ApiEndpointContract method fields body encoders ApiUseGenericFieldFailure NoApiExtension))
 
 testApiRouteEndpointAtNeverFailingWithFieldFailure ::
   (Typeable response) =>
@@ -142,9 +144,9 @@ testApiRouteEndpointAtNeverFailingWithFieldFailure ::
   NonEmpty (ApiResponseEncoder response) ->
   ([ApiRequestParseError] -> ApiResponse response) ->
   (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
-  ApiRouteEndpoint fields body domainFailure response
+  ApiRouteEndpoint NoApiExtension fields body domainFailure response
 testApiRouteEndpointAtNeverFailingWithFieldFailure method path fields body encoders fieldFailure =
-  Api.apiRouteEndpointNeverFailing (ApiRouteEndpointDeclaration path (ApiEndpointContract method fields body encoders (ApiRenderFieldFailures fieldFailure)))
+  Api.apiRouteEndpointNeverFailing (ApiRouteEndpointDeclaration path (ApiEndpointContract method fields body encoders (ApiRenderFieldFailures fieldFailure) NoApiExtension))
 
 testApiRouteDefinitionWithContext ::
   (Typeable response) =>
@@ -156,7 +158,7 @@ testApiRouteDefinitionWithContext ::
   (domainFailure -> ApiResponse response) ->
   RouteDefinition route context ()
 testApiRouteDefinitionWithContext method fields body encoders =
-  Api.apiRouteDefinitionWithContext (ApiEndpointContract method fields body encoders ApiUseGenericFieldFailure) testApiMetadata
+  Api.apiRouteDefinitionWithContext (ApiEndpointContract method fields body encoders ApiUseGenericFieldFailure NoApiExtension) testApiMetadata
 
 testApiRouteDefinitionWithContextWithFieldFailure ::
   (Typeable response) =>
@@ -169,7 +171,7 @@ testApiRouteDefinitionWithContextWithFieldFailure ::
   (domainFailure -> ApiResponse response) ->
   RouteDefinition route context ()
 testApiRouteDefinitionWithContextWithFieldFailure method fields body encoders fieldFailure =
-  Api.apiRouteDefinitionWithContext (ApiEndpointContract method fields body encoders (ApiRenderFieldFailures fieldFailure)) testApiMetadata
+  Api.apiRouteDefinitionWithContext (ApiEndpointContract method fields body encoders (ApiRenderFieldFailures fieldFailure) NoApiExtension) testApiMetadata
 
 testApiRouteDefinitionWithContextNeverFailing ::
   (Typeable response) =>
@@ -180,7 +182,7 @@ testApiRouteDefinitionWithContextNeverFailing ::
   (context -> ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
   RouteDefinition route context ()
 testApiRouteDefinitionWithContextNeverFailing method fields body encoders =
-  Api.apiRouteDefinitionWithContextNeverFailing (ApiEndpointContract method fields body encoders ApiUseGenericFieldFailure) testApiMetadata
+  Api.apiRouteDefinitionWithContextNeverFailing (ApiEndpointContract method fields body encoders ApiUseGenericFieldFailure NoApiExtension) testApiMetadata
 
 testApiRouteDefinitionWithContextNeverFailingWithFieldFailure ::
   (Typeable response) =>
@@ -192,7 +194,7 @@ testApiRouteDefinitionWithContextNeverFailingWithFieldFailure ::
   (context -> ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
   RouteDefinition route context ()
 testApiRouteDefinitionWithContextNeverFailingWithFieldFailure method fields body encoders fieldFailure =
-  Api.apiRouteDefinitionWithContextNeverFailing (ApiEndpointContract method fields body encoders (ApiRenderFieldFailures fieldFailure)) testApiMetadata
+  Api.apiRouteDefinitionWithContextNeverFailing (ApiEndpointContract method fields body encoders (ApiRenderFieldFailures fieldFailure) NoApiExtension) testApiMetadata
 
 testHeaderValue :: Text -> ApiHeaderValue
 testHeaderValue value = fromMaybe (error "expected test header value to be valid") (apiHeaderValue value)
@@ -257,7 +259,7 @@ apiRouteResponseStream response =
         ProtocolResponseWai _ -> error "expected API route to render a protocol stream"
     _ -> error "expected API route to render a protocol response"
 
-runApiRoute :: ApiRouteEndpoint fields body domainFailure response -> Wai.Request -> IO (Response () ())
+runApiRoute :: ApiRouteEndpoint NoApiExtension fields body domainFailure response -> Wai.Request -> IO (Response () ())
 runApiRoute endpoint request =
   routeResponse (apiRouteDefinition testApiMetadata endpoint) request (RouteRequest () ())
 
@@ -270,7 +272,7 @@ routeResponse definition request routeRequest =
     ProtocolRouteHandler renderProtocol -> nonPageResponse <$> renderProtocol request routeRequest
     PageRouteHandler _ -> expectationFailure "expected API protocol definition" >> fail "unreachable"
 
-runApiRouteEndpointGroup :: ApiEndpointFamily -> ApiPath -> Wai.Request -> IO (Response ApiPath ())
+runApiRouteEndpointGroup :: ApiEndpointFamily NoApiExtension -> ApiPath -> Wai.Request -> IO (Response ApiPath ())
 runApiRouteEndpointGroup family declaredPath request =
   routeResponse (apiRouteEndpointFamilyDefinition (const testApiMetadata) family declaredPath) request (RouteRequest declaredPath ())
 
@@ -522,6 +524,7 @@ spec =
               ApiNoRequestBody
               (textResponseEncoder :| [])
               ApiUseGenericFieldFailure
+              NoApiExtension
           declaration = ApiRouteEndpointDeclaration (at "/api/contract") contract
           decodedFields = runRequestCodec (apiEndpointContractFields contract) (apiRequestDataFromWaiRequest Wai.defaultRequest)
       expectAll
@@ -539,6 +542,48 @@ spec =
                    ApiUseGenericFieldFailure -> pure ()
                    ApiRenderFieldFailures _ -> expectationFailure "expected the contract's generic field-failure policy",
                  apiEndpointContractMethod (apiRouteEndpointDeclarationContract declaration) `shouldBe` ApiPost
+               ]
+        )
+
+    it "replaces documentation metadata without changing the runtime contract" $ do
+      let contract =
+            ApiEndpointContract
+              ApiPost
+              (pure ())
+              ApiNoRequestBody
+              (textResponseEncoder :| [])
+              ApiUseGenericFieldFailure
+              NoApiExtension
+          documented = withApiEndpointExtension (TestEndpointExtension "status endpoint") contract
+          decodedFields = runRequestCodec (apiEndpointContractFields documented) (apiRequestDataFromWaiRequest Wai.defaultRequest)
+          endpoint =
+            Api.apiRouteEndpoint
+              (ApiRouteEndpointDeclaration (at "/api/documented") documented)
+              (const (pure (Right (apiResponse "documented"))))
+              (const (apiResponse "unreachable"))
+      runtimeResponse <-
+        routeResponse
+          (apiRouteDefinition testApiMetadata endpoint)
+          (Wai.defaultRequest {Wai.requestMethod = "POST"})
+          (RouteRequest () ())
+      expectAll
+        ( (apiEndpointContractMethod documented `shouldBe` ApiPost)
+            :| [ case apiEndpointContractBody documented of
+                   ApiNoRequestBody -> pure ()
+                   _ -> expectationFailure "replacing metadata changed the request body declaration",
+                 case apiEndpointContractEncoders documented of
+                   _ :| _ -> pure (),
+                 case apiEndpointContractFieldFailurePolicy documented of
+                   ApiUseGenericFieldFailure -> pure ()
+                   ApiRenderFieldFailures _ -> expectationFailure "replacing metadata changed the field-failure policy",
+                 case apiEndpointContractExtension documented of
+                   TestEndpointExtension "status endpoint" -> pure ()
+                   TestEndpointExtension extensionName -> expectationFailure ("unexpected extension: " <> Text.unpack extensionName),
+                 case decodedFields of
+                   ApiRequestDecoded () -> pure ()
+                   _ -> expectationFailure "replacing metadata changed the request codec",
+                 apiRouteResponseStatus runtimeResponse `shouldBe` HttpTypes.status200,
+                 apiRouteResponseBody runtimeResponse `shouldBe` "documented"
                ]
         )
 

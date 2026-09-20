@@ -23,7 +23,9 @@ module HarchWeb.Api.Endpoint.Internal
     ApiPath (..),
     at,
     ApiFieldFailurePolicy (..),
+    NoApiExtension (..),
     ApiEndpointContract (..),
+    withApiEndpointExtension,
     ApiRouteEndpointDeclaration (..),
     ApiRouteEndpoint (..),
     SomeApiRouteEndpoint (..),
@@ -115,46 +117,72 @@ data ApiFieldFailurePolicy response
   = ApiUseGenericFieldFailure
   | ApiRenderFieldFailures ([ApiRequestParseError] -> ApiResponse response)
 
+-- | Deliberately empty metadata for APIs that opt out of an extension.
+--
+-- Decision record (AHI-4E, 2026-09-20): endpoint documentation augments the
+-- existing typed declaration rather than creating a parallel route table.
+-- Every existing endpoint must therefore select this explicit no-extension
+-- value; the shared runtime retains one dispatcher and ignores the extension.
+data NoApiExtension fields body response = NoApiExtension
+
 -- | The reusable typed contract for an API request: method, decoded fields,
 -- exactly one body consumer, response representations, and field-error
 -- policy. Context-aware route definitions consume this value directly.
-data ApiEndpointContract fields body response = ApiEndpointContract
+data ApiEndpointContract extension fields body response = ApiEndpointContract
   { apiEndpointContractMethod :: ApiMethod,
     apiEndpointContractFields :: RequestCodec fields,
     apiEndpointContractBody :: ApiRequestBody body,
     apiEndpointContractEncoders :: NonEmpty (ApiResponseEncoder response),
-    apiEndpointContractFieldFailurePolicy :: ApiFieldFailurePolicy response
+    apiEndpointContractFieldFailurePolicy :: ApiFieldFailurePolicy response,
+    -- The declaration owns its metadata, so construct and validate its outer
+    -- value with the rest of the static contract.  The runtime still never
+    -- interprets that metadata.
+    apiEndpointContractExtension :: !(extension fields body response)
   }
+
+-- | Replace an endpoint contract's extension without changing its request or
+-- response behavior.  Documentation interpreters use this to attach their
+-- metadata after an application has declared the shared runtime contract.
+withApiEndpointExtension :: extension' fields body response -> ApiEndpointContract extension fields body response -> ApiEndpointContract extension' fields body response
+withApiEndpointExtension extension contract =
+  ApiEndpointContract
+    { apiEndpointContractMethod = apiEndpointContractMethod contract,
+      apiEndpointContractFields = apiEndpointContractFields contract,
+      apiEndpointContractBody = apiEndpointContractBody contract,
+      apiEndpointContractEncoders = apiEndpointContractEncoders contract,
+      apiEndpointContractFieldFailurePolicy = apiEndpointContractFieldFailurePolicy contract,
+      apiEndpointContractExtension = extension
+    }
 
 -- | A path-owning endpoint declaration. It combines a route path with one
 -- 'ApiEndpointContract'; context-free route tables use this while
 -- context-aware definitions reuse the contract without manufacturing a path.
-data ApiRouteEndpointDeclaration fields body response = ApiRouteEndpointDeclaration
+data ApiRouteEndpointDeclaration extension fields body response = ApiRouteEndpointDeclaration
   { apiRouteEndpointDeclarationPath :: ApiPath,
-    apiRouteEndpointDeclarationContract :: ApiEndpointContract fields body response
+    apiRouteEndpointDeclarationContract :: ApiEndpointContract extension fields body response
   }
 
 -- | One typed endpoint declaration for use in the application's shared route
 -- table. Its path-owning declaration retains the cohesive request contract;
 -- the constructor adds only the handler's distinct failure mode.
-data ApiRouteEndpoint fields body domainFailure response where
+data ApiRouteEndpoint extension fields body domainFailure response where
   ApiRouteEndpoint ::
     (Typeable response) =>
-    ApiRouteEndpointDeclaration fields body response ->
+    ApiRouteEndpointDeclaration extension fields body response ->
     (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
     (domainFailure -> ApiResponse response) ->
-    ApiRouteEndpoint fields body domainFailure response
+    ApiRouteEndpoint extension fields body domainFailure response
   ApiRouteEndpointNeverFailing ::
     (Typeable response) =>
-    ApiRouteEndpointDeclaration fields body response ->
+    ApiRouteEndpointDeclaration extension fields body response ->
     (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
-    ApiRouteEndpoint fields body domainFailure response
+    ApiRouteEndpoint extension fields body domainFailure response
 
 -- | An endpoint table may contain declarations with different request, body,
 -- failure, and response types without exposing those existentials to a
 -- handler. Each declaration remains fully typed at its definition site.
-data SomeApiRouteEndpoint where
-  SomeApiRouteEndpoint :: ApiRouteEndpoint fields body domainFailure response -> SomeApiRouteEndpoint
+data SomeApiRouteEndpoint extension where
+  SomeApiRouteEndpoint :: ApiRouteEndpoint extension fields body domainFailure response -> SomeApiRouteEndpoint extension
 
 -- | Cohesive decoded input supplied to an endpoint handler.
 data ApiEndpointRequest fields body = ApiEndpointRequest
@@ -228,28 +256,28 @@ data ApiRequestBody body where
 -- handler mode and its failure interpreter.
 apiRouteEndpoint ::
   (Typeable response) =>
-  ApiRouteEndpointDeclaration fields body response ->
+  ApiRouteEndpointDeclaration extension fields body response ->
   (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
   (domainFailure -> ApiResponse response) ->
-  ApiRouteEndpoint fields body domainFailure response
+  ApiRouteEndpoint extension fields body domainFailure response
 apiRouteEndpoint = ApiRouteEndpoint
 
 -- | Construct an endpoint with a total handler and no fabricated domain
 -- failure branch.
 apiRouteEndpointNeverFailing ::
   (Typeable response) =>
-  ApiRouteEndpointDeclaration fields body response ->
+  ApiRouteEndpointDeclaration extension fields body response ->
   (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
-  ApiRouteEndpoint fields body domainFailure response
+  ApiRouteEndpoint extension fields body domainFailure response
 apiRouteEndpointNeverFailing = ApiRouteEndpointNeverFailing
 
-apiRouteEndpointPath :: ApiRouteEndpoint fields body domainFailure response -> ApiPath
+apiRouteEndpointPath :: ApiRouteEndpoint extension fields body domainFailure response -> ApiPath
 apiRouteEndpointPath endpoint =
   case endpoint of
     ApiRouteEndpoint declaration _ _ -> apiRouteEndpointDeclarationPath declaration
     ApiRouteEndpointNeverFailing declaration _ -> apiRouteEndpointDeclarationPath declaration
 
-apiRouteEndpointMethod :: ApiRouteEndpoint fields body domainFailure response -> ApiMethod
+apiRouteEndpointMethod :: ApiRouteEndpoint extension fields body domainFailure response -> ApiMethod
 apiRouteEndpointMethod endpoint =
   case endpoint of
     ApiRouteEndpoint declaration _ _ -> apiEndpointContractMethod (apiRouteEndpointDeclarationContract declaration)

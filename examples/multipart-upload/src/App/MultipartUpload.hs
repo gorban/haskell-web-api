@@ -52,6 +52,7 @@ import HarchWeb.Api
     ApiResponseEncoder,
     ApiRouteEndpoint,
     ApiRouteEndpointDeclaration (..),
+    NoApiExtension (NoApiExtension),
     SomeApiRouteEndpoint (..),
     apiResponse,
     apiRouteEndpointNeverFailing,
@@ -106,7 +107,7 @@ nativeUploadPath = "/native-upload"
 -- by its form GET and POST requests; composed via
 -- 'HarchWeb.Api.apiRouteEndpointFamilyCodec'/'apiRouteEndpointFamilyDefinition'
 -- rather than the removed compatibility @apiEndpointMiddleware@.
-nativeUploadEndpoints :: NativeUploadState -> [SomeApiRouteEndpoint]
+nativeUploadEndpoints :: NativeUploadState -> [SomeApiRouteEndpoint NoApiExtension]
 nativeUploadEndpoints state =
   [ SomeApiRouteEndpoint (showUploadFormEndpoint state),
     SomeApiRouteEndpoint (submitUploadEndpoint state)
@@ -115,21 +116,21 @@ nativeUploadEndpoints state =
 htmlResponseEncoders :: NonEmpty (ApiResponseEncoder ByteString.ByteString)
 htmlResponseEncoders = bytesResponseEncoder (apiUtf8ContentType htmlMediaType) :| []
 
-showUploadFormEndpoint :: NativeUploadState -> ApiRouteEndpoint () () domainFailure ByteString.ByteString
+showUploadFormEndpoint :: NativeUploadState -> ApiRouteEndpoint NoApiExtension () () domainFailure ByteString.ByteString
 showUploadFormEndpoint state =
   apiRouteEndpointNeverFailing
     ( ApiRouteEndpointDeclaration
         (at nativeUploadPath)
-        (ApiEndpointContract ApiGet noRequestFields ApiNoRequestBody htmlResponseEncoders ApiUseGenericFieldFailure)
+        (ApiEndpointContract ApiGet noRequestFields ApiNoRequestBody htmlResponseEncoders ApiUseGenericFieldFailure NoApiExtension)
     )
     (\_endpointRequest -> issueUploadToken state >>= renderUploadFormPage)
 
-submitUploadEndpoint :: NativeUploadState -> ApiRouteEndpoint () (ApiMultipartRequest InMemoryUpload) domainFailure ByteString.ByteString
+submitUploadEndpoint :: NativeUploadState -> ApiRouteEndpoint NoApiExtension () (ApiMultipartRequest InMemoryUpload) domainFailure ByteString.ByteString
 submitUploadEndpoint state =
   apiRouteEndpointNeverFailing
     ( ApiRouteEndpointDeclaration
         (at nativeUploadPath)
-        (ApiEndpointContract ApiPost noRequestFields (ApiMultipartRequestBody inMemoryMultipartStorage defaultMultipartLimits) htmlResponseEncoders ApiUseGenericFieldFailure)
+        (ApiEndpointContract ApiPost noRequestFields (ApiMultipartRequestBody inMemoryMultipartStorage defaultMultipartLimits) htmlResponseEncoders ApiUseGenericFieldFailure NoApiExtension)
     )
     (handleUploadSubmission state . apiEndpointRequestBody)
 

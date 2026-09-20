@@ -926,6 +926,17 @@ contains only the selected model facade and its encoding proof; its following
 slice adds the generic extension to the existing endpoint contract and
 interprets explicitly supplied families without crawling a completed `Site`.
 
+**Follow-up decision — typed endpoint metadata extension (AHI-4E,
+2026-09-20): add an explicit extension parameter to
+`ApiEndpointContract`, and make every existing endpoint choose
+`NoApiExtension`.** This keeps documentation metadata with the exact method,
+path, request codec, body reader, response encoders, and field-failure policy
+that it describes. `withApiEndpointExtension` replaces only that metadata;
+the shared runtime intentionally does not interpret it, preserving one
+dispatcher and all current route behavior. The next slice may define a
+documentation-specific extension in `harch-web-openapi`; availability policy,
+OpenAPI interpretation, and a Swagger renderer remain separate follow-ups.
+
 The public `openapi3-3.2.5` and `insert-ordered-containers-0.3.0` releases
 build and pass their complete upstream suites on the frozen GHC/Aeson/lens
 plan, but both metadata bounds exclude Aeson 2.3.1.0. `openapi3` also emits

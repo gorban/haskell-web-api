@@ -55,13 +55,13 @@ import Numeric.Natural (Natural)
 -- | Request-specific values owned by one execution of an already-declared
 -- endpoint contract. The request data is derived once, before body and field
 -- decoding choose their short-circuiting path.
-data ApiEndpointExecution fields body response = ApiEndpointExecution
-  { apiEndpointExecutionContract :: ApiEndpointContract fields body response,
+data ApiEndpointExecution extension fields body response = ApiEndpointExecution
+  { apiEndpointExecutionContract :: ApiEndpointContract extension fields body response,
     apiEndpointExecutionRequestData :: ApiRequestData,
     apiEndpointExecutionRequest :: Wai.Request
   }
 
-apiEndpointExecution :: ApiEndpointContract fields body response -> Wai.Request -> ApiEndpointExecution fields body response
+apiEndpointExecution :: ApiEndpointContract extension fields body response -> Wai.Request -> ApiEndpointExecution extension fields body response
 apiEndpointExecution contract request =
   ApiEndpointExecution
     { apiEndpointExecutionContract = contract,
@@ -69,7 +69,7 @@ apiEndpointExecution contract request =
       apiEndpointExecutionRequest = request
     }
 
-runApiRouteEndpoint :: ApiRouteEndpoint fields body domainFailure response -> Wai.Request -> IO ProtocolResponse
+runApiRouteEndpoint :: ApiRouteEndpoint extension fields body domainFailure response -> Wai.Request -> IO ProtocolResponse
 runApiRouteEndpoint endpoint request =
   case endpoint of
     ApiRouteEndpoint declaration handler failureResponse ->
@@ -82,7 +82,7 @@ runApiRouteEndpoint endpoint request =
 -- this transport boundary rather than forwarded through endpoint handlers.
 runDecodedApiRequest ::
   (Typeable response) =>
-  ApiEndpointExecution fields body response ->
+  ApiEndpointExecution extension fields body response ->
   (fields -> body -> IO ProtocolResponse) ->
   IO ProtocolResponse
 runDecodedApiRequest execution onDecoded =
@@ -115,7 +115,7 @@ data ApiBufferedBodyResult body
 
 decodeBufferedApiRequest ::
   (Typeable response) =>
-  ApiEndpointExecution fields body response ->
+  ApiEndpointExecution extension fields body response ->
   MissingContentTypePolicy ->
   ApiRequestBodyByteLimit ->
   [ApiBodyDecoder body] ->
@@ -129,7 +129,7 @@ decodeBufferedApiRequest execution missingContentTypePolicy maximumBytes decoder
 
 decodeUrlEncodedApiRequest ::
   (Typeable response) =>
-  ApiEndpointExecution fields ApiForm response ->
+  ApiEndpointExecution extension fields ApiForm response ->
   MissingContentTypePolicy ->
   ApiRequestBodyByteLimit ->
   Natural ->
@@ -155,7 +155,7 @@ decodeUrlEncodedApiRequest execution missingContentTypePolicy maximumBytes maxim
 
 decodeBufferedApiBody ::
   (Typeable response) =>
-  ApiEndpointExecution fields body response ->
+  ApiEndpointExecution extension fields body response ->
   MissingContentTypePolicy ->
   ApiRequestBodyByteLimit ->
   [ApiBodyDecoder body] ->
@@ -173,11 +173,11 @@ decodeBufferedApiBody execution missingContentTypePolicy maximumBytes decoders =
   where
     request = apiEndpointExecutionRequest execution
     requestData = apiEndpointExecutionRequestData execution
-    ApiEndpointContract _ _ _ encoders _ = apiEndpointExecutionContract execution
+    ApiEndpointContract _ _ _ encoders _ _ = apiEndpointExecutionContract execution
 
 decodeEndpointFields ::
   (Typeable response) =>
-  ApiEndpointExecution fields body response ->
+  ApiEndpointExecution extension fields body response ->
   (fields -> IO ProtocolResponse) ->
   IO ProtocolResponse
 decodeEndpointFields execution onDecoded =
@@ -193,11 +193,11 @@ decodeEndpointFields execution onDecoded =
         ApiRequestCodecInvalid -> pure (apiFailureProtocolResponse encoders HttpTypes.status400 "API request fields were rejected.")
   where
     requestData = apiEndpointExecutionRequestData execution
-    ApiEndpointContract _ fields _ encoders failurePolicy = apiEndpointExecutionContract execution
+    ApiEndpointContract _ fields _ encoders failurePolicy _ = apiEndpointExecutionContract execution
 
 fieldFailureProtocolResponse ::
   (Typeable response) =>
-  ApiEndpointExecution fields body response ->
+  ApiEndpointExecution extension fields body response ->
   ([ApiRequestParseError] -> ApiResponse response) ->
   [ApiRequestParseError] ->
   ProtocolResponse
@@ -207,13 +207,13 @@ fieldFailureProtocolResponse execution responseFor parseErrors =
     (apiEndpointExecutionRequestData execution)
     ((responseFor parseErrors) {apiEndpointResponseStatus = HttpTypes.status400})
   where
-    ApiEndpointContract _ _ _ encoders _ = apiEndpointExecutionContract execution
+    ApiEndpointContract _ _ _ encoders _ _ = apiEndpointExecutionContract execution
 
 -- | Interpret a declared endpoint contract with an ordinary typed
 -- domain-failure rail.
 runApiRouteEndpointHandler ::
   (Typeable response) =>
-  ApiEndpointExecution fields body response ->
+  ApiEndpointExecution extension fields body response ->
   (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
   (domainFailure -> ApiResponse response) ->
   IO ProtocolResponse
@@ -221,7 +221,7 @@ runApiRouteEndpointHandler execution handler failureResponse =
   runDecodedApiRequest execution runHandler
   where
     requestData = apiEndpointExecutionRequestData execution
-    ApiEndpointContract _ _ _ encoders _ = apiEndpointExecutionContract execution
+    ApiEndpointContract _ _ _ encoders _ _ = apiEndpointExecutionContract execution
 
     runHandler decodedFields decodedBody = do
       handlerResult <- handler (ApiEndpointRequest decodedFields decodedBody)
@@ -231,14 +231,14 @@ runApiRouteEndpointHandler execution handler failureResponse =
 -- no impossible error branch for callers to construct.
 runApiRouteEndpointHandlerNeverFailing ::
   (Typeable response) =>
-  ApiEndpointExecution fields body response ->
+  ApiEndpointExecution extension fields body response ->
   (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
   IO ProtocolResponse
 runApiRouteEndpointHandlerNeverFailing execution handler =
   runDecodedApiRequest execution runHandler
   where
     requestData = apiEndpointExecutionRequestData execution
-    ApiEndpointContract _ _ _ encoders _ = apiEndpointExecutionContract execution
+    ApiEndpointContract _ _ _ encoders _ _ = apiEndpointExecutionContract execution
 
     runHandler decodedFields decodedBody = do
       responseValue <- handler (ApiEndpointRequest decodedFields decodedBody)
