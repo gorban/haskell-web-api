@@ -265,7 +265,7 @@ jobs:
       - name: Upload coverage artifact
         id: upload_coverage_artifact
         if: github.ref == 'refs/heads/main' && steps.prepare_coverage_artifact.outcome == 'success'
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: coverage-site
           path: _site
@@ -309,7 +309,7 @@ jobs:
 
       - name: Upload tested source packages and dependency provenance
         if: steps.source_packages.outcome == 'success'
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: tested-source-packages
           path: dist-newstyle/release/
@@ -317,7 +317,7 @@ jobs:
 
       - name: Upload Playwright failure artifacts
         if: failure() && steps.run_tests_skip_unit.outcome == 'failure'
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: playwright-failures
           path: '**/test-results/playwright/'
