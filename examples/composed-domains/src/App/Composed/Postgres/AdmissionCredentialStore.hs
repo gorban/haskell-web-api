@@ -4,6 +4,7 @@
 -- | PostgreSQL adapter for operator-provisioned admission credentials.
 module App.Composed.Postgres.AdmissionCredentialStore
   ( buildPostgresAdmissionCredentialStoreWithRunner,
+    provisionPostgresAdmissionCredentialWithRunner,
   )
 where
 
@@ -13,8 +14,12 @@ import App.Composed.Admission
     StoredAdmissionCredential (..),
   )
 import App.Composed.Admission.Types
-  ( admissionLoginNameText,
+  ( AdmissionLoginName,
+    AdmissionPrincipalId,
+    EncryptedAdmissionTotpSecret,
+    admissionLoginNameText,
     admissionPrincipalIdText,
+    encryptedAdmissionTotpSecretText,
     mkAdmissionPrincipalId,
     mkEncryptedAdmissionTotpSecret,
   )
@@ -30,6 +35,29 @@ buildPostgresAdmissionCredentialStoreWithRunner runQuery source =
     { findAdmissionCredential = \loginName -> decodeCredential <$> runQuery source findQuery [admissionLoginNameText loginName],
       markAdmissionTotpCounterUsed = \principalId counter -> decodeWritten <$> runQuery source markUsedQuery [admissionPrincipalIdText principalId, Text.pack (show counter)]
     }
+
+-- | Write one operator-prepared admission credential.  The input secret is
+-- already an 'EncryptedAdmissionTotpSecret': provisioning never accepts a raw
+-- TOTP value, and values travel to PostgreSQL only as libpq parameters through
+-- the supplied runner.  A conflicting principal or login is reported as an
+-- ordinary false result so a setup command can fail without disclosing which
+-- identifier already exists.
+provisionPostgresAdmissionCredentialWithRunner ::
+  (source -> Text -> [Text] -> IO (Either Text [[Text]])) ->
+  source ->
+  AdmissionPrincipalId ->
+  AdmissionLoginName ->
+  EncryptedAdmissionTotpSecret ->
+  IO (Either AdmissionCredentialStoreError Bool)
+provisionPostgresAdmissionCredentialWithRunner runQuery source principalId loginName encryptedSecret =
+  decodeWritten
+    <$> runQuery
+      source
+      provisionQuery
+      [ admissionPrincipalIdText principalId,
+        admissionLoginNameText loginName,
+        encryptedAdmissionTotpSecretText encryptedSecret
+      ]
 
 decodeCredential :: Either Text [[Text]] -> Either AdmissionCredentialStoreError (Maybe StoredAdmissionCredential)
 decodeCredential result =
@@ -49,6 +77,7 @@ decodeWritten = either (const (Left AdmissionCredentialStoreUnavailable)) $ \cas
   [[_]] -> Right True
   _ -> Left AdmissionCredentialStoreCorrupt
 
-findQuery, markUsedQuery :: Text
+findQuery, markUsedQuery, provisionQuery :: Text
 findQuery = "SELECT admission_principal_id, encrypted_totp_secret, COALESCE(last_used_totp_counter::TEXT, '') FROM composed.admission_credentials WHERE admission_login_name = $1;"
 markUsedQuery = "UPDATE composed.admission_credentials SET last_used_totp_counter = $2::BIGINT WHERE admission_principal_id = $1 AND (last_used_totp_counter IS NULL OR last_used_totp_counter < $2::BIGINT) RETURNING admission_principal_id;"
+provisionQuery = "INSERT INTO composed.admission_credentials (admission_principal_id, admission_login_name, encrypted_totp_secret) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING admission_principal_id;"

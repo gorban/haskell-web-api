@@ -772,6 +772,23 @@ spec = describe "Unit.App.Composed" $ do
                        )
                      ]
 
+  it "provisions only encrypted admission credentials through parameterized queries" $ do
+    let loginName = requiredCsrf "admission login" (mkAdmissionLoginName "support_operator")
+        principalId = requiredCsrf "admission principal" (mkAdmissionPrincipalId "beta-operator")
+        encryptedSecret = requiredCsrf "encrypted admission secret" (mkEncryptedAdmissionTotpSecret "v1-envelope")
+    calls <- newIORef ([] :: [(Text, [Text])])
+    let runner _ sql parameters = do
+          modifyIORef' calls (<> [(sql, parameters)])
+          pure (Right [["beta-operator"]])
+    provisionPostgresAdmissionCredentialWithRunner runner () principalId loginName encryptedSecret `shouldReturn` Right True
+    provisionPostgresAdmissionCredentialWithRunner (\_ _ _ -> pure (Right [])) () principalId loginName encryptedSecret `shouldReturn` Right False
+    provisionPostgresAdmissionCredentialWithRunner (\_ _ _ -> pure (Left "database unavailable")) () principalId loginName encryptedSecret `shouldReturn` Left AdmissionCredentialStoreUnavailable
+    readIORef calls
+      `shouldReturn` [ ( "INSERT INTO composed.admission_credentials (admission_principal_id, admission_login_name, encrypted_totp_secret) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING admission_principal_id;",
+                         ["beta-operator", "support_operator", "v1-envelope"]
+                       )
+                     ]
+
   it "fails closed for malformed and unavailable admission PostgreSQL rows" $ do
     let loginName = requiredCsrf "admission login" (mkAdmissionLoginName "support_operator")
         principalId = requiredCsrf "admission principal" (mkAdmissionPrincipalId "beta-operator")

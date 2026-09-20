@@ -74,6 +74,7 @@ module App.Composed
     buildComposedModuleWithDependencies,
     buildPostgresAdmissionSessionStoreWithRunner,
     buildPostgresAdmissionCredentialStoreWithRunner,
+    provisionPostgresAdmissionCredentialWithRunner,
     buildPostgresAdmissionAttemptStoreWithRunner,
     closeComposedDatabaseRuntime,
     defaultAdmissionAttemptStoragePolicy,
@@ -195,7 +196,10 @@ import App.Composed.Postgres.AdmissionAttemptStore
     defaultAdmissionAttemptStoragePolicy,
     mkAdmissionAttemptStoragePolicy,
   )
-import App.Composed.Postgres.AdmissionCredentialStore (buildPostgresAdmissionCredentialStoreWithRunner)
+import App.Composed.Postgres.AdmissionCredentialStore
+  ( buildPostgresAdmissionCredentialStoreWithRunner,
+    provisionPostgresAdmissionCredentialWithRunner,
+  )
 import App.Composed.Postgres.AdmissionSessionStore (buildPostgresAdmissionSessionStoreWithRunner)
 import App.Composed.Postgres.Runtime
   ( ComposedDatabaseRuntime,
