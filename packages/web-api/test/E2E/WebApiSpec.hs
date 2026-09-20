@@ -694,7 +694,7 @@ spec =
                   $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0, mutationRequestCount = 2}|])
             readIORef deliveryCountReference `shouldReturn` 0
 
-        it "recovers one retained profile action after its signed durable session expires" $ \(browser, appConfig) ->
+        it "recovers one retained profile action after its session-bound page CSRF and durable session expire together" $ \(browser, appConfig) ->
           withTestAccountJwtFixture $ \environmentConfig _ -> do
             runtime <- requiredAccountJwtRuntime environmentConfig
             initialNow <- Time.currentUnixTimeNanoseconds
@@ -725,6 +725,13 @@ spec =
               runBrowserSpec browser do
                 setCookie profileUrl sessionCookieName (TextEncoding.decodeUtf8 (HarchWeb.encodedJwtBytes initialJwt))
                 visit profileUrl
+                -- The initial render issued this real page token while the durable
+                -- session was active.  The fixture expires that session after the
+                -- profile load, so this action submits the now-invalid
+                -- session-bound cookie/form pair.  Authentication must challenge
+                -- before client-action body intake or CSRF replay can occur.
+                pageCsrfToken <- documentCsrfToken
+                liftScenarioIO $ pageCsrfToken `shouldSatisfy` (not . Text.null)
                 assertAllObserved $ isVisible (byRole Heading `named` "Profile") `shouldEqual` True
                 click profileSubmit
                 assertAllObserved do

@@ -598,12 +598,13 @@ rejection rail — the same recoverable "needs your attention" patch an
 ordinary rejected credential already produces — rather than trusting the
 earlier successful sign-in or silently succeeding against a now-invalid
 session. No production code changed; this closes a real, previously-unproven
-security property with existing framework primitives. Two narrower items from
-the same acceptance bullet — "simultaneous" account-session/CSRF expiry and
-the full close/reopen/complete-recovery round trip (found already covered by
-the existing "recovers one retained profile action after its signed durable
-session expires" test on closer reading) — remain open follow-ups, named here
-rather than claimed done.
+security property with existing framework primitives. The same retained-action
+fixture now explicitly proves simultaneous session-bound page-CSRF and durable
+session expiry: it renders the real token while the session is active, expires
+that durable session after the profile load, and submits the retained token.
+The authentication guard challenges before client-action body intake or CSRF
+replay. The full close/reopen/complete-recovery round trip was already covered
+by that test's failed-login, close, fresh-submit, and one-replay sequence.
 
 **Conditional-leave-confirmation refinement (AHI-4C, 2026-09-19):** treat a
 retained action as unresolved for the existing declarative
