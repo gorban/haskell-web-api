@@ -5,7 +5,7 @@ module Unit.App.ComposedSpec (spec) where
 
 import App.Composed
 import Catalog.Domain
-import Control.Exception (ErrorCall, evaluate, try)
+import Control.Exception (ErrorCall, bracket, evaluate, try)
 import Control.Monad (when)
 import Crypto.Error (maybeCryptoError)
 import Data.ByteString qualified as ByteString
@@ -109,6 +109,30 @@ testRequestId =
 
 spec :: Spec
 spec = describe "Unit.App.Composed" $ do
+  it "uses one parameterized composed runtime connection and fails closed after shutdown" $
+    bracket
+      (newComposedDatabaseRuntime (ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_runtime password=web_api connect_timeout=1"))
+      closeComposedDatabaseRuntime
+      ( \runtime -> do
+          runComposedDatabaseQuery runtime "SELECT $1::TEXT, $2::TEXT;" ["literal '; DROP TABLE composed.admission_sessions; --", "second value"]
+            `shouldReturn` Right [["literal '; DROP TABLE composed.admission_sessions; --", "second value"]]
+          runComposedDatabaseQuery runtime "SELECT NULL::TEXT;" []
+            `shouldReturn` Left "database result is malformed"
+          runComposedDatabaseQuery runtime "SET application_name TO 'composed-runtime-test';" []
+            `shouldReturn` Left "database unavailable"
+          closeComposedDatabaseRuntime runtime
+          runComposedDatabaseQuery runtime "SELECT 'unreachable'::TEXT;" []
+            `shouldReturn` Left "database unavailable"
+      )
+  it "fails closed when the composed database cannot be reached" $
+    bracket
+      (newComposedDatabaseRuntime (ComposedDatabaseConnectionString "host=127.0.0.1 port=1 dbname=web_api_dev user=web_api_runtime password=web_api connect_timeout=1"))
+      closeComposedDatabaseRuntime
+      ( \runtime ->
+          runComposedDatabaseQuery runtime "SELECT 'unreachable'::TEXT;" []
+            `shouldReturn` Left "database unavailable"
+      )
+
   it "keeps admission login names and encrypted TOTP envelopes distinct and redacted" $ do
     let loginName = requiredCsrf "admission login" (mkAdmissionLoginName "support_operator")
         encryptedSecret = requiredCsrf "admission encrypted secret" (mkEncryptedAdmissionTotpSecret "v1-encrypted-envelope")

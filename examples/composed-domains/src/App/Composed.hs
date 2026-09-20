@@ -63,6 +63,7 @@ module App.Composed
     RootRoute (..),
     StoredAdmissionCredential (..),
     ComposedDatabaseConnectionString (..),
+    ComposedDatabaseRuntime,
     ComposedDomainCapabilities (..),
     ComposedSiteDependencies (..),
     SynchronizerTokenDigest,
@@ -74,6 +75,7 @@ module App.Composed
     buildPostgresAdmissionSessionStoreWithRunner,
     buildPostgresAdmissionCredentialStoreWithRunner,
     buildPostgresAdmissionAttemptStoreWithRunner,
+    closeComposedDatabaseRuntime,
     defaultAdmissionAttemptStoragePolicy,
     buildComposedSiteWithDependencies,
     buildComposedSiteWithAdmissionSecurityDependencies,
@@ -111,6 +113,8 @@ module App.Composed
     composedDatabaseChanges,
     runComposedDatabaseChanges,
     runComposedDatabaseChangesWithExecutor,
+    newComposedDatabaseRuntime,
+    runComposedDatabaseQuery,
     synchronizerCsrfProtection,
     buildPostgresSynchronizerTokenStoreWithRunner,
     defaultSynchronizerStoragePolicy,
@@ -193,6 +197,12 @@ import App.Composed.Postgres.AdmissionAttemptStore
   )
 import App.Composed.Postgres.AdmissionCredentialStore (buildPostgresAdmissionCredentialStoreWithRunner)
 import App.Composed.Postgres.AdmissionSessionStore (buildPostgresAdmissionSessionStoreWithRunner)
+import App.Composed.Postgres.Runtime
+  ( ComposedDatabaseRuntime,
+    closeComposedDatabaseRuntime,
+    newComposedDatabaseRuntime,
+    runComposedDatabaseQuery,
+  )
 import App.Composed.Postgres.SynchronizerStore
   ( SynchronizerStoragePolicy,
     buildPostgresSynchronizerTokenStoreWithRunner,
