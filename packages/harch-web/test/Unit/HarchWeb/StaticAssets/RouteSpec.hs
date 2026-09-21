@@ -47,7 +47,7 @@ spec =
         let definition = staticAssetRouteDefinition staticAssets metadata
         routeNavigationLabel definition `shouldBe` Nothing
         routeMetadata definition `shouldBe` metadata
-        Site.routeMethods definition `shouldBe` [RouteGet]
+        Site.routeMethods definition (RouteRequest (StaticAssetRoute (routePathSegments location)) ()) `shouldBe` routeMethodPolicy [RouteGet]
         routeExecutionPolicy definition `shouldBe` unboundedRouteExecutionPolicy
         response <-
           case routeHandler definition of

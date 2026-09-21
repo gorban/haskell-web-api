@@ -82,7 +82,7 @@ spec =
       endpointAccess (routeMetadata definition) `shouldBe` RequireAuthorized MayReadCatalog
       endpointNameText (endpointName (routeMetadata definition)) `shouldBe` "catalog.index"
       routeTemplateText (endpointRouteTemplate (routeMetadata definition)) `shouldBe` "/"
-      Site.routeMethods definition `shouldBe` [RouteGet]
+      Site.routeMethods definition (RouteRequest CatalogIndex catalogContext) `shouldBe` routeMethodPolicy [RouteGet]
       routeExecutionPolicy definition `shouldBe` unboundedRouteExecutionPolicy
       case routeHandler definition of
         PageRouteHandler renderPage -> do

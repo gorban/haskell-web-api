@@ -101,22 +101,22 @@ spec =
                      `shouldBe` Nothing,
                    routeNavigationLabel (siteRouteDefinition twoPageSite (Api LiveDataEvents))
                      `shouldBe` Nothing,
-                   Site.routeMethods (siteRouteDefinition twoPageSite (Page HomePage))
-                     `shouldBe` [RouteGet],
-                   Site.routeMethods (siteRouteDefinition twoPageSite (Page PageNotFound))
-                     `shouldBe` [],
-                   Site.routeMethods (siteRouteDefinition twoPageSite (Api LiveDataEvents))
-                     `shouldBe` [RouteGet],
-                   Site.routeMethods (siteRouteDefinition twoPageSite (Custom (PreviewPage previewSlug)))
-                     `shouldBe` [RouteGet],
-                   Site.routeMethods (siteRouteDefinition twoPageSite (Custom NativeSubscriptionFallback))
-                     `shouldBe` [RoutePost],
+                   Site.routeMethods (siteRouteDefinition twoPageSite (Page HomePage)) (RouteRequest (Page HomePage) ())
+                     `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
+                   Site.routeMethods (siteRouteDefinition twoPageSite (Page PageNotFound)) (RouteRequest (Page PageNotFound) ())
+                     `shouldBe` HarchWeb.RouteHidden,
+                   Site.routeMethods (siteRouteDefinition twoPageSite (Api LiveDataEvents)) (RouteRequest (Api LiveDataEvents) ())
+                     `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
+                   Site.routeMethods (siteRouteDefinition twoPageSite (Custom (PreviewPage previewSlug))) (RouteRequest (Custom (PreviewPage previewSlug)) ())
+                     `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
+                   Site.routeMethods (siteRouteDefinition twoPageSite (Custom NativeSubscriptionFallback)) (RouteRequest (Custom NativeSubscriptionFallback) ())
+                     `shouldBe` HarchWeb.routeMethodPolicy [RoutePost],
                    routeNavigationLabel (siteRouteDefinition twoPageSite (Custom NativeSubscriptionFallback))
                      `shouldBe` Nothing,
-                   Site.routeMethods (siteRouteDefinition twoPageSite (Custom NativeSubscriptionResult))
-                     `shouldBe` [RouteGet],
-                   Site.routeMethods (siteRouteDefinition twoPageSite failureRoute)
-                     `shouldBe` [RouteGet],
+                   Site.routeMethods (siteRouteDefinition twoPageSite (Custom NativeSubscriptionResult)) (RouteRequest (Custom NativeSubscriptionResult) ())
+                     `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
+                   Site.routeMethods (siteRouteDefinition twoPageSite failureRoute) (RouteRequest failureRoute ())
+                     `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
                    routeNavigationLabel (siteRouteDefinition twoPageSite failureRoute)
                      `shouldBe` Nothing,
                    staticAssetRoots (siteStaticAssets twoPageSite)

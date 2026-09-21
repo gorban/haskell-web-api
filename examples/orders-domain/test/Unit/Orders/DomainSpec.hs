@@ -81,7 +81,7 @@ spec =
       endpointAccess (routeMetadata definition) `shouldBe` RequireAuthorized MayReadOrders
       endpointNameText (endpointName (routeMetadata definition)) `shouldBe` "orders.index"
       routeTemplateText (endpointRouteTemplate (routeMetadata definition)) `shouldBe` "/"
-      Site.routeMethods definition `shouldBe` [RouteGet]
+      Site.routeMethods definition (RouteRequest OrdersIndex ordersContext) `shouldBe` routeMethodPolicy [RouteGet]
       routeExecutionPolicy definition `shouldBe` unboundedRouteExecutionPolicy
       case routeHandler definition of
         PageRouteHandler renderPage -> do

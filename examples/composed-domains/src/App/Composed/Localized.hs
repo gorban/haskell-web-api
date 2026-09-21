@@ -38,6 +38,7 @@ import HarchWeb.Server
     mapPageResult,
   )
 import HarchWeb.Site (RouteDefinition (..), RouteHandler (..))
+import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 
@@ -110,6 +111,11 @@ localizedRootDefinition localePolicy localizedModule rootRoute =
       let localDefinition = moduleEndpoints localizedModule localRoute
        in localDefinition
             { routeMetadata = prefixLocaleMetadata (routeMetadata localDefinition),
+              routeMethods =
+                Site.routeMethods localDefinition
+                  . RouteRequest localRoute
+                  . setRequestLocale (defaultLocale localePolicy) selectedLocale
+                  . requestContext,
               routeHandler =
                 case routeHandler localDefinition of
                   PageRouteHandler renderLocalPage ->

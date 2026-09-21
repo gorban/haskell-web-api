@@ -247,7 +247,7 @@ mountRouteDefinition routeMount contextProjection mapMetadata childDefinitions p
        in RouteDefinition
             { routeNavigationLabel = routeNavigationLabel childDefinition,
               routeMetadata = requiredMountedMetadata (mapMetadata (routeMetadata childDefinition)),
-              routeMethods = Site.routeMethods childDefinition,
+              routeMethods = Site.routeMethods childDefinition . childRequest,
               routeExecutionPolicy = routeExecutionPolicy childDefinition,
               routeHandler =
                 case routeHandler childDefinition of

@@ -39,6 +39,7 @@ module HarchWeb.Api.Endpoint
     apiRequestBodyByteLimitValue,
     apiRouteEndpoint,
     withApiEndpointAvailability,
+    withApiEndpointAvailabilityFromContext,
     apiRouteEndpointNeverFailing,
     apiRouteEndpointPath,
     apiRouteEndpointAvailability,
@@ -86,6 +87,7 @@ import HarchWeb.Api.Endpoint.Internal
     at,
     requireApiRequestBodyByteLimit,
     withApiEndpointAvailability,
+    withApiEndpointAvailabilityFromContext,
     withApiEndpointExtension,
     withApiMultipartRequest,
   )

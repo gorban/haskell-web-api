@@ -117,7 +117,7 @@ catalogRouteDefinition queries CatalogIndex =
           (requiredRouteTemplateOrDie "/")
           HtmlEndpoint
           (RequireAuthorized MayReadCatalog),
-      routeMethods = [RouteGet],
+      routeMethods = const (routeMethodPolicy [RouteGet]),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeHandler = PageRouteHandler $ \_ request -> do
         summary <- loadCatalogSummary queries (requestContext request)

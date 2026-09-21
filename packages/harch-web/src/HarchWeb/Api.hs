@@ -51,6 +51,7 @@ module HarchWeb.Api
     apiRequestBodyByteLimitValue,
     apiRouteEndpoint,
     withApiEndpointAvailability,
+    withApiEndpointAvailabilityFromContext,
     apiRouteEndpointNeverFailing,
     apiRouteEndpointPath,
     apiRouteEndpointAvailability,

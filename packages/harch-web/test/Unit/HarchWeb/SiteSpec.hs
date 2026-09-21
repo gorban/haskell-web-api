@@ -407,6 +407,8 @@ spec =
               }
           application = buildSiteApplication (sampleSite {siteRouteCodec = conflictingCodec})
           deleteHomeRequest = (waiRequest []) {Wai.requestMethod = "DELETE"}
+      HarchWeb.routeMethods (HarchWeb.routeCodec application) (RouteRequest HomeRoute (SampleContext ""))
+        `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet]
       getResponse <- performWaiRequest (toWaiApplication application) (waiRequest [])
       deleteResponse <- performWaiRequest (toWaiApplication application) deleteHomeRequest
       expectAll
@@ -414,6 +416,29 @@ spec =
             :| [ Wai.responseStatus deleteResponse `shouldBe` Http.status405,
                  lookup Http.hAllow (Wai.responseHeaders deleteResponse) `shouldBe` Just "GET, HEAD, OPTIONS"
                ]
+        )
+
+    it "resolves a route definition's method availability from the full route request" $ do
+      let contextSensitiveHomeRoute =
+            homeRouteDefinition
+              { Site.routeMethods =
+                  \routeRequest ->
+                    if requestContext routeRequest == SampleContext "/member"
+                      then HarchWeb.routeMethodPolicy [HarchWeb.RouteGet]
+                      else HarchWeb.RouteHidden
+              }
+          application =
+            buildSiteApplication
+              ( sampleSite
+                  { siteRouteDefinition = \case
+                      HomeRoute -> contextSensitiveHomeRoute
+                      route -> sampleRouteDefinition route
+                  }
+              )
+          routeMethodsFor requestContextValue = HarchWeb.routeMethods (HarchWeb.routeCodec application) (RouteRequest HomeRoute requestContextValue)
+      expectAll
+        ( (routeMethodsFor (SampleContext "/member") `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet])
+            :| [routeMethodsFor (SampleContext "") `shouldBe` HarchWeb.RouteHidden]
         )
 
     it "carries each route's execution policy through the shared dispatcher" $ do
@@ -640,7 +665,7 @@ apiRouteDefinition =
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMetadata = sampleMetadata HarchWeb.ApiEndpoint StatusApiRoute,
-      routeMethods = [HarchWeb.RouteGet],
+      routeMethods = const (HarchWeb.routeMethodPolicy [HarchWeb.RouteGet]),
       routeExecutionPolicy = HarchWeb.unboundedRouteExecutionPolicy,
       routeHandler = Site.ProtocolRouteHandler $ \_ _ ->
         pure
@@ -668,7 +693,7 @@ notFoundRouteDefinition =
             pageBootstrapHooks = []
           }
   )
-    { Site.routeMethods = []
+    { Site.routeMethods = const HarchWeb.RouteHidden
     }
 
 samplePageShell :: Page SampleRoute SampleContext -> PageShell SampleRoute SampleContext

@@ -1397,7 +1397,7 @@ spec = describe "Unit.App.Composed" $ do
     routeTemplateText (endpointRouteTemplate (routeMetadata loginDefinition)) `shouldBe` "/public/login"
     endpointProtocol (routeMetadata loginDefinition) `shouldBe` HtmlEndpoint
     endpointAccess (routeMetadata loginDefinition) `shouldBe` AllowUnauthenticated
-    Site.routeMethods loginDefinition `shouldBe` [Routing.RouteGet]
+    Site.routeMethods loginDefinition (RouteRequest (Public PublicLogin) publicContext) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
     routeExecutionPolicy loginDefinition `shouldBe` unboundedRouteExecutionPolicy
     directLoginResponse <- runRouteDefinition loginDefinition Wai.defaultRequest (RouteRequest (Public PublicLogin) publicContext)
     case directLoginResponse of
@@ -1413,14 +1413,14 @@ spec = describe "Unit.App.Composed" $ do
     routeTemplateText (endpointRouteTemplate (routeMetadata assetDefinition)) `shouldBe` "/public/assets/*"
     endpointProtocol (routeMetadata assetDefinition) `shouldBe` AssetEndpoint
     endpointAccess (routeMetadata assetDefinition) `shouldBe` AllowUnauthenticated
-    Site.routeMethods assetDefinition `shouldBe` [Routing.RouteGet]
+    Site.routeMethods assetDefinition (RouteRequest (Public (PublicAsset (StaticAssetRoute (routePathSegments assetLocation)))) publicContext) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
     routeExecutionPolicy assetDefinition `shouldBe` unboundedRouteExecutionPolicy
     routeNavigationLabel missingDefinition `shouldBe` Nothing
     endpointName (routeMetadata missingDefinition) `shouldBe` requiredEndpointName "root.public.not-found"
     routeTemplateText (endpointRouteTemplate (routeMetadata missingDefinition)) `shouldBe` "/public/404"
     endpointProtocol (routeMetadata missingDefinition) `shouldBe` HtmlEndpoint
     endpointAccess (routeMetadata missingDefinition) `shouldBe` AllowUnauthenticated
-    Site.routeMethods missingDefinition `shouldBe` []
+    Site.routeMethods missingDefinition (RouteRequest (Public PublicNotFound) publicContext) `shouldBe` Routing.RouteHidden
     routeExecutionPolicy missingDefinition `shouldBe` unboundedRouteExecutionPolicy
     directMissingResponse <- runRouteDefinition missingDefinition Wai.defaultRequest (RouteRequest (Public PublicNotFound) publicContext)
     case directMissingResponse of
@@ -1470,7 +1470,7 @@ spec = describe "Unit.App.Composed" $ do
     parseRoute (Site.siteRouteCodec disabledSite) publicContext localizedNativeLocation `shouldBe` RouteNotMatched
     endpointName (routeMetadata nativeDefinition) `shouldBe` requiredEndpointName "root.public.admission.native"
     endpointProtocol (routeMetadata nativeDefinition) `shouldBe` ApiEndpoint
-    Site.routeMethods nativeDefinition `shouldBe` [Routing.RoutePost]
+    Site.routeMethods nativeDefinition (RouteRequest enabledNativeRoute publicContext) `shouldBe` Routing.routeMethodPolicy [Routing.RoutePost]
     renderedAdmission <- runRouteDefinition admissionDefinition Wai.defaultRequest (RouteRequest enabledAdmissionRoute publicContext)
     case renderedAdmission of
       PageResponse _ page ->

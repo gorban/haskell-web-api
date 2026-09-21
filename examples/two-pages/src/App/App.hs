@@ -65,6 +65,7 @@ import HarchWeb
     parseClientActionFields,
     readRequestBodyUpTo,
     replaceRegion,
+    routeMethodPolicy,
     serverSentEventSourceFromList,
     unboundedRequestHeadLimits,
     unboundedRouteExecutionPolicy,
@@ -121,7 +122,7 @@ twoPageSite csrfProtection =
 routeDefinition :: CsrfProtection () -> TwoPageRoute -> RouteDefinition TwoPageRoute () ()
 routeDefinition csrfProtection route =
   case route of
-    Page PageNotFound -> (pageRouteDefinition PageNotFound) {routeMethods = []}
+    Page PageNotFound -> (pageRouteDefinition PageNotFound) {routeMethods = const (routeMethodPolicy [])}
     Page page -> pageRouteDefinition page
     Api LiveDataEvents -> liveDataEventsRouteDefinition
     Custom (PreviewPage previewSlug) -> previewPageDefinition previewSlug
@@ -137,7 +138,7 @@ liveDataEventsRouteDefinition =
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMetadata = twoPageEndpointMetadata ApiEndpoint (Api LiveDataEvents),
-      routeMethods = [RouteGet],
+      routeMethods = const (routeMethodPolicy [RouteGet]),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeHandler = ProtocolRouteHandler $ \_ _ -> do
         eventSource <-
@@ -185,7 +186,7 @@ nativeSubscriptionFallbackRouteDefinition csrfProtection =
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMetadata = twoPageEndpointMetadata ApiEndpoint (Custom NativeSubscriptionFallback),
-      routeMethods = [RoutePost],
+      routeMethods = const (routeMethodPolicy [RoutePost]),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeHandler = ProtocolRouteHandler (nativeSubscriptionFallbackHandler csrfProtection)
     }

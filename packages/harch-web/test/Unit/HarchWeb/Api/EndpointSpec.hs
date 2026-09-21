@@ -35,7 +35,7 @@ routeLocationForTest target =
   where
     (path, query) = Text.breakOn "?" target
 
-testEndpointTable :: [SomeApiRouteEndpoint NoApiExtension]
+testEndpointTable :: [SomeApiRouteEndpoint () NoApiExtension]
 testEndpointTable =
   [ SomeApiRouteEndpoint (testEndpoint ApiGet (at "/api/status") "ReadStatus"),
     SomeApiRouteEndpoint (testEndpoint ApiPost (at "/api/status") "WriteStatus"),
@@ -64,10 +64,10 @@ requiredApiRouteTemplate routeTemplateValue =
     Right parsedRouteTemplate -> parsedRouteTemplate
     Left metadataError -> error ("invalid API route-template test literal: " <> show metadataError)
 
-testEndpointFamily :: ApiEndpointFamily NoApiExtension
+testEndpointFamily :: ApiEndpointFamily () NoApiExtension
 testEndpointFamily = requireApiEndpointFamily testEndpointTable
 
-testEndpoint :: ApiMethod -> ApiPath -> Text -> ApiRouteEndpoint NoApiExtension () () () Text
+testEndpoint :: ApiMethod -> ApiPath -> Text -> ApiRouteEndpoint () NoApiExtension () () () Text
 testEndpoint method path responseText =
   Api.apiRouteEndpoint
     ( ApiRouteEndpointDeclaration
@@ -77,7 +77,7 @@ testEndpoint method path responseText =
     (const (pure (Right (apiResponse responseText))))
     (const (apiResponse "unreachable"))
 
-neverFailingEndpoint :: ApiRouteEndpoint NoApiExtension () () domainFailure Text
+neverFailingEndpoint :: ApiRouteEndpoint () NoApiExtension () () domainFailure Text
 neverFailingEndpoint =
   Api.apiRouteEndpointNeverFailing
     ( ApiRouteEndpointDeclaration
@@ -86,7 +86,7 @@ neverFailingEndpoint =
     )
     (const (pure (apiResponse "Total")))
 
-streamEndpoint :: ApiRouteEndpoint NoApiExtension () () () ()
+streamEndpoint :: ApiRouteEndpoint () NoApiExtension () () () ()
 streamEndpoint =
   Api.apiRouteEndpoint
     ( ApiRouteEndpointDeclaration
@@ -106,7 +106,7 @@ testApiRouteEndpoint ::
   NonEmpty (ApiResponseEncoder response) ->
   (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
   (domainFailure -> ApiResponse response) ->
-  ApiRouteEndpoint NoApiExtension fields body domainFailure response
+  ApiRouteEndpoint () NoApiExtension fields body domainFailure response
 testApiRouteEndpoint method fields body encoders =
   Api.apiRouteEndpoint (ApiRouteEndpointDeclaration (at "") (ApiEndpointContract method fields body encoders ApiUseGenericFieldFailure NoApiExtension))
 
@@ -119,7 +119,7 @@ testApiRouteEndpointWithFieldFailure ::
   ([ApiRequestParseError] -> ApiResponse response) ->
   (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
   (domainFailure -> ApiResponse response) ->
-  ApiRouteEndpoint NoApiExtension fields body domainFailure response
+  ApiRouteEndpoint () NoApiExtension fields body domainFailure response
 testApiRouteEndpointWithFieldFailure method fields body encoders fieldFailure =
   Api.apiRouteEndpoint (ApiRouteEndpointDeclaration (at "") (ApiEndpointContract method fields body encoders (ApiRenderFieldFailures fieldFailure) NoApiExtension))
 
@@ -131,7 +131,7 @@ testApiRouteEndpointAtNeverFailing ::
   ApiRequestBody body ->
   NonEmpty (ApiResponseEncoder response) ->
   (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
-  ApiRouteEndpoint NoApiExtension fields body domainFailure response
+  ApiRouteEndpoint () NoApiExtension fields body domainFailure response
 testApiRouteEndpointAtNeverFailing method path fields body encoders =
   Api.apiRouteEndpointNeverFailing (ApiRouteEndpointDeclaration path (ApiEndpointContract method fields body encoders ApiUseGenericFieldFailure NoApiExtension))
 
@@ -144,7 +144,7 @@ testApiRouteEndpointAtNeverFailingWithFieldFailure ::
   NonEmpty (ApiResponseEncoder response) ->
   ([ApiRequestParseError] -> ApiResponse response) ->
   (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
-  ApiRouteEndpoint NoApiExtension fields body domainFailure response
+  ApiRouteEndpoint () NoApiExtension fields body domainFailure response
 testApiRouteEndpointAtNeverFailingWithFieldFailure method path fields body encoders fieldFailure =
   Api.apiRouteEndpointNeverFailing (ApiRouteEndpointDeclaration path (ApiEndpointContract method fields body encoders (ApiRenderFieldFailures fieldFailure) NoApiExtension))
 
@@ -259,7 +259,7 @@ apiRouteResponseStream response =
         ProtocolResponseWai _ -> error "expected API route to render a protocol stream"
     _ -> error "expected API route to render a protocol response"
 
-runApiRoute :: ApiRouteEndpoint NoApiExtension fields body domainFailure response -> Wai.Request -> IO (Response () ())
+runApiRoute :: ApiRouteEndpoint () NoApiExtension fields body domainFailure response -> Wai.Request -> IO (Response () ())
 runApiRoute endpoint request =
   routeResponse (apiRouteDefinition testApiMetadata endpoint) request (RouteRequest () ())
 
@@ -272,7 +272,7 @@ routeResponse definition request routeRequest =
     ProtocolRouteHandler renderProtocol -> nonPageResponse <$> renderProtocol request routeRequest
     PageRouteHandler _ -> expectationFailure "expected API protocol definition" >> fail "unreachable"
 
-runApiRouteEndpointGroup :: ApiEndpointFamily NoApiExtension -> ApiPath -> Wai.Request -> IO (Response ApiPath ())
+runApiRouteEndpointGroup :: ApiEndpointFamily () NoApiExtension -> ApiPath -> Wai.Request -> IO (Response ApiPath ())
 runApiRouteEndpointGroup family declaredPath request =
   routeResponse (apiRouteEndpointFamilyDefinition (const testApiMetadata) family declaredPath) request (RouteRequest declaredPath ())
 
@@ -441,20 +441,55 @@ spec =
                  ]
           )
 
+      it "uses the resolved context to hide an endpoint before negotiation and direct execution" $ do
+        handlerCalls <- newIORef (0 :: Int)
+        let hiddenPath = at "/api/contextual-availability"
+            contextualEndpoint :: ApiRouteEndpoint Bool NoApiExtension () () () Text
+            contextualEndpoint =
+              withApiEndpointAvailabilityFromContext
+                (\enabled -> if enabled then ApiAvailable else ApiHidden)
+                ( Api.apiRouteEndpoint
+                    (ApiRouteEndpointDeclaration hiddenPath (ApiEndpointContract ApiGet noRequestFields ApiNoRequestBody (textResponseEncoder :| []) ApiUseGenericFieldFailure NoApiExtension))
+                    ( \_ -> do
+                        atomicModifyIORef' handlerCalls (\callCount -> (callCount + 1, ()))
+                        pure (Right (apiResponse "contextual"))
+                    )
+                    (const (apiResponse "unreachable"))
+                )
+            contextualFamily = requireApiEndpointFamily [SomeApiRouteEndpoint contextualEndpoint]
+            contextualCodec = apiRouteEndpointFamilyCodec contextualFamily
+            contextualDefinition = apiRouteEndpointFamilyDefinition (const testApiMetadata) contextualFamily hiddenPath
+        expectAll
+          ( (apiRouteEndpointAvailability contextualEndpoint True `shouldBe` ApiAvailable)
+              :| [ apiRouteEndpointAvailability contextualEndpoint False `shouldBe` ApiHidden,
+                   HarchWeb.matchRouteMethod contextualCodec True (HarchWeb.requestMethod "GET") (routeLocationForTest "/api/contextual-availability") `shouldBe` Right (HarchWeb.RouteMatched (RouteRequest hiddenPath True)),
+                   HarchWeb.matchRouteMethod contextualCodec False (HarchWeb.requestMethod "GET") (routeLocationForTest "/api/contextual-availability") `shouldBe` Right (HarchWeb.RouteNotFound (RouteRequest hiddenPath False)),
+                   HarchWeb.matchRouteMethod contextualCodec False (HarchWeb.requestMethod "HEAD") (routeLocationForTest "/api/contextual-availability") `shouldBe` Right (HarchWeb.RouteNotFound (RouteRequest hiddenPath False)),
+                   HarchWeb.matchRouteMethod contextualCodec False (HarchWeb.requestMethod "OPTIONS") (routeLocationForTest "/api/contextual-availability") `shouldBe` Right (HarchWeb.RouteNotFound (RouteRequest hiddenPath False)),
+                   HarchWeb.matchRouteMethod contextualCodec False (HarchWeb.requestMethod "POST") (routeLocationForTest "/api/contextual-availability") `shouldBe` Right (HarchWeb.RouteNotFound (RouteRequest hiddenPath False)),
+                   routeMethods contextualDefinition (RouteRequest hiddenPath False) `shouldBe` HarchWeb.RouteHidden
+                 ]
+          )
+        directResponse <- routeResponse contextualDefinition (Wai.defaultRequest {Wai.requestMethod = "GET"}) (RouteRequest hiddenPath False)
+        expectAll
+          ( (apiRouteResponseStatus directResponse `shouldBe` HttpTypes.status404)
+              :| [apiRouteResponseHeaders directResponse `shouldBe` [], readIORef handlerCalls `shouldReturn` 0]
+          )
+
       it "replaces availability for both endpoint handler forms without changing their declarations" $
         let ordinaryPath = at "/api/ordinary-availability"
             hiddenOrdinary = withApiEndpointAvailability ApiHidden (testEndpoint ApiGet ordinaryPath "ordinary")
             hiddenTotal = withApiEndpointAvailability ApiHidden neverFailingEndpoint
          in expectAll
-              ( (apiRouteEndpointAvailability hiddenOrdinary `shouldBe` ApiHidden)
+              ( (apiRouteEndpointAvailability hiddenOrdinary () `shouldBe` ApiHidden)
                   :| [ apiRouteEndpointPath hiddenOrdinary `shouldBe` ordinaryPath,
-                       apiRouteEndpointAvailability hiddenTotal `shouldBe` ApiHidden,
+                       apiRouteEndpointAvailability hiddenTotal () `shouldBe` ApiHidden,
                        apiRouteEndpointPath hiddenTotal `shouldBe` at "/api/total"
                      ]
               )
 
       it "agrees with the codec's routeMethods so the shared dispatcher and the definition never diverge" $
-        HarchWeb.routeMethodPolicy (routeMethods (apiRouteEndpointFamilyDefinition (const testApiMetadata) testEndpointFamily (at "/api/status")))
+        routeMethods (apiRouteEndpointFamilyDefinition (const testApiMetadata) testEndpointFamily (at "/api/status")) (RouteRequest (at "/api/status") ())
           `shouldBe` HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointFamily) (HarchWeb.RouteRequest (at "/api/status") ())
 
       it "leaves every generated endpoint route definition without additional execution admission" $ do
@@ -696,11 +731,11 @@ spec =
         expectAll
           ( (routeNavigationLabel (apiRouteDefinition testApiMetadata successfulEndpoint) `shouldBe` Nothing)
               :| [ routeMetadata (apiRouteDefinition testApiMetadata successfulEndpoint) `shouldBe` testApiMetadata,
-                   routeMethods (apiRouteDefinition testApiMetadata successfulEndpoint) `shouldBe` [HarchWeb.RoutePost],
-                   routeMethods (apiRouteDefinition testApiMetadata domainFailureEndpoint) `shouldBe` [HarchWeb.RouteGet],
-                   routeMethods (apiRouteDefinition testApiMetadata (testApiRouteEndpoint ApiPut (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) `shouldBe` [HarchWeb.RoutePut],
-                   routeMethods (apiRouteDefinition testApiMetadata (testApiRouteEndpoint ApiPatch (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) `shouldBe` [HarchWeb.RoutePatch],
-                   routeMethods (apiRouteDefinition testApiMetadata (testApiRouteEndpoint ApiDelete (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) `shouldBe` [HarchWeb.RouteDelete]
+                   routeMethods (apiRouteDefinition testApiMetadata successfulEndpoint) (RouteRequest () ()) `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RoutePost],
+                   routeMethods (apiRouteDefinition testApiMetadata domainFailureEndpoint) (RouteRequest () ()) `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet],
+                   routeMethods (apiRouteDefinition testApiMetadata (testApiRouteEndpoint ApiPut (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) (RouteRequest () ()) `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RoutePut],
+                   routeMethods (apiRouteDefinition testApiMetadata (testApiRouteEndpoint ApiPatch (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) (RouteRequest () ()) `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RoutePatch],
+                   routeMethods (apiRouteDefinition testApiMetadata (testApiRouteEndpoint ApiDelete (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) (RouteRequest () ()) `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteDelete]
                  ]
           )
 
@@ -767,7 +802,7 @@ spec =
         response <- runApiRoute totalEndpoint Wai.defaultRequest
         expectAll
           ( (apiRouteEndpointPath totalEndpoint `shouldBe` at "/api/total-field-failure")
-              :| [ routeMethods (apiRouteDefinition testApiMetadata totalEndpoint) `shouldBe` [HarchWeb.RouteGet],
+              :| [ routeMethods (apiRouteDefinition testApiMetadata totalEndpoint) (RouteRequest () ()) `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet],
                    apiRouteResponseStatus response `shouldBe` HttpTypes.status400,
                    apiRouteResponseBody response `shouldBe` "[MissingApiField ApiQuerySource \"query\"]"
                  ]
@@ -1324,7 +1359,7 @@ spec =
 
       it "declares its endpoint's own method and no navigation label, unaffected by context" $
         expectAll
-          ( (routeMethods contextAwareEndpointDefinition `shouldBe` [HarchWeb.RouteGet])
+          ( (routeMethods contextAwareEndpointDefinition (RouteRequest () "context") `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet])
               :| [ routeNavigationLabel contextAwareEndpointDefinition `shouldBe` Nothing,
                    routeMetadata contextAwareEndpointDefinition `shouldBe` testApiMetadata
                  ]
@@ -1373,7 +1408,7 @@ spec =
         domainFailureResponse <- routeResponse fieldFailureDefinition (Wai.defaultRequest {Wai.queryString = [("query", Just "domain")]}) (RouteRequest () "context")
         expectAll
           ( (routeNavigationLabel fieldFailureDefinition `shouldBe` Nothing)
-              :| [ routeMethods fieldFailureDefinition `shouldBe` [HarchWeb.RouteGet],
+              :| [ routeMethods fieldFailureDefinition (RouteRequest () "context") `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet],
                    apiRouteResponseStatus response `shouldBe` HttpTypes.status400,
                    apiRouteResponseBody response `shouldBe` "[MissingApiField ApiQuerySource \"query\"]",
                    apiRouteResponseBody acceptedResponse `shouldBe` "context:accepted",
@@ -1399,7 +1434,7 @@ spec =
 
       it "declares its endpoint's own method and no navigation label, unaffected by context" $
         expectAll
-          ( (routeMethods neverFailingContextAwareEndpointDefinition `shouldBe` [HarchWeb.RoutePost])
+          ( (routeMethods neverFailingContextAwareEndpointDefinition (RouteRequest () "context") `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RoutePost])
               :| [ routeNavigationLabel neverFailingContextAwareEndpointDefinition `shouldBe` Nothing,
                    routeMetadata neverFailingContextAwareEndpointDefinition `shouldBe` testApiMetadata
                  ]
@@ -1437,7 +1472,7 @@ spec =
         acceptedResponse <- routeResponse fieldFailureDefinition (Wai.defaultRequest {Wai.queryString = [("query", Just "accepted")]}) (RouteRequest () "context")
         expectAll
           ( (routeNavigationLabel fieldFailureDefinition `shouldBe` Nothing)
-              :| [ routeMethods fieldFailureDefinition `shouldBe` [HarchWeb.RouteGet],
+              :| [ routeMethods fieldFailureDefinition (RouteRequest () "context") `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet],
                    apiRouteResponseStatus response `shouldBe` HttpTypes.status400,
                    apiRouteResponseBody response `shouldBe` "[MissingApiField ApiQuerySource \"query\"]",
                    apiRouteResponseBody acceptedResponse `shouldBe` "context:accepted"

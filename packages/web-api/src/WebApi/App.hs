@@ -321,7 +321,7 @@ buildAppRouteDefinition config pageRepository accountWorkflow route =
       Site.RouteDefinition
         { Site.routeNavigationLabel = routeNavigationLabel route,
           Site.routeMetadata = endpointMetadata route,
-          Site.routeMethods = appRouteMethods route,
+          Site.routeMethods = const (HarchWeb.routeMethodPolicy (appRouteMethods route)),
           Site.routeExecutionPolicy = HarchWeb.unboundedRouteExecutionPolicy,
           Site.routeHandler = Site.PageRouteHandler $
             \_ -> selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow
@@ -332,7 +332,7 @@ protocolRouteDefinition route renderProtocol =
   Site.RouteDefinition
     { Site.routeNavigationLabel = routeNavigationLabel route,
       Site.routeMetadata = endpointMetadata route,
-      Site.routeMethods = appRouteMethods route,
+      Site.routeMethods = const (HarchWeb.routeMethodPolicy (appRouteMethods route)),
       Site.routeExecutionPolicy = HarchWeb.unboundedRouteExecutionPolicy,
       Site.routeHandler = Site.ProtocolRouteHandler (const renderProtocol)
     }

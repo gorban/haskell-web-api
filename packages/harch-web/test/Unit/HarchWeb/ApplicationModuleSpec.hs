@@ -124,7 +124,7 @@ spec =
         `shouldBe` Just ParentSaveTarget
       moduleActionRoute mountedModule 42 ParentSaveTarget `shouldBe` Just (CatalogRoute ChildItemRoute)
       Site.routeNavigationLabel mountedDefinition `shouldBe` Just "Catalog"
-      Site.routeMethods mountedDefinition `shouldBe` [RouteGet]
+      Site.routeMethods mountedDefinition (RouteRequest (CatalogRoute ChildItemRoute) 42) `shouldBe` routeMethodPolicy [RouteGet]
       Site.routeExecutionPolicy mountedDefinition `shouldBe` unboundedRouteExecutionPolicy
       let mountedNotFoundRequest = notFoundRequest (moduleRouteCodec mountedModule) 42
       mountedNotFoundRequest `shouldBe` RouteRequest (CatalogRoute ChildItemRoute) 42

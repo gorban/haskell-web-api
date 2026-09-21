@@ -24,7 +24,7 @@ routeDefinition failureReference =
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMetadata = twoPageClientActionFailureEndpointMetadata,
-      routeMethods = [RouteGet],
+      routeMethods = const (HarchWeb.routeMethodPolicy [RouteGet]),
       routeExecutionPolicy = HarchWeb.unboundedRouteExecutionPolicy,
       routeHandler = PageRouteHandler (renderFailurePage failureReference)
     }

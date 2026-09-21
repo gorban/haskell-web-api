@@ -4,7 +4,13 @@
 --
 -- FQ8 makes the stable route-table, shell, and CSRF declaration inputs one
 -- 'SimpleSiteConfiguration'. Dynamic policy, middleware, action, and
--- reporter customizations stay on 'Site' itself. The default disabled
+-- reporter customizations stay on 'Site' itself. Decision record (AHI-4E,
+-- 2026-09-21): a route definition owns a pure method policy over its parsed
+-- request, rather than reducing it to a static method list at site assembly.
+-- This preserves endpoint availability derived from a bounded context snapshot
+-- at the shared dispatcher, before it can synthesize HEAD/OPTIONS or expose
+-- @Allow@. Mounts project the request into their child policy; no WAI
+-- pre-router or second dispatcher is introduced. The default disabled
 -- reporters remain ordinary no-op observer policy, not strictness or
 -- coverage-only callbacks.
 module HarchWeb.Site
@@ -89,10 +95,13 @@ data RouteDefinition route context authorization = RouteDefinition
     -- supply authenticated metadata; a public endpoint must name
     -- 'AllowUnauthenticated' explicitly.
     routeMetadata :: EndpointMetadata authorization,
-    -- | The methods this route owns. 'buildSiteApplication' installs this
-    -- declaration into the shared route codec, making the site table the
-    -- authoritative source for ordinary page and protocol dispatch alike.
-    routeMethods :: [HarchWeb.RouteMethod],
+    -- | The method policy this route owns for its already parsed request.
+    -- 'buildSiteApplication' installs this declaration into the shared route
+    -- codec, making the site table the authoritative source for ordinary
+    -- page and protocol dispatch alike. A static declaration uses
+    -- 'HarchWeb.routeMethodPolicy' under @const@; a pure context-aware policy
+    -- can hide a route before 405, HEAD, OPTIONS, or @Allow@ are derived.
+    routeMethods :: RouteRequest route context -> HarchWeb.RouteMethodPolicy,
     -- | Optional additional admission for this route after the shared
     -- dispatcher has selected its path and method. It cannot alter listener,
     -- request-head, or application-wide policy; see 'RouteExecutionPolicy'.
@@ -239,7 +248,7 @@ pageRoute metadata navigationLabel renderPage =
   RouteDefinition
     { routeNavigationLabel = navigationLabel,
       routeMetadata = metadata,
-      routeMethods = [HarchWeb.RouteGet],
+      routeMethods = const (HarchWeb.routeMethodPolicy [HarchWeb.RouteGet]),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeHandler = PageRouteHandler $ \pageSecurity routeRequest ->
         RenderedPage <$> renderPage pageSecurity routeRequest
@@ -261,10 +270,8 @@ buildSiteApplication site =
         routeCodec =
           (siteRouteCodec site)
             { HarchWeb.routeMethods =
-                HarchWeb.routeMethodPolicy
-                  . routeMethods
-                  . siteRouteDefinition site
-                  . HarchWeb.requestRoute
+                \routeRequest ->
+                  routeMethods (siteRouteDefinition site (HarchWeb.requestRoute routeRequest)) routeRequest
             },
         applicationSecurity = siteSecurity site,
         applicationSecurityEventRoot = siteSecurityEventRoot site,

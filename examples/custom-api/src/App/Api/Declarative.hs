@@ -46,14 +46,14 @@ import HarchWeb.Api.Multipart (InMemoryUpload, defaultMultipartLimits, inMemoryM
 import HarchWeb.Site qualified as Site
 import Network.Wai qualified as Wai
 
-declarativeApiEndpoints :: [SomeApiRouteEndpoint NoApiExtension]
+declarativeApiEndpoints :: [SomeApiRouteEndpoint () NoApiExtension]
 declarativeApiEndpoints =
   [ SomeApiRouteEndpoint readGreetingEndpoint,
     SomeApiRouteEndpoint submitGreetingEndpoint,
     SomeApiRouteEndpoint uploadAvatarEndpoint
   ]
 
-declarativeApiEndpointFamily :: ApiEndpointFamily NoApiExtension
+declarativeApiEndpointFamily :: ApiEndpointFamily () NoApiExtension
 declarativeApiEndpointFamily =
   requireApiEndpointFamily declarativeApiEndpoints
 
@@ -146,7 +146,7 @@ customGreetingEncoder =
 greetingMediaType :: ApiMediaType
 greetingMediaType = requireApiMediaType "text/x-greeting"
 
-readGreetingEndpoint :: ApiRouteEndpoint NoApiExtension () () domainFailure GreetingResponse
+readGreetingEndpoint :: ApiRouteEndpoint () NoApiExtension () () domainFailure GreetingResponse
 readGreetingEndpoint =
   apiRouteEndpointNeverFailing
     ( ApiRouteEndpointDeclaration
@@ -155,7 +155,7 @@ readGreetingEndpoint =
     )
     (\_endpointRequest -> pure (apiResponse (greetingFor "World")))
 
-submitGreetingEndpoint :: ApiRouteEndpoint NoApiExtension () GreetingRequest domainFailure GreetingResponse
+submitGreetingEndpoint :: ApiRouteEndpoint () NoApiExtension () GreetingRequest domainFailure GreetingResponse
 submitGreetingEndpoint =
   apiRouteEndpointNeverFailing
     ( ApiRouteEndpointDeclaration
@@ -167,7 +167,7 @@ submitGreetingEndpoint =
 maxGreetingBodyBytes :: ApiRequestBodyByteLimit
 maxGreetingBodyBytes = requireApiRequestBodyByteLimit (16 * 1024)
 
-uploadAvatarEndpoint :: ApiRouteEndpoint NoApiExtension () (ApiMultipartRequest InMemoryUpload) AvatarUploadFailure Text
+uploadAvatarEndpoint :: ApiRouteEndpoint () NoApiExtension () (ApiMultipartRequest InMemoryUpload) AvatarUploadFailure Text
 uploadAvatarEndpoint =
   apiRouteEndpoint
     ( ApiRouteEndpointDeclaration

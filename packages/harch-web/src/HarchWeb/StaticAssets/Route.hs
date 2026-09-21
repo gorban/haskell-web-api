@@ -57,7 +57,7 @@ staticAssetRouteDefinition staticAssetsConfig metadata =
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMetadata = metadata,
-      routeMethods = [RouteGet],
+      routeMethods = const (routeMethodPolicy [RouteGet]),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeHandler = ProtocolRouteHandler $ \request routeRequest ->
         NonPageProtocolResponse <$> staticAssetRouteResponse staticAssetsConfig request (requestRoute routeRequest)

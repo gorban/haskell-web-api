@@ -119,7 +119,7 @@ ordersRouteDefinition queries OrdersIndex =
           (requiredRouteTemplateOrDie "/")
           HtmlEndpoint
           (RequireAuthorized MayReadOrders),
-      routeMethods = [RouteGet],
+      routeMethods = const (routeMethodPolicy [RouteGet]),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeHandler = PageRouteHandler $ \_ request -> do
         summary <- loadOrdersSummary queries (requestContext request)

@@ -49,18 +49,18 @@ import Network.Wai qualified as Wai
 -- | Convert a declaration into one entry in a 'RouteDefinition' table. The
 -- server has already selected the route and method before this runs, so it
 -- cannot produce a competing 404/405/HEAD/OPTIONS policy.
-apiRouteDefinition :: EndpointMetadata authorization -> ApiRouteEndpoint extension fields body domainFailure response -> RouteDefinition route context authorization
+apiRouteDefinition :: EndpointMetadata authorization -> ApiRouteEndpoint context extension fields body domainFailure response -> RouteDefinition route context authorization
 apiRouteDefinition metadata endpoint =
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMetadata = metadata,
-      routeMethods =
-        case apiRouteEndpointAvailability endpoint of
-          ApiAvailable -> [toRouteMethod (apiRouteEndpointMethod endpoint)]
-          ApiHidden -> [],
+      routeMethods = \routeRequest ->
+        case apiRouteEndpointAvailability endpoint (HarchWeb.requestContext routeRequest) of
+          ApiAvailable -> HarchWeb.routeMethodPolicy [toRouteMethod (apiRouteEndpointMethod endpoint)]
+          ApiHidden -> HarchWeb.RouteHidden,
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
-      routeHandler = ProtocolRouteHandler $ \request _ ->
-        case apiRouteEndpointAvailability endpoint of
+      routeHandler = ProtocolRouteHandler $ \request routeRequest ->
+        case apiRouteEndpointAvailability endpoint (HarchWeb.requestContext routeRequest) of
           ApiAvailable -> HarchWeb.NonPageProtocolResponse <$> runApiRouteEndpoint endpoint request
           ApiHidden -> pure (HarchWeb.NonPageProtocolResponse (apiHttpResponseToProtocolResponse (ApiHttpResponse HttpTypes.status404 [] Nothing)))
     }
@@ -80,7 +80,7 @@ apiRouteDefinitionWithContext contract metadata contextAwareHandler failureRespo
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMetadata = metadata,
-      routeMethods = [toRouteMethod method],
+      routeMethods = const (HarchWeb.routeMethodPolicy [toRouteMethod method]),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeHandler = ProtocolRouteHandler $ \request routeRequest ->
         HarchWeb.NonPageProtocolResponse
@@ -104,7 +104,7 @@ apiRouteDefinitionWithContextNeverFailing contract metadata contextAwareHandler 
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMetadata = metadata,
-      routeMethods = [toRouteMethod method],
+      routeMethods = const (HarchWeb.routeMethodPolicy [toRouteMethod method]),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeHandler = ProtocolRouteHandler $ \request routeRequest ->
         HarchWeb.NonPageProtocolResponse
@@ -118,7 +118,7 @@ apiRouteDefinitionWithContextNeverFailing contract metadata contextAwareHandler 
 -- | A non-empty, unambiguous set of typed endpoint declarations. Construct it
 -- with 'apiEndpointFamily' so a codec and definition cannot be derived from
 -- different tables.
-newtype ApiEndpointFamily extension = ApiEndpointFamily (NonEmpty (SomeApiRouteEndpoint extension))
+newtype ApiEndpointFamily context extension = ApiEndpointFamily (NonEmpty (SomeApiRouteEndpoint context extension))
 
 -- | A rejected endpoint-family declaration names the exact ambiguity rather
 -- than silently selecting its first declaration.
@@ -129,7 +129,7 @@ data ApiEndpointFamilyError
 -- | Validate an endpoint table once before deriving either route-family
 -- interpreter. Every path/method pair must occur exactly once; distinct
 -- methods at the same path remain valid declarations.
-apiEndpointFamily :: [SomeApiRouteEndpoint extension] -> Either ApiEndpointFamilyError (ApiEndpointFamily extension)
+apiEndpointFamily :: [SomeApiRouteEndpoint context extension] -> Either ApiEndpointFamilyError (ApiEndpointFamily context extension)
 apiEndpointFamily endpoints =
   case NonEmpty.nonEmpty endpoints of
     Nothing -> Left EmptyApiEndpointFamily
@@ -141,7 +141,7 @@ apiEndpointFamily endpoints =
 -- | Assert that an application-authored, static endpoint table is valid.
 -- Runtime-derived tables should instead handle 'apiEndpointFamily's precise
 -- error result explicitly.
-requireApiEndpointFamily :: [SomeApiRouteEndpoint extension] -> ApiEndpointFamily extension
+requireApiEndpointFamily :: [SomeApiRouteEndpoint context extension] -> ApiEndpointFamily context extension
 requireApiEndpointFamily endpoints =
   case apiEndpointFamily endpoints of
     Left EmptyApiEndpointFamily -> error "API endpoint family must not be empty"
@@ -156,7 +156,7 @@ requireApiEndpointFamily endpoints =
         )
     Right family -> family
 
-duplicateEndpointDeclaration :: [SomeApiRouteEndpoint extension] -> Maybe (ApiPath, ApiMethod)
+duplicateEndpointDeclaration :: [SomeApiRouteEndpoint context extension] -> Maybe (ApiPath, ApiMethod)
 duplicateEndpointDeclaration endpoints =
   case endpoints of
     [] -> Nothing
@@ -165,21 +165,21 @@ duplicateEndpointDeclaration endpoints =
         Just _ -> Just (endpointPath endpoint, endpointMethod endpoint)
         Nothing -> duplicateEndpointDeclaration remainingEndpoints
 
-sameEndpointDeclaration :: SomeApiRouteEndpoint extension -> SomeApiRouteEndpoint extension -> Bool
+sameEndpointDeclaration :: SomeApiRouteEndpoint context extension -> SomeApiRouteEndpoint context extension -> Bool
 sameEndpointDeclaration firstEndpoint secondEndpoint =
   endpointPath firstEndpoint == endpointPath secondEndpoint
     && endpointMethod firstEndpoint == endpointMethod secondEndpoint
 
-endpointPath :: SomeApiRouteEndpoint extension -> ApiPath
+endpointPath :: SomeApiRouteEndpoint context extension -> ApiPath
 endpointPath (SomeApiRouteEndpoint endpoint) = apiRouteEndpointPath endpoint
 
-endpointMethod :: SomeApiRouteEndpoint extension -> ApiMethod
+endpointMethod :: SomeApiRouteEndpoint context extension -> ApiMethod
 endpointMethod (SomeApiRouteEndpoint endpoint) = apiRouteEndpointMethod endpoint
 
 -- | Adapt one validated endpoint family into the shared route codec. Combine
 -- it with the application's other route families so the shared dispatcher
 -- owns every 404/405/HEAD/OPTIONS decision.
-apiRouteEndpointFamilyCodec :: ApiEndpointFamily extension -> HarchWeb.RouteCodec ApiPath context
+apiRouteEndpointFamilyCodec :: ApiEndpointFamily context extension -> HarchWeb.RouteCodec ApiPath context
 apiRouteEndpointFamilyCodec family =
   HarchWeb.RouteCodec
     { HarchWeb.parseRoute = \context location ->
@@ -190,7 +190,7 @@ apiRouteEndpointFamilyCodec family =
       HarchWeb.notFoundRequest = HarchWeb.RouteRequest (ApiPath Text.empty),
       HarchWeb.routeMethods = \routeRequest ->
         case HarchWeb.requestRoute routeRequest of
-          ApiPath pathText -> HarchWeb.routeMethodPolicy (apiPathRouteMethods family pathText)
+          ApiPath pathText -> HarchWeb.routeMethodPolicy (apiPathRouteMethods family (HarchWeb.requestContext routeRequest) pathText)
     }
   where
     endpoints = endpointFamilyEndpoints family
@@ -199,7 +199,7 @@ apiRouteEndpointFamilyCodec family =
         Nothing -> Nothing
         Just endpoint -> Just (endpointPath endpoint)
 
-endpointAtLocation :: HarchWeb.RouteLocation -> SomeApiRouteEndpoint extension -> Bool
+endpointAtLocation :: HarchWeb.RouteLocation -> SomeApiRouteEndpoint context extension -> Bool
 endpointAtLocation location endpoint =
   apiPathText (endpointPath endpoint)
     == safeUrlText (HarchWeb.encodeRouteLocation (location {HarchWeb.routeQueryFields = []}))
@@ -216,25 +216,25 @@ apiPathLocation apiPath =
 apiPathText :: ApiPath -> Text
 apiPathText (ApiPath pathText) = pathText
 
-endpointFamilyEndpoints :: ApiEndpointFamily extension -> [SomeApiRouteEndpoint extension]
+endpointFamilyEndpoints :: ApiEndpointFamily context extension -> [SomeApiRouteEndpoint context extension]
 endpointFamilyEndpoints (ApiEndpointFamily endpoints) = NonEmpty.toList endpoints
 
-apiPathRouteMethods :: ApiEndpointFamily extension -> Text -> [HarchWeb.RouteMethod]
-apiPathRouteMethods family pathText =
-  maybe [] (map toRouteMethod . NonEmpty.toList . declaredMethods) (NonEmpty.nonEmpty (filter (\endpoint -> endpointAtPath pathText endpoint && endpointIsAvailable endpoint) (endpointFamilyEndpoints family)))
+apiPathRouteMethods :: ApiEndpointFamily context extension -> context -> Text -> [HarchWeb.RouteMethod]
+apiPathRouteMethods family context pathText =
+  maybe [] (map toRouteMethod . NonEmpty.toList . declaredMethods) (NonEmpty.nonEmpty (filter (\endpoint -> endpointAtPath pathText endpoint && endpointIsAvailable context endpoint) (endpointFamilyEndpoints family)))
 
 -- | The 'RouteDefinition' for one path the family codec owns. A path with no
 -- declared endpoint is the family codec's ordinary not-found sentinel, so it
 -- renders a 404 before the defensive matcher is considered.
-apiRouteEndpointFamilyDefinition :: (ApiPath -> EndpointMetadata authorization) -> ApiEndpointFamily extension -> ApiPath -> RouteDefinition ApiPath context authorization
+apiRouteEndpointFamilyDefinition :: (ApiPath -> EndpointMetadata authorization) -> ApiEndpointFamily context extension -> ApiPath -> RouteDefinition ApiPath context authorization
 apiRouteEndpointFamilyDefinition endpointMetadataForPath family apiPath@(ApiPath pathText) =
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMetadata = endpointMetadataForPath apiPath,
-      routeMethods = apiPathRouteMethods family pathText,
+      routeMethods = \routeRequest -> HarchWeb.routeMethodPolicy (apiPathRouteMethods family (HarchWeb.requestContext routeRequest) pathText),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
-      routeHandler = ProtocolRouteHandler $ \request _ ->
-        case NonEmpty.nonEmpty (filter (\endpoint -> endpointAtPath pathText endpoint && endpointIsAvailable endpoint) (endpointFamilyEndpoints family)) of
+      routeHandler = ProtocolRouteHandler $ \request routeRequest ->
+        case NonEmpty.nonEmpty (filter (\endpoint -> endpointAtPath pathText endpoint && endpointIsAvailable (HarchWeb.requestContext routeRequest) endpoint) (endpointFamilyEndpoints family)) of
           Nothing -> pure (HarchWeb.NonPageProtocolResponse (apiHttpResponseToProtocolResponse (ApiHttpResponse HttpTypes.status404 [] Nothing)))
           Just pathEndpoints ->
             case matchedApiRouteEndpoint pathEndpoints (requestMethodTextFromWai request) of
@@ -246,7 +246,7 @@ apiRouteEndpointFamilyDefinition endpointMetadataForPath family apiPath@(ApiPath
 -- declaration. The shared dispatcher normally makes 'Nothing' unreachable;
 -- keeping it explicit lets the family definition remain total when embedded
 -- directly or wired incorrectly.
-matchedApiRouteEndpoint :: NonEmpty (SomeApiRouteEndpoint extension) -> Text -> Maybe (SomeApiRouteEndpoint extension)
+matchedApiRouteEndpoint :: NonEmpty (SomeApiRouteEndpoint context extension) -> Text -> Maybe (SomeApiRouteEndpoint context extension)
 matchedApiRouteEndpoint pathEndpoints requestMethod =
   case find (endpointHasMethod requestMethod) endpointList of
     Just endpoint -> Just endpoint
@@ -256,7 +256,7 @@ matchedApiRouteEndpoint pathEndpoints requestMethod =
   where
     endpointList = NonEmpty.toList pathEndpoints
 
-methodNotAllowedResponse :: NonEmpty (SomeApiRouteEndpoint extension) -> ApiHttpResponse
+methodNotAllowedResponse :: NonEmpty (SomeApiRouteEndpoint context extension) -> ApiHttpResponse
 methodNotAllowedResponse pathEndpoints =
   ApiHttpResponse
     HttpTypes.status405
@@ -266,20 +266,20 @@ methodNotAllowedResponse pathEndpoints =
 requestMethodTextFromWai :: Wai.Request -> Text
 requestMethodTextFromWai request = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode (Wai.requestMethod request)
 
-endpointAtPath :: Text -> SomeApiRouteEndpoint extension -> Bool
+endpointAtPath :: Text -> SomeApiRouteEndpoint context extension -> Bool
 endpointAtPath requestPath (SomeApiRouteEndpoint endpoint) =
   case apiRouteEndpointPath endpoint of
     ApiPath declaredPath -> declaredPath == requestPath
 
-endpointIsAvailable :: SomeApiRouteEndpoint extension -> Bool
-endpointIsAvailable (SomeApiRouteEndpoint endpoint) =
-  apiRouteEndpointAvailability endpoint == ApiAvailable
+endpointIsAvailable :: context -> SomeApiRouteEndpoint context extension -> Bool
+endpointIsAvailable context (SomeApiRouteEndpoint endpoint) =
+  apiRouteEndpointAvailability endpoint context == ApiAvailable
 
-endpointHasMethod :: Text -> SomeApiRouteEndpoint extension -> Bool
+endpointHasMethod :: Text -> SomeApiRouteEndpoint context extension -> Bool
 endpointHasMethod requestMethod (SomeApiRouteEndpoint endpoint) =
   apiMethodText (apiRouteEndpointMethod endpoint) == requestMethod
 
-declaredMethods :: NonEmpty (SomeApiRouteEndpoint extension) -> NonEmpty ApiMethod
+declaredMethods :: NonEmpty (SomeApiRouteEndpoint context extension) -> NonEmpty ApiMethod
 declaredMethods (firstEndpoint :| remainingEndpoints) =
   endpointMethod firstEndpoint :| map endpointMethod remainingEndpoints
 

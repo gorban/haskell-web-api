@@ -69,7 +69,7 @@ apiEndpointExecution contract request =
       apiEndpointExecutionRequest = request
     }
 
-runApiRouteEndpoint :: ApiRouteEndpoint extension fields body domainFailure response -> Wai.Request -> IO ProtocolResponse
+runApiRouteEndpoint :: ApiRouteEndpoint context extension fields body domainFailure response -> Wai.Request -> IO ProtocolResponse
 runApiRouteEndpoint endpoint request =
   case endpoint of
     ApiRouteEndpoint _ declaration handler failureResponse ->

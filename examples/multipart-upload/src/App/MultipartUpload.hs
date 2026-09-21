@@ -107,7 +107,7 @@ nativeUploadPath = "/native-upload"
 -- by its form GET and POST requests; composed via
 -- 'HarchWeb.Api.apiRouteEndpointFamilyCodec'/'apiRouteEndpointFamilyDefinition'
 -- rather than the removed compatibility @apiEndpointMiddleware@.
-nativeUploadEndpoints :: NativeUploadState -> [SomeApiRouteEndpoint NoApiExtension]
+nativeUploadEndpoints :: NativeUploadState -> [SomeApiRouteEndpoint () NoApiExtension]
 nativeUploadEndpoints state =
   [ SomeApiRouteEndpoint (showUploadFormEndpoint state),
     SomeApiRouteEndpoint (submitUploadEndpoint state)
@@ -116,7 +116,7 @@ nativeUploadEndpoints state =
 htmlResponseEncoders :: NonEmpty (ApiResponseEncoder ByteString.ByteString)
 htmlResponseEncoders = bytesResponseEncoder (apiUtf8ContentType htmlMediaType) :| []
 
-showUploadFormEndpoint :: NativeUploadState -> ApiRouteEndpoint NoApiExtension () () domainFailure ByteString.ByteString
+showUploadFormEndpoint :: NativeUploadState -> ApiRouteEndpoint () NoApiExtension () () domainFailure ByteString.ByteString
 showUploadFormEndpoint state =
   apiRouteEndpointNeverFailing
     ( ApiRouteEndpointDeclaration
@@ -125,7 +125,7 @@ showUploadFormEndpoint state =
     )
     (\_endpointRequest -> issueUploadToken state >>= renderUploadFormPage)
 
-submitUploadEndpoint :: NativeUploadState -> ApiRouteEndpoint NoApiExtension () (ApiMultipartRequest InMemoryUpload) domainFailure ByteString.ByteString
+submitUploadEndpoint :: NativeUploadState -> ApiRouteEndpoint () NoApiExtension () (ApiMultipartRequest InMemoryUpload) domainFailure ByteString.ByteString
 submitUploadEndpoint state =
   apiRouteEndpointNeverFailing
     ( ApiRouteEndpointDeclaration

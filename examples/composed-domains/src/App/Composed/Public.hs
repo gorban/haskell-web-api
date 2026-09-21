@@ -243,7 +243,7 @@ publicRouteDefinition staticAssetsConfig csrfProtection maybeAdmissionWorkflow a
       RouteDefinition
         { routeNavigationLabel = Nothing,
           routeMetadata = mkEndpointMetadata (requiredEndpointNameOrDie "root.public.admission") (requiredRouteTemplateOrDie "/public/admission") HtmlEndpoint AllowUnauthenticated,
-          routeMethods = [Routing.RouteGet],
+          routeMethods = const (Routing.routeMethodPolicy [Routing.RouteGet]),
           routeExecutionPolicy = unboundedRouteExecutionPolicy,
           routeHandler = PageRouteHandler $ \pageSecurity request ->
             pure
@@ -263,7 +263,7 @@ publicRouteDefinition staticAssetsConfig csrfProtection maybeAdmissionWorkflow a
           RouteDefinition
             { routeNavigationLabel = Nothing,
               routeMetadata = mkEndpointMetadata (requiredEndpointNameOrDie "root.public.admission.native") (requiredRouteTemplateOrDie "/public/admission/native") ApiEndpoint AllowUnauthenticated,
-              routeMethods = [Routing.RoutePost],
+              routeMethods = const (Routing.routeMethodPolicy [Routing.RoutePost]),
               routeExecutionPolicy = unboundedRouteExecutionPolicy,
               routeHandler =
                 ProtocolRouteHandler
@@ -281,7 +281,7 @@ publicRouteDefinition staticAssetsConfig csrfProtection maybeAdmissionWorkflow a
       RouteDefinition
         { routeNavigationLabel = Just "Login",
           routeMetadata = mkEndpointMetadata (requiredEndpointNameOrDie "root.public.login") (requiredRouteTemplateOrDie "/public/login") HtmlEndpoint AllowUnauthenticated,
-          routeMethods = [Routing.RouteGet],
+          routeMethods = const (Routing.routeMethodPolicy [Routing.RouteGet]),
           routeExecutionPolicy = unboundedRouteExecutionPolicy,
           routeHandler = PageRouteHandler $ \_ request ->
             pure
@@ -299,7 +299,7 @@ publicRouteDefinition staticAssetsConfig csrfProtection maybeAdmissionWorkflow a
       RouteDefinition
         { routeNavigationLabel = Nothing,
           routeMetadata = mkEndpointMetadata (requiredEndpointNameOrDie "root.public.assets") (requiredRouteTemplateOrDie "/public/assets/*") AssetEndpoint AllowUnauthenticated,
-          routeMethods = [Routing.RouteGet],
+          routeMethods = const (Routing.routeMethodPolicy [Routing.RouteGet]),
           routeExecutionPolicy = unboundedRouteExecutionPolicy,
           routeHandler = ProtocolRouteHandler $ \request _ ->
             NonPageProtocolResponse <$> staticAssetRouteResponse staticAssetsConfig request assetRoute
@@ -308,7 +308,7 @@ publicRouteDefinition staticAssetsConfig csrfProtection maybeAdmissionWorkflow a
       RouteDefinition
         { routeNavigationLabel = Nothing,
           routeMetadata = mkEndpointMetadata (requiredEndpointNameOrDie "root.public.not-found") (requiredRouteTemplateOrDie "/public/404") HtmlEndpoint AllowUnauthenticated,
-          routeMethods = [],
+          routeMethods = const Routing.RouteHidden,
           routeExecutionPolicy = unboundedRouteExecutionPolicy,
           routeHandler = PageRouteHandler $ \_ request ->
             pure

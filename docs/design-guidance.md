@@ -985,12 +985,31 @@ plain 404, and proves the handler is never called. This extends the existing
 endpoint declaration and its one dispatcher rather than creating a visibility
 middleware or a documentation-only filter.
 
-This slice deliberately supplies static availability only. The earlier
-request-aware `RouteCodec` capability is sufficient for a bounded
-context-snapshot resolver, but such a resolver is not yet attached to an API
-family or to OpenAPI generation. The remaining AHI-4E availability slice must
-add that pure context decision and prove the same no-leak behavior before
-claiming dynamic feature-flag support.
+**Follow-up decision — endpoint availability from a bounded route context
+(AHI-4E, 2026-09-21): make `ApiRouteEndpoint` and `ApiEndpointFamily`
+context-parameterized, and store a pure `context -> ApiAvailability` resolver
+on the endpoint.** `withApiEndpointAvailability` remains the static helper;
+`withApiEndpointAvailabilityFromContext` installs the dynamic resolver. The
+family codec and direct family definition each resolve it from the same parsed
+request before filtering endpoint methods or selecting a handler. The direct
+single-endpoint definition follows the same rule.
+
+The existing `RouteCodec` request-aware capability would still have been lost
+at the site boundary because `RouteDefinition` stored only a static method
+list. `RouteDefinition.routeMethods` now owns `RouteRequest route context ->
+RouteMethodPolicy`; static routes explicitly use `const (routeMethodPolicy
+...)`, and mounts project the parent request before they invoke a child policy.
+`buildSiteApplication` passes that policy to the already existing shared
+codec. This preserves one owner for 404, 405, synthesized HEAD/OPTIONS, and
+`Allow`, rather than adding WAI middleware or an availability pre-router.
+
+The regression proves an endpoint selected by a `Bool` context snapshot is
+available when true and is a route-not-found for GET, HEAD, OPTIONS, and POST
+when false. Its direct definition also returns a bare 404 and never calls the
+handler. The next AHI-4E OpenAPI-provider slice must evaluate this same
+resolver from its deliberate documentation snapshot and prune hidden
+endpoints; until then it must not claim that generated documentation supports
+dynamic availability.
 
 The public `openapi3-3.2.5` and `insert-ordered-containers-0.3.0` releases
 build and pass their complete upstream suites on the frozen GHC/Aeson/lens
