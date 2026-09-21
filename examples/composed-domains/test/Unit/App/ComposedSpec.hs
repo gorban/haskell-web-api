@@ -20,6 +20,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
+import HarchWeb.Account qualified as Account
 import HarchWeb.Action qualified as Action
 import HarchWeb.ApplicationModule (ApplicationModule (..), mountApplicationModule)
 import HarchWeb.ClientStorage (noClientStorageCleanup)
@@ -87,7 +88,7 @@ import HarchWeb.Server
     toWaiApplication,
     unboundedRouteExecutionPolicy,
   )
-import HarchWeb.Session (OpaqueSession (..), SessionCookiePolicy (..), mkSessionCookieName, mkSessionId)
+import HarchWeb.Session (OpaqueSession (..), SessionCookieExtraction (SessionCookieFound, SessionCookieMissing), SessionCookiePolicy (..), defaultSessionCookiePolicy, extractSessionCookieId, mkSessionCookieName, mkSessionId, renderSessionCookie, sessionCookieName)
 import HarchWeb.Site (RouteDefinition (..), RouteHandler (PageRouteHandler, ProtocolRouteHandler))
 import HarchWeb.Site qualified as Site
 import HarchWeb.StaticAssets
@@ -105,10 +106,26 @@ import Orders.Domain
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
 import TestCore.Wai (nextRequestBodyChunk, performWaiRequest, readResponseBody, waiRequest)
+import WebApi.Config qualified as WebApiConfig
+import WebApi.Postgres.Testing qualified as WebApiPostgres
+import WebApi.Session qualified as WebApiSession
 
 testRequestId :: RequestId
 testRequestId =
   fromMaybe (error "invalid composed test request identifier") (mkRequestId "550e8400-e29b-41d4-a716-446655440000")
+
+expectDurableSessionWritten :: IO (Either storeError Bool) -> Expectation
+expectDurableSessionWritten action =
+  action >>= \case
+    Right True -> pure ()
+    _ -> expectationFailure "expected the durable session write to succeed"
+
+expectDurableSessionLoaded :: (Eq principal) => IO (Either storeError (Maybe (OpaqueSession principal))) -> OpaqueSession principal -> Expectation
+expectDurableSessionLoaded action expectedSession =
+  action >>= \case
+    Right (Just actualSession)
+      | actualSession == expectedSession -> pure ()
+    _ -> expectationFailure "expected the durable session store to return its own session"
 
 spec :: Spec
 spec = describe "Unit.App.Composed" $ do
@@ -233,6 +250,73 @@ spec = describe "Unit.App.Composed" $ do
                   `shouldReturn` Right [["1"]]
             )
             (closeRuntimes >> cleanUp)
+      )
+
+  it "keeps account, MFA-enrollment, and admission cookies and durable tables isolated with the same opaque session text" $
+    bracket
+      (newComposedDatabaseRuntime (ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_owner password=web_api_owner connect_timeout=1"))
+      closeComposedDatabaseRuntime
+      ( \ownerRuntime -> do
+          let runtimeDatabaseConfig = WebApiConfig.databaseConfig WebApiConfig.defaultAppEnvironmentConfig
+              migrationDatabaseConfig = runtimeDatabaseConfig {WebApiConfig.databaseUser = "web_api_owner", WebApiConfig.databasePassword = "web_api_owner"}
+              runtimeConnection = ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_runtime password=web_api connect_timeout=1"
+              sharedSessionId = requiredCsrf "shared cross-domain session id" (mkSessionId "0123456789abcdef0123456789abcdef")
+              accountId = requiredCsrf "cross-domain account id" (Account.mkAccountId "composed-cross-domain-session-account")
+              admissionPrincipalId = requiredCsrf "cross-domain admission principal" (mkAdmissionPrincipalId "composed-cross-domain-session-principal")
+              admissionLoginName = requiredCsrf "cross-domain admission login" (mkAdmissionLoginName "composed_cross_domain_session")
+              encryptedSecret = requiredCsrf "cross-domain encrypted admission secret" (mkEncryptedAdmissionTotpSecret "v1-cross-domain-envelope")
+              accountSession = OpaqueSession sharedSessionId accountId (unixTimeNanoseconds 100) (unixTimeNanoseconds 200)
+              mfaEnrollmentSession = OpaqueSession sharedSessionId accountId (unixTimeNanoseconds 101) (unixTimeNanoseconds 201)
+              admissionSession = OpaqueSession sharedSessionId admissionPrincipalId (unixTimeNanoseconds 102) (unixTimeNanoseconds 202)
+              cookiePair policy sessionToken = Text.takeWhile (/= ';') (renderSessionCookie policy sessionToken)
+              accountCookie = cookiePair defaultSessionCookiePolicy sharedSessionId
+              mfaCookie = cookiePair WebApiSession.mfaEnrollmentSessionCookiePolicy sharedSessionId
+              admissionCookie = cookiePair defaultAdmissionSessionCookiePolicy sharedSessionId
+              cookies = [(Http.hCookie, TextEncoding.encodeUtf8 (Text.intercalate "; " [accountCookie, mfaCookie, admissionCookie]))]
+              cleanUp = do
+                deletedMfaSessions <- runComposedDatabaseQuery ownerRuntime "DELETE FROM web_api.mfa_enrollment_sessions WHERE account_id = $1 RETURNING session_id;" [Account.accountIdText accountId]
+                deletedMfaSessions `shouldSatisfy` \case Right _ -> True; Left _ -> False
+                deletedAccountSessions <- runComposedDatabaseQuery ownerRuntime "DELETE FROM web_api.account_sessions WHERE account_id = $1 RETURNING session_id;" [Account.accountIdText accountId]
+                deletedAccountSessions `shouldSatisfy` \case Right _ -> True; Left _ -> False
+                deletedAccounts <- runComposedDatabaseQuery ownerRuntime "DELETE FROM web_api.accounts WHERE account_id = $1 RETURNING account_id;" [Account.accountIdText accountId]
+                deletedAccounts `shouldSatisfy` \case Right _ -> True; Left _ -> False
+                deletedAdmissionSessions <- runComposedDatabaseQuery ownerRuntime "DELETE FROM composed.admission_sessions WHERE admission_principal_id = $1 RETURNING session_id;" [admissionPrincipalIdText admissionPrincipalId]
+                deletedAdmissionSessions `shouldSatisfy` \case Right _ -> True; Left _ -> False
+                deletedAdmissionCredentials <- runComposedDatabaseQuery ownerRuntime "DELETE FROM composed.admission_credentials WHERE admission_principal_id = $1 RETURNING admission_principal_id;" [admissionPrincipalIdText admissionPrincipalId]
+                deletedAdmissionCredentials `shouldSatisfy` \case Right _ -> True; Left _ -> False
+          WebApiPostgres.runPostgresMigrationsForRuntime migrationDatabaseConfig runtimeDatabaseConfig `shouldReturn` Right ()
+          runComposedDatabaseChanges (ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_owner password=web_api_owner connect_timeout=1") `shouldReturn` Right ()
+          cleanUp
+          bracket
+            (newComposedDatabaseRuntime runtimeConnection)
+            closeComposedDatabaseRuntime
+            ( \runtime ->
+                finally
+                  ( do
+                      insertedAccount <- runComposedDatabaseQuery ownerRuntime "INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds) VALUES ($1, $2, $3, $4::BIGINT) RETURNING account_id;" [Account.accountIdText accountId, "composed-cross-domain-session@example.test", "test-password-hash", "1"]
+                      insertedAccount `shouldBe` Right [[Account.accountIdText accountId]]
+                      provisionPostgresAdmissionCredentialWithRunner runComposedDatabaseQuery ownerRuntime admissionPrincipalId admissionLoginName encryptedSecret `shouldReturn` Right True
+                      let accountStore = WebApiPostgres.buildRuntimePostgresAccountSessionStoreWithRunner runComposedDatabaseQuery runtime
+                          mfaEnrollmentStore = WebApiPostgres.buildRuntimePostgresMfaEnrollmentSessionStoreWithRunner runComposedDatabaseQuery runtime
+                          admissionStore = buildPostgresAdmissionSessionStoreWithRunner runComposedDatabaseQuery runtime
+                      expectDurableSessionWritten (WebApiSession.saveAccountSession accountStore accountSession)
+                      expectDurableSessionWritten (WebApiSession.saveMfaEnrollmentSession mfaEnrollmentStore mfaEnrollmentSession)
+                      saveAdmissionSession admissionStore admissionSession `shouldReturn` Right True
+                      expectAll
+                        ( expectDurableSessionLoaded (WebApiSession.loadAccountSession accountStore sharedSessionId) accountSession
+                            :| [ expectDurableSessionLoaded (WebApiSession.loadMfaEnrollmentSession mfaEnrollmentStore sharedSessionId) mfaEnrollmentSession,
+                                 loadAdmissionSession admissionStore (mkAdmissionSessionId sharedSessionId) `shouldReturn` Right (Just admissionSession),
+                                 extractSessionCookieId (sessionCookieName defaultSessionCookiePolicy) [(Http.hCookie, TextEncoding.encodeUtf8 mfaCookie)] `shouldBe` SessionCookieMissing,
+                                 extractSessionCookieId (sessionCookieName WebApiSession.mfaEnrollmentSessionCookiePolicy) [(Http.hCookie, TextEncoding.encodeUtf8 admissionCookie)] `shouldBe` SessionCookieMissing,
+                                 extractSessionCookieId (sessionCookieName defaultAdmissionSessionCookiePolicy) [(Http.hCookie, TextEncoding.encodeUtf8 accountCookie)] `shouldBe` SessionCookieMissing,
+                                 extractSessionCookieId (sessionCookieName defaultSessionCookiePolicy) cookies `shouldBe` SessionCookieFound sharedSessionId,
+                                 extractSessionCookieId (sessionCookieName WebApiSession.mfaEnrollmentSessionCookiePolicy) cookies `shouldBe` SessionCookieFound sharedSessionId,
+                                 extractSessionCookieId (sessionCookieName defaultAdmissionSessionCookiePolicy) cookies `shouldBe` SessionCookieFound sharedSessionId
+                               ]
+                        )
+                  )
+                  cleanUp
+            )
       )
 
   it "keeps admission login names and encrypted TOTP envelopes distinct and redacted" $ do
