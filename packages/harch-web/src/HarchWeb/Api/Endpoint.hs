@@ -18,6 +18,7 @@ module HarchWeb.Api.Endpoint
   ( ApiMethod (..),
     ApiPath,
     ApiFieldFailurePolicy (..),
+    ApiAvailability (..),
     NoApiExtension (..),
     ApiEndpointContract (..),
     withApiEndpointExtension,
@@ -37,8 +38,10 @@ module HarchWeb.Api.Endpoint
     requireApiRequestBodyByteLimit,
     apiRequestBodyByteLimitValue,
     apiRouteEndpoint,
+    withApiEndpointAvailability,
     apiRouteEndpointNeverFailing,
     apiRouteEndpointPath,
+    apiRouteEndpointAvailability,
     apiRouteDefinition,
     apiRouteDefinitionWithContext,
     apiRouteDefinitionWithContextNeverFailing,
@@ -57,7 +60,8 @@ where
 
 import HarchWeb.Api.Endpoint.Family
 import HarchWeb.Api.Endpoint.Internal
-  ( ApiEndpointContract (..),
+  ( ApiAvailability (..),
+    ApiEndpointContract (..),
     ApiEndpointRequest (..),
     ApiFieldFailurePolicy (..),
     ApiMethod (..),
@@ -76,10 +80,12 @@ import HarchWeb.Api.Endpoint.Internal
     apiRequestBodyByteLimit,
     apiRequestBodyByteLimitValue,
     apiRouteEndpoint,
+    apiRouteEndpointAvailability,
     apiRouteEndpointNeverFailing,
     apiRouteEndpointPath,
     at,
     requireApiRequestBodyByteLimit,
+    withApiEndpointAvailability,
     withApiEndpointExtension,
     withApiMultipartRequest,
   )

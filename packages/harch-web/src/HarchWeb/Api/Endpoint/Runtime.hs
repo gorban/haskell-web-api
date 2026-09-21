@@ -72,9 +72,9 @@ apiEndpointExecution contract request =
 runApiRouteEndpoint :: ApiRouteEndpoint extension fields body domainFailure response -> Wai.Request -> IO ProtocolResponse
 runApiRouteEndpoint endpoint request =
   case endpoint of
-    ApiRouteEndpoint declaration handler failureResponse ->
+    ApiRouteEndpoint _ declaration handler failureResponse ->
       runApiRouteEndpointHandler (apiEndpointExecution (apiRouteEndpointDeclarationContract declaration) request) handler failureResponse
-    ApiRouteEndpointNeverFailing declaration handler ->
+    ApiRouteEndpointNeverFailing _ declaration handler ->
       runApiRouteEndpointHandlerNeverFailing (apiEndpointExecution (apiRouteEndpointDeclarationContract declaration) request) handler
 
 -- | Decode one declared body and its fields before passing them to the

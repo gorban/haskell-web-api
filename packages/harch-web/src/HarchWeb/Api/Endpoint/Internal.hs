@@ -23,6 +23,7 @@ module HarchWeb.Api.Endpoint.Internal
     ApiPath (..),
     at,
     ApiFieldFailurePolicy (..),
+    ApiAvailability (..),
     NoApiExtension (..),
     ApiEndpointContract (..),
     withApiEndpointExtension,
@@ -41,9 +42,11 @@ module HarchWeb.Api.Endpoint.Internal
     apiRequestBodyByteLimitValue,
     ApiRequestBody (..),
     apiRouteEndpoint,
+    withApiEndpointAvailability,
     apiRouteEndpointNeverFailing,
     apiRouteEndpointPath,
     apiRouteEndpointMethod,
+    apiRouteEndpointAvailability,
   )
 where
 
@@ -117,6 +120,15 @@ data ApiFieldFailurePolicy response
   = ApiUseGenericFieldFailure
   | ApiRenderFieldFailures ([ApiRequestParseError] -> ApiResponse response)
 
+-- | Whether one declared endpoint participates in routing. Documentation
+-- interpreters must use the same declaration when they are added.
+-- 'ApiHidden' is a protocol-level absence: its family removes it before
+-- method negotiation, so it cannot expose @Allow@ or reach its handler.
+data ApiAvailability
+  = ApiAvailable
+  | ApiHidden
+  deriving (Eq, Show)
+
 -- | Deliberately empty metadata for APIs that opt out of an extension.
 --
 -- Decision record (AHI-4E, 2026-09-20): endpoint documentation augments the
@@ -168,12 +180,14 @@ data ApiRouteEndpointDeclaration extension fields body response = ApiRouteEndpoi
 data ApiRouteEndpoint extension fields body domainFailure response where
   ApiRouteEndpoint ::
     (Typeable response) =>
+    ApiAvailability ->
     ApiRouteEndpointDeclaration extension fields body response ->
     (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
     (domainFailure -> ApiResponse response) ->
     ApiRouteEndpoint extension fields body domainFailure response
   ApiRouteEndpointNeverFailing ::
     (Typeable response) =>
+    ApiAvailability ->
     ApiRouteEndpointDeclaration extension fields body response ->
     (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
     ApiRouteEndpoint extension fields body domainFailure response
@@ -260,7 +274,21 @@ apiRouteEndpoint ::
   (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
   (domainFailure -> ApiResponse response) ->
   ApiRouteEndpoint extension fields body domainFailure response
-apiRouteEndpoint = ApiRouteEndpoint
+apiRouteEndpoint = ApiRouteEndpoint ApiAvailable
+
+-- | Replace an endpoint's availability while retaining the same path,
+-- contract, and handler. The family interpreters read this before method
+-- negotiation; it is not a handler-local visibility flag.
+withApiEndpointAvailability ::
+  ApiAvailability ->
+  ApiRouteEndpoint extension fields body domainFailure response ->
+  ApiRouteEndpoint extension fields body domainFailure response
+withApiEndpointAvailability availability endpoint =
+  case endpoint of
+    ApiRouteEndpoint _ declaration handler failureResponse ->
+      ApiRouteEndpoint availability declaration handler failureResponse
+    ApiRouteEndpointNeverFailing _ declaration handler ->
+      ApiRouteEndpointNeverFailing availability declaration handler
 
 -- | Construct an endpoint with a total handler and no fabricated domain
 -- failure branch.
@@ -269,16 +297,22 @@ apiRouteEndpointNeverFailing ::
   ApiRouteEndpointDeclaration extension fields body response ->
   (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
   ApiRouteEndpoint extension fields body domainFailure response
-apiRouteEndpointNeverFailing = ApiRouteEndpointNeverFailing
+apiRouteEndpointNeverFailing = ApiRouteEndpointNeverFailing ApiAvailable
 
 apiRouteEndpointPath :: ApiRouteEndpoint extension fields body domainFailure response -> ApiPath
 apiRouteEndpointPath endpoint =
   case endpoint of
-    ApiRouteEndpoint declaration _ _ -> apiRouteEndpointDeclarationPath declaration
-    ApiRouteEndpointNeverFailing declaration _ -> apiRouteEndpointDeclarationPath declaration
+    ApiRouteEndpoint _ declaration _ _ -> apiRouteEndpointDeclarationPath declaration
+    ApiRouteEndpointNeverFailing _ declaration _ -> apiRouteEndpointDeclarationPath declaration
 
 apiRouteEndpointMethod :: ApiRouteEndpoint extension fields body domainFailure response -> ApiMethod
 apiRouteEndpointMethod endpoint =
   case endpoint of
-    ApiRouteEndpoint declaration _ _ -> apiEndpointContractMethod (apiRouteEndpointDeclarationContract declaration)
-    ApiRouteEndpointNeverFailing declaration _ -> apiEndpointContractMethod (apiRouteEndpointDeclarationContract declaration)
+    ApiRouteEndpoint _ declaration _ _ -> apiEndpointContractMethod (apiRouteEndpointDeclarationContract declaration)
+    ApiRouteEndpointNeverFailing _ declaration _ -> apiEndpointContractMethod (apiRouteEndpointDeclarationContract declaration)
+
+apiRouteEndpointAvailability :: ApiRouteEndpoint extension fields body domainFailure response -> ApiAvailability
+apiRouteEndpointAvailability endpoint =
+  case endpoint of
+    ApiRouteEndpoint availability _ _ _ -> availability
+    ApiRouteEndpointNeverFailing availability _ _ -> availability

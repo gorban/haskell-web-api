@@ -394,6 +394,65 @@ spec =
       it "reports no methods for a path with no declared endpoint" $
         HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointFamily) (HarchWeb.RouteRequest (at "/api/unknown") ()) `shouldBe` HarchWeb.RouteHidden
 
+      it "makes a hidden endpoint indistinguishable from an undeclared route before negotiation or handler execution" $ do
+        handlerCalls <- newIORef (0 :: Int)
+        let hiddenPath = at "/api/hidden"
+            hiddenEndpoint =
+              withApiEndpointAvailability
+                ApiHidden
+                ( Api.apiRouteEndpoint
+                    ( ApiRouteEndpointDeclaration
+                        hiddenPath
+                        (ApiEndpointContract ApiGet noRequestFields ApiNoRequestBody (textResponseEncoder :| []) ApiUseGenericFieldFailure NoApiExtension)
+                    )
+                    ( \_ -> do
+                        atomicModifyIORef' handlerCalls (\callCount -> (callCount + 1, ()))
+                        pure (Right (apiResponse "hidden"))
+                    )
+                    (const (apiResponse "unreachable"))
+                )
+            hiddenFamily = requireApiEndpointFamily [SomeApiRouteEndpoint hiddenEndpoint]
+            hiddenCodec = apiRouteEndpointFamilyCodec hiddenFamily
+        HarchWeb.parseRoute hiddenCodec () (routeLocationForTest "/api/hidden")
+          `shouldBe` HarchWeb.RouteParsed (RouteRequest hiddenPath ())
+        expectAll
+          ( ( HarchWeb.matchRouteMethod hiddenCodec () (HarchWeb.requestMethod "GET") (routeLocationForTest "/api/hidden")
+                `shouldBe` Right (HarchWeb.RouteNotFound (RouteRequest hiddenPath ()))
+            )
+              :| [ HarchWeb.matchRouteMethod hiddenCodec () (HarchWeb.requestMethod "HEAD") (routeLocationForTest "/api/hidden")
+                     `shouldBe` Right (HarchWeb.RouteNotFound (RouteRequest hiddenPath ())),
+                   HarchWeb.matchRouteMethod hiddenCodec () (HarchWeb.requestMethod "OPTIONS") (routeLocationForTest "/api/hidden")
+                     `shouldBe` Right (HarchWeb.RouteNotFound (RouteRequest hiddenPath ())),
+                   HarchWeb.matchRouteMethod hiddenCodec () (HarchWeb.requestMethod "POST") (routeLocationForTest "/api/hidden")
+                     `shouldBe` Right (HarchWeb.RouteNotFound (RouteRequest hiddenPath ())),
+                   HarchWeb.routeMethods hiddenCodec (RouteRequest hiddenPath ()) `shouldBe` HarchWeb.RouteHidden
+                 ]
+          )
+        directResponse <- runApiRouteEndpointGroup hiddenFamily hiddenPath (Wai.defaultRequest {Wai.requestMethod = "GET"})
+        standaloneResponse <- runApiRoute hiddenEndpoint (Wai.defaultRequest {Wai.requestMethod = "GET"})
+        expectAll
+          ( (apiRouteResponseStatus directResponse `shouldBe` HttpTypes.status404)
+              :| [ apiRouteResponseHeaders directResponse `shouldBe` [],
+                   apiRouteResponseBody directResponse `shouldBe` "",
+                   apiRouteResponseStatus standaloneResponse `shouldBe` HttpTypes.status404,
+                   apiRouteResponseHeaders standaloneResponse `shouldBe` [],
+                   apiRouteResponseBody standaloneResponse `shouldBe` "",
+                   readIORef handlerCalls `shouldReturn` 0
+                 ]
+          )
+
+      it "replaces availability for both endpoint handler forms without changing their declarations" $
+        let ordinaryPath = at "/api/ordinary-availability"
+            hiddenOrdinary = withApiEndpointAvailability ApiHidden (testEndpoint ApiGet ordinaryPath "ordinary")
+            hiddenTotal = withApiEndpointAvailability ApiHidden neverFailingEndpoint
+         in expectAll
+              ( (apiRouteEndpointAvailability hiddenOrdinary `shouldBe` ApiHidden)
+                  :| [ apiRouteEndpointPath hiddenOrdinary `shouldBe` ordinaryPath,
+                       apiRouteEndpointAvailability hiddenTotal `shouldBe` ApiHidden,
+                       apiRouteEndpointPath hiddenTotal `shouldBe` at "/api/total"
+                     ]
+              )
+
       it "agrees with the codec's routeMethods so the shared dispatcher and the definition never diverge" $
         HarchWeb.routeMethodPolicy (routeMethods (apiRouteEndpointFamilyDefinition (const testApiMetadata) testEndpointFamily (at "/api/status")))
           `shouldBe` HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointFamily) (HarchWeb.RouteRequest (at "/api/status") ())

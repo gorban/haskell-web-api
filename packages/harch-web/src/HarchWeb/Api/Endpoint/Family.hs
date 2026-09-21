@@ -54,9 +54,15 @@ apiRouteDefinition metadata endpoint =
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMetadata = metadata,
-      routeMethods = [toRouteMethod (apiRouteEndpointMethod endpoint)],
+      routeMethods =
+        case apiRouteEndpointAvailability endpoint of
+          ApiAvailable -> [toRouteMethod (apiRouteEndpointMethod endpoint)]
+          ApiHidden -> [],
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
-      routeHandler = ProtocolRouteHandler $ \request _ -> HarchWeb.NonPageProtocolResponse <$> runApiRouteEndpoint endpoint request
+      routeHandler = ProtocolRouteHandler $ \request _ ->
+        case apiRouteEndpointAvailability endpoint of
+          ApiAvailable -> HarchWeb.NonPageProtocolResponse <$> runApiRouteEndpoint endpoint request
+          ApiHidden -> pure (HarchWeb.NonPageProtocolResponse (apiHttpResponseToProtocolResponse (ApiHttpResponse HttpTypes.status404 [] Nothing)))
     }
 
 -- | Like 'apiRouteEndpoint' composed with 'apiRouteDefinition', but the
@@ -215,7 +221,7 @@ endpointFamilyEndpoints (ApiEndpointFamily endpoints) = NonEmpty.toList endpoint
 
 apiPathRouteMethods :: ApiEndpointFamily extension -> Text -> [HarchWeb.RouteMethod]
 apiPathRouteMethods family pathText =
-  maybe [] (map toRouteMethod . NonEmpty.toList . declaredMethods) (NonEmpty.nonEmpty (filter (endpointAtPath pathText) (endpointFamilyEndpoints family)))
+  maybe [] (map toRouteMethod . NonEmpty.toList . declaredMethods) (NonEmpty.nonEmpty (filter (\endpoint -> endpointAtPath pathText endpoint && endpointIsAvailable endpoint) (endpointFamilyEndpoints family)))
 
 -- | The 'RouteDefinition' for one path the family codec owns. A path with no
 -- declared endpoint is the family codec's ordinary not-found sentinel, so it
@@ -228,7 +234,7 @@ apiRouteEndpointFamilyDefinition endpointMetadataForPath family apiPath@(ApiPath
       routeMethods = apiPathRouteMethods family pathText,
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeHandler = ProtocolRouteHandler $ \request _ ->
-        case NonEmpty.nonEmpty (filter (endpointAtPath pathText) (endpointFamilyEndpoints family)) of
+        case NonEmpty.nonEmpty (filter (\endpoint -> endpointAtPath pathText endpoint && endpointIsAvailable endpoint) (endpointFamilyEndpoints family)) of
           Nothing -> pure (HarchWeb.NonPageProtocolResponse (apiHttpResponseToProtocolResponse (ApiHttpResponse HttpTypes.status404 [] Nothing)))
           Just pathEndpoints ->
             case matchedApiRouteEndpoint pathEndpoints (requestMethodTextFromWai request) of
@@ -264,6 +270,10 @@ endpointAtPath :: Text -> SomeApiRouteEndpoint extension -> Bool
 endpointAtPath requestPath (SomeApiRouteEndpoint endpoint) =
   case apiRouteEndpointPath endpoint of
     ApiPath declaredPath -> declaredPath == requestPath
+
+endpointIsAvailable :: SomeApiRouteEndpoint extension -> Bool
+endpointIsAvailable (SomeApiRouteEndpoint endpoint) =
+  apiRouteEndpointAvailability endpoint == ApiAvailable
 
 endpointHasMethod :: Text -> SomeApiRouteEndpoint extension -> Bool
 endpointHasMethod requestMethod (SomeApiRouteEndpoint endpoint) =

@@ -974,6 +974,24 @@ AHI-4E slice attaches API availability to endpoint declarations and applies
 this capability to the documented hidden Catalog endpoint; it does not add a
 pre-router or WAI middleware.
 
+**Follow-up decision — endpoint-owned static availability (AHI-4E,
+2026-09-21): add the closed `ApiAvailability` value to the existing typed
+endpoint, default every existing constructor to `ApiAvailable`, and provide
+`withApiEndpointAvailability` for the explicit `ApiHidden` choice.** The
+endpoint family codec and its direct route definition both filter that one
+value before they derive methods or invoke a handler. The regression exercises
+GET, HEAD, OPTIONS, and a wrong method, checks the direct definition returns a
+plain 404, and proves the handler is never called. This extends the existing
+endpoint declaration and its one dispatcher rather than creating a visibility
+middleware or a documentation-only filter.
+
+This slice deliberately supplies static availability only. The earlier
+request-aware `RouteCodec` capability is sufficient for a bounded
+context-snapshot resolver, but such a resolver is not yet attached to an API
+family or to OpenAPI generation. The remaining AHI-4E availability slice must
+add that pure context decision and prove the same no-leak behavior before
+claiming dynamic feature-flag support.
+
 The public `openapi3-3.2.5` and `insert-ordered-containers-0.3.0` releases
 build and pass their complete upstream suites on the frozen GHC/Aeson/lens
 plan, but both metadata bounds exclude Aeson 2.3.1.0. `openapi3` also emits
