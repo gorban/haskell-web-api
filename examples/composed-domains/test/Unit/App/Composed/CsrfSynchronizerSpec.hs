@@ -120,6 +120,9 @@ spec = describe "Unit.App.Composed.CsrfSynchronizer" $ do
     let allSql = concatMap (NonEmpty.toList . databaseChangeStatements) composedDatabaseChanges
         executor = DatabaseChangeExecutor (const (pure (Right (Just DatabaseChangeCommandSucceeded))))
     allSql `shouldSatisfy` any (Text.isInfixOf "admission_credentials")
+    allSql `shouldSatisfy` any (Text.isInfixOf "GRANT USAGE ON SCHEMA composed TO web_api_runtime")
+    allSql `shouldSatisfy` any (Text.isInfixOf "UPDATE (last_used_totp_counter) ON composed.admission_credentials")
+    allSql `shouldSatisfy` (not . any (Text.isInfixOf "INSERT ON composed.admission_credentials TO web_api_runtime"))
     runComposedDatabaseChangesWithExecutor executor `shouldReturn` Left DatabaseChangeQueryReturnedNoRows
 
   it "fails closed when the composed migration connection cannot be opened" $ do
