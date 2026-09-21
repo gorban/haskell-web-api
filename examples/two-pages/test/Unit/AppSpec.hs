@@ -269,19 +269,19 @@ spec =
                      <$> mkPreviewSlug "summer-release",
                    parseRoute ExampleRoutes.routeCodec () "/preview/Invalid" `shouldBe` Nothing,
                    parseRoute ExampleRoutes.routeCodec () "/missing" `shouldBe` Nothing,
-                   HarchWeb.routeMethods ExampleRoutes.routeCodec (Page HomePage)
+                   HarchWeb.routeMethods ExampleRoutes.routeCodec (HarchWeb.RouteRequest (Page HomePage) ())
                      `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
-                   HarchWeb.routeMethods ExampleRoutes.routeCodec (Page PageNotFound)
+                   HarchWeb.routeMethods ExampleRoutes.routeCodec (HarchWeb.RouteRequest (Page PageNotFound) ())
                      `shouldBe` HarchWeb.RouteHidden,
-                   HarchWeb.routeMethods ExampleRoutes.routeCodec (Api LiveDataEvents)
+                   HarchWeb.routeMethods ExampleRoutes.routeCodec (HarchWeb.RouteRequest (Api LiveDataEvents) ())
                      `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
-                   HarchWeb.routeMethods ExampleRoutes.routeCodec (Custom (PreviewPage previewSlug))
+                   HarchWeb.routeMethods ExampleRoutes.routeCodec (HarchWeb.RouteRequest (Custom (PreviewPage previewSlug)) ())
                      `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
-                   HarchWeb.routeMethods ExampleRoutes.routeCodec (Custom NativeSubscriptionFallback)
+                   HarchWeb.routeMethods ExampleRoutes.routeCodec (HarchWeb.RouteRequest (Custom NativeSubscriptionFallback) ())
                      `shouldBe` HarchWeb.routeMethodPolicy [RoutePost],
-                   HarchWeb.routeMethods ExampleRoutes.routeCodec (Custom NativeSubscriptionResult)
+                   HarchWeb.routeMethods ExampleRoutes.routeCodec (HarchWeb.RouteRequest (Custom NativeSubscriptionResult) ())
                      `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
-                   HarchWeb.routeMethods ExampleRoutes.routeCodec failureRoute
+                   HarchWeb.routeMethods ExampleRoutes.routeCodec (HarchWeb.RouteRequest failureRoute ())
                      `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page HomePage, requestContext = ()} `shouldBe` "/",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page SecondPage, requestContext = ()} `shouldBe` "/second",

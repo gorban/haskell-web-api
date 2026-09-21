@@ -86,7 +86,10 @@ combineApplicationModules modules =
         { parseRoute = parseModules,
           renderRoute = \routeRequest -> renderRoute (moduleRouteCodec (selectModule id (requestRoute routeRequest))) routeRequest,
           notFoundRequest = notFoundRequest (moduleRouteCodec firstModule),
-          routeMethods = \routeValue -> Routing.routeMethods (moduleRouteCodec (selectModule id routeValue)) routeValue
+          routeMethods = \routeRequest ->
+            Routing.routeMethods
+              (moduleRouteCodec (selectModule id (requestRoute routeRequest)))
+              routeRequest
         }
 
     parseModules context location = go moduleList

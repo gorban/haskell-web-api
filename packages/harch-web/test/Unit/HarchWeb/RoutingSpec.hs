@@ -77,6 +77,29 @@ data MountedParentRoute
 data MountedChildRoute = CatalogChildRoute
   deriving (Eq, Show)
 
+data ContextualRoute = ContextualRoute
+  deriving (Eq, Show)
+
+data ContextualVisibility
+  = ContextualVisible
+  | ContextualHidden
+  deriving (Eq, Show)
+
+contextualCodec :: RouteCodec ContextualRoute ContextualVisibility
+contextualCodec =
+  RouteCodec
+    { parseRoute = \visibility location ->
+        if routeLocationText location == "/contextual"
+          then RouteParsed (RouteRequest ContextualRoute visibility)
+          else RouteNotMatched,
+      renderRoute = const (testRouteLocation "/contextual"),
+      notFoundRequest = RouteRequest ContextualRoute,
+      routeMethods = \routeRequest ->
+        case requestContext routeRequest of
+          ContextualVisible -> routeMethodPolicy [RouteGet]
+          ContextualHidden -> RouteHidden
+    }
+
 mountedCatalogCodec :: RouteCodec MountedParentRoute Int
 mountedCatalogCodec =
   mountRouteCodec
@@ -221,6 +244,23 @@ existingSpec = do
           }
       prefixRouteLocation emptyPathPrefix location `shouldBe` location
 
+  describe "request-aware method policy" $
+    it "hides a parsed route before GET, HEAD, OPTIONS, or Allow negotiation" $
+      expectAll
+        ( ( matchRouteMethod contextualCodec ContextualVisible (requestMethod "GET") (testRouteLocation "/contextual")
+              `shouldBe` Right (RouteMatched (RouteRequest ContextualRoute ContextualVisible))
+          )
+            :| [ matchRouteMethod contextualCodec ContextualHidden (requestMethod "GET") (testRouteLocation "/contextual")
+                   `shouldBe` Right (RouteNotFound (RouteRequest ContextualRoute ContextualHidden)),
+                 matchRouteMethod contextualCodec ContextualHidden (requestMethod "HEAD") (testRouteLocation "/contextual")
+                   `shouldBe` Right (RouteNotFound (RouteRequest ContextualRoute ContextualHidden)),
+                 matchRouteMethod contextualCodec ContextualHidden (requestMethod "OPTIONS") (testRouteLocation "/contextual")
+                   `shouldBe` Right (RouteNotFound (RouteRequest ContextualRoute ContextualHidden)),
+                 matchRouteMethod contextualCodec ContextualHidden (requestMethod "POST") (testRouteLocation "/contextual")
+                   `shouldBe` Right (RouteNotFound (RouteRequest ContextualRoute ContextualHidden))
+               ]
+        )
+
   describe "mountRouteCodec" $
     it "projects context one way and owns only its typed structured prefix" $
       expectAll
@@ -229,7 +269,7 @@ existingSpec = do
           )
             :| [ parseRoute mountedCatalogCodec 42 (testRouteLocation "/orders/items") `shouldBe` RouteNotMatched,
                  routeLocationText (renderRoute mountedCatalogCodec (RouteRequest CatalogParentRoute 42)) `shouldBe` "/catalog/items",
-                 routeMethods mountedCatalogCodec OtherParentRoute `shouldBe` RouteHidden
+                 routeMethods mountedCatalogCodec (RouteRequest OtherParentRoute 0) `shouldBe` RouteHidden
                ]
         )
 
@@ -260,8 +300,8 @@ existingSpec = do
 
     it "delegates routeMethods to whichever family a route belongs to" $
       expectAll
-        ( (routeMethods combinedCodec (RouteFamilyA RoutingWriteRoute) `shouldBe` routeMethodPolicy [RoutePost, RoutePut])
-            :| [routeMethods combinedCodec (RouteFamilyB RoutingSecondOnlyRoute) `shouldBe` routeMethodPolicy [RouteGet]]
+        ( (routeMethods combinedCodec (RouteRequest (RouteFamilyA RoutingWriteRoute) RoutingTestContext) `shouldBe` routeMethodPolicy [RoutePost, RoutePut])
+            :| [routeMethods combinedCodec (RouteRequest (RouteFamilyB RoutingSecondOnlyRoute) RoutingTestContext) `shouldBe` routeMethodPolicy [RouteGet]]
         )
 
     it "derives one shared 404/405/HEAD/OPTIONS authority across both combined families" $
@@ -427,12 +467,13 @@ testCodec =
             RoutingMissingRoute -> "/404",
       notFoundRequest = \requestContextValue -> missingRequest {requestContext = requestContextValue},
       routeMethods =
-        routeMethodPolicy . \case
-          RoutingReadRoute -> [RouteGet]
-          RoutingWriteRoute -> [RoutePost, RoutePut]
-          RoutingEmptyRoute -> []
-          RoutingSharedRoute -> [RouteGet]
-          RoutingMissingRoute -> []
+        routeMethodPolicy . \routeRequest ->
+          case requestRoute routeRequest of
+            RoutingReadRoute -> [RouteGet]
+            RoutingWriteRoute -> [RoutePost, RoutePut]
+            RoutingEmptyRoute -> []
+            RoutingSharedRoute -> [RouteGet]
+            RoutingMissingRoute -> []
     }
 
 -- | A second, independent route family used only to exercise
@@ -454,9 +495,10 @@ secondCodec =
             RoutingSharedRouteB -> "/shared",
       notFoundRequest = RouteRequest RoutingSecondOnlyRoute,
       routeMethods =
-        routeMethodPolicy . \case
-          RoutingSecondOnlyRoute -> [RouteGet]
-          RoutingSharedRouteB -> [RouteGet]
+        routeMethodPolicy . \routeRequest ->
+          case requestRoute routeRequest of
+            RoutingSecondOnlyRoute -> [RouteGet]
+            RoutingSharedRouteB -> [RouteGet]
     }
 
 combinedCodec :: RouteCodec (RouteFamily RoutingTestRoute SecondFamilyRoute) RoutingTestContext

@@ -43,7 +43,7 @@ spec =
         parseRoute codec () (RouteLocation [requiredPathSegment "orders"] []) `shouldBe` RouteNotMatched
         renderRoute codec (RouteRequest (StaticAssetRoute (routePathSegments location)) ()) `shouldBe` location
         notFoundRequest codec () `shouldBe` RouteRequest (StaticAssetRoute []) ()
-        Routing.routeMethods codec (StaticAssetRoute (routePathSegments location)) `shouldBe` routeMethodPolicy [RouteGet]
+        Routing.routeMethods codec (RouteRequest (StaticAssetRoute (routePathSegments location)) ()) `shouldBe` routeMethodPolicy [RouteGet]
         let definition = staticAssetRouteDefinition staticAssets metadata
         routeNavigationLabel definition `shouldBe` Nothing
         routeMetadata definition `shouldBe` metadata

@@ -645,10 +645,10 @@ spec = describe "Unit.App.Composed" $ do
       `shouldBe` requiredModuleName "root" :| [requiredModuleName "root.public", requiredModuleName "public"]
     moduleRouteMountChain rootModule ordersRoute
       `shouldBe` requiredModuleName "root" :| [requiredModuleName "root.orders", requiredModuleName "orders"]
-    Routing.routeMethods (moduleRouteCodec rootModule) loginRoute `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
-    Routing.routeMethods (moduleRouteCodec rootModule) notFoundRoute `shouldBe` Routing.RouteHidden
-    Routing.routeMethods (moduleRouteCodec rootModule) catalogRoute `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
-    Routing.routeMethods (moduleRouteCodec rootModule) ordersRoute `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
+    Routing.routeMethods (moduleRouteCodec rootModule) (RouteRequest loginRoute rootContext) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
+    Routing.routeMethods (moduleRouteCodec rootModule) (RouteRequest notFoundRoute rootContext) `shouldBe` Routing.RouteHidden
+    Routing.routeMethods (moduleRouteCodec rootModule) (RouteRequest catalogRoute rootContext) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
+    Routing.routeMethods (moduleRouteCodec rootModule) (RouteRequest ordersRoute rootContext) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
     routePathSegments (renderRoute (moduleRouteCodec rootModule) (RouteRequest loginRoute rootContext))
       `shouldBe` [requiredPathSegment "en", requiredPathSegment "public", requiredPathSegment "login"]
     routePathSegments (renderRoute (moduleRouteCodec rootModule) (RouteRequest (Localized (locale "es") (Public (PublicAsset assetRoute))) rootContext))
@@ -1376,8 +1376,8 @@ spec = describe "Unit.App.Composed" $ do
         requestContext request `shouldBe` publicContext
       routeResult -> expectationFailure ("expected public asset route, got " <> show routeResult)
     parseRoute (moduleRouteCodec publicModule) publicContext (RouteLocation [requiredPathSegment "other"] []) `shouldBe` RouteNotMatched
-    Routing.routeMethods (moduleRouteCodec publicModule) (Public (PublicAsset (StaticAssetRoute (routePathSegments assetLocation)))) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
-    Routing.routeMethods (moduleRouteCodec publicModule) (Catalog CatalogIndex) `shouldBe` Routing.RouteHidden
+    Routing.routeMethods (moduleRouteCodec publicModule) (RouteRequest (Public (PublicAsset (StaticAssetRoute (routePathSegments assetLocation)))) publicContext) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
+    Routing.routeMethods (moduleRouteCodec publicModule) (RouteRequest (Catalog CatalogIndex) publicContext) `shouldBe` Routing.RouteHidden
     notFoundRequest (moduleRouteCodec publicModule) publicContext `shouldBe` RouteRequest (Public PublicNotFound) publicContext
     moduleActionRoute publicModule publicContext AdmissionActionTarget `shouldBe` Nothing
     fmap isNothing (moduleHandleAction publicModule (ClientActionRequest (RouteRequest (Public (PublicAdmission ReturnToAccountLogin)) publicContext) (CatalogAction RefreshCatalog) Nothing publicContext)) `shouldReturn` True
@@ -1385,7 +1385,7 @@ spec = describe "Unit.App.Composed" $ do
         loginDefinition = moduleEndpoints publicModule (Public PublicLogin)
         assetDefinition = moduleEndpoints publicModule (Public (PublicAsset (StaticAssetRoute (routePathSegments assetLocation))))
         missingDefinition = moduleEndpoints publicModule (Public PublicNotFound)
-    Routing.routeMethods (moduleRouteCodec publicModule) (Public (PublicAdmission ReturnToAccountLogin)) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
+    Routing.routeMethods (moduleRouteCodec publicModule) (RouteRequest (Public (PublicAdmission ReturnToAccountLogin)) publicContext) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
     directAdmissionResponse <- runRouteDefinition admissionDefinition Wai.defaultRequest (RouteRequest (Public (PublicAdmission ReturnToAccountLogin)) publicContext)
     case directAdmissionResponse of
       PageResponse _ page -> do

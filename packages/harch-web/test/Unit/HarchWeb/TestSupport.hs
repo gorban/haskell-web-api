@@ -151,7 +151,7 @@ sampleCodec =
     { parseRoute = parseSampleRoute,
       renderRoute = renderSampleRoute,
       notFoundRequest = \routeContext -> routeContext `seq` RouteRequest {requestRoute = MissingRoute, requestContext = routeContext},
-      routeMethods = routeMethodPolicy . sampleRouteMethods
+      routeMethods = routeMethodPolicy . sampleRouteMethods . requestRoute
     }
 
 sampleRouteMethods :: TestRoute -> [RouteMethod]
@@ -611,7 +611,7 @@ rootPathCodec =
             EventStreamRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/events"
             MissingRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/404",
       notFoundRequest = \routeContext -> routeContext `seq` RouteRequest {requestRoute = MissingRoute, requestContext = routeContext},
-      routeMethods = routeMethodPolicy . sampleRouteMethods
+      routeMethods = routeMethodPolicy . sampleRouteMethods . requestRoute
     }
 
 renderSampleResponse :: RouteRequest TestRoute TestContext -> Response TestRoute TestContext

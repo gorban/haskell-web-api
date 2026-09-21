@@ -426,10 +426,16 @@ mountRouteCodec RouteMount {routeMountPrefix, embedChildRoute, projectChildRoute
                     }
            in childLocation {routePathSegments = mountPrefix <> routePathSegments childLocation}
 
-    mountedRouteMethods parentRoute =
-      case projectChildRoute parentRoute of
+    mountedRouteMethods parentRequest =
+      case projectChildRoute (requestRoute parentRequest) of
         Nothing -> RouteHidden
-        Just childRoute -> Routing.routeMethods childCodec childRoute
+        Just childRoute ->
+          Routing.routeMethods
+            childCodec
+            RouteRequest
+              { requestRoute = childRoute,
+                requestContext = projectContext (requestContext parentRequest)
+              }
 
 stripMountPrefix :: [PathSegment] -> [PathSegment] -> Maybe [PathSegment]
 stripMountPrefix prefix segments =

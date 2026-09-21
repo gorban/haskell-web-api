@@ -81,7 +81,12 @@ localeRootCodec localePolicy localizedModule =
         let selectedLocale = requestLocale (requestCore requestContext)
             localNotFound = notFoundRequest (moduleRouteCodec localizedModule) (setRequestLocale (defaultLocale localePolicy) selectedLocale requestContext)
          in RouteRequest (Localized selectedLocale (requestRoute localNotFound)) requestContext,
-      routeMethods = \(Localized _ localRoute) -> Routing.routeMethods (moduleRouteCodec localizedModule) localRoute
+      routeMethods = \routeRequest ->
+        case requestRoute routeRequest of
+          Localized _ localRoute ->
+            Routing.routeMethods
+              (moduleRouteCodec localizedModule)
+              (routeRequest {requestRoute = localRoute})
     }
   where
     parseRootRoute rootContext location =

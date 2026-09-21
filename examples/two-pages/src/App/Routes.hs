@@ -219,7 +219,7 @@ routeCodec =
       renderRoute = routeLocation . requestRoute,
       notFoundRequest = \requestContext ->
         RouteRequest {requestRoute = Page PageNotFound, requestContext = requestContext},
-      routeMethods = routeMethodPolicy . twoPageRouteMethods
+      routeMethods = routeMethodPolicy . twoPageRouteMethods . requestRoute
     }
 
 twoPageRouteMethods :: TwoPageRoute -> [RouteMethod]

@@ -388,15 +388,15 @@ spec =
           )
 
       it "reports every declared method at a path, deduplicated" $
-        HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointFamily) (at "/api/status")
+        HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointFamily) (HarchWeb.RouteRequest (at "/api/status") ())
           `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet, HarchWeb.RoutePost]
 
       it "reports no methods for a path with no declared endpoint" $
-        HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointFamily) (at "/api/unknown") `shouldBe` HarchWeb.RouteHidden
+        HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointFamily) (HarchWeb.RouteRequest (at "/api/unknown") ()) `shouldBe` HarchWeb.RouteHidden
 
       it "agrees with the codec's routeMethods so the shared dispatcher and the definition never diverge" $
         HarchWeb.routeMethodPolicy (routeMethods (apiRouteEndpointFamilyDefinition (const testApiMetadata) testEndpointFamily (at "/api/status")))
-          `shouldBe` HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointFamily) (at "/api/status")
+          `shouldBe` HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointFamily) (HarchWeb.RouteRequest (at "/api/status") ())
 
       it "leaves every generated endpoint route definition without additional execution admission" $ do
         let contextDefinition =

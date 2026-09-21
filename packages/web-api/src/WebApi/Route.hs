@@ -206,7 +206,7 @@ routeCodec =
           { HarchWeb.requestRoute = NotFoundRoute,
             HarchWeb.requestContext = requestContext
           },
-      HarchWeb.routeMethods = HarchWeb.routeMethodPolicy . appRouteMethods
+      HarchWeb.routeMethods = HarchWeb.routeMethodPolicy . appRouteMethods . HarchWeb.requestRoute
     }
 
 appRouteMethods :: AppRoute -> [HarchWeb.RouteMethod]

@@ -335,8 +335,8 @@ spec =
       parseRoute mountedCodec 42 (testRouteLocation "/catalog/missing") `shouldBe` RouteNotMatched
       parseRoute mountedCodec 42 (testRouteLocation "/catalog/malformed") `shouldBe` RouteMalformed InvalidRouteTargetEncoding
       notFoundRequest mountedCodec 42 `shouldBe` RouteRequest ParentOtherRoute 42
-      Routing.routeMethods mountedCodec ParentOtherRoute `shouldBe` RouteHidden
-      Routing.routeMethods mountedCodec (CatalogRoute ChildItemRoute) `shouldBe` routeMethodPolicy [RouteGet]
+      Routing.routeMethods mountedCodec (RouteRequest ParentOtherRoute 42) `shouldBe` RouteHidden
+      Routing.routeMethods mountedCodec (RouteRequest (CatalogRoute ChildItemRoute) 42) `shouldBe` routeMethodPolicy [RouteGet]
       let nestedPrefixMount =
             (mountedRoutes testModuleMount)
               { routeMountPrefix = requiredPathSegment "catalog" :| [requiredPathSegment "item"]
@@ -558,8 +558,8 @@ spec =
       parseRoute rootCodec 42 (testRouteLocation "/other") `shouldBe` RouteParsed (RouteRequest ParentOtherRoute 42)
       renderRoute rootCodec (RouteRequest ParentOtherRoute 42) `shouldBe` testRouteLocation "/other"
       notFoundRequest rootCodec 42 `shouldBe` RouteRequest (CatalogRoute ChildItemRoute) 42
-      Routing.routeMethods rootCodec (CatalogRoute ChildItemRoute) `shouldBe` routeMethodPolicy [RouteGet]
-      Routing.routeMethods rootCodec ParentOtherRoute `shouldBe` routeMethodPolicy [RouteGet]
+      Routing.routeMethods rootCodec (RouteRequest (CatalogRoute ChildItemRoute) 42) `shouldBe` routeMethodPolicy [RouteGet]
+      Routing.routeMethods rootCodec (RouteRequest ParentOtherRoute 42) `shouldBe` routeMethodPolicy [RouteGet]
       EndpointMetadata.endpointNameText (EndpointMetadata.endpointName (routeMetadata (moduleEndpoints rootModule ParentOtherRoute)))
         `shouldBe` "root.other"
       let installedSite =
@@ -908,8 +908,9 @@ childCodec =
       renderRoute = \case
         RouteRequest ChildItemRoute _ -> testRouteLocation "/item",
       notFoundRequest = RouteRequest ChildItemRoute,
-      routeMethods = \case
-        ChildItemRoute -> routeMethodPolicy [RouteGet]
+      routeMethods = \routeRequest ->
+        case requestRoute routeRequest of
+          ChildItemRoute -> routeMethodPolicy [RouteGet]
     }
 
 malformedChildCodec :: RouteCodec ChildRoute Text

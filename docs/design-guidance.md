@@ -960,6 +960,20 @@ dispatcher and all current route behavior. The next slice may define a
 documentation-specific extension in `harch-web-openapi`; availability policy,
 OpenAPI interpretation, and a Swagger renderer remain separate follow-ups.
 
+**Follow-up decision — resolve method policy from the parsed request (AHI-4E,
+2026-09-21): change `RouteCodec.routeMethods` to receive its resolved
+`RouteRequest`, not only a route value.** Availability can depend on a bounded
+context snapshot selected during parsing. Checking it in a handler would occur
+after the shared dispatcher had already chosen 405, synthesized HEAD or
+OPTIONS, and exposed `Allow`. The existing `RouteCodec` is already the single
+owner of that protocol decision, so it is the small general framework
+primitive to extend. Mounts and composed codecs preserve the same request while
+projecting the child context before delegation. The routing regression proves a
+hidden parsed route is 404 for GET, HEAD, OPTIONS, and a wrong method. The next
+AHI-4E slice attaches API availability to endpoint declarations and applies
+this capability to the documented hidden Catalog endpoint; it does not add a
+pre-router or WAI middleware.
+
 The public `openapi3-3.2.5` and `insert-ordered-containers-0.3.0` releases
 build and pass their complete upstream suites on the frozen GHC/Aeson/lens
 plan, but both metadata bounds exclude Aeson 2.3.1.0. `openapi3` also emits

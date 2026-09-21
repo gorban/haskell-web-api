@@ -182,7 +182,9 @@ apiRouteEndpointFamilyCodec family =
           Nothing -> HarchWeb.RouteNotMatched,
       HarchWeb.renderRoute = apiPathLocation . HarchWeb.requestRoute,
       HarchWeb.notFoundRequest = HarchWeb.RouteRequest (ApiPath Text.empty),
-      HarchWeb.routeMethods = \(ApiPath pathText) -> HarchWeb.routeMethodPolicy (apiPathRouteMethods family pathText)
+      HarchWeb.routeMethods = \routeRequest ->
+        case HarchWeb.requestRoute routeRequest of
+          ApiPath pathText -> HarchWeb.routeMethodPolicy (apiPathRouteMethods family pathText)
     }
   where
     endpoints = endpointFamilyEndpoints family

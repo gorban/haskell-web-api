@@ -54,7 +54,7 @@ spec =
         `shouldBe` RouteLocation [] []
       notFoundRequest (moduleRouteCodec moduleValue) ordersContext
         `shouldBe` RouteRequest OrdersIndex ordersContext
-      Routing.routeMethods (moduleRouteCodec moduleValue) OrdersIndex `shouldBe` routeMethodPolicy [RouteGet]
+      Routing.routeMethods (moduleRouteCodec moduleValue) (RouteRequest OrdersIndex ordersContext) `shouldBe` routeMethodPolicy [RouteGet]
       Action.decodeAction
         (moduleActionCodec moduleValue)
         Action.ClientActionPayload

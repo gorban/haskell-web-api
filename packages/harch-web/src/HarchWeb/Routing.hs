@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Typed route matching and rendering for HarchWeb applications.
@@ -378,7 +377,12 @@ data RouteCodec route context = RouteCodec
   { parseRoute :: context -> RouteLocation -> RouteParseResult route context,
     renderRoute :: RouteRequest route context -> RouteLocation,
     notFoundRequest :: context -> RouteRequest route context,
-    routeMethods :: route -> RouteMethodPolicy
+    -- Method ownership may depend on the bounded context selected while
+    -- parsing this request.  Keeping that decision at this shared boundary
+    -- lets an endpoint become hidden before 405, HEAD, OPTIONS, or Allow are
+    -- derived; an application must not try to recreate that policy in a WAI
+    -- handler after the dispatcher has already exposed the route.
+    routeMethods :: RouteRequest route context -> RouteMethodPolicy
   }
 
 routeHref :: RouteCodec route context -> context -> route -> SafeUrl
@@ -425,9 +429,10 @@ combineRouteCodecs codecA codecB =
           RouteFamilyA routeA -> renderRoute codecA (routeRequest {requestRoute = routeA})
           RouteFamilyB routeB -> renderRoute codecB (routeRequest {requestRoute = routeB}),
       notFoundRequest = mapRouteRequest RouteFamilyB . notFoundRequest codecB,
-      routeMethods = \case
-        RouteFamilyA routeA -> routeMethods codecA routeA
-        RouteFamilyB routeB -> routeMethods codecB routeB
+      routeMethods = \routeRequest ->
+        case requestRoute routeRequest of
+          RouteFamilyA routeA -> routeMethods codecA (routeRequest {requestRoute = routeA})
+          RouteFamilyB routeB -> routeMethods codecB (routeRequest {requestRoute = routeB})
     }
   where
     mapRouteRequest embed routeRequest = routeRequest {requestRoute = embed (requestRoute routeRequest)}
@@ -460,7 +465,7 @@ matchRouteMethod codec context incomingMethod location =
     RouteNotMatched -> Right (RouteNotFound (notFoundRequest codec context))
     RouteMalformed routeError -> Left routeError
     RouteParsed routeRequest ->
-      case routeMethods codec (requestRoute routeRequest) of
+      case routeMethods codec routeRequest of
         RouteHidden -> Right (RouteNotFound routeRequest)
         RouteAllows declaredMethods ->
           case NonEmpty.nonEmpty (Set.toList declaredMethods) of

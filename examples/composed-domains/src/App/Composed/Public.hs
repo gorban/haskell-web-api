@@ -219,14 +219,15 @@ publicRouteCodec staticAssetsConfig maybeAdmissionWorkflow =
           Public PublicNotFound -> RouteLocation [requiredPathSegment "public", requiredPathSegment "404"] []
           _ -> error "attempted to render a non-public route through the public module",
       notFoundRequest = RouteRequest (Public PublicNotFound),
-      routeMethods = \case
-        Public (PublicAdmission _) -> Routing.routeMethodPolicy [Routing.RouteGet]
-        Public PublicAdmissionNativeFallback
-          | isJust maybeAdmissionWorkflow -> Routing.routeMethodPolicy [Routing.RoutePost]
-        Public PublicLogin -> Routing.routeMethodPolicy [Routing.RouteGet]
-        Public (PublicAsset _) -> Routing.routeMethodPolicy [Routing.RouteGet]
-        Public PublicNotFound -> RouteHidden
-        _ -> RouteHidden
+      routeMethods = \routeRequest ->
+        case requestRoute routeRequest of
+          Public (PublicAdmission _) -> Routing.routeMethodPolicy [Routing.RouteGet]
+          Public PublicAdmissionNativeFallback
+            | isJust maybeAdmissionWorkflow -> Routing.routeMethodPolicy [Routing.RoutePost]
+          Public PublicLogin -> Routing.routeMethodPolicy [Routing.RouteGet]
+          Public (PublicAsset _) -> Routing.routeMethodPolicy [Routing.RouteGet]
+          Public PublicNotFound -> RouteHidden
+          _ -> RouteHidden
     }
   where
     requiredAdmissionReturnQueryName = requiredQueryName "return"

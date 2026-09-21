@@ -606,7 +606,7 @@ spec = do
       HarchWeb.safeUrlText (HarchWeb.encodeRouteLocation (HarchWeb.renderRoute codec apiNotFoundRequest)) `shouldBe` renderRoutePath apiNotFoundRequest
       HarchWeb.safeUrlText (HarchWeb.encodeRouteLocation (HarchWeb.renderRoute codec notFoundRequest)) `shouldBe` renderRoutePath notFoundRequest
       HarchWeb.notFoundRequest codec defaultRequestContext `shouldBe` notFoundRequest
-      HarchWeb.routeMethods codec NotFoundRoute `shouldBe` HarchWeb.RouteHidden
+      HarchWeb.routeMethods codec (HarchWeb.RouteRequest NotFoundRoute defaultRequestContext) `shouldBe` HarchWeb.RouteHidden
       -- 'pureApplication's own codec (above) has its 'HarchWeb.routeMethods'
       -- overridden by 'HarchWeb.buildSiteApplication' to derive from each
       -- route's live 'HarchWeb.RouteDefinition' instead — which, for
@@ -615,10 +615,10 @@ spec = do
       -- 'Api _' declaration. Test 'WebApi.Route.routeCodec' directly for
       -- those two so this assertion exercises the declaration it names,
       -- not a same-valued but different code path.
-      HarchWeb.routeMethods WebApi.Route.routeCodec ApiNotFoundRoute `shouldBe` HarchWeb.RouteHidden
-      HarchWeb.routeMethods WebApi.Route.routeCodec StatusApiRoute `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet]
-      HarchWeb.routeMethods WebApi.Route.routeCodec SecondApiRoute `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet]
-      HarchWeb.routeMethods WebApi.Route.routeCodec TokenApiRoute `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RoutePost]
+      HarchWeb.routeMethods WebApi.Route.routeCodec (HarchWeb.RouteRequest ApiNotFoundRoute defaultRequestContext) `shouldBe` HarchWeb.RouteHidden
+      HarchWeb.routeMethods WebApi.Route.routeCodec (HarchWeb.RouteRequest StatusApiRoute defaultRequestContext) `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet]
+      HarchWeb.routeMethods WebApi.Route.routeCodec (HarchWeb.RouteRequest SecondApiRoute defaultRequestContext) `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet]
+      HarchWeb.routeMethods WebApi.Route.routeCodec (HarchWeb.RouteRequest TokenApiRoute defaultRequestContext) `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RoutePost]
 
     it "attaches security only after the page selector returns a page result" $ do
       expectedSecondResponse <- selectResponse defaultAppConfig secondRequest

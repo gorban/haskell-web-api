@@ -713,9 +713,10 @@ sampleRouteCodec =
       renderRoute = \routeRequest -> routeLocationForTest (renderRouteHref (requestContext routeRequest) (requestRoute routeRequest)),
       notFoundRequest = \requestContextValue -> RouteRequest {requestRoute = NotFoundRoute, requestContext = requestContextValue},
       routeMethods =
-        HarchWeb.routeMethodPolicy . \case
-          NotFoundRoute -> []
-          _ -> [HarchWeb.RouteGet]
+        HarchWeb.routeMethodPolicy . \routeRequest ->
+          case requestRoute routeRequest of
+            NotFoundRoute -> []
+            _ -> [HarchWeb.RouteGet]
     }
 
 renderRouteHref :: SampleContext -> SampleRoute -> Text

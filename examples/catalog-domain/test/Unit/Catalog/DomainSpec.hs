@@ -54,7 +54,7 @@ spec =
         `shouldBe` RouteLocation [] []
       notFoundRequest (moduleRouteCodec moduleValue) catalogContext
         `shouldBe` RouteRequest CatalogIndex catalogContext
-      Routing.routeMethods (moduleRouteCodec moduleValue) CatalogIndex `shouldBe` routeMethodPolicy [RouteGet]
+      Routing.routeMethods (moduleRouteCodec moduleValue) (RouteRequest CatalogIndex catalogContext) `shouldBe` routeMethodPolicy [RouteGet]
       Action.decodeAction
         (moduleActionCodec moduleValue)
         Action.ClientActionPayload
