@@ -43,8 +43,12 @@ expect_failure 'missing Playwright dependencies' 'Playwright dependencies are un
 
 write_node 'v24.0.0' 0
 success_output="$(PATH="$fixture_root/bin:$PATH" "$checker")"
+if ! printf '%s' "$success_output" | grep -Fq 'build all -O2 --ghc-options=-optl-fuse-ld=lld'; then
+  printf 'Integration and E2E gate did not build all test components first. Output:\n%s\n' "$success_output" >&2
+  exit 1
+fi
 if ! printf '%s' "$success_output" | grep -Fq 'test all -O2 --ghc-options=-optl-fuse-ld=lld --test-options=--skip Unit'; then
-  printf 'Integration and E2E gate did not invoke the expected Cabal command. Output:\n%s\n' "$success_output" >&2
+  printf 'Integration and E2E gate did not invoke the expected test command. Output:\n%s\n' "$success_output" >&2
   exit 1
 fi
 

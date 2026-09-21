@@ -28,4 +28,10 @@ if ! (
 fi
 
 cd "$repo_root"
+
+# Cabal can start a test component before its executable is linked when a
+# clean @test all@ evaluates the project in parallel. Build every component
+# first, then run the non-Unit integration/E2E selection from those concrete
+# test executables.
+cabal build all -O2 --ghc-options=-optl-fuse-ld=lld
 exec cabal test all -O2 --ghc-options=-optl-fuse-ld=lld --test-options="--skip Unit"
