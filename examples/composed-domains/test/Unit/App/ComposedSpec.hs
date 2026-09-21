@@ -6,7 +6,7 @@ module Unit.App.ComposedSpec (spec) where
 
 import App.Composed
 import Catalog.Domain
-import Control.Exception (ErrorCall, bracket, evaluate, try)
+import Control.Exception (ErrorCall, bracket, evaluate, finally, try)
 import Control.Monad (when)
 import Core.Config (ConfigParseError (..))
 import Crypto.Error (maybeCryptoError)
@@ -141,6 +141,51 @@ spec = describe "Unit.App.Composed" $ do
       ( \runtime ->
           runComposedDatabaseQuery runtime "SELECT 'unreachable'::TEXT;" []
             `shouldReturn` Left "database unavailable"
+      )
+
+  it "keeps encrypted admission provisioning owner-only while the runtime role can use its durable adapters" $
+    bracket
+      (newComposedDatabaseRuntime (ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_owner password=web_api_owner connect_timeout=1"))
+      closeComposedDatabaseRuntime
+      ( \ownerRuntime -> do
+          runComposedDatabaseChanges (ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_owner password=web_api_owner connect_timeout=1")
+            `shouldReturn` Right ()
+          let principalId = requiredCsrf "real PostgreSQL admission principal" (mkAdmissionPrincipalId "composed-runtime-grants-test")
+              loginName = requiredCsrf "real PostgreSQL admission login" (mkAdmissionLoginName "composed_runtime_grants_test")
+              encryptedSecret = requiredCsrf "real PostgreSQL encrypted admission secret" (mkEncryptedAdmissionTotpSecret "v1-test-envelope")
+              cleanUp = do
+                deletedSessions <- runComposedDatabaseQuery ownerRuntime "DELETE FROM composed.admission_sessions WHERE admission_principal_id = $1 RETURNING session_id;" [admissionPrincipalIdText principalId]
+                deletedSessions
+                  `shouldSatisfy` \case Right _ -> True; Left _ -> False
+                deletedCredentials <- runComposedDatabaseQuery ownerRuntime "DELETE FROM composed.admission_credentials WHERE admission_principal_id = $1 RETURNING admission_principal_id;" [admissionPrincipalIdText principalId]
+                deletedCredentials
+                  `shouldSatisfy` \case Right _ -> True; Left _ -> False
+          cleanUp
+          bracket
+            (newComposedDatabaseRuntime (ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_runtime password=web_api connect_timeout=1"))
+            closeComposedDatabaseRuntime
+            ( \runtime ->
+                ( do
+                    runComposedDatabaseQuery
+                      runtime
+                      "SELECT has_schema_privilege(current_user, 'composed', 'USAGE')::TEXT, has_table_privilege(current_user, 'composed.admission_credentials', 'SELECT')::TEXT, has_column_privilege(current_user, 'composed.admission_credentials', 'last_used_totp_counter', 'UPDATE')::TEXT, has_table_privilege(current_user, 'composed.admission_credentials', 'INSERT')::TEXT, has_table_privilege(current_user, 'composed.admission_sessions', 'INSERT')::TEXT, has_function_privilege(current_user, 'composed.reserve_admission_attempt_group(jsonb,bigint,bigint,bigint)'::regprocedure, 'EXECUTE')::TEXT;"
+                      []
+                      `shouldReturn` Right [["true", "true", "true", "false", "true", "true"]]
+                    let ownerCredentialStore = buildPostgresAdmissionCredentialStoreWithRunner runComposedDatabaseQuery ownerRuntime
+                        runtimeCredentialStore = buildPostgresAdmissionCredentialStoreWithRunner runComposedDatabaseQuery runtime
+                    provisionPostgresAdmissionCredentialWithRunner runComposedDatabaseQuery ownerRuntime principalId loginName encryptedSecret
+                      `shouldReturn` Right True
+                    findAdmissionCredential runtimeCredentialStore loginName
+                      `shouldReturn` Right (Just (StoredAdmissionCredential principalId encryptedSecret Nothing))
+                    markAdmissionTotpCounterUsed runtimeCredentialStore principalId 7
+                      `shouldReturn` Right True
+                    provisionPostgresAdmissionCredentialWithRunner runComposedDatabaseQuery runtime principalId loginName encryptedSecret
+                      `shouldReturn` Left AdmissionCredentialStoreUnavailable
+                    findAdmissionCredential ownerCredentialStore loginName
+                      `shouldReturn` Right (Just (StoredAdmissionCredential principalId encryptedSecret (Just 7)))
+                )
+                  `finally` cleanUp
+            )
       )
 
   it "keeps admission login names and encrypted TOTP envelopes distinct and redacted" $ do

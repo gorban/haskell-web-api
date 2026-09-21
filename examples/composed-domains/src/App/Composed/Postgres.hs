@@ -29,9 +29,11 @@ import Postgres.DatabaseChange
 
 newtype ComposedDatabaseConnectionString = ComposedDatabaseConnectionString ByteString
 
--- | Apply the composed schema and its own digest ledger.  Provisioning and
--- runtime grants are deployment-owned follow-up statements, not mutable
--- application migration state.
+-- | Apply the composed schema and its own digest ledger. Operator
+-- provisioning remains a separate deployment operation because it carries
+-- encrypted credentials; the runtime role grants are immutable changes here
+-- because every durable runtime adapter depends on that least-privilege
+-- boundary.
 runComposedDatabaseChanges :: ComposedDatabaseConnectionString -> IO (Either DatabaseChangeError ())
 runComposedDatabaseChanges (ComposedDatabaseConnectionString connectionString) =
   runDatabaseChanges
