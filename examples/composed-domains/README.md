@@ -35,6 +35,38 @@ Run the Unit and real-browser proof with:
 cabal test composed-domains-tests --test-show-details=direct
 ```
 
+## Admission database setup
+
+The development executable above remains a public composition example. It
+does not configure an account authentication runtime and therefore cannot be
+turned into an admission deployment by setting an environment variable.
+
+The separate operator-only setup executable owns the composed admission schema
+and credentials. Supply `COMPOSED_DATABASE_CONNECTION_STRING` and
+`COMPOSED_ADMISSION_TOTP_ENCRYPTION_KEY` through `.env`, `.env.local`, or the
+environment, with each later source overriding the earlier one. The encryption
+key is an AES-256 key encoded as unpadded Base64URL. Keep both values out of
+version control.
+
+Apply immutable database changes first:
+
+```sh
+cabal run composed-domains-admission-setup -- migrate
+```
+
+Then provision one credential using identifiers that are safe for the
+application's typed constructors:
+
+```sh
+cabal run composed-domains-admission-setup -- provision support-operator support_operator
+```
+
+The executable reads the Base32 TOTP secret only from an interactive terminal
+with echo disabled. Do not pass it through an argument, environment variable,
+or seed file. It validates and encrypts the canonical secret before its one
+parameterized PostgreSQL insert. Command output and public failures contain no
+secret, principal, login name, connection string, or encrypted envelope.
+
 The browser suite covers direct and enhanced navigation, scripts-disabled
 fallback, the language dialog's keyboard/focus behavior, and narrow/mobile Help
 link layout. The Help link is a reference control, not a general Harch FAB API;

@@ -25,6 +25,8 @@ module App.Composed
     AdmissionReturnTarget (..),
     AdmissionPrincipalId,
     AdmissionSessionId,
+    AdmissionSetupCommand (..),
+    AdmissionSetupError (..),
     AdmissionCompositionError (..),
     AdmissionConfig,
     AdmissionConfigError (..),
@@ -92,6 +94,7 @@ module App.Composed
     completeAdmissionProof,
     admissionAttemptScopeStorageKey,
     admissionAttemptBudgetsToList,
+    encryptAdmissionTotpSecret,
     admissionReturnTargetRoute,
     admissionLoginNameText,
     admissionPrincipalId,
@@ -124,6 +127,8 @@ module App.Composed
     buildPostgresSynchronizerTokenStoreWithRunner,
     defaultSynchronizerStoragePolicy,
     mkSynchronizerStoragePolicy,
+    parseAdmissionSetupCommand,
+    renderAdmissionSetupError,
   )
 where
 
@@ -177,6 +182,13 @@ import App.Composed.Admission.Types
     mkAdmissionSessionId,
     mkEncryptedAdmissionTotpSecret,
     unAdmissionSessionId,
+  )
+import App.Composed.AdmissionSetup
+  ( AdmissionSetupCommand (..),
+    AdmissionSetupError (..),
+    encryptAdmissionTotpSecret,
+    parseAdmissionSetupCommand,
+    renderAdmissionSetupError,
   )
 import App.Composed.CsrfSynchronizer
   ( SynchronizerTokenCapacityPolicy (..),
