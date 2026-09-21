@@ -1,4 +1,5 @@
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Unit.App.ComposedSpec (spec) where
@@ -7,6 +8,7 @@ import App.Composed
 import Catalog.Domain
 import Control.Exception (ErrorCall, bracket, evaluate, try)
 import Control.Monad (when)
+import Core.Config (ConfigParseError (..))
 import Crypto.Error (maybeCryptoError)
 import Data.ByteString qualified as ByteString
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
@@ -109,6 +111,14 @@ testRequestId =
 
 spec :: Spec
 spec = describe "Unit.App.Composed" $ do
+  it "parses deployment secrets without exposing them in diagnostics" $ do
+    parseComposedDeploymentConfig [] [] []
+      `shouldSatisfy` \case Left (MissingConfigValue "COMPOSED_DATABASE_CONNECTION_STRING") -> True; _ -> False
+    parseComposedDeploymentConfig [("COMPOSED_DATABASE_CONNECTION_STRING", "host=database password=secret"), ("COMPOSED_ADMISSION_TOTP_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")] [] []
+      `shouldSatisfy` \result -> either (const False) ((== "ComposedDeploymentConfig <redacted>") . show) result
+    parseComposedDeploymentConfig [("COMPOSED_DATABASE_CONNECTION_STRING", "host=database"), ("COMPOSED_ADMISSION_TOTP_ENCRYPTION_KEY", "short")] [] []
+      `shouldSatisfy` \case Left (InvalidConfigValue "COMPOSED_ADMISSION_TOTP_ENCRYPTION_KEY" "<redacted>") -> True; _ -> False
+
   it "uses one parameterized composed runtime connection and fails closed after shutdown" $
     bracket
       (newComposedDatabaseRuntime (ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_runtime password=web_api connect_timeout=1"))

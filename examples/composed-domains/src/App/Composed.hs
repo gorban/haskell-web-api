@@ -64,6 +64,9 @@ module App.Composed
     StoredAdmissionCredential (..),
     ComposedDatabaseConnectionString (..),
     ComposedDatabaseRuntime,
+    ComposedDeploymentConfig,
+    composedDeploymentAdmissionEncryptionKey,
+    composedDeploymentDatabase,
     ComposedDomainCapabilities (..),
     ComposedSiteDependencies (..),
     SynchronizerTokenDigest,
@@ -115,6 +118,7 @@ module App.Composed
     runComposedDatabaseChanges,
     runComposedDatabaseChangesWithExecutor,
     newComposedDatabaseRuntime,
+    parseComposedDeploymentConfig,
     runComposedDatabaseQuery,
     synchronizerCsrfProtection,
     buildPostgresSynchronizerTokenStoreWithRunner,
@@ -180,6 +184,12 @@ import App.Composed.CsrfSynchronizer
     SynchronizerTokenStore (..),
     SynchronizerTokenStoreError (..),
     synchronizerCsrfProtection,
+  )
+import App.Composed.DeploymentConfig
+  ( ComposedDeploymentConfig,
+    composedDeploymentAdmissionEncryptionKey,
+    composedDeploymentDatabase,
+    parseComposedDeploymentConfig,
   )
 import App.Composed.Localized (localizeApplicationModule, requestContextFromWai)
 import App.Composed.Model
