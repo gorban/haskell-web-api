@@ -39,6 +39,7 @@ module WebApi.Route
     endpointMetadata,
     matchRoute,
     parseRoute,
+    appRouteMethods,
     renderRoutePath,
     renderRouteUrl,
     requiredRouteUrl,

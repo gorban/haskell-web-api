@@ -120,6 +120,7 @@ import WebApi.Route
     AppRoute (..),
     RequestAuthenticationTransport (..),
     accountAuthenticationProfileName,
+    appRouteMethods,
     defaultRequestContext,
     endpointMetadata,
     requestContextFromWaiRequest,
@@ -320,7 +321,7 @@ buildAppRouteDefinition config pageRepository accountWorkflow route =
       Site.RouteDefinition
         { Site.routeNavigationLabel = routeNavigationLabel route,
           Site.routeMetadata = endpointMetadata route,
-          Site.routeMethods = HarchWeb.routeMethodPolicyMethods (HarchWeb.routeMethods routeCodec (HarchWeb.RouteRequest route defaultRequestContext)),
+          Site.routeMethods = appRouteMethods route,
           Site.routeExecutionPolicy = HarchWeb.unboundedRouteExecutionPolicy,
           Site.routeHandler = Site.PageRouteHandler $
             \_ -> selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow
@@ -331,7 +332,7 @@ protocolRouteDefinition route renderProtocol =
   Site.RouteDefinition
     { Site.routeNavigationLabel = routeNavigationLabel route,
       Site.routeMetadata = endpointMetadata route,
-      Site.routeMethods = HarchWeb.routeMethodPolicyMethods (HarchWeb.routeMethods routeCodec (HarchWeb.RouteRequest route defaultRequestContext)),
+      Site.routeMethods = appRouteMethods route,
       Site.routeExecutionPolicy = HarchWeb.unboundedRouteExecutionPolicy,
       Site.routeHandler = Site.ProtocolRouteHandler (const renderProtocol)
     }
