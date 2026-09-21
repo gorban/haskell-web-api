@@ -388,7 +388,7 @@ spec =
       aroundAllWith (withBrowserServer challengedBrowserApp) $
         parallel $
           describe "profile authentication challenges" $ do
-            it "serves the app-home profile landing through SSR and enhanced navigation" $ \(browser, server) -> do
+            it "serves the TODO profile landing through SSR and enhanced navigation" $ \(browser, server) -> do
               let secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
                   loginUrl = HarchWeb.localServerBaseUrl server <> "/login"
                   profileUrl = HarchWeb.localServerBaseUrl server <> "/profile"
