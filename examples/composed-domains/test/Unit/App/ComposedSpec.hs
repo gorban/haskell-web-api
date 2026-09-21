@@ -6,8 +6,9 @@ module Unit.App.ComposedSpec (spec) where
 
 import App.Composed
 import Catalog.Domain
+import Control.Concurrent (forkIO, newEmptyMVar, putMVar, readMVar, takeMVar)
 import Control.Exception (ErrorCall, bracket, evaluate, finally, try)
-import Control.Monad (when)
+import Control.Monad (replicateM, when)
 import Core.Config (ConfigParseError (..))
 import Crypto.Error (maybeCryptoError)
 import Data.ByteString qualified as ByteString
@@ -186,6 +187,52 @@ spec = describe "Unit.App.Composed" $ do
                 )
                   `finally` cleanUp
             )
+      )
+
+  it "serializes real PostgreSQL admission reservations and frees retained capacity at expiry" $
+    bracket
+      (newComposedDatabaseRuntime (ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_owner password=web_api_owner connect_timeout=1"))
+      closeComposedDatabaseRuntime
+      ( \ownerRuntime -> do
+          runComposedDatabaseChanges (ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_owner password=web_api_owner connect_timeout=1")
+            `shouldReturn` Right ()
+          let cleanUp = do
+                deletedAttempts <- runComposedDatabaseQuery ownerRuntime "DELETE FROM composed.admission_attempt_groups RETURNING attempt_group_id::TEXT;" []
+                deletedAttempts `shouldSatisfy` \case Right _ -> True; Left _ -> False
+              runtimeConnection = ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_runtime password=web_api connect_timeout=1"
+              budgetJson = "[{\"key\":\"admission-totp:known:composed-concurrent-reservation-test\",\"maximum\":\"2\",\"window\":\"100\",\"lockout\":\"100\"}]"
+          cleanUp
+          runtimeOne <- newComposedDatabaseRuntime runtimeConnection
+          runtimeTwo <- newComposedDatabaseRuntime runtimeConnection
+          let runtimes = [runtimeOne, runtimeTwo]
+              closeRuntimes = mapM_ closeComposedDatabaseRuntime runtimes
+              reserve runtime now =
+                runComposedDatabaseQuery
+                  runtime
+                  "SELECT outcome, value FROM composed.reserve_admission_attempt_group($1::JSONB, $2::BIGINT, $3::BIGINT, $4::BIGINT);"
+                  [budgetJson, Text.pack (show (now - (1 :: Word64))), Text.pack (show now), "1"]
+          finally
+            ( do
+                start <- newEmptyMVar
+                completions <- replicateM 2 newEmptyMVar
+                sequence_
+                  [ forkIO (readMVar start >> reserve runtime 1000 >>= putMVar completion)
+                  | (runtime, completion) <- zip runtimes completions
+                  ]
+                putMVar start ()
+                concurrentResults <- traverse takeMVar completions
+                length [() | Right [["reserved", _]] <- concurrentResults] `shouldBe` 1
+                length [() | Right [["storage-exhausted", ""]] <- concurrentResults] `shouldBe` 1
+                reservationAfterExpiry <- reserve runtimeOne 1002
+                reservationAfterExpiry
+                  `shouldSatisfy` (\case Right [["reserved", _]] -> True; _ -> False)
+                runComposedDatabaseQuery
+                  ownerRuntime
+                  "SELECT count(*)::TEXT FROM composed.admission_attempt_groups;"
+                  []
+                  `shouldReturn` Right [["1"]]
+            )
+            (closeRuntimes >> cleanUp)
       )
 
   it "keeps admission login names and encrypted TOTP envelopes distinct and redacted" $ do
