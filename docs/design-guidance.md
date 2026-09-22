@@ -945,9 +945,9 @@ interpretation of typed endpoint declarations; making `harch-web` itself
 depend on a data model, renderer, or Swagger assets would impose that cost on
 every application. A second WAI dispatcher would duplicate method, path,
 authorization, and availability ownership. The bootstrap package therefore
-contains only the selected model facade and its encoding proof; its following
-slice adds the generic extension to the existing endpoint contract and
-interprets explicitly supplied families without crawling a completed `Site`.
+contains the selected model facade and its encoding proof. The generic
+extension subsequently landed in the existing endpoint contract; no OpenAPI
+package introduces a route dispatcher or crawls a completed `Site`.
 
 **Follow-up decision — typed endpoint metadata extension (AHI-4E,
 2026-09-20): add an explicit extension parameter to
@@ -959,6 +959,18 @@ the shared runtime intentionally does not interpret it, preserving one
 dispatcher and all current route behavior. The next slice may define a
 documentation-specific extension in `harch-web-openapi`; availability policy,
 OpenAPI interpretation, and a Swagger renderer remain separate follow-ups.
+
+**Follow-up decision — typed OpenAPI metadata boundary (AHI-4E,
+2026-09-22): define `OpenApiExtension` only in the optional
+`harch-web-openapi` package and attach it with the existing
+`withApiEndpointExtension` boundary.** Its smart constructors validate custom
+`x-*` names and duplicate extension names before later interpretation. The
+extension is parameterized by the endpoint's existing request and response
+types, preventing an untyped documentation property bag while leaving runtime
+codecs, handlers, authorization, and availability untouched. Schema helpers,
+explicit mounted-family interpretation, aggregation, and the cached document
+provider remain the concrete next gap; this metadata slice does not yet emit
+or serve an OpenAPI document.
 
 **Follow-up decision — resolve method policy from the parsed request (AHI-4E,
 2026-09-21): change `RouteCodec.routeMethods` to receive its resolved
@@ -1020,9 +1032,10 @@ exact-header diagnostic classifier. The isolated verifier rebuilds the
 unmodified Hackage sources and applies the classifier. This is a time-bounded
 compatibility decision, not a general third-party warning policy: remove all
 three exceptions when public releases widen the bounds and repair the source.
-No API-family interpretation, schema generation, document provider, Swagger
-renderer, asset route, or documentation security mapping ships in this slice;
-the next AHI-4E slices close those concrete gaps.
+The optional package now also supplies validated typed endpoint metadata, but
+no API-family interpretation, schema generation, document provider, Swagger
+renderer, asset route, or documentation security mapping ships yet. The next
+AHI-4E slices close those concrete gaps.
 
 **Follow-up decision — verified TLS compatibility exception (2026-09-12): use
 the current public TLS/Warp releases, with the smallest source-compatible bound

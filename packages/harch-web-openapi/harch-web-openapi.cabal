@@ -29,11 +29,17 @@ common common
 library
   import: common
   exposed: True
-  exposed-modules: HarchWeb.OpenApi
+  exposed-modules:
+    HarchWeb.OpenApi
+    HarchWeb.OpenApi.Metadata
+
   hs-source-dirs: src
   build-depends:
+    aeson ^>=2.3.1.0,
     base ^>=4.22.0.0,
+    harch-web ^>=0.1.2.0,
     openapi3 ^>=3.2.5,
+    text ^>=2.1.2,
 
 test-suite harch-web-openapi-tests
   import: common
@@ -42,6 +48,7 @@ test-suite harch-web-openapi-tests
   -- hspec-discover imports every test module. Keep this complete and let the
   -- manifest check verify it against test/ rather than suppress Cabal warnings.
   other-modules:
+    Unit.HarchWeb.OpenApi.MetadataSpec
     Unit.HarchWeb.OpenApiSpec
 
   ghc-options:
@@ -60,6 +67,7 @@ test-suite harch-web-openapi-tests
     aeson ^>=2.3.1.0,
     base ^>=4.22.0.0,
     bytestring ^>=0.12.2.0,
+    harch-web ^>=0.1.2.0,
     harch-web-openapi ^>=0.1.2.0,
     hspec ^>=2.11.17,
     test-core ^>=0.1.2.0,
