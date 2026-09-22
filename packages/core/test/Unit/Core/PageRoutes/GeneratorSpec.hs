@@ -15,17 +15,17 @@ spec =
     it "derives nested constructors, modules, paths, and stable content hashes" $ do
       let loginSource = "pageDefinition :: RouteDefinition route context\npageDefinition = login\n"
           changedSource = loginSource <> "login = ()\n"
-          loginPage = pageSpecFromRelativePath "Account/Login.hs" loginSource
-          changedLoginPage = pageSpecFromRelativePath "Account/Login.hs" changedSource
+          loginPage = pageSpecFromRelativePath "App.Pages." "Account/Login.hs" loginSource
+          changedLoginPage = pageSpecFromRelativePath "App.Pages." "Account/Login.hs" changedSource
       expectAll
         ( ((pageSourcePath <$> loginPage) `shouldBe` Right "Account/Login.hs")
             :| [ (pageConstructor <$> loginPage) `shouldBe` Right "AccountLoginPage",
                  (pageModuleName <$> loginPage) `shouldBe` Right "App.Pages.Account.Login",
                  (pageUrlPath <$> loginPage) `shouldBe` Right "/account/login",
                  (pageSourceHash <$> loginPage) `shouldNotBe` (pageSourceHash <$> changedLoginPage),
-                 pageSpecFromRelativePath "Home.hs" "pageDefinition = home"
+                 pageSpecFromRelativePath "App.Pages." "Home.hs" "pageDefinition = home"
                    `shouldSatisfy` hasConstructor "HomePage",
-                 pageSpecFromRelativePath "NotFound.hs" "pageDefinition = missing"
+                 pageSpecFromRelativePath "App.Pages." "NotFound.hs" "pageDefinition = missing"
                    `shouldSatisfy` hasPage "PageNotFound" "/404"
                ]
         )
@@ -43,6 +43,7 @@ spec =
           errors =
             [ missingError,
               noPagesError,
+              InvalidPageModulePrefix "WebApi.Pages",
               InvalidPagePath "bad.txt",
               MissingPageDefinition "Missing.hs",
               ConstructorCollision "SamePage" ["A.hs", "B.hs"],
@@ -62,18 +63,26 @@ spec =
                ]
         )
 
-    it "rejects unsupported module paths and missing conventional definitions" $
+    it "rejects malformed page namespaces, unsupported module paths, and missing conventional definitions" $
       expectAll
-        ( ( pageSpecFromRelativePath "account/Login.hs" "pageDefinition = login"
-              `shouldBe` Left (InvalidPagePath "account/Login.hs")
+        ( ( pageSpecFromRelativePath "WebApi.Pages" "Login.hs" "pageDefinition = login"
+              `shouldBe` Left (InvalidPageModulePrefix "WebApi.Pages")
           )
-            :| [ pageSpecFromRelativePath "Account/Login.txt" "pageDefinition = login"
+            :| [ pageSpecFromRelativePath ".WebApi.Pages." "Login.hs" "pageDefinition = login"
+                   `shouldBe` Left (InvalidPageModulePrefix ".WebApi.Pages."),
+                 pageSpecFromRelativePath "WebApi..Pages." "Login.hs" "pageDefinition = login"
+                   `shouldBe` Left (InvalidPageModulePrefix "WebApi..Pages."),
+                 pageSpecFromRelativePath "webApi.Pages." "Login.hs" "pageDefinition = login"
+                   `shouldBe` Left (InvalidPageModulePrefix "webApi.Pages."),
+                 pageSpecFromRelativePath "App.Pages." "account/Login.hs" "pageDefinition = login"
+                   `shouldBe` Left (InvalidPagePath "account/Login.hs"),
+                 pageSpecFromRelativePath "App.Pages." "Account/Login.txt" "pageDefinition = login"
                    `shouldBe` Left (InvalidPagePath "Account/Login.txt"),
-                 pageSpecFromRelativePath "Account/Log-in.hs" "pageDefinition = login"
+                 pageSpecFromRelativePath "App.Pages." "Account/Log-in.hs" "pageDefinition = login"
                    `shouldBe` Left (InvalidPagePath "Account/Log-in.hs"),
-                 pageSpecFromRelativePath "Account/.hs" "pageDefinition = login"
+                 pageSpecFromRelativePath "App.Pages." "Account/.hs" "pageDefinition = login"
                    `shouldBe` Left (InvalidPagePath "Account/.hs"),
-                 pageSpecFromRelativePath "Login.hs" "-- pageDefinition is intentionally absent"
+                 pageSpecFromRelativePath "App.Pages." "Login.hs" "-- pageDefinition is intentionally absent"
                    `shouldBe` Left (MissingPageDefinition "Login.hs")
                ]
         )
@@ -120,15 +129,22 @@ spec =
         writePage pagesDirectory "Home.hs" "pageDefinition = home"
         writePage pagesDirectory "Account/Login.hs" "pageDefinition = login"
         writePage pagesDirectory "notes.txt" "not a module"
-        firstDiscovery <- discoverPages pagesDirectory
+        firstDiscovery <- discoverPages "App.Pages." pagesDirectory
         firstDiscovery `shouldSatisfy` hasConstructors ["AccountLoginPage", "HomePage"]
         writePage pagesDirectory "Second.hs" "pageDefinition = second"
-        secondDiscovery <- discoverPages pagesDirectory
+        secondDiscovery <- discoverPages "App.Pages." pagesDirectory
         secondDiscovery
           `shouldSatisfy` hasConstructors ["AccountLoginPage", "HomePage", "SecondPage"]
         removeFile (pagesDirectory </> "Account/Login.hs")
-        thirdDiscovery <- discoverPages pagesDirectory
+        thirdDiscovery <- discoverPages "App.Pages." pagesDirectory
         thirdDiscovery `shouldSatisfy` hasConstructors ["HomePage", "SecondPage"]
+        -- The module namespace is the application's, so discovery takes it as an
+        -- argument rather than assuming App.Pages.
+        prefixedDiscovery <- discoverPages "WebApi.Pages." pagesDirectory
+        prefixedDiscovery
+          `shouldSatisfy` hasModules ["WebApi.Pages.Home", "WebApi.Pages.Second"]
+        invalidPrefixDiscovery <- discoverPages "webApi.Pages." pagesDirectory
+        invalidPrefixDiscovery `shouldBe` Left (InvalidPageModulePrefix "webApi.Pages.")
 
     it "reports missing and empty page roots explicitly" $
       withSystemTempDirectory "harch-empty-pages" $ \temporaryDirectory -> do
@@ -136,10 +152,10 @@ spec =
             emptyDirectory = temporaryDirectory </> "empty"
         createDirectoryIfMissing True emptyDirectory
         expectAll
-          ( ( discoverPages missingDirectory
+          ( ( discoverPages "App.Pages." missingDirectory
                 `shouldReturn` Left (PagesDirectoryMissing missingDirectory)
             )
-              :| [ discoverPages emptyDirectory
+              :| [ discoverPages "App.Pages." emptyDirectory
                      `shouldReturn` Left (NoPagesDiscovered emptyDirectory)
                  ]
           )
@@ -185,6 +201,39 @@ spec =
                  ]
           )
 
+    it "writes dispatchers that import pages below another application namespace" $
+      withSystemTempDirectory "harch-prefixed-page-generation" $ \temporaryDirectory -> do
+        let pagesDirectory = temporaryDirectory </> "pages"
+            generatedDirectory = temporaryDirectory </> "generated"
+            config =
+              (defaultGeneratorConfig pagesDirectory generatedDirectory)
+                { pageModulePrefix = "WebApi.Pages.",
+                  routeModuleName = "WebApi.Pages.Route.Generated",
+                  dispatcherModuleName = "WebApi.Pages.Generated",
+                  applicationRouteModuleName = "WebApi.Route",
+                  applicationRouteTypeName = "AppRoute",
+                  requestContextTypeName = "AppRequestContext"
+                }
+        writePage pagesDirectory "Home.hs" "pageDefinition = home"
+        generated <- generatePageModules config
+        dispatcherSource <- TextIO.readFile (generatedDirectory </> "WebApi/Pages/Generated.hs")
+        expectAll
+          ( ( generated
+                `shouldBe` Right
+                  ( Generated
+                      [ generatedDirectory </> "WebApi/Pages/Route/Generated.hs",
+                        generatedDirectory </> "WebApi/Pages/Generated.hs",
+                        generatedDirectory </> "harch-page-routes.manifest"
+                      ]
+                  )
+            )
+              :| [ dispatcherSource
+                     `shouldSatisfy` Text.isInfixOf "HomePage -> WebApi.Pages.Home.pageDefinition",
+                   dispatcherSource
+                     `shouldSatisfy` Text.isInfixOf "RouteDefinition AppRoute AppRequestContext ()"
+                 ]
+          )
+
 samplePageSpecs :: [PageSpec]
 samplePageSpecs =
   [ PageSpec "Home.hs" "HomePage" "App.Pages.Home" "/" "home-hash",
@@ -217,6 +266,12 @@ hasConstructors :: [String] -> Either GenerationError [PageSpec] -> Bool
 hasConstructors expectedConstructors pageResult =
   case pageResult of
     Right pageSpecs -> map pageConstructor pageSpecs == expectedConstructors
+    Left _ -> False
+
+hasModules :: [String] -> Either GenerationError [PageSpec] -> Bool
+hasModules expectedModules pageResult =
+  case pageResult of
+    Right pageSpecs -> map pageModuleName pageSpecs == expectedModules
     Left _ -> False
 
 writePage :: FilePath -> FilePath -> String -> IO ()

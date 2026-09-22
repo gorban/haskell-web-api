@@ -46,6 +46,13 @@ import System.FilePath
 data GeneratorConfig = GeneratorConfig
   { pagesSourceDirectory :: FilePath,
     generatedSourceDirectory :: FilePath,
+    -- | The module namespace every discovered page module lives under, with its
+    -- trailing dot: a page file @Home.hs@ becomes @<prefix>Home@ and
+    -- @Account/Login.hs@ becomes @<prefix>Account.Login@.  It is configuration
+    -- rather than a constant because the namespace belongs to the application,
+    -- not to this tool: a framework build step has no business deciding that
+    -- every application's pages are called @App.Pages.@.
+    pageModulePrefix :: String,
     routeModuleName :: String,
     dispatcherModuleName :: String,
     applicationRouteModuleName :: String,
@@ -60,6 +67,7 @@ defaultGeneratorConfig pagesDirectory generatedDirectory =
   GeneratorConfig
     { pagesSourceDirectory = pagesDirectory,
       generatedSourceDirectory = generatedDirectory,
+      pageModulePrefix = "App.Pages.",
       routeModuleName = "App.Pages.Route.Generated",
       dispatcherModuleName = "App.Pages.Generated",
       applicationRouteModuleName = "App.Routes",
@@ -80,6 +88,7 @@ data PageSpec = PageSpec
 data GenerationError
   = PagesDirectoryMissing FilePath
   | NoPagesDiscovered FilePath
+  | InvalidPageModulePrefix String
   | InvalidPagePath FilePath
   | MissingPageDefinition FilePath
   | ConstructorCollision String [FilePath]
@@ -93,7 +102,7 @@ data GenerationOutcome
 
 generatePageModules :: GeneratorConfig -> IO (Either GenerationError GenerationOutcome)
 generatePageModules config = do
-  discovered <- discoverPages (pagesSourceDirectory config)
+  discovered <- discoverPages (pageModulePrefix config) (pagesSourceDirectory config)
   case discovered of
     Left generationError -> pure (Left generationError)
     Right pageSpecs -> do
@@ -108,45 +117,54 @@ generatePageModules config = do
       changed <- or <$> traverse (uncurry writeIfChanged) outputs
       pure (Right ((if changed then Generated else Unchanged) (map fst outputs)))
 
-discoverPages :: FilePath -> IO (Either GenerationError [PageSpec])
-discoverPages sourceDirectory = do
-  sourceExists <- doesDirectoryExist sourceDirectory
-  if not sourceExists
-    then pure (Left (PagesDirectoryMissing sourceDirectory))
+-- | Discover the page modules under a directory, naming each one under the
+-- supplied module prefix.  The prefix is the application's, so it is an argument
+-- rather than a constant (see 'pageModulePrefix').
+discoverPages :: String -> FilePath -> IO (Either GenerationError [PageSpec])
+discoverPages pageModulePrefix sourceDirectory = do
+  if not (validPageModulePrefix pageModulePrefix)
+    then pure (Left (InvalidPageModulePrefix pageModulePrefix))
     else do
-      sourceFiles <- listHaskellFiles sourceDirectory
-      case sourceFiles of
-        [] -> pure (Left (NoPagesDiscovered sourceDirectory))
-        _ -> do
-          pageResults <-
-            forM sourceFiles $ \sourcePath -> do
-              source <- readFile sourcePath
-              let relativePath = makeRelative sourceDirectory sourcePath
-              pure (pageSpecFromRelativePath relativePath source)
-          pure $ do
-            pageSpecs <- sequenceA pageResults
-            validatePageSpecs pageSpecs
+      sourceExists <- doesDirectoryExist sourceDirectory
+      if not sourceExists
+        then pure (Left (PagesDirectoryMissing sourceDirectory))
+        else do
+          sourceFiles <- listHaskellFiles sourceDirectory
+          case sourceFiles of
+            [] -> pure (Left (NoPagesDiscovered sourceDirectory))
+            _ -> do
+              pageResults <-
+                forM sourceFiles $ \sourcePath -> do
+                  source <- readFile sourcePath
+                  let relativePath = makeRelative sourceDirectory sourcePath
+                  pure (pageSpecFromRelativePath pageModulePrefix relativePath source)
+              pure $ do
+                pageSpecs <- sequenceA pageResults
+                validatePageSpecs pageSpecs
 
-pageSpecFromRelativePath :: FilePath -> String -> Either GenerationError PageSpec
-pageSpecFromRelativePath relativePath source = do
+pageSpecFromRelativePath :: String -> FilePath -> String -> Either GenerationError PageSpec
+pageSpecFromRelativePath pageModulePrefix relativePath source = do
   let pathSegments = splitDirectories (dropExtension relativePath)
-  if takeExtension relativePath /= ".hs"
-    || takeFileName relativePath == ".hs"
-    || null pathSegments
-    || not (all validModuleSegment pathSegments)
-    then Left (InvalidPagePath relativePath)
+  if not (validPageModulePrefix pageModulePrefix)
+    then Left (InvalidPageModulePrefix pageModulePrefix)
     else
-      if not (hasPageDefinition source)
-        then Left (MissingPageDefinition relativePath)
+      if takeExtension relativePath /= ".hs"
+        || takeFileName relativePath == ".hs"
+        || null pathSegments
+        || not (all validModuleSegment pathSegments)
+        then Left (InvalidPagePath relativePath)
         else
-          Right
-            PageSpec
-              { pageSourcePath = relativePath,
-                pageConstructor = constructorFor pathSegments,
-                pageModuleName = "App.Pages." <> intercalate "." pathSegments,
-                pageUrlPath = pathFor pathSegments,
-                pageSourceHash = stableHash source
-              }
+          if not (hasPageDefinition source)
+            then Left (MissingPageDefinition relativePath)
+            else
+              Right
+                PageSpec
+                  { pageSourcePath = relativePath,
+                    pageConstructor = constructorFor pathSegments,
+                    pageModuleName = pageModulePrefix <> intercalate "." pathSegments,
+                    pageUrlPath = pathFor pathSegments,
+                    pageSourceHash = stableHash source
+                  }
 
 validatePageSpecs :: [PageSpec] -> Either GenerationError [PageSpec]
 validatePageSpecs pageSpecs = do
@@ -269,6 +287,14 @@ validModuleSegment segment =
    in not (Text.null firstCharacter)
         && Text.all isUpper firstCharacter
         && Text.all isAlphaNum segmentText
+
+validPageModulePrefix :: String -> Bool
+validPageModulePrefix pageModulePrefix =
+  case reverse pageModulePrefix of
+    '.' : reversedModuleName ->
+      let moduleSegments = splitOn '.' (reverse reversedModuleName)
+       in not (null moduleSegments) && all validModuleSegment moduleSegments
+    _ -> False
 
 hasPageDefinition :: String -> Bool
 hasPageDefinition source =

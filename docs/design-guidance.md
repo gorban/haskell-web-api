@@ -1154,6 +1154,13 @@ Static page registration therefore cannot drift from the discovered module set. 
 decoding, APIs, and app-specific custom pages stay explicit instead of being forced into the static-page
 convention.
 
+The generator defaults to the two-pages `App.Pages.` namespace, but its
+application-owned `pageModulePrefix` configuration accepts another qualified
+module namespace only when every segment starts uppercase and the value ends in
+a dot. It rejects malformed values before reading page sources or writing
+generated files. This keeps an optional application's namespace out of the
+framework while making a misconfigured generated import a typed build error.
+
 ### Components are typed Haskell functions
 
 Use the `harch` quasiquoter for page and component bodies. Component calls support nullary records,
