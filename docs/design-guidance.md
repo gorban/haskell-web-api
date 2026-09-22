@@ -1037,6 +1037,29 @@ only application-supplied families through that projection, evaluate their
 existing availability resolver from a deliberate snapshot, and still will not
 crawl a completed `Site`.
 
+**Follow-up decision — explicit mounted OpenAPI document construction
+(AHI-4E, 2026-09-22): consume application-supplied `ApiEndpointFamily`
+values together with their existing structural `RouteMount`, and retain the
+public `openapi3` value beside a validated wire-encoding overlay.** The family
+projection is the only source of operations and its existing pure
+availability resolver is evaluated against one construction snapshot, so a
+hidden endpoint is absent from the document without a second router or site
+crawl. Reusing `RouteMount` prevents a separately authored documentation
+prefix from drifting from runtime routing; its `PathSegment`s are rendered
+only when the OpenAPI path map is made.
+
+The selected public `openapi3-3.2.5` model encodes `openapi: 3.0.0` and has
+no fields for specification-extension members. The document wrapper therefore
+keeps the transformable typed model, then applies only previously validated
+`x-*` operation values and the repository's required `3.0.3` wire label at
+its one encoder. It does not accept arbitrary JSON member names or create a
+new document data model. The current API-family boundary has no per-method
+`EndpointMetadata` identity, so this initial slice derives a stable
+method/path operation ID and rejects collisions. Name-derived IDs, declared
+status/schema/media-type responses, resolved root-owned security, component
+validation, cached providers, and Swagger routes remain concrete follow-up
+work; this slice must not be described as completing those guarantees.
+
 The public `openapi3-3.2.5` and `insert-ordered-containers-0.3.0` releases
 build and pass their complete upstream suites on the frozen GHC/Aeson/lens
 plan, but both metadata bounds exclude Aeson 2.3.1.0. `openapi3` also emits
