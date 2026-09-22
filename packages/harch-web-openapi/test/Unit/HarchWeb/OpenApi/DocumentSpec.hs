@@ -8,6 +8,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Maybe (isJust)
 import Data.Text (Text)
+import Data.Text qualified as Text
 import HarchWeb.Api qualified as Api
 import HarchWeb.ApplicationModule (RouteMount (..))
 import HarchWeb.OpenApi
@@ -65,6 +66,38 @@ spec =
       expectDocumentFailure
         (buildOpenApiDocument (OpenApiDocumentDetails "Catalog API" "1.0") False [openApiMountedFamily catalogMount (family [visibleEndpoint "/items" Api.ApiGet extension, visibleEndpoint "/summary" Api.ApiGet extension])])
         (DuplicateOpenApiOperationId "catalog-lookup")
+
+    it "uses an authored response status with its safe standard description" $ do
+      extension <- requireRight (withOpenApiResponseStatus 201 emptyOpenApiExtension)
+      document <-
+        requireRight
+          (buildOpenApiDocument (OpenApiDocumentDetails "Catalog API" "1.0") False [openApiMountedFamily catalogMount (family [visibleEndpoint "/items" Api.ApiPost extension])])
+      encoded <- decodeDocument document
+      let responses = lookupObject "paths" encoded >>= lookupObject "/api/catalog/items" >>= lookupObject "post" >>= lookupObject "responses"
+      expectAll
+        ( ((responses >>= lookupObject "201" >>= lookupText "description") `shouldBe` Just "Created")
+            :| [ (responses >>= lookupObject "default") `shouldBe` Nothing
+               ]
+        )
+
+    it "documents every supported standard response status and keeps an unknown status neutral" $ do
+      let expectations =
+            [ (200, "OK"),
+              (201, "Created"),
+              (202, "Accepted"),
+              (204, "No Content"),
+              (400, "Bad Request"),
+              (401, "Unauthorized"),
+              (403, "Forbidden"),
+              (404, "Not Found"),
+              (409, "Conflict"),
+              (422, "Unprocessable Content"),
+              (429, "Too Many Requests"),
+              (500, "Internal Server Error"),
+              (418, "Response")
+            ]
+      descriptions <- traverse documentedResponseDescription expectations
+      descriptions `shouldBe` map (Just . snd) expectations
 
     it "rejects an API declaration path that cannot be an OpenAPI path" $ do
       extension <- requireRight (mkOpenApiExtension Nothing Nothing [] False [])
@@ -166,6 +199,15 @@ hiddenEndpoint path extension =
   Api.withApiEndpointAvailabilityFromContext
     (\enabled -> if enabled then Api.ApiAvailable else Api.ApiHidden)
     (visibleEndpoint path Api.ApiGet extension)
+
+documentedResponseDescription :: (Int, Text) -> IO (Maybe Text)
+documentedResponseDescription (status, _) = do
+  extension <- requireRight (withOpenApiResponseStatus status emptyOpenApiExtension)
+  document <-
+    requireRight
+      (buildOpenApiDocument (OpenApiDocumentDetails "Catalog API" "1.0") False [openApiMountedFamily catalogMount (family [visibleEndpoint "/items" Api.ApiGet extension])])
+  encoded <- decodeDocument document
+  pure (lookupObject "paths" encoded >>= lookupObject "/api/catalog/items" >>= lookupObject "get" >>= lookupObject "responses" >>= lookupObject (Text.pack (show status)) >>= lookupText "description")
 
 decodeDocument :: OpenApiDocument -> IO (KeyMap.KeyMap Value)
 decodeDocument document =

@@ -75,6 +75,7 @@ import HarchWeb.OpenApi.Metadata
     openApiExtensionDeprecated,
     openApiExtensionDescription,
     openApiExtensionOperationId,
+    openApiExtensionResponseStatus,
     openApiExtensionSpecificationExtensions,
     openApiExtensionSummary,
     openApiExtensionTags,
@@ -253,10 +254,40 @@ operationForExtension path method extension =
       _operationOperationId = Just (operationIdForExtension path method extension),
       _operationDeprecated = Just (openApiExtensionDeprecated extension),
       _operationResponses =
-        (mempty :: Responses)
-          { _responsesDefault = Just (Inline ((mempty :: Response) {_responseDescription = "Response"}))
-          }
+        responsesForExtension extension
     }
+
+responsesForExtension :: OpenApiExtension fields body response -> Responses
+responsesForExtension extension =
+  case openApiExtensionResponseStatus extension of
+    Nothing ->
+      (mempty :: Responses)
+        { _responsesDefault = Just (Inline ((mempty :: Response) {_responseDescription = "Response"}))
+        }
+    Just status ->
+      (mempty :: Responses)
+        { _responsesResponses =
+            InsOrdHashMap.singleton
+              status
+              (Inline ((mempty :: Response) {_responseDescription = responseDescriptionForStatus status}))
+        }
+
+responseDescriptionForStatus :: Int -> Text
+responseDescriptionForStatus status =
+  case status of
+    200 -> "OK"
+    201 -> "Created"
+    202 -> "Accepted"
+    204 -> "No Content"
+    400 -> "Bad Request"
+    401 -> "Unauthorized"
+    403 -> "Forbidden"
+    404 -> "Not Found"
+    409 -> "Conflict"
+    422 -> "Unprocessable Content"
+    429 -> "Too Many Requests"
+    500 -> "Internal Server Error"
+    _ -> "Response"
 
 operationIdFor :: Text -> ApiMethod -> Text
 operationIdFor path method =

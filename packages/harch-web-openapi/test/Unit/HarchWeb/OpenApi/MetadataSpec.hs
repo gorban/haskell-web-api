@@ -48,6 +48,15 @@ spec =
                ]
         )
 
+    it "adds only a valid HTTP response status" $ do
+      extension <- requireRight (withOpenApiResponseStatus 201 emptyOpenApiExtension)
+      expectAll
+        ( (openApiExtensionResponseStatus extension `shouldBe` Just 201)
+            :| [ withOpenApiResponseStatus 99 emptyOpenApiExtension `shouldBe` Left (InvalidOpenApiResponseStatus 99),
+                 withOpenApiResponseStatus 600 emptyOpenApiExtension `shouldBe` Left (InvalidOpenApiResponseStatus 600)
+               ]
+        )
+
     it "accepts only portable x-* specification extension names" $ do
       extension <- requireRight (mkOpenApiSpecificationExtension "x-harch-preview.v1" (String "enabled"))
       portableCharacterExtension <- requireRight (mkOpenApiSpecificationExtension "x-harch_A-2" (String "enabled"))

@@ -1068,6 +1068,17 @@ deriving a name-based ID needs a later framework capability. The typed
 extension keeps this authored value explicit and cannot alter runtime routing;
 document construction rejects duplicate selected IDs across mounted families.
 
+**Follow-up decision — authored OpenAPI response status (AHI-4E,
+2026-09-22): let optional endpoint metadata select one validated HTTP status,
+while leaving response schemas and content absent until their typed slice.**
+The existing OpenAPI document interpreter already owns the operation response
+model, so this extends that metadata boundary instead of creating a parallel
+response declaration.  A status outside the HTTP three-digit range is rejected
+before construction; known standard statuses receive their conventional safe
+description, and every other valid status receives the neutral "Response"
+description.  This makes no claim about runtime handler outcomes, media types,
+or schemas; those remain the next OpenAPI response-metadata work.
+
 The public `openapi3-3.2.5` and `insert-ordered-containers-0.3.0` releases
 build and pass their complete upstream suites on the frozen GHC/Aeson/lens
 plan, but both metadata bounds exclude Aeson 2.3.1.0. `openapi3` also emits
