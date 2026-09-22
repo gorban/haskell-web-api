@@ -33,6 +33,7 @@ library
     HarchWeb.OpenApi
     HarchWeb.OpenApi.Document
     HarchWeb.OpenApi.Metadata
+    HarchWeb.OpenApi.Provider
 
   hs-source-dirs: src
   build-depends:
@@ -55,6 +56,7 @@ test-suite harch-web-openapi-tests
   other-modules:
     Unit.HarchWeb.OpenApi.DocumentSpec
     Unit.HarchWeb.OpenApi.MetadataSpec
+    Unit.HarchWeb.OpenApi.ProviderSpec
     Unit.HarchWeb.OpenApiSpec
 
   ghc-options:

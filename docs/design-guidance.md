@@ -1074,6 +1074,27 @@ no API-family interpretation, schema generation, document provider, Swagger
 renderer, asset route, or documentation security mapping ships yet. The next
 AHI-4E slices close those concrete gaps.
 
+**Follow-up decision — startup-cached explicit OpenAPI provider (AHI-4E,
+2026-09-22): add `OpenApiDocumentProvider` only in the optional OpenAPI
+package, and make its supplied constructor prepare strict encoded bytes from
+one application-selected availability snapshot before the provider exists.**
+This is an additive composition capability, explicitly authorized by AHI-4E,
+for immutable document data; it is disjoint from `RouteCodec`'s existing
+path/method/security ownership. A new route adapter or provider-local
+dispatcher would duplicate those responsibilities, so neither ships in this
+slice. The prepared value is opaque and can reach clients only through the
+later ordinary typed documentation route.
+
+The default provider closes over one fully evaluated byte value, so it cannot
+rebuild a document or query storage for later request contexts. Invalid static
+details fail while composition creates the provider, which makes the default
+startup failure rather than a chance to serve stale or malformed output. The
+provider's public effectful function still lets an application select a
+dynamic cache or visibility policy deliberately; that application must call
+the explicit snapshot builder at a bounded cache boundary and later map a
+typed failure to a safe unavailable response. This slice does not add that
+route, schemas/statuses/security mapping, or Swagger UI.
+
 **Follow-up decision — verified TLS compatibility exception (2026-09-12): use
 the current public TLS/Warp releases, with the smallest source-compatible bound
 exceptions and an executable proof of their limits.** The warning-clean TLS-1.x

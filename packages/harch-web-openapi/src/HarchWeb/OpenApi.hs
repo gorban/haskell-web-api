@@ -22,6 +22,11 @@ module HarchWeb.OpenApi
     mapOpenApiDocumentModel,
     applyOpenApiOperationExtensions,
     encodeOpenApiDocument,
+    OpenApiDocumentProvider (..),
+    PreparedOpenApiDocument,
+    preparedOpenApiDocumentBytes,
+    prepareOpenApiDocumentFromSnapshot,
+    mkCachedOpenApiDocumentProvider,
     OpenApiExtension,
     OpenApiExtensionError (..),
     OpenApiSpecificationExtension,
@@ -35,3 +40,4 @@ where
 import Data.OpenApi (OpenApi)
 import HarchWeb.OpenApi.Document
 import HarchWeb.OpenApi.Metadata
+import HarchWeb.OpenApi.Provider
