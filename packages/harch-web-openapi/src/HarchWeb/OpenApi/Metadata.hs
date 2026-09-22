@@ -16,8 +16,10 @@ module HarchWeb.OpenApi.Metadata
     emptyOpenApiExtension,
     withOpenApiExtension,
     mkOpenApiExtension,
+    withOpenApiOperationId,
     mkOpenApiSpecificationExtension,
     openApiExtensionSummary,
+    openApiExtensionOperationId,
     openApiExtensionDescription,
     openApiExtensionTags,
     openApiExtensionDeprecated,
@@ -38,7 +40,8 @@ import HarchWeb.Api (ApiEndpointContract, withApiEndpointExtension)
 -- relationship owned by @harch-web@ without making documentation alter the
 -- endpoint handler, codecs, authorization, or availability decision.
 data OpenApiExtension fields body response = OpenApiExtension
-  { openApiExtensionSummary :: Maybe Text,
+  { openApiExtensionOperationId :: Maybe Text,
+    openApiExtensionSummary :: Maybe Text,
     openApiExtensionDescription :: Maybe Text,
     openApiExtensionTags :: [Text],
     openApiExtensionDeprecated :: Bool,
@@ -55,12 +58,13 @@ data OpenApiSpecificationExtension = OpenApiSpecificationExtension Text Value
 -- | Construction failures that are objective specification errors.
 data OpenApiExtensionError
   = InvalidOpenApiSpecificationExtensionName Text
+  | InvalidOpenApiOperationId Text
   | DuplicateOpenApiSpecificationExtension Text
   deriving (Eq, Show)
 
 -- | Metadata with no optional prose, tags, deprecation marker, or extensions.
 emptyOpenApiExtension :: OpenApiExtension fields body response
-emptyOpenApiExtension = OpenApiExtension Nothing Nothing [] False []
+emptyOpenApiExtension = OpenApiExtension Nothing Nothing Nothing [] False []
 
 -- | Attach documentation to the same typed endpoint contract that owns its
 -- codecs and runtime behavior.  This replaces only the generic extension;
@@ -77,7 +81,16 @@ mkOpenApiExtension :: Maybe Text -> Maybe Text -> [Text] -> Bool -> [OpenApiSpec
 mkOpenApiExtension summary description tags deprecated specificationExtensions =
   case duplicateExtensionName specificationExtensions of
     Just duplicate -> Left (DuplicateOpenApiSpecificationExtension duplicate)
-    Nothing -> Right (OpenApiExtension summary description tags deprecated specificationExtensions)
+    Nothing -> Right (OpenApiExtension Nothing summary description tags deprecated specificationExtensions)
+
+-- | Replace the derived method/path operation identity with an authored,
+-- portable identifier. An empty or whitespace-only value cannot name an
+-- operation; punctuation remains allowed because OpenAPI treats the value as
+-- an opaque identifier.
+withOpenApiOperationId :: Text -> OpenApiExtension fields body response -> Either OpenApiExtensionError (OpenApiExtension fields body response)
+withOpenApiOperationId operationId extension
+  | Text.null (Text.strip operationId) = Left (InvalidOpenApiOperationId operationId)
+  | otherwise = Right extension {openApiExtensionOperationId = Just operationId}
 
 -- | Validate one custom OpenAPI extension name.  OpenAPI reserves the
 -- @x-@ prefix; after it, accept only nonempty ASCII letters, digits, dots,

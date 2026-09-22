@@ -33,6 +33,7 @@ module HarchWeb.OpenApi
     emptyOpenApiExtension,
     withOpenApiExtension,
     mkOpenApiExtension,
+    withOpenApiOperationId,
     mkOpenApiSpecificationExtension,
   )
 where

@@ -1060,6 +1060,14 @@ status/schema/media-type responses, resolved root-owned security, component
 validation, cached providers, and Swagger routes remain concrete follow-up
 work; this slice must not be described as completing those guarantees.
 
+**Follow-up decision — authored OpenAPI operation identities (AHI-4E,
+2026-09-22): let optional endpoint metadata carry a nonblank authored
+operation ID, while retaining the method/path form only as a fallback.** The
+family projection does not expose the runtime `EndpointMetadata` name, so
+deriving a name-based ID needs a later framework capability. The typed
+extension keeps this authored value explicit and cannot alter runtime routing;
+document construction rejects duplicate selected IDs across mounted families.
+
 The public `openapi3-3.2.5` and `insert-ordered-containers-0.3.0` releases
 build and pass their complete upstream suites on the frozen GHC/Aeson/lens
 plan, but both metadata bounds exclude Aeson 2.3.1.0. `openapi3` also emits

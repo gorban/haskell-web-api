@@ -39,6 +39,15 @@ spec =
                ]
         )
 
+    it "adds only a validated authored operation identifier" $ do
+      extension <- requireRight (withOpenApiOperationId "catalog-list" emptyOpenApiExtension)
+      expectAll
+        ( (openApiExtensionOperationId extension `shouldBe` Just "catalog-list")
+            :| [ withOpenApiOperationId " \t" emptyOpenApiExtension `shouldBe` Left (InvalidOpenApiOperationId " \t"),
+                 withOpenApiOperationId "" emptyOpenApiExtension `shouldBe` Left (InvalidOpenApiOperationId "")
+               ]
+        )
+
     it "accepts only portable x-* specification extension names" $ do
       extension <- requireRight (mkOpenApiSpecificationExtension "x-harch-preview.v1" (String "enabled"))
       portableCharacterExtension <- requireRight (mkOpenApiSpecificationExtension "x-harch_A-2" (String "enabled"))

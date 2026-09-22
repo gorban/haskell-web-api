@@ -14,11 +14,12 @@
 -- the exact 'ApiEndpointFamily' and the same structural 'RouteMount' that
 -- supplies runtime routing.  A later AHI-4E slice adds schemas, status
 -- declarations, resolved security, provider caching, and Swagger routes.
--- The existing family abstraction does not carry the runtime
--- 'EndpointMetadata' name per method, so this first slice derives a stable
--- method/path identifier and rejects collisions. It must be replaced by the
--- validated endpoint name when the API-family metadata boundary carries that
--- identity; it must not be presented as that later name-based guarantee.
+-- An extension can carry a nonblank authored operation ID; otherwise the
+-- existing family abstraction has no runtime 'EndpointMetadata' name per
+-- method, so this slice falls back to a stable method/path identifier and
+-- rejects collisions.  The fallback must be replaced by the validated endpoint
+-- name when the API-family metadata boundary carries that identity; it must not
+-- be presented as that later name-based guarantee.
 module HarchWeb.OpenApi.Document
   ( OpenApiDocument,
     OpenApiDocumentDetails (..),
@@ -41,7 +42,7 @@ import Data.ByteString.Lazy (ByteString)
 import Data.HashMap.Strict.InsOrd.Compat qualified as InsOrdHashMap
 import Data.HashSet.InsOrd qualified as InsOrdHashSet
 import Data.List.NonEmpty qualified as NonEmpty
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, fromMaybe)
 import Data.OpenApi
   ( Info (..),
     OpenApi (..),
@@ -73,6 +74,7 @@ import HarchWeb.OpenApi.Metadata
     OpenApiSpecificationExtension,
     openApiExtensionDeprecated,
     openApiExtensionDescription,
+    openApiExtensionOperationId,
     openApiExtensionSpecificationExtensions,
     openApiExtensionSummary,
     openApiExtensionTags,
@@ -138,6 +140,7 @@ data OpenApiDocument = OpenApiDocument
 data OpenApiOperation = OpenApiOperation
   { operationPath :: Text,
     operationMethod :: ApiMethod,
+    operationId :: Text,
     operationValue :: Operation,
     operationExtensions :: [OpenApiSpecificationExtension]
   }
@@ -224,6 +227,7 @@ operationForEndpoint context mountPrefix endpoint
               OpenApiOperation
                 { operationPath = fullPath,
                   operationMethod = method,
+                  operationId = operationIdForExtension fullPath method extension,
                   operationValue = operationForExtension fullPath method extension,
                   operationExtensions = openApiExtensionSpecificationExtensions extension
                 }
@@ -246,7 +250,7 @@ operationForExtension path method extension =
     { _operationTags = InsOrdHashSet.fromList (openApiExtensionTags extension),
       _operationSummary = openApiExtensionSummary extension,
       _operationDescription = openApiExtensionDescription extension,
-      _operationOperationId = Just (operationIdFor path method),
+      _operationOperationId = Just (operationIdForExtension path method extension),
       _operationDeprecated = Just (openApiExtensionDeprecated extension),
       _operationResponses =
         (mempty :: Responses)
@@ -260,6 +264,10 @@ operationIdFor path method =
     <> "-"
     <> Text.intercalate "-" (filter (not . Text.null) (Text.split (`elem` ['/', '-', '_']) path))
 
+operationIdForExtension :: Text -> ApiMethod -> OpenApiExtension fields body response -> Text
+operationIdForExtension path method extension =
+  fromMaybe (operationIdFor path method) (openApiExtensionOperationId extension)
+
 validateDistinctOperations :: [OpenApiOperation] -> Either OpenApiDocumentFailure [OpenApiOperation]
 validateDistinctOperations operations =
   case findDuplicate operationIdentity operations of
@@ -270,9 +278,9 @@ validateDistinctOperations operations =
 
 validateDistinctOperationIds :: [OpenApiOperation] -> Either OpenApiDocumentFailure [OpenApiOperation]
 validateDistinctOperationIds operations =
-  case findDuplicate (\operation -> operationIdFor (operationPath operation) (operationMethod operation)) operations of
+  case findDuplicate operationId operations of
     Nothing -> Right operations
-    Just duplicate -> Left (DuplicateOpenApiOperationId (operationIdFor (operationPath duplicate) (operationMethod duplicate)))
+    Just duplicate -> Left (DuplicateOpenApiOperationId (operationId duplicate))
 
 findDuplicate :: (Eq identity) => (value -> identity) -> [value] -> Maybe value
 findDuplicate identify = go []

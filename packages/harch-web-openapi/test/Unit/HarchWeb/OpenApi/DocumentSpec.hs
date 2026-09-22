@@ -54,6 +54,18 @@ spec =
         )
         (DuplicateOpenApiOperationId "get-api-catalog-one-two")
 
+    it "uses authored operation identifiers and rejects their collisions" $ do
+      baseExtension <- requireRight (mkOpenApiExtension Nothing Nothing [] False [])
+      extension <- requireRight (withOpenApiOperationId "catalog-lookup" baseExtension)
+      document <-
+        requireRight
+          (buildOpenApiDocument (OpenApiDocumentDetails "Catalog API" "1.0") False [openApiMountedFamily catalogMount (family [visibleEndpoint "/items" Api.ApiGet extension])])
+      encoded <- decodeDocument document
+      (lookupObject "paths" encoded >>= lookupObject "/api/catalog/items" >>= lookupObject "get" >>= lookupText "operationId") `shouldBe` Just "catalog-lookup"
+      expectDocumentFailure
+        (buildOpenApiDocument (OpenApiDocumentDetails "Catalog API" "1.0") False [openApiMountedFamily catalogMount (family [visibleEndpoint "/items" Api.ApiGet extension, visibleEndpoint "/summary" Api.ApiGet extension])])
+        (DuplicateOpenApiOperationId "catalog-lookup")
+
     it "rejects an API declaration path that cannot be an OpenAPI path" $ do
       extension <- requireRight (mkOpenApiExtension Nothing Nothing [] False [])
       expectDocumentFailure
