@@ -110,12 +110,24 @@ spec =
           config = defaultGeneratorConfig "pages" "generated"
           routeSource = renderRouteModule config pageSpecs
           dispatcherSource = renderDispatcherModule config pageSpecs
+          -- An application whose page handler renders from running
+          -- configuration declares the context type, and the dispatcher
+          -- threads it to each page's own definition.
+          contextConfig =
+            config {pageDefinitionContextTypeName = Just "AppContext"}
+          contextDispatcherSource = renderDispatcherModule contextConfig pageSpecs
       expectAll
         ( (routeSource `shouldContain` "data PageRoute\n  = HomePage")
             :| [ routeSource `shouldContain` "PageNotFound -> \"/404\"",
                  routeSource `shouldContain` "\"/second\" -> Just SecondPage",
                  dispatcherSource `shouldContain` "HomePage -> App.Pages.Home.pageDefinition",
                  dispatcherSource `shouldContain` "PageNotFound -> App.Pages.NotFound.pageDefinition",
+                 dispatcherSource `shouldContain` "pageRouteDefinition :: PageRoute -> RouteDefinition",
+                 contextDispatcherSource
+                   `shouldContain` "pageRouteDefinition :: AppContext -> PageRoute -> RouteDefinition",
+                 contextDispatcherSource `shouldContain` "pageRouteDefinition context route =",
+                 contextDispatcherSource
+                   `shouldContain` "HomePage -> App.Pages.Home.pageDefinition context",
                  renderManifest pageSpecs
                    `shouldBe` "Home.hs\thome-hash\nNotFound.hs\tnot-found-hash\nSecond.hs\tsecond-hash\n",
                  renderRouteModule config [] `shouldContain` "  = NoPagesGenerated",

@@ -53,6 +53,18 @@ data GeneratorConfig = GeneratorConfig
     -- not to this tool: a framework build step has no business deciding that
     -- every application's pages are called @App.Pages.@.
     pageModulePrefix :: String,
+    -- | The application context type each generated @pageDefinition@ takes, when
+    -- the application's page handlers need runtime services.
+    --
+    -- A page definition is a value, and an application whose handler is a
+    -- function of its configuration cannot express one without a parameter:
+    -- the handler needs the value that carries those services.  When this is
+    -- @Just \"AppContext\"@ the generated dispatcher becomes
+    -- @pageRouteDefinition :: AppContext -> PageRoute -> RouteDefinition …@
+    -- and delegates @\<Page\>.pageDefinition context@; when it is 'Nothing' —
+    -- the default — the generated shape is unchanged, so every existing caller
+    -- keeps working.
+    pageDefinitionContextTypeName :: Maybe String,
     routeModuleName :: String,
     dispatcherModuleName :: String,
     applicationRouteModuleName :: String,
@@ -68,6 +80,7 @@ defaultGeneratorConfig pagesDirectory generatedDirectory =
     { pagesSourceDirectory = pagesDirectory,
       generatedSourceDirectory = generatedDirectory,
       pageModulePrefix = "App.Pages.",
+      pageDefinitionContextTypeName = Nothing,
       routeModuleName = "App.Pages.Route.Generated",
       dispatcherModuleName = "App.Pages.Generated",
       applicationRouteModuleName = "App.Routes",
@@ -227,17 +240,30 @@ renderDispatcherModule config pageSpecs =
       ]
         <> map (\pageSpec -> "import " <> pageModuleName pageSpec <> " qualified") pageSpecs
         <> [ "",
-             "pageRouteDefinition :: PageRoute -> RouteDefinition "
+             "pageRouteDefinition :: "
+               <> contextParameterType
+               <> "PageRoute -> RouteDefinition "
                <> applicationRouteTypeName config
                <> " "
                <> requestContextTypeName config
                <> " "
                <> authorizationTypeName config,
-             "pageRouteDefinition route =",
+             "pageRouteDefinition " <> contextParameterName <> "route =",
              "  case route of"
            ]
-        <> map (renderRouteCase (\pageSpec -> Text.pack (pageModuleName pageSpec <> ".pageDefinition"))) pageSpecs
+        <> map (renderRouteCase (renderPageDefinition config)) pageSpecs
     )
+  where
+    contextParameterType = maybe "" (<> " -> ") (pageDefinitionContextTypeName config)
+    contextParameterName = maybe "" (const "context ") (pageDefinitionContextTypeName config)
+
+-- | How the dispatcher reaches a page's own definition.  With a declared
+-- context type the page receives it; without one the definition is a plain
+-- value, which is the shape most applications want.
+renderPageDefinition :: GeneratorConfig -> PageSpec -> Text
+renderPageDefinition config pageSpec =
+  Text.pack (pageModuleName pageSpec <> ".pageDefinition")
+    <> maybe "" (const " context") (pageDefinitionContextTypeName config)
 
 renderManifest :: [PageSpec] -> String
 renderManifest pageSpecs =
