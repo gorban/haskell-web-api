@@ -46,6 +46,7 @@ module HarchWeb.Api.Endpoint.Internal
     withApiEndpointAvailabilityFromContext,
     apiRouteEndpointNeverFailing,
     apiRouteEndpointPath,
+    withApiRouteEndpointDeclaration,
     apiRouteEndpointMethod,
     apiRouteEndpointAvailability,
   )
@@ -320,6 +321,19 @@ apiRouteEndpointPath endpoint =
   case endpoint of
     ApiRouteEndpoint _ declaration _ _ -> apiRouteEndpointDeclarationPath declaration
     ApiRouteEndpointNeverFailing _ declaration _ -> apiRouteEndpointDeclarationPath declaration
+
+-- | Consume the static declaration carried by an endpoint without exposing
+-- its handler. Declaration interpreters can read the path, contract, and
+-- generic extension from the same value the runtime uses, while routing
+-- remains owned by the endpoint-family adapter.
+withApiRouteEndpointDeclaration ::
+  ApiRouteEndpoint context extension fields body domainFailure response ->
+  (ApiRouteEndpointDeclaration extension fields body response -> result) ->
+  result
+withApiRouteEndpointDeclaration endpoint consumeDeclaration =
+  case endpoint of
+    ApiRouteEndpoint _ declaration _ _ -> consumeDeclaration declaration
+    ApiRouteEndpointNeverFailing _ declaration _ -> consumeDeclaration declaration
 
 apiRouteEndpointMethod :: ApiRouteEndpoint context extension fields body domainFailure response -> ApiMethod
 apiRouteEndpointMethod endpoint =

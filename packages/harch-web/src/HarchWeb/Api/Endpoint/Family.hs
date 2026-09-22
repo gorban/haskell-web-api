@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes #-}
 
 -- | Private adaptation of a heterogeneous endpoint table to the shared route
 -- codec/definition boundary. This is deliberately the sole method-aware
@@ -22,6 +23,8 @@ module HarchWeb.Api.Endpoint.Family
     ApiEndpointFamilyError (..),
     apiEndpointFamily,
     requireApiEndpointFamily,
+    mapApiEndpointFamily,
+    apiPathText,
     apiRouteEndpointFamilyCodec,
     apiRouteEndpointFamilyDefinition,
   )
@@ -156,6 +159,22 @@ requireApiEndpointFamily endpoints =
         )
     Right family -> family
 
+-- | Project every heterogeneous declaration in a validated family into one
+-- result type. This is the read-only boundary for explicit declaration
+-- interpreters: an interpreter receives the exact endpoint values that feed
+-- the shared runtime adapter, but cannot replace the family table or take
+-- over path/method dispatch. For example, the optional OpenAPI package uses
+-- this with 'withApiRouteEndpointDeclaration' to read only families the
+-- application deliberately supplies.
+mapApiEndpointFamily ::
+  (forall fields body domainFailure response. ApiRouteEndpoint context extension fields body domainFailure response -> result) ->
+  ApiEndpointFamily context extension ->
+  [result]
+mapApiEndpointFamily mapEndpoint (ApiEndpointFamily endpoints) =
+  map mapSomeEndpoint (NonEmpty.toList endpoints)
+  where
+    mapSomeEndpoint (SomeApiRouteEndpoint endpoint) = mapEndpoint endpoint
+
 duplicateEndpointDeclaration :: [SomeApiRouteEndpoint context extension] -> Maybe (ApiPath, ApiMethod)
 duplicateEndpointDeclaration endpoints =
   case endpoints of
@@ -213,6 +232,10 @@ apiPathLocation apiPath =
         Left routeError -> error ("invalid authored API path: " <> show routeError)
         Right location -> location
 
+-- | Render an authored API path for a declaration interpreter. The value
+-- remains opaque for routing: this accessor gives a deliberate, read-only
+-- interpreter such as the optional OpenAPI package its static declaration
+-- text without exposing another way to construct route identities.
 apiPathText :: ApiPath -> Text
 apiPathText (ApiPath pathText) = pathText
 

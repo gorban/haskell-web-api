@@ -42,6 +42,7 @@ module HarchWeb.Api.Endpoint
     withApiEndpointAvailabilityFromContext,
     apiRouteEndpointNeverFailing,
     apiRouteEndpointPath,
+    withApiRouteEndpointDeclaration,
     apiRouteEndpointAvailability,
     apiRouteDefinition,
     apiRouteDefinitionWithContext,
@@ -50,6 +51,8 @@ module HarchWeb.Api.Endpoint
     ApiEndpointFamilyError (..),
     apiEndpointFamily,
     requireApiEndpointFamily,
+    mapApiEndpointFamily,
+    apiPathText,
     apiRouteEndpointFamilyCodec,
     apiRouteEndpointFamilyDefinition,
     at,
@@ -90,5 +93,6 @@ import HarchWeb.Api.Endpoint.Internal
     withApiEndpointAvailabilityFromContext,
     withApiEndpointExtension,
     withApiMultipartRequest,
+    withApiRouteEndpointDeclaration,
   )
 import HarchWeb.Api.Endpoint.Runtime

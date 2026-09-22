@@ -1023,6 +1023,20 @@ resolver from its deliberate documentation snapshot and prune hidden
 endpoints; until then it must not claim that generated documentation supports
 dynamic availability.
 
+**Follow-up decision — read-only explicit family interpretation (AHI-4E,
+2026-09-22): expose `mapApiEndpointFamily`,
+`withApiRouteEndpointDeclaration`, and `apiPathText` at the existing typed
+endpoint boundary.** An optional interpreter must read the precise validated
+declarations that its runtime uses, but making `ApiEndpointFamily` a public
+list or introducing an OpenAPI route registry would permit a second table to
+drift from the shared dispatcher. The family therefore remains opaque and
+offers only a rank-n projection over its heterogeneous endpoints. The
+endpoint continuation exposes static path and contract values while retaining
+handlers and routing ownership. The first OpenAPI document slice will consume
+only application-supplied families through that projection, evaluate their
+existing availability resolver from a deliberate snapshot, and still will not
+crawl a completed `Site`.
+
 The public `openapi3-3.2.5` and `insert-ordered-containers-0.3.0` releases
 build and pass their complete upstream suites on the frozen GHC/Aeson/lens
 plan, but both metadata bounds exclude Aeson 2.3.1.0. `openapi3` also emits

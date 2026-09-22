@@ -67,6 +67,13 @@ requiredApiRouteTemplate routeTemplateValue =
 testEndpointFamily :: ApiEndpointFamily () NoApiExtension
 testEndpointFamily = requireApiEndpointFamily testEndpointTable
 
+declarationIdentity :: ApiRouteEndpoint () NoApiExtension fields body domainFailure response -> (Text, ApiMethod)
+declarationIdentity endpoint =
+  withApiRouteEndpointDeclaration endpoint $ \declaration ->
+    ( apiPathText (apiRouteEndpointDeclarationPath declaration),
+      apiEndpointContractMethod (apiRouteEndpointDeclarationContract declaration)
+    )
+
 testEndpoint :: ApiMethod -> ApiPath -> Text -> ApiRouteEndpoint () NoApiExtension () () () Text
 testEndpoint method path responseText =
   Api.apiRouteEndpoint
@@ -339,6 +346,15 @@ spec =
          in case apiEndpointFamily [SomeApiRouteEndpoint (testEndpoint ApiGet path "Get"), SomeApiRouteEndpoint (testEndpoint ApiPost path "Post")] of
               Left _ -> expectationFailure "rejected distinct method declarations"
               Right _ -> pure ()
+
+      it "projects the exact heterogeneous declarations for an explicit interpreter" $
+        mapApiEndpointFamily declarationIdentity testEndpointFamily
+          `shouldBe` [ ("/api/status", ApiGet),
+                       ("/api/status", ApiPost),
+                       ("/api/second", ApiGet),
+                       ("/api/total", ApiGet),
+                       ("/api/stream", ApiGet)
+                     ]
 
       it "parses a declared path into its ApiPath route identity" $
         HarchWeb.parseRoute (apiRouteEndpointFamilyCodec testEndpointFamily) () (routeLocationForTest "/api/status")
