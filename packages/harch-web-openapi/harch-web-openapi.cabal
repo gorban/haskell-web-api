@@ -43,6 +43,7 @@ library
     base ^>=4.22.0.0,
     bytestring ^>=0.12.2.0,
     harch-web ^>=0.1.2.0,
+    http-media ^>=0.8.1.1,
     insert-ordered-containers ^>=0.3,
     openapi3 ^>=3.2.5,
     text ^>=2.1.2,

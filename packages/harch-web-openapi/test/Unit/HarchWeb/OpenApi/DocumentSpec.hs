@@ -34,7 +34,8 @@ spec =
                  lookupText "openapi" encoded `shouldBe` Just "3.0.3",
                  (visibleGet >>= lookupText "operationId") `shouldBe` Just "get-api-catalog-items",
                  (visibleGet >>= lookupText "x-harch-preview") `shouldBe` Just "enabled",
-                 (visibleGet >>= lookupObject "responses" >>= lookupObject "default" >>= lookupText "description") `shouldBe` Just "Response"
+                 (visibleGet >>= lookupObject "responses" >>= lookupObject "default" >>= lookupText "description") `shouldBe` Just "Response",
+                 (visibleGet >>= lookupObject "responses" >>= lookupObject "default" >>= lookupObject "content" >>= lookupObject "text/plain") `shouldBe` Just mempty
                ]
         )
 
@@ -77,6 +78,22 @@ spec =
       expectAll
         ( ((responses >>= lookupObject "201" >>= lookupText "description") `shouldBe` Just "Created")
             :| [ (responses >>= lookupObject "default") `shouldBe` Nothing
+               ]
+        )
+
+    it "documents every declared response representation without inventing a body shape" $ do
+      document <-
+        requireRight
+          ( buildOpenApiDocument
+              (OpenApiDocumentDetails "Catalog API" "1.0")
+              False
+              [openApiMountedFamily catalogMount (family [visibleEndpointWithEncoders "/items" Api.ApiGet (Api.jsonResponseEncoder :| [Api.textResponseEncoder]) emptyOpenApiExtension])]
+          )
+      encoded <- decodeDocument document
+      let content = lookupObject "paths" encoded >>= lookupObject "/api/catalog/items" >>= lookupObject "get" >>= lookupObject "responses" >>= lookupObject "default" >>= lookupObject "content"
+      expectAll
+        ( ((content >>= lookupObject "application/json") `shouldBe` Just mempty)
+            :| [ (content >>= lookupObject "text/plain") `shouldBe` Just mempty
                ]
         )
 
@@ -189,9 +206,13 @@ family :: [Api.ApiRouteEndpoint Bool OpenApiExtension fields body domainFailure 
 family endpoints = Api.requireApiEndpointFamily (map Api.SomeApiRouteEndpoint endpoints)
 
 visibleEndpoint :: Text -> Api.ApiMethod -> OpenApiExtension () () Text -> Api.ApiRouteEndpoint Bool OpenApiExtension () () () Text
-visibleEndpoint path method extension =
+visibleEndpoint path method =
+  visibleEndpointWithEncoders path method (Api.textResponseEncoder :| [])
+
+visibleEndpointWithEncoders :: Text -> Api.ApiMethod -> NonEmpty (Api.ApiResponseEncoder Text) -> OpenApiExtension () () Text -> Api.ApiRouteEndpoint Bool OpenApiExtension () () () Text
+visibleEndpointWithEncoders path method encoders extension =
   Api.apiRouteEndpointNeverFailing
-    (Api.ApiRouteEndpointDeclaration (Api.at path) (Api.ApiEndpointContract method Api.noRequestFields Api.ApiNoRequestBody (Api.textResponseEncoder :| []) Api.ApiUseGenericFieldFailure extension))
+    (Api.ApiRouteEndpointDeclaration (Api.at path) (Api.ApiEndpointContract method Api.noRequestFields Api.ApiNoRequestBody encoders Api.ApiUseGenericFieldFailure extension))
     (const (pure (Api.apiResponse "visible")))
 
 hiddenEndpoint :: Text -> OpenApiExtension () () Text -> Api.ApiRouteEndpoint Bool OpenApiExtension () () () Text

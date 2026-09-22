@@ -1070,7 +1070,7 @@ document construction rejects duplicate selected IDs across mounted families.
 
 **Follow-up decision — authored OpenAPI response status (AHI-4E,
 2026-09-22): let optional endpoint metadata select one validated HTTP status,
-while leaving response schemas and content absent until their typed slice.**
+while leaving response schemas absent until their typed slice.**
 The existing OpenAPI document interpreter already owns the operation response
 model, so this extends that metadata boundary instead of creating a parallel
 response declaration.  A status outside the HTTP three-digit range is rejected
@@ -1078,6 +1078,22 @@ before construction; known standard statuses receive their conventional safe
 description, and every other valid status receives the neutral "Response"
 description.  This makes no claim about runtime handler outcomes, media types,
 or schemas; those remain the next OpenAPI response-metadata work.
+
+**Follow-up decision — declared OpenAPI response media types (AHI-4E,
+2026-09-22): derive only `content` keys from the endpoint's nonempty runtime
+`ApiResponseEncoder` list.** The encoder list already decides which media
+representations the runtime can select, so the document interpreter extends
+that existing boundary rather than adding a second response-representation
+declaration. Each normalized media type gets an empty OpenAPI media object.
+This accurately documents availability but deliberately does not infer a
+schema, example, or body shape from an encoder: applications can supply
+arbitrary response encoders, and a body contract needs its own typed metadata.
+The opaque media-type declaration now accepts only concrete media names in the
+RFC 4288 grammar that `http-media` accepts; ranges cannot be emitted response
+content types. The adapter's conversion therefore cannot turn an accepted
+framework value into a partial third-party constructor.
+The selected optional response status remains documentation metadata only; it
+does not claim that every runtime outcome has that status.
 
 The public `openapi3-3.2.5` and `insert-ordered-containers-0.3.0` releases
 build and pass their complete upstream suites on the frozen GHC/Aeson/lens

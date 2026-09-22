@@ -24,6 +24,7 @@ module HarchWeb.Api.MediaType
   )
 where
 
+import Data.Char (isAlphaNum, isAscii)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Text.Show (showListWith)
@@ -135,6 +136,7 @@ apiMediaTypeParts (ApiMediaType mediaType) =
 normalizeMediaType :: Text -> Maybe Text
 normalizeMediaType contentTypeValue = do
   (typeText, subtypeText) <- parseMediaRange (Text.strip (fst (Text.breakOn ";" contentTypeValue)))
+  if validMediaName typeText && validMediaName subtypeText then Just () else Nothing
   pure (Text.toLower typeText <> "/" <> Text.toLower subtypeText)
 
 parseMediaRange :: Text -> Maybe (Text, Text)
@@ -142,3 +144,20 @@ parseMediaRange mediaRangeText =
   case Text.splitOn "/" mediaRangeText of
     [typeText, subtypeText] | not (Text.null typeText), not (Text.null subtypeText) -> Just (typeText, subtypeText)
     _ -> Nothing
+
+-- | Match the concrete RFC 4288 media-name grammar accepted by the public
+-- @http-media@ adapter.  Media ranges are deliberately excluded: an endpoint
+-- declaration becomes an emitted response content type. Keeping this check at
+-- the opaque declaration boundary means every accepted 'ApiMediaType' can
+-- become both a runtime content type and an OpenAPI media-type key without a
+-- partial conversion.
+validMediaName :: Text -> Bool
+validMediaName value =
+  not (Text.null value)
+    && Text.length value <= 127
+    && Text.all isMediaNameCharacter value
+
+isMediaNameCharacter :: Char -> Bool
+isMediaNameCharacter character =
+  isAscii character
+    && (isAlphaNum character || character `elem` ("!#$&.+-^_" :: String))

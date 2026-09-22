@@ -58,7 +58,8 @@ spec =
       it "validates and normalizes an application-declared media type" $
         expectAll
           ( (apiMediaType " Application/JSON " `shouldBe` Just (testMediaType "application/json"))
-              :| [ apiMediaTypeText (testMediaType "application/json") `shouldBe` "application/json",
+              :| [ apiMediaType "application/vnd.example+json" `shouldBe` Just (testMediaType "application/vnd.example+json"),
+                   apiMediaTypeText (testMediaType "application/json") `shouldBe` "application/json",
                    apiMediaTypeText jsonMediaType `shouldBe` "application/json",
                    apiMediaTypeText plainTextMediaType `shouldBe` "text/plain",
                    apiMediaTypeText htmlMediaType `shouldBe` "text/html",
@@ -68,7 +69,11 @@ spec =
                    show (testMediaType "application/json") `shouldSatisfy` (not . null),
                    showList [testMediaType "application/json", testMediaType "text/plain"] "" `shouldSatisfy` (not . null),
                    apiMediaType "not-a-media-type" `shouldBe` Nothing,
-                   apiMediaType "text" `shouldBe` Nothing
+                   apiMediaType "text" `shouldBe` Nothing,
+                   apiMediaType "application/json with-space" `shouldBe` Nothing,
+                   apiMediaType "application/@json" `shouldBe` Nothing,
+                   apiMediaType "application/*" `shouldBe` Nothing,
+                   apiMediaType (Text.replicate 128 "a" <> "/json") `shouldBe` Nothing
                  ]
           )
 

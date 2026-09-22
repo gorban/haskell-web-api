@@ -12,8 +12,11 @@
 -- validated extension overlay together until encoding.  It does not parse a
 -- completed 'Site', redispatch requests, or retain handlers: callers supply
 -- the exact 'ApiEndpointFamily' and the same structural 'RouteMount' that
--- supplies runtime routing.  A later AHI-4E slice adds schemas, status
--- declarations, resolved security, provider caching, and Swagger routes.
+-- supplies runtime routing.  It records each endpoint's declared response
+-- media types, but leaves response schemas and examples absent: encoder
+-- selection is representation truth, not a body-shape declaration.  Later
+-- AHI-4E slices add schemas, resolved security, provider caching, and Swagger
+-- routes.
 -- An extension can carry a nonblank authored operation ID; otherwise the
 -- existing family abstraction has no runtime 'EndpointMetadata' name per
 -- method, so this slice falls back to a stable method/path identifier and
@@ -45,6 +48,7 @@ import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.OpenApi
   ( Info (..),
+    MediaTypeObject,
     OpenApi (..),
     Operation (..),
     PathItem (..),
@@ -54,14 +58,19 @@ import Data.OpenApi
   )
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Api
   ( ApiAvailability (ApiAvailable),
     ApiEndpointContract (..),
     ApiEndpointFamily,
+    ApiMediaType,
     ApiMethod (..),
+    ApiResponseEncoder (..),
     ApiRouteEndpoint,
     ApiRouteEndpointDeclaration (..),
+    apiContentTypeMediaType,
     apiEndpointContractExtension,
+    apiMediaTypeText,
     apiMethodText,
     apiPathText,
     apiRouteEndpointAvailability,
@@ -83,6 +92,7 @@ import HarchWeb.OpenApi.Metadata
     openApiSpecificationExtensionValue,
   )
 import HarchWeb.Routing (PathSegment, pathSegmentText)
+import Network.HTTP.Media qualified as HttpMedia
 
 -- | Required, application-owned document identity.  It is separate from
 -- endpoint documentation because one combined document has one title and
@@ -147,10 +157,12 @@ data OpenApiOperation = OpenApiOperation
   }
 
 -- | Build a valid basic OpenAPI operation for every endpoint available in the
--- supplied construction snapshot.  The current API contract has no declared
--- response status or schema, so each operation truthfully uses a @default@
--- response rather than inventing a @200@ response.  Those optional details
--- are added by the later schema/response slice.
+-- supplied construction snapshot.  An extension may select a documented
+-- response status; otherwise each operation truthfully uses @default@ rather
+-- than inventing a @200@ response.  Its nonempty response-encoder list is the
+-- runtime source of representation media types, so those keys are recorded in
+-- OpenAPI @content@ with empty media objects.  This declares neither a schema
+-- nor examples, which need a distinct typed response-body contract.
 buildOpenApiDocument :: OpenApiDocumentDetails -> context -> [OpenApiMountedFamily context] -> Either OpenApiDocumentFailure OpenApiDocument
 buildOpenApiDocument details context mountedFamilies = do
   validatedDetails <- validateDocumentDetails details
@@ -229,7 +241,7 @@ operationForEndpoint context mountPrefix endpoint
                 { operationPath = fullPath,
                   operationMethod = method,
                   operationId = operationIdForExtension fullPath method extension,
-                  operationValue = operationForExtension fullPath method extension,
+                  operationValue = operationForExtension fullPath method (apiEndpointContractEncoders contract) extension,
                   operationExtensions = openApiExtensionSpecificationExtensions extension
                 }
           )
@@ -245,8 +257,8 @@ mountedOperationPath mountPrefix localPath
             <> (if localPath == "/" then "" else localPath)
         )
 
-operationForExtension :: Text -> ApiMethod -> OpenApiExtension fields body response -> Operation
-operationForExtension path method extension =
+operationForExtension :: Text -> ApiMethod -> NonEmpty.NonEmpty (ApiResponseEncoder response) -> OpenApiExtension fields body response -> Operation
+operationForExtension path method encoders extension =
   (mempty :: Operation)
     { _operationTags = InsOrdHashSet.fromList (openApiExtensionTags extension),
       _operationSummary = openApiExtensionSummary extension,
@@ -254,23 +266,49 @@ operationForExtension path method extension =
       _operationOperationId = Just (operationIdForExtension path method extension),
       _operationDeprecated = Just (openApiExtensionDeprecated extension),
       _operationResponses =
-        responsesForExtension extension
+        responsesForExtension encoders extension
     }
 
-responsesForExtension :: OpenApiExtension fields body response -> Responses
-responsesForExtension extension =
+responsesForExtension :: NonEmpty.NonEmpty (ApiResponseEncoder response) -> OpenApiExtension fields body response -> Responses
+responsesForExtension encoders extension =
   case openApiExtensionResponseStatus extension of
     Nothing ->
       (mempty :: Responses)
-        { _responsesDefault = Just (Inline ((mempty :: Response) {_responseDescription = "Response"}))
+        { _responsesDefault = Just (Inline (responseFor encoders "Response"))
         }
     Just status ->
       (mempty :: Responses)
         { _responsesResponses =
             InsOrdHashMap.singleton
               status
-              (Inline ((mempty :: Response) {_responseDescription = responseDescriptionForStatus status}))
+              (Inline (responseFor encoders (responseDescriptionForStatus status)))
         }
+
+responseFor :: NonEmpty.NonEmpty (ApiResponseEncoder response) -> Text -> Response
+responseFor encoders description =
+  (mempty :: Response)
+    { _responseDescription = description,
+      _responseContent =
+        InsOrdHashMap.fromList
+          ( map
+              ( \encoder ->
+                  ( openApiMediaType (apiContentTypeMediaType (apiResponseEncoderContentType encoder)),
+                    mempty :: MediaTypeObject
+                  )
+              )
+              (NonEmpty.toList encoders)
+          )
+    }
+
+-- | 'ApiMediaType' is opaque and its declaration validation uses the same
+-- media-name grammar as @http-media@, so splitting its normalized bare
+-- @type/subtype@ form is total and the public constructor cannot fail.
+openApiMediaType :: ApiMediaType -> HttpMedia.MediaType
+openApiMediaType mediaType =
+  TextEncoding.encodeUtf8 mainType HttpMedia.// TextEncoding.encodeUtf8 subtype
+  where
+    (mainType, slashAndSubtype) = Text.breakOn "/" (apiMediaTypeText mediaType)
+    subtype = Text.drop 1 slashAndSubtype
 
 responseDescriptionForStatus :: Int -> Text
 responseDescriptionForStatus status =
