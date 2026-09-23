@@ -34,6 +34,7 @@ library
     HarchWeb.OpenApi.Document
     HarchWeb.OpenApi.Metadata
     HarchWeb.OpenApi.Provider
+    HarchWeb.OpenApi.Route
 
   hs-source-dirs: src
   build-depends:
@@ -44,6 +45,7 @@ library
     bytestring ^>=0.12.2.0,
     harch-web ^>=0.1.2.0,
     http-media ^>=0.8.1.1,
+    http-types ^>=0.12.5,
     insert-ordered-containers ^>=0.3,
     network-uri ^>=2.6.4.2,
     openapi3 ^>=3.2.5,
@@ -59,6 +61,7 @@ test-suite harch-web-openapi-tests
     Unit.HarchWeb.OpenApi.DocumentSpec
     Unit.HarchWeb.OpenApi.MetadataSpec
     Unit.HarchWeb.OpenApi.ProviderSpec
+    Unit.HarchWeb.OpenApi.RouteSpec
     Unit.HarchWeb.OpenApiSpec
 
   ghc-options:
@@ -80,6 +83,8 @@ test-suite harch-web-openapi-tests
     harch-web ^>=0.1.2.0,
     harch-web-openapi ^>=0.1.2.0,
     hspec ^>=2.11.17,
+    http-types ^>=0.12.5,
     openapi3 ^>=3.2.5,
     test-core ^>=0.1.2.0,
     text ^>=2.1.2,
+    wai ^>=3.2.5,

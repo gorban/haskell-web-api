@@ -27,6 +27,7 @@ module HarchWeb.OpenApi
     preparedOpenApiDocumentBytes,
     prepareOpenApiDocumentFromSnapshot,
     mkCachedOpenApiDocumentProvider,
+    openApiDocumentRouteDefinition,
     OpenApiExtension,
     OpenApiExtensionError (..),
     OpenApiSpecificationExtension,
@@ -48,3 +49,4 @@ import Data.OpenApi (OpenApi)
 import HarchWeb.OpenApi.Document
 import HarchWeb.OpenApi.Metadata
 import HarchWeb.OpenApi.Provider
+import HarchWeb.OpenApi.Route
