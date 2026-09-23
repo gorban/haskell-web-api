@@ -20,12 +20,16 @@ module HarchWeb.OpenApi.Metadata
     withOpenApiResponseStatus,
     withOpenApiRequestSchema,
     withOpenApiResponseSchema,
+    withOpenApiRequestExample,
+    withOpenApiResponseExample,
     mkOpenApiSpecificationExtension,
     openApiExtensionSummary,
     openApiExtensionOperationId,
     openApiExtensionResponseStatus,
     openApiExtensionRequestSchema,
     openApiExtensionResponseSchema,
+    openApiExtensionRequestExample,
+    openApiExtensionResponseExample,
     openApiExtensionDescription,
     openApiExtensionTags,
     openApiExtensionDeprecated,
@@ -51,6 +55,8 @@ data OpenApiExtension fields body response = OpenApiExtension
     openApiExtensionResponseStatus :: Maybe Int,
     openApiExtensionRequestSchema :: Maybe Schema,
     openApiExtensionResponseSchema :: Maybe Schema,
+    openApiExtensionRequestExample :: Maybe Value,
+    openApiExtensionResponseExample :: Maybe Value,
     openApiExtensionSummary :: Maybe Text,
     openApiExtensionDescription :: Maybe Text,
     openApiExtensionTags :: [Text],
@@ -75,7 +81,7 @@ data OpenApiExtensionError
 
 -- | Metadata with no optional prose, tags, deprecation marker, or extensions.
 emptyOpenApiExtension :: OpenApiExtension fields body response
-emptyOpenApiExtension = OpenApiExtension Nothing Nothing Nothing Nothing Nothing Nothing [] False []
+emptyOpenApiExtension = OpenApiExtension Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] False []
 
 -- | Attach documentation to the same typed endpoint contract that owns its
 -- codecs and runtime behavior.  This replaces only the generic extension;
@@ -92,7 +98,7 @@ mkOpenApiExtension :: Maybe Text -> Maybe Text -> [Text] -> Bool -> [OpenApiSpec
 mkOpenApiExtension summary description tags deprecated specificationExtensions =
   case duplicateExtensionName specificationExtensions of
     Just duplicate -> Left (DuplicateOpenApiSpecificationExtension duplicate)
-    Nothing -> Right (OpenApiExtension Nothing Nothing Nothing Nothing summary description tags deprecated specificationExtensions)
+    Nothing -> Right (OpenApiExtension Nothing Nothing Nothing Nothing Nothing Nothing summary description tags deprecated specificationExtensions)
 
 -- | Replace the derived method/path operation identity with an authored,
 -- portable identifier. An empty or whitespace-only value cannot name an
@@ -128,6 +134,22 @@ withOpenApiRequestSchema schema extension =
 withOpenApiResponseSchema :: Schema -> OpenApiExtension fields body response -> OpenApiExtension fields body response
 withOpenApiResponseSchema schema extension =
   extension {openApiExtensionResponseSchema = Just schema}
+
+-- | Declare one authored inline example for every concrete request
+-- representation the endpoint accepts. Document construction rejects this
+-- metadata for a body with no declared representation, rather than dropping
+-- the example. The document interpreter does not synthesize examples from
+-- arbitrary decoder functions.
+withOpenApiRequestExample :: Value -> OpenApiExtension fields body response -> OpenApiExtension fields body response
+withOpenApiRequestExample example extension =
+  extension {openApiExtensionRequestExample = Just example}
+
+-- | Declare one authored inline example for every representation of this
+-- endpoint's successful response. Examples remain inline until a later
+-- component-owning document slice can validate named references.
+withOpenApiResponseExample :: Value -> OpenApiExtension fields body response -> OpenApiExtension fields body response
+withOpenApiResponseExample example extension =
+  extension {openApiExtensionResponseExample = Just example}
 
 -- | Validate one custom OpenAPI extension name.  OpenAPI reserves the
 -- @x-@ prefix; after it, accept only nonempty ASCII letters, digits, dots,

@@ -1120,6 +1120,18 @@ schema from an arbitrary decoder function. As for responses, components and
 examples need their later owners before references or generated values can be
 accepted.
 
+**Follow-up decision — explicit OpenAPI media examples (AHI-4E,
+2026-09-23): let endpoint metadata carry one optional authored JSON example
+for request and response media, and apply it to each concrete runtime media
+representation.** An arbitrary decoder or encoder cannot safely yield a
+representative value, so the document interpreter never derives examples from
+the codec. The selected OpenAPI media object is already the boundary that owns
+the inline schema, keeping this metadata beside its representation without a
+parallel documentation table. A no-body or streaming declaration rejects an
+authored request example rather than dropping it. Named examples and component
+references remain deferred: the present builder has no component allocator or
+reference validation, and must not emit a dangling reference.
+
 The public `openapi3-3.2.5` and `insert-ordered-containers-0.3.0` releases
 build and pass their complete upstream suites on the frozen GHC/Aeson/lens
 plan, but both metadata bounds exclude Aeson 2.3.1.0. `openapi3` also emits

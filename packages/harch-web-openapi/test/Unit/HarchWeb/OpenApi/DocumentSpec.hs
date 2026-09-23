@@ -99,8 +99,8 @@ spec =
                ]
         )
 
-    it "applies an explicit inline response schema to every declared representation" $ do
-      let extension = withOpenApiResponseSchema (mempty :: Schema) emptyOpenApiExtension
+    it "applies explicit inline response schema and example metadata to every declared representation" $ do
+      let extension = withOpenApiResponseExample (String "visible item") (withOpenApiResponseSchema (mempty :: Schema) emptyOpenApiExtension)
       document <-
         requireRight
           ( buildOpenApiDocument
@@ -112,12 +112,31 @@ spec =
       let content = lookupObject "paths" encoded >>= lookupObject "/api/catalog/items" >>= lookupObject "get" >>= lookupObject "responses" >>= lookupObject "default" >>= lookupObject "content"
       expectAll
         ( ((content >>= lookupObject "application/json" >>= lookupObject "schema") `shouldBe` Just mempty)
-            :| [ (content >>= lookupObject "text/plain" >>= lookupObject "schema") `shouldBe` Just mempty
+            :| [ (content >>= lookupObject "text/plain" >>= lookupObject "schema") `shouldBe` Just mempty,
+                 (content >>= lookupObject "application/json" >>= lookupText "example") `shouldBe` Just "visible item",
+                 (content >>= lookupObject "text/plain" >>= lookupText "example") `shouldBe` Just "visible item"
+               ]
+        )
+
+    it "documents an authored response example without inventing a schema" $ do
+      let extension = withOpenApiResponseExample (String "visible item") emptyOpenApiExtension
+      document <-
+        requireRight
+          ( buildOpenApiDocument
+              (OpenApiDocumentDetails "Catalog API" "1.0")
+              False
+              [openApiMountedFamily catalogMount (family [visibleEndpoint "/items" Api.ApiGet extension])]
+          )
+      encoded <- decodeDocument document
+      let mediaType = lookupObject "paths" encoded >>= lookupObject "/api/catalog/items" >>= lookupObject "get" >>= lookupObject "responses" >>= lookupObject "default" >>= lookupObject "content" >>= lookupObject "text/plain"
+      expectAll
+        ( ((mediaType >>= lookupText "example") `shouldBe` Just "visible item")
+            :| [ (mediaType >>= lookupObject "schema") `shouldBe` Nothing
                ]
         )
 
     it "documents an explicit request schema at every concrete typed request representation" $ do
-      let extension = withOpenApiRequestSchema (mempty :: Schema) emptyOpenApiExtension
+      let extension = withOpenApiRequestExample (String "new item") (withOpenApiRequestSchema (mempty :: Schema) emptyOpenApiExtension)
       bufferedDocument <-
         requireRight
           ( buildOpenApiDocument
@@ -144,8 +163,11 @@ spec =
       multipartContent <- requestContentFor multipartDocument "/api/catalog/uploads"
       expectAll
         ( ((bufferedContent >>= lookupObject "text/plain" >>= lookupObject "schema") `shouldBe` Just mempty)
-            :| [ (urlEncodedContent >>= lookupObject "application/x-www-form-urlencoded" >>= lookupObject "schema") `shouldBe` Just mempty,
-                 (multipartContent >>= lookupObject "multipart/form-data" >>= lookupObject "schema") `shouldBe` Just mempty
+            :| [ (bufferedContent >>= lookupObject "text/plain" >>= lookupText "example") `shouldBe` Just "new item",
+                 (urlEncodedContent >>= lookupObject "application/x-www-form-urlencoded" >>= lookupObject "schema") `shouldBe` Just mempty,
+                 (urlEncodedContent >>= lookupObject "application/x-www-form-urlencoded" >>= lookupText "example") `shouldBe` Just "new item",
+                 (multipartContent >>= lookupObject "multipart/form-data" >>= lookupObject "schema") `shouldBe` Just mempty,
+                 (multipartContent >>= lookupObject "multipart/form-data" >>= lookupText "example") `shouldBe` Just "new item"
                ]
         )
 
@@ -160,6 +182,12 @@ spec =
       expectDocumentFailure
         (buildOpenApiDocument (OpenApiDocumentDetails "Catalog API" "1.0") False [openApiMountedFamily catalogMount (family [streamingEndpoint "/events" extension])])
         (OpenApiRequestSchemaWithoutDeclaredMediaType "/api/catalog/events" Api.ApiPost)
+
+    it "rejects a request example when the runtime body declares no media type" $ do
+      let extension = withOpenApiRequestExample (String "new item") emptyOpenApiExtension
+      expectDocumentFailure
+        (buildOpenApiDocument (OpenApiDocumentDetails "Catalog API" "1.0") False [openApiMountedFamily catalogMount (family [visibleEndpoint "/items" Api.ApiPost extension])])
+        (OpenApiRequestExampleWithoutDeclaredMediaType "/api/catalog/items" Api.ApiPost)
 
     it "documents every supported standard response status and keeps an unknown status neutral" $ do
       let expectations =
@@ -192,7 +220,7 @@ spec =
       expectAll
         ( expectDocumentFailure (buildOpenApiDocument (OpenApiDocumentDetails "" "1.0") False mounted) EmptyOpenApiDocumentTitle
             :| [ expectDocumentFailure (buildOpenApiDocument (OpenApiDocumentDetails "Catalog API" "") False mounted) EmptyOpenApiDocumentVersion,
-                 map renderOpenApiDocumentFailure [EmptyOpenApiDocumentTitle, EmptyOpenApiDocumentVersion, InvalidOpenApiEndpointPath "/items", DuplicateOpenApiPathMethod "/items" Api.ApiGet, DuplicateOpenApiOperationId "get-items", OpenApiRequestSchemaWithoutDeclaredMediaType "/items" Api.ApiPost] `shouldBe` ["OpenAPI document title must not be empty.", "OpenAPI document version must not be empty.", "OpenAPI endpoint path is invalid: /items", "OpenAPI path and method are duplicated: get /items", "OpenAPI operation identifier is duplicated: get-items", "OpenAPI request schema has no declared request media type: post /items"]
+                 map renderOpenApiDocumentFailure [EmptyOpenApiDocumentTitle, EmptyOpenApiDocumentVersion, InvalidOpenApiEndpointPath "/items", DuplicateOpenApiPathMethod "/items" Api.ApiGet, DuplicateOpenApiOperationId "get-items", OpenApiRequestSchemaWithoutDeclaredMediaType "/items" Api.ApiPost, OpenApiRequestExampleWithoutDeclaredMediaType "/items" Api.ApiPost] `shouldBe` ["OpenAPI document title must not be empty.", "OpenAPI document version must not be empty.", "OpenAPI endpoint path is invalid: /items", "OpenAPI path and method are duplicated: get /items", "OpenAPI operation identifier is duplicated: get-items", "OpenAPI request schema has no declared request media type: post /items", "OpenAPI request example has no declared request media type: post /items"]
                ]
         )
 

@@ -91,7 +91,9 @@ import HarchWeb.OpenApi.Metadata
     openApiExtensionDeprecated,
     openApiExtensionDescription,
     openApiExtensionOperationId,
+    openApiExtensionRequestExample,
     openApiExtensionRequestSchema,
+    openApiExtensionResponseExample,
     openApiExtensionResponseSchema,
     openApiExtensionResponseStatus,
     openApiExtensionSpecificationExtensions,
@@ -121,6 +123,7 @@ data OpenApiDocumentFailure
   | DuplicateOpenApiPathMethod Text ApiMethod
   | DuplicateOpenApiOperationId Text
   | OpenApiRequestSchemaWithoutDeclaredMediaType Text ApiMethod
+  | OpenApiRequestExampleWithoutDeclaredMediaType Text ApiMethod
 
 -- | Render a construction failure for application diagnostics. The ADT stays
 -- the programmatic boundary; callers should branch on its constructors rather
@@ -134,6 +137,7 @@ renderOpenApiDocumentFailure failure =
     DuplicateOpenApiPathMethod path method -> "OpenAPI path and method are duplicated: " <> Text.toLower (apiMethodText method) <> " " <> path
     DuplicateOpenApiOperationId operationId -> "OpenAPI operation identifier is duplicated: " <> operationId
     OpenApiRequestSchemaWithoutDeclaredMediaType path method -> "OpenAPI request schema has no declared request media type: " <> Text.toLower (apiMethodText method) <> " " <> path
+    OpenApiRequestExampleWithoutDeclaredMediaType path method -> "OpenAPI request example has no declared request media type: " <> Text.toLower (apiMethodText method) <> " " <> path
 
 -- | One documented family paired with the actual structural runtime mount.
 -- The existential route types are deliberately irrelevant to documentation:
@@ -272,7 +276,7 @@ mountedOperationPath mountPrefix localPath
 
 operationForExtension :: Text -> ApiMethod -> ApiRequestBody body -> NonEmpty.NonEmpty (ApiResponseEncoder response) -> OpenApiExtension fields body response -> Either OpenApiDocumentFailure Operation
 operationForExtension path method requestBody encoders extension = do
-  requestBodyValue <- requestBodyFor path method requestBody (openApiExtensionRequestSchema extension)
+  requestBodyValue <- requestBodyFor path method requestBody (openApiExtensionRequestSchema extension) (openApiExtensionRequestExample extension)
   pure
     (mempty :: Operation)
       { _operationTags = InsOrdHashSet.fromList (openApiExtensionTags extension),
@@ -285,13 +289,14 @@ operationForExtension path method requestBody encoders extension = do
           responsesForExtension encoders extension
       }
 
-requestBodyFor :: Text -> ApiMethod -> ApiRequestBody body -> Maybe Schema -> Either OpenApiDocumentFailure (Maybe (Referenced RequestBody))
-requestBodyFor path method requestBody schema =
+requestBodyFor :: Text -> ApiMethod -> ApiRequestBody body -> Maybe Schema -> Maybe Value -> Either OpenApiDocumentFailure (Maybe (Referenced RequestBody))
+requestBodyFor path method requestBody schema example =
   case requestMediaTypes requestBody of
     [] ->
-      case schema of
-        Nothing -> Right Nothing
-        Just _ -> Left (OpenApiRequestSchemaWithoutDeclaredMediaType path method)
+      case (schema, example) of
+        (Nothing, Nothing) -> Right Nothing
+        (Just _, _) -> Left (OpenApiRequestSchemaWithoutDeclaredMediaType path method)
+        (Nothing, Just _) -> Left (OpenApiRequestExampleWithoutDeclaredMediaType path method)
     mediaTypes ->
       Right
         ( Just
@@ -299,7 +304,7 @@ requestBodyFor path method requestBody schema =
                 ( (mempty :: RequestBody)
                     { _requestBodyContent =
                         InsOrdHashMap.fromList
-                          [ (openApiMediaType mediaType, mediaTypeObjectFor schema)
+                          [ (openApiMediaType mediaType, mediaTypeObjectFor schema example)
                           | mediaType <- mediaTypes
                           ]
                     }
@@ -340,17 +345,18 @@ responseFor encoders extension description =
           ( map
               ( \encoder ->
                   ( openApiMediaType (apiContentTypeMediaType (apiResponseEncoderContentType encoder)),
-                    mediaTypeObjectFor (openApiExtensionResponseSchema extension)
+                    mediaTypeObjectFor (openApiExtensionResponseSchema extension) (openApiExtensionResponseExample extension)
                   )
               )
               (NonEmpty.toList encoders)
           )
     }
 
-mediaTypeObjectFor :: Maybe Schema -> MediaTypeObject
-mediaTypeObjectFor schema =
+mediaTypeObjectFor :: Maybe Schema -> Maybe Value -> MediaTypeObject
+mediaTypeObjectFor schema example =
   (mempty :: MediaTypeObject)
-    { _mediaTypeObjectSchema = Inline <$> schema
+    { _mediaTypeObjectSchema = Inline <$> schema,
+      _mediaTypeObjectExample = example
     }
 
 -- | 'ApiMediaType' is opaque and accepts only concrete media names that

@@ -15,6 +15,8 @@ spec =
       expectAll
         ( (openApiExtensionSummary extension `shouldBe` Nothing)
             :| [ openApiExtensionDescription extension `shouldBe` Nothing,
+                 openApiExtensionRequestExample extension `shouldBe` Nothing,
+                 openApiExtensionResponseExample extension `shouldBe` Nothing,
                  openApiExtensionTags extension `shouldBe` [],
                  openApiExtensionDeprecated extension `shouldBe` False,
                  openApiExtensionSpecificationExtensions extension `shouldBe` []
@@ -73,6 +75,17 @@ spec =
         ( (openApiExtensionRequestSchema extension `shouldBe` Just mempty)
             :| [ openApiExtensionResponseSchema extension `shouldBe` Nothing,
                  openApiExtensionSummary extension `shouldBe` Nothing
+               ]
+        )
+
+    it "attaches authored request and response examples without changing schemas" $ do
+      let requestExtension = withOpenApiRequestExample (String "catalog item") emptyOpenApiExtension
+          responseExtension = withOpenApiResponseExample (String "created item") requestExtension
+      expectAll
+        ( (openApiExtensionRequestExample responseExtension `shouldBe` Just (String "catalog item"))
+            :| [ openApiExtensionResponseExample responseExtension `shouldBe` Just (String "created item"),
+                 openApiExtensionRequestSchema responseExtension `shouldBe` Nothing,
+                 openApiExtensionResponseSchema responseExtension `shouldBe` Nothing
                ]
         )
 
