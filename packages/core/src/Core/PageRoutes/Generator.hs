@@ -65,6 +65,13 @@ data GeneratorConfig = GeneratorConfig
     -- the default — the generated shape is unchanged, so every existing caller
     -- keeps working.
     pageDefinitionContextTypeName :: Maybe String,
+    -- | The module the context type lives in, so the generated dispatcher can
+    -- import it.  A generated module has no other way to bring the type into
+    -- scope, and a qualified name would only move the same fact into a string
+    -- that has to be split apart again.  Set it together with
+    -- 'pageDefinitionContextTypeName'; leaving both unset keeps the
+    -- parameterless dispatcher.
+    pageDefinitionContextModuleName :: Maybe String,
     routeModuleName :: String,
     dispatcherModuleName :: String,
     applicationRouteModuleName :: String,
@@ -81,6 +88,7 @@ defaultGeneratorConfig pagesDirectory generatedDirectory =
       generatedSourceDirectory = generatedDirectory,
       pageModulePrefix = "App.Pages.",
       pageDefinitionContextTypeName = Nothing,
+      pageDefinitionContextModuleName = Nothing,
       routeModuleName = "App.Pages.Route.Generated",
       dispatcherModuleName = "App.Pages.Generated",
       applicationRouteModuleName = "App.Routes",
@@ -238,6 +246,7 @@ renderDispatcherModule config pageSpecs =
         "import " <> routeModuleName config <> " (PageRoute (..))",
         "import HarchWeb.Site (RouteDefinition)"
       ]
+        <> contextImport
         <> map (\pageSpec -> "import " <> pageModuleName pageSpec <> " qualified") pageSpecs
         <> [ "",
              "pageRouteDefinition :: "
@@ -256,6 +265,11 @@ renderDispatcherModule config pageSpecs =
   where
     contextParameterType = maybe "" (<> " -> ") (pageDefinitionContextTypeName config)
     contextParameterName = maybe "" (const "context ") (pageDefinitionContextTypeName config)
+    contextImport =
+      [ "import " <> contextModule <> " (" <> contextType <> ")"
+      | Just contextModule <- [pageDefinitionContextModuleName config],
+        Just contextType <- [pageDefinitionContextTypeName config]
+      ]
 
 -- | How the dispatcher reaches a page's own definition.  With a declared
 -- context type the page receives it; without one the definition is a plain

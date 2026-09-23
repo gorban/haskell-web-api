@@ -114,7 +114,10 @@ spec =
           -- configuration declares the context type, and the dispatcher
           -- threads it to each page's own definition.
           contextConfig =
-            config {pageDefinitionContextTypeName = Just "AppContext"}
+            config
+              { pageDefinitionContextTypeName = Just "AppContext",
+                pageDefinitionContextModuleName = Just "App.Context"
+              }
           contextDispatcherSource = renderDispatcherModule contextConfig pageSpecs
       expectAll
         ( (routeSource `shouldContain` "data PageRoute\n  = HomePage")
@@ -125,6 +128,8 @@ spec =
                  dispatcherSource `shouldContain` "pageRouteDefinition :: PageRoute -> RouteDefinition",
                  contextDispatcherSource
                    `shouldContain` "pageRouteDefinition :: AppContext -> PageRoute -> RouteDefinition",
+                 contextDispatcherSource `shouldContain` "import App.Context (AppContext)",
+                 dispatcherSource `shouldNotContain` "import App.Context (AppContext)",
                  contextDispatcherSource `shouldContain` "pageRouteDefinition context route =",
                  contextDispatcherSource
                    `shouldContain` "HomePage -> App.Pages.Home.pageDefinition context",
