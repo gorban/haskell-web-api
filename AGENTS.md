@@ -76,6 +76,8 @@ cabal run haskell-web-api-db -- migrate-and-seed
 ./tools/check-executable-file-metadata.sh
 ./tools/test-ci-workflow-policy.sh
 ./tools/check-ci-workflow-policy.sh
+./tools/test-check-scoped-css.sh
+./tools/check-scoped-css.sh
 ./tools/run-optimized-build-check.sh
 ./tools/run-code-coverage-check.sh
 ./.github/scripts/formatting-checks.sh

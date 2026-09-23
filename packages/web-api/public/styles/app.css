@@ -1,3 +1,5 @@
+/* ---- global ---- */
+/* harch-global: design tokens shared by every page and component. */
 :root {
   color-scheme: light dark;
   --app-color-background: #f7f8fb;
@@ -14,10 +16,12 @@
   --app-content-width: 48rem;
 }
 
+/* harch-global: document-wide box-sizing reset. */
 * {
   box-sizing: border-box;
 }
 
+/* harch-global: document-wide body reset. */
 body {
   margin: 0;
   background: var(--app-color-background);
@@ -26,26 +30,32 @@ body {
   line-height: 1.5;
 }
 
+/* harch-global: document-wide link color. */
 a {
   color: var(--app-color-accent);
 }
 
+/* harch-global: document-wide focus-visible ring for standard controls. */
 :where(a, button, input, select):focus-visible {
   outline: 0.2rem solid var(--app-color-focus);
   outline-offset: 0.2rem;
 }
 
+/* harch-global: framework-owned [data-error-summary] focus hook, shared by
+   every page's accessible-field error summary, not one page/component. */
 [data-error-summary]:focus {
   outline: 0.2rem solid var(--app-color-focus);
   outline-offset: 0.2rem;
 }
 
+/* harch-global: framework-owned [data-accessible-field] semantic hooks. */
 [data-accessible-field] {
   display: grid;
   gap: 0.25rem;
   margin-block: var(--app-space-2);
 }
 
+/* harch-global: see [data-accessible-field] above. */
 [data-accessible-field] :where(input, select) {
   min-block-size: 2.75rem;
   padding: var(--app-space-1);
@@ -54,24 +64,30 @@ a {
   font: inherit;
 }
 
+/* harch-global: see [data-accessible-field] above. */
 [data-field-hint] {
   color: var(--app-color-muted);
 }
 
+/* harch-global: see [data-accessible-field] above. */
 [data-field-hint],
 [data-field-error] {
   margin-block: 0;
 }
 
+/* harch-global: see [data-accessible-field] above. */
 [data-field-error],
 [data-error-state] {
   font-weight: 600;
 }
 
+/* harch-global: see [data-error-summary] above. */
 [data-error-summary] {
   padding: var(--app-space-2);
   border-inline-start: 0.3rem solid var(--app-color-focus);
 }
+
+/* ---- app-shell ---- */
 
 .harch-app-shell-navigation {
   display: flex;
@@ -120,6 +136,8 @@ a {
   background: var(--app-color-surface);
 }
 
+/* ---- page-frame ---- */
+
 .harch-page-frame-root {
   padding: clamp(1rem, 4vw, 2rem);
   border: 1px solid var(--app-color-border);
@@ -147,10 +165,14 @@ a {
   margin-block-start: 0;
 }
 
+/* Shared trailing-margin reset for page-frame content and the account
+   profile's identity value; kept as one rule rather than duplicated. */
 .harch-page-frame-content > :last-child,
 .harch-profile-identity-value {
   margin-block-end: 0;
 }
+
+/* ---- app-controls ---- */
 
 .harch-app-controls-language-trigger {
   display: inline-flex;
@@ -178,6 +200,8 @@ a {
   background: rgb(10 16 30 / 65%);
 }
 
+/* ---- account-pages ---- */
+
 .harch-account-pages-reauthentication-dialog {
   width: min(100% - 2rem, 34rem);
   max-block-size: min(90dvb, 44rem);
@@ -200,6 +224,8 @@ a {
   border-radius: var(--app-radius);
   font: inherit;
 }
+
+/* ---- app-controls (continued) ---- */
 
 .harch-app-controls-language-list {
   display: grid;
@@ -265,7 +291,10 @@ a {
   }
 }
 
+/* ---- global (continued) ---- */
+
 @media (prefers-color-scheme: dark) {
+  /* harch-global: dark-theme overrides of the design tokens declared above. */
   :root {
     --app-color-background: #101522;
     --app-color-surface: #171e2d;

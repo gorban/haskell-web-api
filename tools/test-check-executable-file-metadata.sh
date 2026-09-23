@@ -17,6 +17,7 @@ expected_executables=(
   tools/check-cabal-packages.sh
   tools/check-ci-workflow-policy.sh
   tools/check-executable-file-metadata.sh
+  tools/check-scoped-css.sh
   tools/check-vscode-ormolu-formatter.sh
   tools/haskell-quality-report.sh
   tools/install-git-hooks.sh
@@ -29,6 +30,7 @@ expected_executables=(
   tools/run-optimized-build-check.sh
   tools/seed-test-database.sh
   tools/test-check-build-diagnostics.sh
+  tools/test-check-scoped-css.sh
   tools/test-tls-compatibility-stack.sh
   tools/test-openapi3-compatibility-stack.sh
   tools/test-dockerfile-manifest-layer.sh

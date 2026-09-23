@@ -210,8 +210,15 @@ jobs:
         run: |
           tools/test-ci-workflow-policy.sh
 
-      - name: Seed PostgreSQL test database
+      - name: Check scoped CSS
         if: steps.workflow_policy.outcome == 'success'
+        id: scoped_css
+        run: |
+          tools/test-check-scoped-css.sh
+          tools/check-scoped-css.sh
+
+      - name: Seed PostgreSQL test database
+        if: steps.scoped_css.outcome == 'success'
         id: seed_postgres
         run: |
           tools/seed-test-database.sh

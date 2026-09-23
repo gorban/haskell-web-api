@@ -1,4 +1,5 @@
 /* Public asset used by the composed-domains typed static-route example. */
+/* harch-global: only this file's one layout rule, not a page/component style. */
 main {
   max-inline-size: 72rem;
   margin-inline: auto;
