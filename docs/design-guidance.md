@@ -1232,6 +1232,71 @@ rather than done inline, to keep this slice reviewable. `web-api`
 documentation, `composed-domains` documentation, and the Swagger UI page
 remain the next slices, now unblocked.
 
+**Follow-up decision — the discovered next gap is deeper than security alone:
+`ApiEndpointFamily`/`ApiRouteEndpoint` cannot represent a context-aware
+endpoint at all (AHI-4E, 2026-09-23).** Attempting the `web-api` documentation
+slice above surfaced a second, structural boundary gap, not just the security
+one: `web-api`'s real `/api/second` and `/api/me` are built through
+`HarchWeb.Api.Endpoint.Family.apiRouteDefinitionWithContext`/
+`apiRouteDefinitionWithContextNeverFailing`, because their handlers need the
+request's resolved locale from `context` (see `WebApi.Api.Endpoints`'s own
+module Haddock for why that sibling primitive exists). Those two functions
+hand-construct a `RouteDefinition` directly; they never produce an
+`ApiRouteEndpoint`/`SomeApiRouteEndpoint` value, so a context-aware endpoint
+can never enter an `ApiEndpointFamily` — and `openApiMountedFamily` requires
+exactly that value. There is currently no bridge between the two construction
+paths, confirmed by reading `HarchWeb.Api.Endpoint.Internal`, `.Family`, and
+`.Runtime` directly rather than assumed.
+
+Building a second, throwaway `ApiEndpointFamily` purely for documentation
+(duplicate declarations, unused handlers) was rejected rather than shipped:
+it is exactly the already-made mistake this document's own opening section
+warns against ("Two dispatchers now have to be kept in sync by hand instead
+of one contract owning path/method ownership outright"), applied to a
+security-relevant boundary. Per "When implementation hits a missing framework
+capability": this is again option 1, not a workaround, since a context-free
+document interpreter needs only the static `ApiRouteEndpointDeclaration`
+(path, contract, extension) — never the handler itself, context-aware or not
+— so a context-aware endpoint genuinely belongs in the same aggregation
+boundary every other endpoint already uses, not a parallel one.
+
+The concrete shape, not yet implemented: add context-aware constructors to
+the `ApiRouteEndpoint context extension fields body domainFailure response`
+GADT (`HarchWeb.Api.Endpoint.Internal`) alongside the existing
+`ApiRouteEndpoint`/`ApiRouteEndpointNeverFailing`, each carrying a handler of
+type `context -> ApiEndpointRequest fields body -> IO (...)` instead of
+`ApiEndpointRequest fields body -> IO (...)`; thread `context` through
+`HarchWeb.Api.Endpoint.Runtime.runApiRouteEndpoint` (its two existing callers,
+`apiRouteDefinition` and `apiRouteEndpointFamilyDefinition` in `Family.hs`,
+already have `context` in scope via `HarchWeb.requestContext routeRequest`, so
+this is mechanical); and reimplement `apiRouteDefinitionWithContext`/
+`apiRouteDefinitionWithContextNeverFailing` to build one of the new
+constructors and derive their `RouteDefinition` through the same
+`apiRouteDefinition` path the context-free case already uses, rather than
+hand-rolling a second, separately-maintained `RouteDefinition` construction —
+closing a pre-existing duplication between the two functions as a side
+benefit, not just an OpenAPI-driven addition. This touches the core API
+dispatch runtime every application in this repository uses (`web-api` and
+every example domain), not an isolated optional package, so it needs its own
+task-sized slice with regression proof that every existing context-aware
+endpoint's 404/405/HEAD/OPTIONS/availability/response behavior is provably
+unchanged — not just that a new document can now be built. `web-api`
+documentation remains blocked on this landing first; `composed-domains`
+documentation and the Swagger UI page were already blocked on the security
+slice and remain so.
+
+Also confirmed while investigating: the already-shipped `HarchWeb.OpenApi.Security`
+closed vocabulary has no plain HTTP-bearer-JWT case, which is what `web-api`'s
+real profiles actually need (`web-api`'s `/api/second`/`/api/me` both accept a
+JWT via cookie *or* bearer header through one uniform transport, per
+`HarchWeb.Authentication.Transport.JwtProofSource`, not the cookie-only or
+OAuth2-client-credentials-only shapes currently defined). Adding that third
+closed-vocabulary case (`Data.OpenApi`'s real shape:
+`SecuritySchemeHttp (HttpSchemeBearer (Just "JWT"))`) is small and can land
+alongside or ahead of the family-boundary fix above; it was not implemented
+here because it is pointless without a way to mount the endpoints that would
+use it.
+
 The public `openapi3-3.2.5` and `insert-ordered-containers-0.3.0` releases
 build and pass their complete upstream suites on the frozen GHC/Aeson/lens
 plan, but both metadata bounds exclude Aeson 2.3.1.0. `openapi3` also emits
