@@ -1145,6 +1145,50 @@ renderer must still use its normal escaped link sink. The OpenAPI interpreter
 only copies the validated value into the typed `ExternalDocs` model, and has no
 runtime routing or authorization effect.
 
+**Follow-up decision — typed route adapter for the prepared document, and the
+discovered next gap (AHI-4E, 2026-09-23): serve the cached provider's bytes
+through the existing `RouteDefinition`/`ProtocolRouteHandler` boundary
+(`HarchWeb.OpenApi.Route`), and confirm no operation `security`/
+`securitySchemes` channel exists yet before an application can honestly
+document its real API surface.** The adapter needs no new dispatcher: it is
+one `GET` `RouteDefinition` an application mounts like any other, gets
+HEAD/OPTIONS from the shared dispatcher for free, and turns a provider
+construction failure into a detail-free 503 rather than a stale or malformed
+document. Access choice for the mounted `/docs/openapi.json` path itself
+remains the application's, exactly as every other route.
+
+Attempting to attach this extension to `web-api`'s real `/api/status`,
+`/api/second`, `/api/me`, and OAuth-token endpoints (the task file's next
+slice) surfaced that the framework genuinely has no channel yet:
+`ApiEndpointContract`/`ApiRouteEndpointDeclaration`/`ApiEndpointFamily` carry
+no `authorization`/`EndpointMetadata`/`AccessRequirement` at all — an
+application's real per-endpoint access requirement is supplied only at its own
+route-mounting boundary, as the `ApiPath -> EndpointMetadata authorization`
+argument to `HarchWeb.Api.Endpoint.Family.apiRouteEndpointFamilyDefinition`,
+entirely outside `harch-web-openapi`'s view. `openApiMountedFamily` therefore
+cannot yet derive a documented operation's security from anything but an
+author's un-cross-checked say-so, which would violate the task's "never a
+docs-only override" requirement by construction if implemented naively.
+
+Per this document's "When implementation hits a missing framework capability"
+protocol: this is option 1 (add the primitive), not a workaround — every
+documented API family will need it, and the task file's own design already
+anticipates it ("Later AHI-4E slices add components, resolved security...").
+The concrete shape: `openApiMountedFamily` (or a new sibling constructor) must
+additionally accept the same `ApiPath -> EndpointMetadata authorization`
+function the application already writes for real mounting, plus one small
+application-supplied `AuthenticationProfileName -> <OpenAPI security scheme>`
+mapping and a way to render `RequireAuthorized authorization` into OpenAPI
+scopes, so a documented operation's `security` is derived from the identical
+value that governs real enforcement rather than a second, independently
+authored vocabulary. This is deliberately deferred as its own task-sized
+slice rather than guessed at here: it touches a security-relevant public
+construction boundary and needs its own construction-error/validation test
+suite (undefined profile, contradictory scheme, etc.) per the task file's
+acceptance criteria. `web-api` documentation, `composed-domains`
+documentation, and the Swagger UI page all remain blocked on this landing
+first.
+
 The public `openapi3-3.2.5` and `insert-ordered-containers-0.3.0` releases
 build and pass their complete upstream suites on the frozen GHC/Aeson/lens
 plan, but both metadata bounds exclude Aeson 2.3.1.0. `openapi3` also emits
