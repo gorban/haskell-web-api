@@ -48,7 +48,8 @@ import Data.HashSet.InsOrd qualified as InsOrdHashSet
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.OpenApi
-  ( Info (..),
+  ( ExternalDocs (..),
+    Info (..),
     MediaTypeObject (..),
     OpenApi (..),
     Operation (..),
@@ -58,6 +59,7 @@ import Data.OpenApi
     Response (..),
     Responses (..),
     Schema,
+    URL (..),
   )
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -87,9 +89,11 @@ import HarchWeb.Api
 import HarchWeb.ApplicationModule (RouteMount (..))
 import HarchWeb.OpenApi.Metadata
   ( OpenApiExtension,
+    OpenApiExternalDocs (..),
     OpenApiSpecificationExtension,
     openApiExtensionDeprecated,
     openApiExtensionDescription,
+    openApiExtensionExternalDocs,
     openApiExtensionOperationId,
     openApiExtensionRequestExample,
     openApiExtensionRequestSchema,
@@ -282,6 +286,9 @@ operationForExtension path method requestBody encoders extension = do
       { _operationTags = InsOrdHashSet.fromList (openApiExtensionTags extension),
         _operationSummary = openApiExtensionSummary extension,
         _operationDescription = openApiExtensionDescription extension,
+        _operationExternalDocs =
+          (\externalDocs -> ExternalDocs (openApiExternalDocsDescription externalDocs) (URL (openApiExternalDocsUrl externalDocs)))
+            <$> openApiExtensionExternalDocs extension,
         _operationOperationId = Just (operationIdForExtension path method extension),
         _operationRequestBody = requestBodyValue,
         _operationDeprecated = Just (openApiExtensionDeprecated extension),

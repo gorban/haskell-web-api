@@ -17,6 +17,7 @@ spec =
             :| [ openApiExtensionDescription extension `shouldBe` Nothing,
                  openApiExtensionRequestExample extension `shouldBe` Nothing,
                  openApiExtensionResponseExample extension `shouldBe` Nothing,
+                 openApiExtensionExternalDocs extension `shouldBe` Nothing,
                  openApiExtensionTags extension `shouldBe` [],
                  openApiExtensionDeprecated extension `shouldBe` False,
                  openApiExtensionSpecificationExtensions extension `shouldBe` []
@@ -86,6 +87,28 @@ spec =
             :| [ openApiExtensionResponseExample responseExtension `shouldBe` Just (String "created item"),
                  openApiExtensionRequestSchema responseExtension `shouldBe` Nothing,
                  openApiExtensionResponseSchema responseExtension `shouldBe` Nothing
+               ]
+        )
+
+    it "attaches only an absolute HTTP(S) external documentation link" $ do
+      extension <- requireRight (withOpenApiExternalDocs "https://docs.example.test/catalog/items" (Just "Catalog item guide") emptyOpenApiExtension)
+      httpExtension <- requireRight (withOpenApiExternalDocs "http://docs.example.test/catalog/items" Nothing emptyOpenApiExtension)
+      upperCaseExtension <- requireRight (withOpenApiExternalDocs "HTTP://docs.example.test/catalog/items" Nothing emptyOpenApiExtension)
+      let externalDocs = OpenApiExternalDocs "https://docs.example.test/catalog/items" (Just "Catalog item guide")
+      expectAll
+        ( (openApiExtensionExternalDocs extension `shouldBe` Just externalDocs)
+            :| [ externalDocs `shouldBe` OpenApiExternalDocs "https://docs.example.test/catalog/items" (Just "Catalog item guide"),
+                 externalDocs `shouldNotBe` OpenApiExternalDocs "https://docs.example.test/catalog/other-items" (Just "Catalog item guide"),
+                 show externalDocs `shouldBe` "OpenApiExternalDocs {openApiExternalDocsUrl = \"https://docs.example.test/catalog/items\", openApiExternalDocsDescription = Just \"Catalog item guide\"}",
+                 showList [externalDocs] "" `shouldBe` "[OpenApiExternalDocs {openApiExternalDocsUrl = \"https://docs.example.test/catalog/items\", openApiExternalDocsDescription = Just \"Catalog item guide\"}]",
+                 openApiExtensionExternalDocs httpExtension `shouldBe` Just (OpenApiExternalDocs "http://docs.example.test/catalog/items" Nothing),
+                 openApiExtensionExternalDocs upperCaseExtension `shouldBe` Just (OpenApiExternalDocs "HTTP://docs.example.test/catalog/items" Nothing),
+                 withOpenApiExternalDocs "/catalog/items" Nothing emptyOpenApiExtension `shouldBe` Left (InvalidOpenApiExternalDocsUrl "/catalog/items"),
+                 withOpenApiExternalDocs "javascript:alert(1)" Nothing emptyOpenApiExtension `shouldBe` Left (InvalidOpenApiExternalDocsUrl "javascript:alert(1)"),
+                 withOpenApiExternalDocs "ftp://docs.example.test/catalog/items" Nothing emptyOpenApiExtension `shouldBe` Left (InvalidOpenApiExternalDocsUrl "ftp://docs.example.test/catalog/items"),
+                 withOpenApiExternalDocs "https:/missing-authority" Nothing emptyOpenApiExtension `shouldBe` Left (InvalidOpenApiExternalDocsUrl "https:/missing-authority"),
+                 withOpenApiExternalDocs "https://" Nothing emptyOpenApiExtension `shouldBe` Left (InvalidOpenApiExternalDocsUrl "https://"),
+                 withOpenApiExternalDocs "https://[broken" Nothing emptyOpenApiExtension `shouldBe` Left (InvalidOpenApiExternalDocsUrl "https://[broken")
                ]
         )
 

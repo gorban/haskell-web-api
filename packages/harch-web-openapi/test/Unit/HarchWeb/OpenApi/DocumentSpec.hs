@@ -83,6 +83,19 @@ spec =
                ]
         )
 
+    it "encodes validated operation external documentation" $ do
+      extension <- requireRight (withOpenApiExternalDocs "https://docs.example.test/catalog/items" (Just "Catalog item guide") emptyOpenApiExtension)
+      document <-
+        requireRight
+          (buildOpenApiDocument (OpenApiDocumentDetails "Catalog API" "1.0") False [openApiMountedFamily catalogMount (family [visibleEndpoint "/items" Api.ApiGet extension])])
+      encoded <- decodeDocument document
+      let externalDocs = lookupObject "paths" encoded >>= lookupObject "/api/catalog/items" >>= lookupObject "get" >>= lookupObject "externalDocs"
+      expectAll
+        ( ((externalDocs >>= lookupText "url") `shouldBe` Just "https://docs.example.test/catalog/items")
+            :| [ (externalDocs >>= lookupText "description") `shouldBe` Just "Catalog item guide"
+               ]
+        )
+
     it "documents every declared response representation without inventing a body shape" $ do
       document <-
         requireRight

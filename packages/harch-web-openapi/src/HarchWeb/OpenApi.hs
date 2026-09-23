@@ -39,6 +39,7 @@ module HarchWeb.OpenApi
     withOpenApiResponseSchema,
     withOpenApiRequestExample,
     withOpenApiResponseExample,
+    withOpenApiExternalDocs,
     mkOpenApiSpecificationExtension,
   )
 where

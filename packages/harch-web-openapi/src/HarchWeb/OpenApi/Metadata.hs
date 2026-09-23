@@ -9,6 +9,14 @@
 -- response types so it can inhabit 'HarchWeb.ApiEndpointContract' without an
 -- untyped side channel.  Later interpretation consumes these values from an
 -- explicitly supplied family; it does not inspect a completed site.
+--
+-- Decision record (AHI-4E, 2026-09-23): external documentation is an
+-- operation-owned optional link and accepts only absolute HTTP(S) URLs with
+-- an authority.  This keeps documentation metadata beside its operation while
+-- preventing a later Swagger renderer from being handed an executable,
+-- local-protocol, or ambiguous relative link.  A renderer remains responsible
+-- for its normal escaped-link sink; this validation narrows the value before
+-- it reaches that later surface.
 module HarchWeb.OpenApi.Metadata
   ( OpenApiExtension,
     OpenApiExtensionError (..),
@@ -22,6 +30,7 @@ module HarchWeb.OpenApi.Metadata
     withOpenApiResponseSchema,
     withOpenApiRequestExample,
     withOpenApiResponseExample,
+    withOpenApiExternalDocs,
     mkOpenApiSpecificationExtension,
     openApiExtensionSummary,
     openApiExtensionOperationId,
@@ -30,21 +39,24 @@ module HarchWeb.OpenApi.Metadata
     openApiExtensionResponseSchema,
     openApiExtensionRequestExample,
     openApiExtensionResponseExample,
+    openApiExtensionExternalDocs,
     openApiExtensionDescription,
     openApiExtensionTags,
     openApiExtensionDeprecated,
     openApiExtensionSpecificationExtensions,
     openApiSpecificationExtensionName,
     openApiSpecificationExtensionValue,
+    OpenApiExternalDocs (..),
   )
 where
 
 import Data.Aeson (Value)
-import Data.Char (isAlphaNum, isAscii)
+import Data.Char (isAlphaNum, isAscii, toLower)
 import Data.OpenApi (Schema)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb.Api (ApiEndpointContract, withApiEndpointExtension)
+import Network.URI (URI (..), URIAuth (..), parseURI)
 
 -- | Metadata an application deliberately attaches to one documented API
 -- endpoint.  The phantom endpoint parameters preserve the generic extension
@@ -57,11 +69,21 @@ data OpenApiExtension fields body response = OpenApiExtension
     openApiExtensionResponseSchema :: Maybe Schema,
     openApiExtensionRequestExample :: Maybe Value,
     openApiExtensionResponseExample :: Maybe Value,
+    openApiExtensionExternalDocs :: Maybe OpenApiExternalDocs,
     openApiExtensionSummary :: Maybe Text,
     openApiExtensionDescription :: Maybe Text,
     openApiExtensionTags :: [Text],
     openApiExtensionDeprecated :: Bool,
     openApiExtensionSpecificationExtensions :: [OpenApiSpecificationExtension]
+  }
+  deriving (Eq, Show)
+
+-- | A validated link to further operation documentation. The URL is limited
+-- to an absolute web URL so a later documentation renderer never turns
+-- endpoint-authored metadata into an executable or local-protocol link.
+data OpenApiExternalDocs = OpenApiExternalDocs
+  { openApiExternalDocsUrl :: Text,
+    openApiExternalDocsDescription :: Maybe Text
   }
   deriving (Eq, Show)
 
@@ -76,12 +98,13 @@ data OpenApiExtensionError
   = InvalidOpenApiSpecificationExtensionName Text
   | InvalidOpenApiOperationId Text
   | InvalidOpenApiResponseStatus Int
+  | InvalidOpenApiExternalDocsUrl Text
   | DuplicateOpenApiSpecificationExtension Text
   deriving (Eq, Show)
 
 -- | Metadata with no optional prose, tags, deprecation marker, or extensions.
 emptyOpenApiExtension :: OpenApiExtension fields body response
-emptyOpenApiExtension = OpenApiExtension Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] False []
+emptyOpenApiExtension = OpenApiExtension Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] False []
 
 -- | Attach documentation to the same typed endpoint contract that owns its
 -- codecs and runtime behavior.  This replaces only the generic extension;
@@ -98,7 +121,7 @@ mkOpenApiExtension :: Maybe Text -> Maybe Text -> [Text] -> Bool -> [OpenApiSpec
 mkOpenApiExtension summary description tags deprecated specificationExtensions =
   case duplicateExtensionName specificationExtensions of
     Just duplicate -> Left (DuplicateOpenApiSpecificationExtension duplicate)
-    Nothing -> Right (OpenApiExtension Nothing Nothing Nothing Nothing Nothing Nothing summary description tags deprecated specificationExtensions)
+    Nothing -> Right (OpenApiExtension Nothing Nothing Nothing Nothing Nothing Nothing Nothing summary description tags deprecated specificationExtensions)
 
 -- | Replace the derived method/path operation identity with an authored,
 -- portable identifier. An empty or whitespace-only value cannot name an
@@ -151,6 +174,15 @@ withOpenApiResponseExample :: Value -> OpenApiExtension fields body response -> 
 withOpenApiResponseExample example extension =
   extension {openApiExtensionResponseExample = Just example}
 
+-- | Attach a validated external documentation link to an operation. Relative
+-- URLs and non-web schemes are rejected before document construction: OpenAPI
+-- metadata is later rendered into an ordinary browser page, so accepting them
+-- would defer a display-sink decision to each renderer.
+withOpenApiExternalDocs :: Text -> Maybe Text -> OpenApiExtension fields body response -> Either OpenApiExtensionError (OpenApiExtension fields body response)
+withOpenApiExternalDocs url description extension
+  | isWebUrl url = Right extension {openApiExtensionExternalDocs = Just (OpenApiExternalDocs url description)}
+  | otherwise = Left (InvalidOpenApiExternalDocsUrl url)
+
 -- | Validate one custom OpenAPI extension name.  OpenAPI reserves the
 -- @x-@ prefix; after it, accept only nonempty ASCII letters, digits, dots,
 -- underscores, and hyphens so generated JSON members remain portable.
@@ -182,3 +214,10 @@ duplicateExtensionName = go []
     go names (extension : rest)
       | openApiSpecificationExtensionName extension `elem` names = Just (openApiSpecificationExtensionName extension)
       | otherwise = go (openApiSpecificationExtensionName extension : names) rest
+
+isWebUrl :: Text -> Bool
+isWebUrl value =
+  case parseURI (Text.unpack value) of
+    Just URI {uriScheme, uriAuthority = Just URIAuth {uriRegName}}
+      | not (null uriRegName) && map toLower uriScheme `elem` ["http:", "https:"] -> True
+    _ -> False

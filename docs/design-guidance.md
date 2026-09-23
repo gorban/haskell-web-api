@@ -1132,6 +1132,19 @@ authored request example rather than dropping it. Named examples and component
 references remain deferred: the present builder has no component allocator or
 reference validation, and must not emit a dangling reference.
 
+**Follow-up decision — validated OpenAPI external documentation links
+(AHI-4E, 2026-09-23): keep an optional external-documentation value beside
+the endpoint operation metadata, but accept only absolute HTTP(S) URLs with an
+authority.** The operation already owns the standard OpenAPI `externalDocs`
+field, so a global documentation table would split related values and drift
+from the mounted family. A future Swagger renderer will expose the value in an
+ordinary browser link. Rejecting relative, malformed, and non-web schemes at
+metadata construction prevents that renderer from inheriting a choice about
+executable or local-protocol URLs. This is not HTML sanitization: the later
+renderer must still use its normal escaped link sink. The OpenAPI interpreter
+only copies the validated value into the typed `ExternalDocs` model, and has no
+runtime routing or authorization effect.
+
 The public `openapi3-3.2.5` and `insert-ordered-containers-0.3.0` releases
 build and pass their complete upstream suites on the frozen GHC/Aeson/lens
 plan, but both metadata bounds exclude Aeson 2.3.1.0. `openapi3` also emits
