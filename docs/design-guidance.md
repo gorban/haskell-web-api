@@ -1095,6 +1095,17 @@ framework value into a partial third-party constructor.
 The selected optional response status remains documentation metadata only; it
 does not claim that every runtime outcome has that status.
 
+**Follow-up decision — explicit OpenAPI response schemas (AHI-4E,
+2026-09-23): extend the existing endpoint documentation extension with one
+optional inline response schema, applying it to every declared response media
+type.** The extension already owns documentation metadata beside the encoder
+list, so it is the correct body-shape boundary; the document interpreter
+remains the only owner of the OpenAPI model. No schema is inferred from an
+arbitrary encoding function. Component references are not accepted yet because
+the current builder owns neither component allocation nor reference validation;
+accepting them would permit dangling references. The schema has no runtime
+effect and examples remain a later explicit metadata slice.
+
 The public `openapi3-3.2.5` and `insert-ordered-containers-0.3.0` releases
 build and pass their complete upstream suites on the frozen GHC/Aeson/lens
 plan, but both metadata bounds exclude Aeson 2.3.1.0. `openapi3` also emits

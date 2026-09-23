@@ -79,5 +79,6 @@ test-suite harch-web-openapi-tests
     harch-web ^>=0.1.2.0,
     harch-web-openapi ^>=0.1.2.0,
     hspec ^>=2.11.17,
+    openapi3 ^>=3.2.5,
     test-core ^>=0.1.2.0,
     text ^>=2.1.2,

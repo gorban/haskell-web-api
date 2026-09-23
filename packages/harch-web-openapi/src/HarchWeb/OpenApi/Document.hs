@@ -13,10 +13,10 @@
 -- completed 'Site', redispatch requests, or retain handlers: callers supply
 -- the exact 'ApiEndpointFamily' and the same structural 'RouteMount' that
 -- supplies runtime routing.  It records each endpoint's declared response
--- media types, but leaves response schemas and examples absent: encoder
--- selection is representation truth, not a body-shape declaration.  Later
--- AHI-4E slices add schemas, resolved security, provider caching, and Swagger
--- routes.
+-- media types. An application can add an inline response schema, while encoder
+-- selection remains representation truth rather than a body-shape inference.
+-- Later AHI-4E slices add components, resolved security, provider caching,
+-- and Swagger routes.
 -- An extension can carry a nonblank authored operation ID; otherwise the
 -- existing family abstraction has no runtime 'EndpointMetadata' name per
 -- method, so this slice falls back to a stable method/path identifier and
@@ -48,13 +48,14 @@ import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.OpenApi
   ( Info (..),
-    MediaTypeObject,
+    MediaTypeObject (..),
     OpenApi (..),
     Operation (..),
     PathItem (..),
     Referenced (Inline),
     Response (..),
     Responses (..),
+    Schema,
   )
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -84,6 +85,7 @@ import HarchWeb.OpenApi.Metadata
     openApiExtensionDeprecated,
     openApiExtensionDescription,
     openApiExtensionOperationId,
+    openApiExtensionResponseSchema,
     openApiExtensionResponseStatus,
     openApiExtensionSpecificationExtensions,
     openApiExtensionSummary,
@@ -161,8 +163,9 @@ data OpenApiOperation = OpenApiOperation
 -- response status; otherwise each operation truthfully uses @default@ rather
 -- than inventing a @200@ response.  Its nonempty response-encoder list is the
 -- runtime source of representation media types, so those keys are recorded in
--- OpenAPI @content@ with empty media objects.  This declares neither a schema
--- nor examples, which need a distinct typed response-body contract.
+-- OpenAPI @content@. An explicitly attached inline schema is shared by every
+-- representation; no schema is inferred from an encoder, and examples remain
+-- a later typed metadata slice.
 buildOpenApiDocument :: OpenApiDocumentDetails -> context -> [OpenApiMountedFamily context] -> Either OpenApiDocumentFailure OpenApiDocument
 buildOpenApiDocument details context mountedFamilies = do
   validatedDetails <- validateDocumentDetails details
@@ -274,18 +277,18 @@ responsesForExtension encoders extension =
   case openApiExtensionResponseStatus extension of
     Nothing ->
       (mempty :: Responses)
-        { _responsesDefault = Just (Inline (responseFor encoders "Response"))
+        { _responsesDefault = Just (Inline (responseFor encoders extension "Response"))
         }
     Just status ->
       (mempty :: Responses)
         { _responsesResponses =
             InsOrdHashMap.singleton
               status
-              (Inline (responseFor encoders (responseDescriptionForStatus status)))
+              (Inline (responseFor encoders extension (responseDescriptionForStatus status)))
         }
 
-responseFor :: NonEmpty.NonEmpty (ApiResponseEncoder response) -> Text -> Response
-responseFor encoders description =
+responseFor :: NonEmpty.NonEmpty (ApiResponseEncoder response) -> OpenApiExtension fields body response -> Text -> Response
+responseFor encoders extension description =
   (mempty :: Response)
     { _responseDescription = description,
       _responseContent =
@@ -293,16 +296,22 @@ responseFor encoders description =
           ( map
               ( \encoder ->
                   ( openApiMediaType (apiContentTypeMediaType (apiResponseEncoderContentType encoder)),
-                    mempty :: MediaTypeObject
+                    mediaTypeObjectFor (openApiExtensionResponseSchema extension)
                   )
               )
               (NonEmpty.toList encoders)
           )
     }
 
--- | 'ApiMediaType' is opaque and its declaration validation uses the same
--- media-name grammar as @http-media@, so splitting its normalized bare
--- @type/subtype@ form is total and the public constructor cannot fail.
+mediaTypeObjectFor :: Maybe Schema -> MediaTypeObject
+mediaTypeObjectFor schema =
+  (mempty :: MediaTypeObject)
+    { _mediaTypeObjectSchema = Inline <$> schema
+    }
+
+-- | 'ApiMediaType' is opaque and accepts only concrete media names that
+-- @http-media@ accepts, so splitting its normalized bare @type/subtype@ form
+-- is total and the public constructor cannot fail.
 openApiMediaType :: ApiMediaType -> HttpMedia.MediaType
 openApiMediaType mediaType =
   TextEncoding.encodeUtf8 mainType HttpMedia.// TextEncoding.encodeUtf8 subtype

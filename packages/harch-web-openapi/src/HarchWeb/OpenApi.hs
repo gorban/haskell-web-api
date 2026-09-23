@@ -35,6 +35,7 @@ module HarchWeb.OpenApi
     mkOpenApiExtension,
     withOpenApiOperationId,
     withOpenApiResponseStatus,
+    withOpenApiResponseSchema,
     mkOpenApiSpecificationExtension,
   )
 where

@@ -4,6 +4,7 @@
 
 import Data.Aeson (Value (String))
 import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.OpenApi (Schema)
 import HarchWeb.Api qualified as Api
 import HarchWeb.OpenApi.Metadata
 
@@ -54,6 +55,15 @@ spec =
         ( (openApiExtensionResponseStatus extension `shouldBe` Just 201)
             :| [ withOpenApiResponseStatus 99 emptyOpenApiExtension `shouldBe` Left (InvalidOpenApiResponseStatus 99),
                  withOpenApiResponseStatus 600 emptyOpenApiExtension `shouldBe` Left (InvalidOpenApiResponseStatus 600)
+               ]
+        )
+
+    it "attaches an inline response schema without changing other metadata" $ do
+      let extension = withOpenApiResponseSchema (mempty :: Schema) emptyOpenApiExtension
+      expectAll
+        ( (openApiExtensionResponseSchema extension `shouldBe` Just mempty)
+            :| [ openApiExtensionResponseStatus extension `shouldBe` Nothing,
+                 openApiExtensionSummary extension `shouldBe` Nothing
                ]
         )
 

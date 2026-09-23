@@ -7,6 +7,7 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Maybe (isJust)
+import Data.OpenApi (Schema)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb.Api qualified as Api
@@ -94,6 +95,23 @@ spec =
       expectAll
         ( ((content >>= lookupObject "application/json") `shouldBe` Just mempty)
             :| [ (content >>= lookupObject "text/plain") `shouldBe` Just mempty
+               ]
+        )
+
+    it "applies an explicit inline response schema to every declared representation" $ do
+      let extension = withOpenApiResponseSchema (mempty :: Schema) emptyOpenApiExtension
+      document <-
+        requireRight
+          ( buildOpenApiDocument
+              (OpenApiDocumentDetails "Catalog API" "1.0")
+              False
+              [openApiMountedFamily catalogMount (family [visibleEndpointWithEncoders "/items" Api.ApiGet (Api.jsonResponseEncoder :| [Api.textResponseEncoder]) extension])]
+          )
+      encoded <- decodeDocument document
+      let content = lookupObject "paths" encoded >>= lookupObject "/api/catalog/items" >>= lookupObject "get" >>= lookupObject "responses" >>= lookupObject "default" >>= lookupObject "content"
+      expectAll
+        ( ((content >>= lookupObject "application/json" >>= lookupObject "schema") `shouldBe` Just mempty)
+            :| [ (content >>= lookupObject "text/plain" >>= lookupObject "schema") `shouldBe` Just mempty
                ]
         )
 
