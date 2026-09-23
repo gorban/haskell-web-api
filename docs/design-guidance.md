@@ -1297,6 +1297,49 @@ alongside or ahead of the family-boundary fix above; it was not implemented
 here because it is pointless without a way to mount the endpoints that would
 use it.
 
+**Follow-up decision — context-aware endpoints shipped into the same
+constructor family (AHI-4E, 2026-09-23): implement the shape decided above
+exactly.** `HarchWeb.Api.Endpoint.Internal`'s `ApiRouteEndpoint` GADT gains
+`ApiRouteEndpointWithContext`/`ApiRouteEndpointWithContextNeverFailing`
+alongside the existing context-free pair, each carrying a handler of type
+`context -> ApiEndpointRequest fields body -> IO (...)`; new smart
+constructors `apiRouteEndpointWithContext`/`apiRouteEndpointWithContextNeverFailing`
+mirror `apiRouteEndpoint`/`apiRouteEndpointNeverFailing`, defaulting
+availability to `const ApiAvailable`. `HarchWeb.Api.Endpoint.Runtime.runApiRouteEndpoint`
+now takes the resolved `context` as an explicit argument and applies it to a
+context-aware handler before delegating to the same, unchanged
+`runApiRouteEndpointHandler`/`runApiRouteEndpointHandlerNeverFailing` every
+constructor already shared — no new request-decoding path.
+
+`apiRouteDefinitionWithContext`/`apiRouteDefinitionWithContextNeverFailing`
+(`HarchWeb.Api.Endpoint.Family`) are reimplemented to build one of the new
+constructors and derive their `RouteDefinition` by delegating to
+`apiRouteDefinition` itself, rather than hand-rolling a second,
+separately-maintained `RouteDefinition` construction — closing a pre-existing
+duplication as a side benefit. Their declared `ApiPath` comes from the
+`EndpointMetadata` argument these functions already receive
+(`routeTemplateText (endpointRouteTemplate metadata)`), the same real path an
+application's own route table already dispatches on — not a second,
+independently authored path, so a documentation interpreter reading this
+declaration can never disagree with where the endpoint actually lives. This
+is why the public signatures of both functions did not need to change: no
+existing `web-api` call site required an update.
+
+Verified behavior-preserving, not just type-checking: every pre-existing
+`apiRouteDefinitionWithContext`/`NeverFailing` test in
+`Unit.HarchWeb.Api.EndpointSpec` passed with its original assertions
+unchanged; the full real end-to-end `Unit.WebApi.AppSpec` suite (real WAI
+requests through `/api/status`, `/second`, `/api/me` and friends, including
+real PostgreSQL-backed responses) passed unchanged; and the complete
+integration/e2e gate (16 suites, real browsers, real server startup) passed.
+New unit tests directly exercise the new constructors placed in a genuine
+`ApiEndpointFamily` (the capability that did not exist before) and their
+availability-from-context override. `web-api`'s `/api/second`/`/api/me` can
+now be wrapped in `SomeApiRouteEndpoint`/`ApiEndpointFamily` and therefore
+participate in `openApiMountedFamily` — `web-api` documentation, Swagger UI,
+and `composed-domains` documentation remain the next, now fully unblocked,
+slices; none were started here.
+
 The public `openapi3-3.2.5` and `insert-ordered-containers-0.3.0` releases
 build and pass their complete upstream suites on the frozen GHC/Aeson/lens
 plan, but both metadata bounds exclude Aeson 2.3.1.0. `openapi3` also emits

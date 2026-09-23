@@ -42,7 +42,7 @@ import HarchWeb qualified
 import HarchWeb.Api.Endpoint.Internal
 import HarchWeb.Api.Endpoint.Runtime
 import HarchWeb.Api.Response
-import HarchWeb.EndpointSecurity (EndpointMetadata)
+import HarchWeb.EndpointSecurity (EndpointMetadata (endpointRouteTemplate), routeTemplateText)
 import HarchWeb.Markup (safeUrlText)
 import HarchWeb.Server (unboundedRouteExecutionPolicy)
 import HarchWeb.Site (RouteDefinition (..), RouteHandler (ProtocolRouteHandler))
@@ -64,14 +64,19 @@ apiRouteDefinition metadata endpoint =
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeHandler = ProtocolRouteHandler $ \request routeRequest ->
         case apiRouteEndpointAvailability endpoint (HarchWeb.requestContext routeRequest) of
-          ApiAvailable -> HarchWeb.NonPageProtocolResponse <$> runApiRouteEndpoint endpoint request
+          ApiAvailable -> HarchWeb.NonPageProtocolResponse <$> runApiRouteEndpoint (HarchWeb.requestContext routeRequest) endpoint request
           ApiHidden -> pure (HarchWeb.NonPageProtocolResponse (apiHttpResponseToProtocolResponse (ApiHttpResponse HttpTypes.status404 [] Nothing)))
     }
 
--- | Like 'apiRouteEndpoint' composed with 'apiRouteDefinition', but the
--- handler additionally receives the route's already-resolved context. This
--- calls the same runtime decoder directly rather than constructing unused
--- synthetic endpoint path and method fields.
+-- | Like 'apiRouteEndpointWithContext' composed with 'apiRouteDefinition'.
+-- The endpoint's declared path comes from @metadata@'s own already-validated
+-- 'HarchWeb.EndpointSecurity.endpointRouteTemplate' rather than a second,
+-- independently authored path: this is the same real path an application's
+-- own route table already dispatches on, reused rather than duplicated, so
+-- a documentation interpreter reading this declaration can never disagree
+-- with where the endpoint actually lives. See the AHI-4E decision record in
+-- @docs/design-guidance.md@ for why 'ApiRouteEndpoint' needed a
+-- context-aware constructor family for this to be possible at all.
 apiRouteDefinitionWithContext ::
   (Typeable response) =>
   ApiEndpointContract extension fields body response ->
@@ -80,23 +85,12 @@ apiRouteDefinitionWithContext ::
   (domainFailure -> ApiResponse response) ->
   RouteDefinition route context authorization
 apiRouteDefinitionWithContext contract metadata contextAwareHandler failureResponse =
-  RouteDefinition
-    { routeNavigationLabel = Nothing,
-      routeMetadata = metadata,
-      routeMethods = const (HarchWeb.routeMethodPolicy [toRouteMethod method]),
-      routeExecutionPolicy = unboundedRouteExecutionPolicy,
-      routeHandler = ProtocolRouteHandler $ \request routeRequest ->
-        HarchWeb.NonPageProtocolResponse
-          <$> runApiRouteEndpointHandler
-            (apiEndpointExecution contract request)
-            (contextAwareHandler (HarchWeb.requestContext routeRequest))
-            failureResponse
-    }
+  apiRouteDefinition metadata (apiRouteEndpointWithContext declaration contextAwareHandler failureResponse)
   where
-    ApiEndpointContract method _ _ _ _ _ = contract
+    declaration = ApiRouteEndpointDeclaration (at (routeTemplateText (endpointRouteTemplate metadata))) contract
 
 -- | The total-handler variant has no fabricated failure renderer or
--- unreachable error branch.
+-- unreachable error branch, mirroring 'apiRouteDefinitionWithContext'.
 apiRouteDefinitionWithContextNeverFailing ::
   (Typeable response) =>
   ApiEndpointContract extension fields body response ->
@@ -104,19 +98,9 @@ apiRouteDefinitionWithContextNeverFailing ::
   (context -> ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
   RouteDefinition route context authorization
 apiRouteDefinitionWithContextNeverFailing contract metadata contextAwareHandler =
-  RouteDefinition
-    { routeNavigationLabel = Nothing,
-      routeMetadata = metadata,
-      routeMethods = const (HarchWeb.routeMethodPolicy [toRouteMethod method]),
-      routeExecutionPolicy = unboundedRouteExecutionPolicy,
-      routeHandler = ProtocolRouteHandler $ \request routeRequest ->
-        HarchWeb.NonPageProtocolResponse
-          <$> runApiRouteEndpointHandlerNeverFailing
-            (apiEndpointExecution contract request)
-            (contextAwareHandler (HarchWeb.requestContext routeRequest))
-    }
+  apiRouteDefinition metadata (apiRouteEndpointWithContextNeverFailing declaration contextAwareHandler)
   where
-    ApiEndpointContract method _ _ _ _ _ = contract
+    declaration = ApiRouteEndpointDeclaration (at (routeTemplateText (endpointRouteTemplate metadata))) contract
 
 -- | A non-empty, unambiguous set of typed endpoint declarations. Construct it
 -- with 'apiEndpointFamily' so a codec and definition cannot be derived from
@@ -262,7 +246,7 @@ apiRouteEndpointFamilyDefinition endpointMetadataForPath family apiPath@(ApiPath
           Just pathEndpoints ->
             case matchedApiRouteEndpoint pathEndpoints (requestMethodTextFromWai request) of
               Nothing -> pure (HarchWeb.NonPageProtocolResponse (apiHttpResponseToProtocolResponse (methodNotAllowedResponse pathEndpoints)))
-              Just (SomeApiRouteEndpoint endpoint) -> HarchWeb.NonPageProtocolResponse <$> runApiRouteEndpoint endpoint request
+              Just (SomeApiRouteEndpoint endpoint) -> HarchWeb.NonPageProtocolResponse <$> runApiRouteEndpoint (HarchWeb.requestContext routeRequest) endpoint request
     }
 
 -- | Resolve a method within a path that is already known to have at least one

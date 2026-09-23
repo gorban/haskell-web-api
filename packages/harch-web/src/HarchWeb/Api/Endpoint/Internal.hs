@@ -42,9 +42,11 @@ module HarchWeb.Api.Endpoint.Internal
     apiRequestBodyByteLimitValue,
     ApiRequestBody (..),
     apiRouteEndpoint,
+    apiRouteEndpointWithContext,
     withApiEndpointAvailability,
     withApiEndpointAvailabilityFromContext,
     apiRouteEndpointNeverFailing,
+    apiRouteEndpointWithContextNeverFailing,
     apiRouteEndpointPath,
     withApiRouteEndpointDeclaration,
     apiRouteEndpointMethod,
@@ -184,6 +186,17 @@ data ApiRouteEndpointDeclaration extension fields body response = ApiRouteEndpoi
 -- | One typed endpoint declaration for use in the application's shared route
 -- table. Its path-owning declaration retains the cohesive request contract;
 -- the constructor adds only the handler's distinct failure mode.
+--
+-- Decision record (AHI-4E, 2026-09-23): the @WithContext@ constructors close
+-- a real gap, not a hypothetical one: an endpoint whose handler needs the
+-- request's already-resolved context (e.g. a locale derived outside any
+-- typed 'RequestCodec' field) previously could not be represented here at
+-- all, so it could never enter an 'HarchWeb.Api.Endpoint.Family.ApiEndpointFamily'
+-- and therefore could never be documented by the optional OpenAPI package,
+-- which reads only this declaration boundary. This extends the existing
+-- constructor family with the same failing/never-failing distinction the
+-- context-free pair already draws, rather than adding a second, parallel
+-- endpoint representation. See @docs/design-guidance.md@.
 data ApiRouteEndpoint context extension fields body domainFailure response where
   ApiRouteEndpoint ::
     (Typeable response) =>
@@ -197,6 +210,19 @@ data ApiRouteEndpoint context extension fields body domainFailure response where
     (context -> ApiAvailability) ->
     ApiRouteEndpointDeclaration extension fields body response ->
     (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
+    ApiRouteEndpoint context extension fields body domainFailure response
+  ApiRouteEndpointWithContext ::
+    (Typeable response) =>
+    (context -> ApiAvailability) ->
+    ApiRouteEndpointDeclaration extension fields body response ->
+    (context -> ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
+    (domainFailure -> ApiResponse response) ->
+    ApiRouteEndpoint context extension fields body domainFailure response
+  ApiRouteEndpointWithContextNeverFailing ::
+    (Typeable response) =>
+    (context -> ApiAvailability) ->
+    ApiRouteEndpointDeclaration extension fields body response ->
+    (context -> ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
     ApiRouteEndpoint context extension fields body domainFailure response
 
 -- | An endpoint table may contain declarations with different request, body,
@@ -284,6 +310,17 @@ apiRouteEndpoint ::
   ApiRouteEndpoint context extension fields body domainFailure response
 apiRouteEndpoint = ApiRouteEndpoint (const ApiAvailable)
 
+-- | Construct a context-aware endpoint with an ordinary, typed
+-- domain-failure rail. See the constructor family's own Haddock for why this
+-- sibling exists beside 'apiRouteEndpoint'.
+apiRouteEndpointWithContext ::
+  (Typeable response) =>
+  ApiRouteEndpointDeclaration extension fields body response ->
+  (context -> ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
+  (domainFailure -> ApiResponse response) ->
+  ApiRouteEndpoint context extension fields body domainFailure response
+apiRouteEndpointWithContext = ApiRouteEndpointWithContext (const ApiAvailable)
+
 -- | Replace an endpoint's availability while retaining the same path,
 -- contract, and handler. The family interpreters read this before method
 -- negotiation; it is not a handler-local visibility flag.
@@ -306,6 +343,10 @@ withApiEndpointAvailabilityFromContext availability endpoint =
       ApiRouteEndpoint availability declaration handler failureResponse
     ApiRouteEndpointNeverFailing _ declaration handler ->
       ApiRouteEndpointNeverFailing availability declaration handler
+    ApiRouteEndpointWithContext _ declaration handler failureResponse ->
+      ApiRouteEndpointWithContext availability declaration handler failureResponse
+    ApiRouteEndpointWithContextNeverFailing _ declaration handler ->
+      ApiRouteEndpointWithContextNeverFailing availability declaration handler
 
 -- | Construct an endpoint with a total handler and no fabricated domain
 -- failure branch.
@@ -316,11 +357,22 @@ apiRouteEndpointNeverFailing ::
   ApiRouteEndpoint context extension fields body domainFailure response
 apiRouteEndpointNeverFailing = ApiRouteEndpointNeverFailing (const ApiAvailable)
 
+-- | The context-aware total-handler variant has no fabricated domain
+-- failure branch, mirroring 'apiRouteEndpointNeverFailing'.
+apiRouteEndpointWithContextNeverFailing ::
+  (Typeable response) =>
+  ApiRouteEndpointDeclaration extension fields body response ->
+  (context -> ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
+  ApiRouteEndpoint context extension fields body domainFailure response
+apiRouteEndpointWithContextNeverFailing = ApiRouteEndpointWithContextNeverFailing (const ApiAvailable)
+
 apiRouteEndpointPath :: ApiRouteEndpoint context extension fields body domainFailure response -> ApiPath
 apiRouteEndpointPath endpoint =
   case endpoint of
     ApiRouteEndpoint _ declaration _ _ -> apiRouteEndpointDeclarationPath declaration
     ApiRouteEndpointNeverFailing _ declaration _ -> apiRouteEndpointDeclarationPath declaration
+    ApiRouteEndpointWithContext _ declaration _ _ -> apiRouteEndpointDeclarationPath declaration
+    ApiRouteEndpointWithContextNeverFailing _ declaration _ -> apiRouteEndpointDeclarationPath declaration
 
 -- | Consume the static declaration carried by an endpoint without exposing
 -- its handler. Declaration interpreters can read the path, contract, and
@@ -334,15 +386,21 @@ withApiRouteEndpointDeclaration endpoint consumeDeclaration =
   case endpoint of
     ApiRouteEndpoint _ declaration _ _ -> consumeDeclaration declaration
     ApiRouteEndpointNeverFailing _ declaration _ -> consumeDeclaration declaration
+    ApiRouteEndpointWithContext _ declaration _ _ -> consumeDeclaration declaration
+    ApiRouteEndpointWithContextNeverFailing _ declaration _ -> consumeDeclaration declaration
 
 apiRouteEndpointMethod :: ApiRouteEndpoint context extension fields body domainFailure response -> ApiMethod
 apiRouteEndpointMethod endpoint =
   case endpoint of
     ApiRouteEndpoint _ declaration _ _ -> apiEndpointContractMethod (apiRouteEndpointDeclarationContract declaration)
     ApiRouteEndpointNeverFailing _ declaration _ -> apiEndpointContractMethod (apiRouteEndpointDeclarationContract declaration)
+    ApiRouteEndpointWithContext _ declaration _ _ -> apiEndpointContractMethod (apiRouteEndpointDeclarationContract declaration)
+    ApiRouteEndpointWithContextNeverFailing _ declaration _ -> apiEndpointContractMethod (apiRouteEndpointDeclarationContract declaration)
 
 apiRouteEndpointAvailability :: ApiRouteEndpoint context extension fields body domainFailure response -> context -> ApiAvailability
 apiRouteEndpointAvailability endpoint =
   case endpoint of
     ApiRouteEndpoint availability _ _ _ -> availability
     ApiRouteEndpointNeverFailing availability _ _ -> availability
+    ApiRouteEndpointWithContext availability _ _ _ -> availability
+    ApiRouteEndpointWithContextNeverFailing availability _ _ -> availability

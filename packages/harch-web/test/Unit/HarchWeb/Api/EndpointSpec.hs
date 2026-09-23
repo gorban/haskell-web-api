@@ -68,7 +68,12 @@ testEndpointFamily :: ApiEndpointFamily () NoApiExtension
 testEndpointFamily = requireApiEndpointFamily testEndpointTable
 
 declarationIdentity :: ApiRouteEndpoint () NoApiExtension fields body domainFailure response -> (Text, ApiMethod)
-declarationIdentity endpoint =
+declarationIdentity = contextAwareDeclarationIdentity
+
+-- | Like 'declarationIdentity', but usable for a 'Text'-context endpoint too:
+-- declaration projection does not depend on the endpoint's context type.
+contextAwareDeclarationIdentity :: ApiRouteEndpoint context NoApiExtension fields body domainFailure response -> (Text, ApiMethod)
+contextAwareDeclarationIdentity endpoint =
   withApiRouteEndpointDeclaration endpoint $ \declaration ->
     ( apiPathText (apiRouteEndpointDeclarationPath declaration),
       apiEndpointContractMethod (apiRouteEndpointDeclarationContract declaration)
@@ -1492,6 +1497,72 @@ spec =
                    apiRouteResponseStatus response `shouldBe` HttpTypes.status400,
                    apiRouteResponseBody response `shouldBe` "[MissingApiField ApiQuerySource \"query\"]",
                    apiRouteResponseBody acceptedResponse `shouldBe` "context:accepted"
+                 ]
+          )
+
+    describe "apiRouteEndpointWithContext and apiRouteEndpointWithContextNeverFailing" $ do
+      let contextAwareDeclaration =
+            ApiRouteEndpointDeclaration
+              (at "/api/context-aware")
+              (ApiEndpointContract ApiGet (pure ()) ApiNoRequestBody (textResponseEncoder :| []) ApiUseGenericFieldFailure NoApiExtension)
+          contextAwareEndpoint :: ApiRouteEndpoint Text NoApiExtension () () () Text
+          contextAwareEndpoint =
+            Api.apiRouteEndpointWithContext
+              contextAwareDeclaration
+              (\contextValue _endpointRequest -> pure (Right (apiResponse ("context:" <> contextValue))))
+              (const (apiResponse "unreachable"))
+          contextAwareFamily = requireApiEndpointFamily [SomeApiRouteEndpoint contextAwareEndpoint]
+
+      it "exposes the same declaration, method, and default availability as a context-free endpoint" $
+        expectAll
+          ( (contextAwareDeclarationIdentity contextAwareEndpoint `shouldBe` ("/api/context-aware", ApiGet))
+              :| [ apiRouteEndpointAvailability contextAwareEndpoint "any-context" `shouldBe` ApiAvailable,
+                   mapApiEndpointFamily contextAwareDeclarationIdentity contextAwareFamily `shouldBe` [("/api/context-aware", ApiGet)]
+                 ]
+          )
+
+      it "was previously impossible to place in an ApiEndpointFamily at all; now dispatches through the family boundary with its resolved context, exactly like the direct-embedding 'apiRouteDefinitionWithContext' path" $ do
+        response <-
+          routeResponse
+            (apiRouteEndpointFamilyDefinition (const testApiMetadata) contextAwareFamily (at "/api/context-aware"))
+            Wai.defaultRequest
+            (RouteRequest (at "/api/context-aware") "resolved")
+        expectAll
+          ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status200)
+              :| [apiRouteResponseBody response `shouldBe` "context:resolved"]
+          )
+
+      it "runs a total handler applied to its resolved context through 'apiRouteEndpointWithContextNeverFailing', with no domain failure to interpret" $ do
+        let totalEndpoint :: ApiRouteEndpoint Text NoApiExtension () () () Text
+            totalEndpoint =
+              Api.apiRouteEndpointWithContextNeverFailing
+                (ApiRouteEndpointDeclaration (at "/api/context-aware-total") (ApiEndpointContract ApiGet (pure ()) ApiNoRequestBody (textResponseEncoder :| []) ApiUseGenericFieldFailure NoApiExtension))
+                (\contextValue _endpointRequest -> pure (apiResponse ("total:" <> contextValue)))
+        response <- routeResponse (apiRouteDefinition testApiMetadata totalEndpoint) Wai.defaultRequest (RouteRequest () "resolved")
+        expectAll
+          ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status200)
+              :| [apiRouteResponseBody response `shouldBe` "total:resolved"]
+          )
+
+      it "supports replacing a context-aware endpoint's availability from context, a capability the direct-embedding 'apiRouteDefinitionWithContext' path still does not expose" $ do
+        handlerCalls <- newIORef (0 :: Int)
+        let toggledEndpoint =
+              withApiEndpointAvailabilityFromContext
+                (\available -> if available then ApiAvailable else ApiHidden)
+                ( Api.apiRouteEndpointWithContext
+                    contextAwareDeclaration
+                    (\_contextValue _endpointRequest -> atomicModifyIORef' handlerCalls (\count -> (count + 1, ())) >> pure (Right (apiResponse "ok")))
+                    (const (apiResponse "unreachable"))
+                )
+        hiddenResponse <- routeResponse (apiRouteDefinition testApiMetadata toggledEndpoint) Wai.defaultRequest (RouteRequest () False)
+        availableResponse <- routeResponse (apiRouteDefinition testApiMetadata toggledEndpoint) Wai.defaultRequest (RouteRequest () True)
+        handlerCallCount <- readIORef handlerCalls
+        expectAll
+          ( (apiRouteEndpointAvailability toggledEndpoint False `shouldBe` ApiHidden)
+              :| [ apiRouteEndpointAvailability toggledEndpoint True `shouldBe` ApiAvailable,
+                   apiRouteResponseStatus hiddenResponse `shouldBe` HttpTypes.status404,
+                   apiRouteResponseStatus availableResponse `shouldBe` HttpTypes.status200,
+                   handlerCallCount `shouldBe` 1
                  ]
           )
 

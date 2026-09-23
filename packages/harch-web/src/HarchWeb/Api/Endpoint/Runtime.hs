@@ -69,13 +69,21 @@ apiEndpointExecution contract request =
       apiEndpointExecutionRequest = request
     }
 
-runApiRouteEndpoint :: ApiRouteEndpoint context extension fields body domainFailure response -> Wai.Request -> IO ProtocolResponse
-runApiRouteEndpoint endpoint request =
+-- | Run one declared endpoint against the resolved request context it was
+-- selected for. A context-free endpoint's handler ignores @context@; a
+-- context-aware one's handler is applied to it before decoding proceeds
+-- through the same shared execution path either way.
+runApiRouteEndpoint :: context -> ApiRouteEndpoint context extension fields body domainFailure response -> Wai.Request -> IO ProtocolResponse
+runApiRouteEndpoint context endpoint request =
   case endpoint of
     ApiRouteEndpoint _ declaration handler failureResponse ->
       runApiRouteEndpointHandler (apiEndpointExecution (apiRouteEndpointDeclarationContract declaration) request) handler failureResponse
     ApiRouteEndpointNeverFailing _ declaration handler ->
       runApiRouteEndpointHandlerNeverFailing (apiEndpointExecution (apiRouteEndpointDeclarationContract declaration) request) handler
+    ApiRouteEndpointWithContext _ declaration handler failureResponse ->
+      runApiRouteEndpointHandler (apiEndpointExecution (apiRouteEndpointDeclarationContract declaration) request) (handler context) failureResponse
+    ApiRouteEndpointWithContextNeverFailing _ declaration handler ->
+      runApiRouteEndpointHandlerNeverFailing (apiEndpointExecution (apiRouteEndpointDeclarationContract declaration) request) (handler context)
 
 -- | Decode one declared body and its fields before passing them to the
 -- response continuation. Protocol parse failures are interpreted exactly at
