@@ -67,6 +67,15 @@ spec =
                ]
         )
 
+    it "attaches an inline request schema without changing other metadata" $ do
+      let extension = withOpenApiRequestSchema (mempty :: Schema) emptyOpenApiExtension
+      expectAll
+        ( (openApiExtensionRequestSchema extension `shouldBe` Just mempty)
+            :| [ openApiExtensionResponseSchema extension `shouldBe` Nothing,
+                 openApiExtensionSummary extension `shouldBe` Nothing
+               ]
+        )
+
     it "accepts only portable x-* specification extension names" $ do
       extension <- requireRight (mkOpenApiSpecificationExtension "x-harch-preview.v1" (String "enabled"))
       portableCharacterExtension <- requireRight (mkOpenApiSpecificationExtension "x-harch_A-2" (String "enabled"))

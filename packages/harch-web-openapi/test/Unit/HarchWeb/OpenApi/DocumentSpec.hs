@@ -2,7 +2,7 @@
 
 {-# SPEC #-}
 
-import Data.Aeson (Value (..), eitherDecode)
+import Data.Aeson (Object, Value (..), eitherDecode)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.List.NonEmpty (NonEmpty ((:|)))
@@ -11,6 +11,7 @@ import Data.OpenApi (Schema)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb.Api qualified as Api
+import HarchWeb.Api.Multipart (InMemoryUpload, defaultMultipartLimits, inMemoryMultipartStorage)
 import HarchWeb.ApplicationModule (RouteMount (..))
 import HarchWeb.OpenApi
 import HarchWeb.Routing (requiredPathSegment)
@@ -115,6 +116,51 @@ spec =
                ]
         )
 
+    it "documents an explicit request schema at every concrete typed request representation" $ do
+      let extension = withOpenApiRequestSchema (mempty :: Schema) emptyOpenApiExtension
+      bufferedDocument <-
+        requireRight
+          ( buildOpenApiDocument
+              (OpenApiDocumentDetails "Catalog API" "1.0")
+              False
+              [openApiMountedFamily catalogMount (family [bufferedEndpoint "/items" extension])]
+          )
+      urlEncodedDocument <-
+        requireRight
+          ( buildOpenApiDocument
+              (OpenApiDocumentDetails "Catalog API" "1.0")
+              False
+              [openApiMountedFamily catalogMount (family [urlEncodedEndpoint "/form" extension])]
+          )
+      multipartDocument <-
+        requireRight
+          ( buildOpenApiDocument
+              (OpenApiDocumentDetails "Catalog API" "1.0")
+              False
+              [openApiMountedFamily catalogMount (family [multipartEndpoint "/uploads" extension])]
+          )
+      bufferedContent <- requestContentFor bufferedDocument "/api/catalog/items"
+      urlEncodedContent <- requestContentFor urlEncodedDocument "/api/catalog/form"
+      multipartContent <- requestContentFor multipartDocument "/api/catalog/uploads"
+      expectAll
+        ( ((bufferedContent >>= lookupObject "text/plain" >>= lookupObject "schema") `shouldBe` Just mempty)
+            :| [ (urlEncodedContent >>= lookupObject "application/x-www-form-urlencoded" >>= lookupObject "schema") `shouldBe` Just mempty,
+                 (multipartContent >>= lookupObject "multipart/form-data" >>= lookupObject "schema") `shouldBe` Just mempty
+               ]
+        )
+
+    it "rejects a request schema when the runtime body declares no media type" $ do
+      let extension = withOpenApiRequestSchema (mempty :: Schema) emptyOpenApiExtension
+      expectDocumentFailure
+        (buildOpenApiDocument (OpenApiDocumentDetails "Catalog API" "1.0") False [openApiMountedFamily catalogMount (family [visibleEndpoint "/items" Api.ApiPost extension])])
+        (OpenApiRequestSchemaWithoutDeclaredMediaType "/api/catalog/items" Api.ApiPost)
+
+    it "rejects a request schema for a streaming body without a media type" $ do
+      let extension = withOpenApiRequestSchema (mempty :: Schema) emptyOpenApiExtension
+      expectDocumentFailure
+        (buildOpenApiDocument (OpenApiDocumentDetails "Catalog API" "1.0") False [openApiMountedFamily catalogMount (family [streamingEndpoint "/events" extension])])
+        (OpenApiRequestSchemaWithoutDeclaredMediaType "/api/catalog/events" Api.ApiPost)
+
     it "documents every supported standard response status and keeps an unknown status neutral" $ do
       let expectations =
             [ (200, "OK"),
@@ -146,7 +192,7 @@ spec =
       expectAll
         ( expectDocumentFailure (buildOpenApiDocument (OpenApiDocumentDetails "" "1.0") False mounted) EmptyOpenApiDocumentTitle
             :| [ expectDocumentFailure (buildOpenApiDocument (OpenApiDocumentDetails "Catalog API" "") False mounted) EmptyOpenApiDocumentVersion,
-                 map renderOpenApiDocumentFailure [EmptyOpenApiDocumentTitle, EmptyOpenApiDocumentVersion, InvalidOpenApiEndpointPath "/items", DuplicateOpenApiPathMethod "/items" Api.ApiGet, DuplicateOpenApiOperationId "get-items"] `shouldBe` ["OpenAPI document title must not be empty.", "OpenAPI document version must not be empty.", "OpenAPI endpoint path is invalid: /items", "OpenAPI path and method are duplicated: get /items", "OpenAPI operation identifier is duplicated: get-items"]
+                 map renderOpenApiDocumentFailure [EmptyOpenApiDocumentTitle, EmptyOpenApiDocumentVersion, InvalidOpenApiEndpointPath "/items", DuplicateOpenApiPathMethod "/items" Api.ApiGet, DuplicateOpenApiOperationId "get-items", OpenApiRequestSchemaWithoutDeclaredMediaType "/items" Api.ApiPost] `shouldBe` ["OpenAPI document title must not be empty.", "OpenAPI document version must not be empty.", "OpenAPI endpoint path is invalid: /items", "OpenAPI path and method are duplicated: get /items", "OpenAPI operation identifier is duplicated: get-items", "OpenAPI request schema has no declared request media type: post /items"]
                ]
         )
 
@@ -232,6 +278,35 @@ visibleEndpointWithEncoders path method encoders extension =
   Api.apiRouteEndpointNeverFailing
     (Api.ApiRouteEndpointDeclaration (Api.at path) (Api.ApiEndpointContract method Api.noRequestFields Api.ApiNoRequestBody encoders Api.ApiUseGenericFieldFailure extension))
     (const (pure (Api.apiResponse "visible")))
+
+bufferedEndpoint :: Text -> OpenApiExtension () Text Text -> Api.ApiRouteEndpoint Bool OpenApiExtension () Text () Text
+bufferedEndpoint path extension =
+  Api.apiRouteEndpointNeverFailing
+    (Api.ApiRouteEndpointDeclaration (Api.at path) (Api.ApiEndpointContract Api.ApiPost Api.noRequestFields (Api.ApiBufferedRequestBody Api.RejectMissingContentType (Api.requireApiRequestBodyByteLimit 64) [Api.textBodyDecoder]) (Api.textResponseEncoder :| []) Api.ApiUseGenericFieldFailure extension))
+    (const (pure (Api.apiResponse "visible")))
+
+urlEncodedEndpoint :: Text -> OpenApiExtension () Api.ApiForm Text -> Api.ApiRouteEndpoint Bool OpenApiExtension () Api.ApiForm () Text
+urlEncodedEndpoint path extension =
+  Api.apiRouteEndpointNeverFailing
+    (Api.ApiRouteEndpointDeclaration (Api.at path) (Api.ApiEndpointContract Api.ApiPost Api.noRequestFields (Api.ApiUrlEncodedFormRequestBody Api.RejectMissingContentType (Api.requireApiRequestBodyByteLimit 64) 8) (Api.textResponseEncoder :| []) Api.ApiUseGenericFieldFailure extension))
+    (const (pure (Api.apiResponse "visible")))
+
+multipartEndpoint :: Text -> OpenApiExtension () (Api.ApiMultipartRequest InMemoryUpload) Text -> Api.ApiRouteEndpoint Bool OpenApiExtension () (Api.ApiMultipartRequest InMemoryUpload) () Text
+multipartEndpoint path extension =
+  Api.apiRouteEndpointNeverFailing
+    (Api.ApiRouteEndpointDeclaration (Api.at path) (Api.ApiEndpointContract Api.ApiPost Api.noRequestFields (Api.ApiMultipartRequestBody inMemoryMultipartStorage defaultMultipartLimits) (Api.textResponseEncoder :| []) Api.ApiUseGenericFieldFailure extension))
+    (const (pure (Api.apiResponse "visible")))
+
+streamingEndpoint :: Text -> OpenApiExtension () Api.ApiStreamingRequest Text -> Api.ApiRouteEndpoint Bool OpenApiExtension () Api.ApiStreamingRequest () Text
+streamingEndpoint path extension =
+  Api.apiRouteEndpointNeverFailing
+    (Api.ApiRouteEndpointDeclaration (Api.at path) (Api.ApiEndpointContract Api.ApiPost Api.noRequestFields (Api.ApiStreamingRequestBody (Api.requireApiRequestBodyByteLimit 64)) (Api.textResponseEncoder :| []) Api.ApiUseGenericFieldFailure extension))
+    (const (pure (Api.apiResponse "visible")))
+
+requestContentFor :: OpenApiDocument -> Text -> IO (Maybe Object)
+requestContentFor document path = do
+  encoded <- decodeDocument document
+  pure (lookupObject "paths" encoded >>= lookupObject path >>= lookupObject "post" >>= lookupObject "requestBody" >>= lookupObject "content")
 
 hiddenEndpoint :: Text -> OpenApiExtension () () Text -> Api.ApiRouteEndpoint Bool OpenApiExtension () () () Text
 hiddenEndpoint path extension =

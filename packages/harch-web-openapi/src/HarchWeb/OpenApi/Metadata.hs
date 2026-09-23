@@ -18,11 +18,13 @@ module HarchWeb.OpenApi.Metadata
     mkOpenApiExtension,
     withOpenApiOperationId,
     withOpenApiResponseStatus,
+    withOpenApiRequestSchema,
     withOpenApiResponseSchema,
     mkOpenApiSpecificationExtension,
     openApiExtensionSummary,
     openApiExtensionOperationId,
     openApiExtensionResponseStatus,
+    openApiExtensionRequestSchema,
     openApiExtensionResponseSchema,
     openApiExtensionDescription,
     openApiExtensionTags,
@@ -47,6 +49,7 @@ import HarchWeb.Api (ApiEndpointContract, withApiEndpointExtension)
 data OpenApiExtension fields body response = OpenApiExtension
   { openApiExtensionOperationId :: Maybe Text,
     openApiExtensionResponseStatus :: Maybe Int,
+    openApiExtensionRequestSchema :: Maybe Schema,
     openApiExtensionResponseSchema :: Maybe Schema,
     openApiExtensionSummary :: Maybe Text,
     openApiExtensionDescription :: Maybe Text,
@@ -72,7 +75,7 @@ data OpenApiExtensionError
 
 -- | Metadata with no optional prose, tags, deprecation marker, or extensions.
 emptyOpenApiExtension :: OpenApiExtension fields body response
-emptyOpenApiExtension = OpenApiExtension Nothing Nothing Nothing Nothing Nothing [] False []
+emptyOpenApiExtension = OpenApiExtension Nothing Nothing Nothing Nothing Nothing Nothing [] False []
 
 -- | Attach documentation to the same typed endpoint contract that owns its
 -- codecs and runtime behavior.  This replaces only the generic extension;
@@ -89,7 +92,7 @@ mkOpenApiExtension :: Maybe Text -> Maybe Text -> [Text] -> Bool -> [OpenApiSpec
 mkOpenApiExtension summary description tags deprecated specificationExtensions =
   case duplicateExtensionName specificationExtensions of
     Just duplicate -> Left (DuplicateOpenApiSpecificationExtension duplicate)
-    Nothing -> Right (OpenApiExtension Nothing Nothing Nothing summary description tags deprecated specificationExtensions)
+    Nothing -> Right (OpenApiExtension Nothing Nothing Nothing Nothing summary description tags deprecated specificationExtensions)
 
 -- | Replace the derived method/path operation identity with an authored,
 -- portable identifier. An empty or whitespace-only value cannot name an
@@ -109,6 +112,14 @@ withOpenApiResponseStatus :: Int -> OpenApiExtension fields body response -> Eit
 withOpenApiResponseStatus status extension
   | status < 100 || status > 599 = Left (InvalidOpenApiResponseStatus status)
   | otherwise = Right extension {openApiExtensionResponseStatus = Just status}
+
+-- | Declare one inline schema for every concrete request representation that
+-- the endpoint's body declaration accepts. Document construction rejects this
+-- metadata for a body with no declared representation (including a streaming
+-- body), rather than inventing a media type the runtime does not enforce.
+withOpenApiRequestSchema :: Schema -> OpenApiExtension fields body response -> OpenApiExtension fields body response
+withOpenApiRequestSchema schema extension =
+  extension {openApiExtensionRequestSchema = Just schema}
 
 -- | Declare the schema for every representation of this endpoint's successful
 -- response. This is deliberately inline: component references need

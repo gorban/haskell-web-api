@@ -12,9 +12,10 @@
 -- validated extension overlay together until encoding.  It does not parse a
 -- completed 'Site', redispatch requests, or retain handlers: callers supply
 -- the exact 'ApiEndpointFamily' and the same structural 'RouteMount' that
--- supplies runtime routing.  It records each endpoint's declared response
--- media types. An application can add an inline response schema, while encoder
--- selection remains representation truth rather than a body-shape inference.
+-- supplies runtime routing. It records each endpoint's declared request and
+-- response media types. An application can add inline request or response
+-- schemas, while the runtime declarations remain representation truth rather
+-- than a body-shape inference.
 -- Later AHI-4E slices add components, resolved security, provider caching,
 -- and Swagger routes.
 -- An extension can carry a nonblank authored operation ID; otherwise the
@@ -53,6 +54,7 @@ import Data.OpenApi
     Operation (..),
     PathItem (..),
     Referenced (Inline),
+    RequestBody (..),
     Response (..),
     Responses (..),
     Schema,
@@ -62,10 +64,12 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Api
   ( ApiAvailability (ApiAvailable),
+    ApiBodyDecoder (..),
     ApiEndpointContract (..),
     ApiEndpointFamily,
     ApiMediaType,
     ApiMethod (..),
+    ApiRequestBody (..),
     ApiResponseEncoder (..),
     ApiRouteEndpoint,
     ApiRouteEndpointDeclaration (..),
@@ -76,6 +80,8 @@ import HarchWeb.Api
     apiPathText,
     apiRouteEndpointAvailability,
     mapApiEndpointFamily,
+    requireApiMediaType,
+    urlEncodedFormMediaType,
     withApiRouteEndpointDeclaration,
   )
 import HarchWeb.ApplicationModule (RouteMount (..))
@@ -85,6 +91,7 @@ import HarchWeb.OpenApi.Metadata
     openApiExtensionDeprecated,
     openApiExtensionDescription,
     openApiExtensionOperationId,
+    openApiExtensionRequestSchema,
     openApiExtensionResponseSchema,
     openApiExtensionResponseStatus,
     openApiExtensionSpecificationExtensions,
@@ -113,6 +120,7 @@ data OpenApiDocumentFailure
   | InvalidOpenApiEndpointPath Text
   | DuplicateOpenApiPathMethod Text ApiMethod
   | DuplicateOpenApiOperationId Text
+  | OpenApiRequestSchemaWithoutDeclaredMediaType Text ApiMethod
 
 -- | Render a construction failure for application diagnostics. The ADT stays
 -- the programmatic boundary; callers should branch on its constructors rather
@@ -125,6 +133,7 @@ renderOpenApiDocumentFailure failure =
     InvalidOpenApiEndpointPath path -> "OpenAPI endpoint path is invalid: " <> path
     DuplicateOpenApiPathMethod path method -> "OpenAPI path and method are duplicated: " <> Text.toLower (apiMethodText method) <> " " <> path
     DuplicateOpenApiOperationId operationId -> "OpenAPI operation identifier is duplicated: " <> operationId
+    OpenApiRequestSchemaWithoutDeclaredMediaType path method -> "OpenAPI request schema has no declared request media type: " <> Text.toLower (apiMethodText method) <> " " <> path
 
 -- | One documented family paired with the actual structural runtime mount.
 -- The existential route types are deliberately irrelevant to documentation:
@@ -238,13 +247,14 @@ operationForEndpoint context mountPrefix endpoint
         let contract = apiRouteEndpointDeclarationContract declaration
             extension = apiEndpointContractExtension contract
             method = apiEndpointContractMethod contract
+        operation <- operationForExtension fullPath method (apiEndpointContractBody contract) (apiEndpointContractEncoders contract) extension
         pure
           ( Just
               OpenApiOperation
                 { operationPath = fullPath,
                   operationMethod = method,
                   operationId = operationIdForExtension fullPath method extension,
-                  operationValue = operationForExtension fullPath method (apiEndpointContractEncoders contract) extension,
+                  operationValue = operation,
                   operationExtensions = openApiExtensionSpecificationExtensions extension
                 }
           )
@@ -260,17 +270,51 @@ mountedOperationPath mountPrefix localPath
             <> (if localPath == "/" then "" else localPath)
         )
 
-operationForExtension :: Text -> ApiMethod -> NonEmpty.NonEmpty (ApiResponseEncoder response) -> OpenApiExtension fields body response -> Operation
-operationForExtension path method encoders extension =
-  (mempty :: Operation)
-    { _operationTags = InsOrdHashSet.fromList (openApiExtensionTags extension),
-      _operationSummary = openApiExtensionSummary extension,
-      _operationDescription = openApiExtensionDescription extension,
-      _operationOperationId = Just (operationIdForExtension path method extension),
-      _operationDeprecated = Just (openApiExtensionDeprecated extension),
-      _operationResponses =
-        responsesForExtension encoders extension
-    }
+operationForExtension :: Text -> ApiMethod -> ApiRequestBody body -> NonEmpty.NonEmpty (ApiResponseEncoder response) -> OpenApiExtension fields body response -> Either OpenApiDocumentFailure Operation
+operationForExtension path method requestBody encoders extension = do
+  requestBodyValue <- requestBodyFor path method requestBody (openApiExtensionRequestSchema extension)
+  pure
+    (mempty :: Operation)
+      { _operationTags = InsOrdHashSet.fromList (openApiExtensionTags extension),
+        _operationSummary = openApiExtensionSummary extension,
+        _operationDescription = openApiExtensionDescription extension,
+        _operationOperationId = Just (operationIdForExtension path method extension),
+        _operationRequestBody = requestBodyValue,
+        _operationDeprecated = Just (openApiExtensionDeprecated extension),
+        _operationResponses =
+          responsesForExtension encoders extension
+      }
+
+requestBodyFor :: Text -> ApiMethod -> ApiRequestBody body -> Maybe Schema -> Either OpenApiDocumentFailure (Maybe (Referenced RequestBody))
+requestBodyFor path method requestBody schema =
+  case requestMediaTypes requestBody of
+    [] ->
+      case schema of
+        Nothing -> Right Nothing
+        Just _ -> Left (OpenApiRequestSchemaWithoutDeclaredMediaType path method)
+    mediaTypes ->
+      Right
+        ( Just
+            ( Inline
+                ( (mempty :: RequestBody)
+                    { _requestBodyContent =
+                        InsOrdHashMap.fromList
+                          [ (openApiMediaType mediaType, mediaTypeObjectFor schema)
+                          | mediaType <- mediaTypes
+                          ]
+                    }
+                )
+            )
+        )
+
+requestMediaTypes :: ApiRequestBody body -> [ApiMediaType]
+requestMediaTypes requestBody =
+  case requestBody of
+    ApiNoRequestBody -> []
+    ApiBufferedRequestBody _ _ decoders -> map apiBodyDecoderMediaType decoders
+    ApiUrlEncodedFormRequestBody {} -> [urlEncodedFormMediaType]
+    ApiStreamingRequestBody _ -> []
+    ApiMultipartRequestBody _ _ -> [requireApiMediaType "multipart/form-data"]
 
 responsesForExtension :: NonEmpty.NonEmpty (ApiResponseEncoder response) -> OpenApiExtension fields body response -> Responses
 responsesForExtension encoders extension =

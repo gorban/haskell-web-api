@@ -1106,6 +1106,20 @@ the current builder owns neither component allocation nor reference validation;
 accepting them would permit dangling references. The schema has no runtime
 effect and examples remain a later explicit metadata slice.
 
+**Follow-up decision — explicit OpenAPI request schemas (AHI-4E,
+2026-09-23): use the same endpoint extension for one optional inline request
+schema, but derive its content keys only from the typed runtime body
+declaration.** Buffered decoders, URL-encoded forms, and multipart bodies
+have concrete accepted media types, so the interpreter records those keys and
+shares the selected schema between them. A no-body or streaming declaration
+has no concrete media type; selecting a schema there is an objective document
+construction error instead of an invented OpenAPI representation. This keeps
+the API declaration as the source of protocol truth, leaves multipart part
+shapes and request fields for later dedicated metadata, and avoids claiming a
+schema from an arbitrary decoder function. As for responses, components and
+examples need their later owners before references or generated values can be
+accepted.
+
 The public `openapi3-3.2.5` and `insert-ordered-containers-0.3.0` releases
 build and pass their complete upstream suites on the frozen GHC/Aeson/lens
 plan, but both metadata bounds exclude Aeson 2.3.1.0. `openapi3` also emits
