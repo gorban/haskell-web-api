@@ -16,8 +16,19 @@
 -- response media types. An application can add inline request or response
 -- schemas, while the runtime declarations remain representation truth rather
 -- than a body-shape inference.
--- Later AHI-4E slices add components, resolved security, provider caching,
--- and Swagger routes.
+--
+-- Decision record (AHI-4E, 2026-09-23): 'OpenApiMountedFamily' also carries
+-- the exact @ApiPath -> EndpointMetadata authorization@ function the
+-- application already writes for real route mounting, plus an
+-- @authorization -> [Text]@ scope projection; 'buildOpenApiDocument' takes a
+-- document-level @Map AuthenticationProfileName OpenApiSecurityScheme@.
+-- Every operation's @security@ is derived from that real, already-enforced
+-- 'HarchWeb.EndpointMetadata.AccessRequirement' — never authored
+-- independently in the extension — and construction fails
+-- ('UndefinedOpenApiSecurityProfile', 'UnresolvedOpenApiSecurityProfile')
+-- rather than guessing when a profile is undefined or unresolvable. Swagger
+-- routes, and wiring this into a real application (@web-api@,
+-- @composed-domains@), remain later AHI-4E slices.
 -- An extension can carry a nonblank authored operation ID; otherwise the
 -- existing family abstraction has no runtime 'EndpointMetadata' name per
 -- method, so this slice falls back to a stable method/path identifier and
@@ -35,6 +46,7 @@ module HarchWeb.OpenApi.Document
     openApiDocumentModel,
     mapOpenApiDocumentModel,
     applyOpenApiOperationExtensions,
+    applyOpenApiAnonymousSecurity,
     encodeOpenApiDocument,
   )
 where
@@ -46,9 +58,12 @@ import Data.ByteString.Lazy (ByteString)
 import Data.HashMap.Strict.InsOrd.Compat qualified as InsOrdHashMap
 import Data.HashSet.InsOrd qualified as InsOrdHashSet
 import Data.List.NonEmpty qualified as NonEmpty
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.OpenApi
-  ( ExternalDocs (..),
+  ( Components (..),
+    ExternalDocs (..),
     Info (..),
     MediaTypeObject (..),
     OpenApi (..),
@@ -59,6 +74,8 @@ import Data.OpenApi
     Response (..),
     Responses (..),
     Schema,
+    SecurityDefinitions (..),
+    SecurityRequirement (..),
     URL (..),
   )
 import Data.Text (Text)
@@ -71,6 +88,7 @@ import HarchWeb.Api
     ApiEndpointFamily,
     ApiMediaType,
     ApiMethod (..),
+    ApiPath,
     ApiRequestBody (..),
     ApiResponseEncoder (..),
     ApiRouteEndpoint,
@@ -87,6 +105,12 @@ import HarchWeb.Api
     withApiRouteEndpointDeclaration,
   )
 import HarchWeb.ApplicationModule (RouteMount (..))
+import HarchWeb.EndpointMetadata
+  ( AccessRequirement (..),
+    AuthenticationProfileName,
+    EndpointMetadata (..),
+    authenticationProfileNameText,
+  )
 import HarchWeb.OpenApi.Metadata
   ( OpenApiExtension,
     OpenApiExternalDocs (..),
@@ -106,6 +130,7 @@ import HarchWeb.OpenApi.Metadata
     openApiSpecificationExtensionName,
     openApiSpecificationExtensionValue,
   )
+import HarchWeb.OpenApi.Security (OpenApiSecurityScheme, openApiSecuritySchemeModel)
 import HarchWeb.Routing (PathSegment, pathSegmentText)
 import Network.HTTP.Media qualified as HttpMedia
 
@@ -128,6 +153,16 @@ data OpenApiDocumentFailure
   | DuplicateOpenApiOperationId Text
   | OpenApiRequestSchemaWithoutDeclaredMediaType Text ApiMethod
   | OpenApiRequestExampleWithoutDeclaredMediaType Text ApiMethod
+  | -- | A non-anonymous endpoint names an authentication profile with no
+    -- entry in the document's supplied profile-to-scheme map. Never resolved
+    -- as anonymous or an arbitrary scheme: the map is the single authority.
+    UndefinedOpenApiSecurityProfile Text
+  | -- | A non-anonymous endpoint's real 'HarchWeb.EndpointMetadata.EndpointMetadata'
+    -- has no authentication profile of its own (one would be inherited from
+    -- an outer default this boundary cannot see). Never silently documented
+    -- as either anonymous or secured: that would be a docs-only guess about
+    -- a real access requirement.
+    UnresolvedOpenApiSecurityProfile Text ApiMethod
 
 -- | Render a construction failure for application diagnostics. The ADT stays
 -- the programmatic boundary; callers should branch on its constructors rather
@@ -142,21 +177,47 @@ renderOpenApiDocumentFailure failure =
     DuplicateOpenApiOperationId operationId -> "OpenAPI operation identifier is duplicated: " <> operationId
     OpenApiRequestSchemaWithoutDeclaredMediaType path method -> "OpenAPI request schema has no declared request media type: " <> Text.toLower (apiMethodText method) <> " " <> path
     OpenApiRequestExampleWithoutDeclaredMediaType path method -> "OpenAPI request example has no declared request media type: " <> Text.toLower (apiMethodText method) <> " " <> path
+    UndefinedOpenApiSecurityProfile profileName -> "OpenAPI security profile is not defined in the supplied scheme map: " <> profileName
+    UnresolvedOpenApiSecurityProfile path method -> "OpenAPI operation has no resolvable authentication profile: " <> Text.toLower (apiMethodText method) <> " " <> path
 
--- | One documented family paired with the actual structural runtime mount.
--- The existential route types are deliberately irrelevant to documentation:
--- only the mount's construction-owned prefix is observed.  Keeping the whole
--- 'RouteMount' value prevents a second, stringly documentation-prefix input.
+-- | One documented family paired with the actual structural runtime mount
+-- and the same access information the application already established for
+-- real routing.  The existential route types are deliberately irrelevant to
+-- documentation: only the mount's construction-owned prefix is observed.
+-- Keeping the whole 'RouteMount' value prevents a second, stringly
+-- documentation-prefix input.
+--
+-- Decision record (AHI-4E, 2026-09-23): security is derived from the exact
+-- @ApiPath -> EndpointMetadata authorization@ function the application
+-- already writes for
+-- 'HarchWeb.Api.Endpoint.Family.apiRouteEndpointFamilyDefinition', not a
+-- second, independently authored copy. This is the only way a documented
+-- operation's declared security can be structurally guaranteed to match the
+-- profile/access requirement that actually governs the endpoint, rather than
+-- a docs-only override the task's own design forbids. The scope function
+-- turns one endpoint's opaque @authorization@ requirement into the OpenAPI
+-- scope names an application-owned 'RequireAuthorized' value demands;
+-- 'RequireAuthenticated' always requires zero scopes and
+-- 'AllowUnauthenticated' requires none of this at all.
 data OpenApiMountedFamily context where
   OpenApiMountedFamily ::
     RouteMount parentRoute childRoute ->
     ApiEndpointFamily context OpenApiExtension ->
+    (ApiPath -> EndpointMetadata authorization) ->
+    (authorization -> [Text]) ->
     OpenApiMountedFamily context
 
 -- | Select an API family for documentation at the composition root.  The
 -- family is already validated by @harch-web@; this function merely records
--- the exact mount used when that family is installed for runtime routing.
-openApiMountedFamily :: RouteMount parentRoute childRoute -> ApiEndpointFamily context OpenApiExtension -> OpenApiMountedFamily context
+-- the exact mount used when that family is installed for runtime routing,
+-- plus the same endpoint-metadata function and a scope projection used to
+-- derive each operation's real security (see the type's own Haddock).
+openApiMountedFamily ::
+  RouteMount parentRoute childRoute ->
+  ApiEndpointFamily context OpenApiExtension ->
+  (ApiPath -> EndpointMetadata authorization) ->
+  (authorization -> [Text]) ->
+  OpenApiMountedFamily context
 openApiMountedFamily = OpenApiMountedFamily
 
 -- | A typed OpenAPI model plus the valid @x-*@ values that its upstream model
@@ -164,7 +225,10 @@ openApiMountedFamily = OpenApiMountedFamily
 -- transformation before 'encodeOpenApiDocument'.
 data OpenApiDocument = OpenApiDocument
   { documentModel :: OpenApi,
-    openApiDocumentOperationExtensions :: [(Text, ApiMethod, [OpenApiSpecificationExtension])]
+    openApiDocumentOperationExtensions :: [(Text, ApiMethod, [OpenApiSpecificationExtension])],
+    -- | Every anonymous operation's path/method, forced to an explicit empty
+    -- @security@ array at encoding time; see 'applyOpenApiAnonymousSecurity'.
+    openApiDocumentAnonymousOperations :: [(Text, ApiMethod)]
   }
 
 data OpenApiOperation = OpenApiOperation
@@ -172,7 +236,12 @@ data OpenApiOperation = OpenApiOperation
     operationMethod :: ApiMethod,
     operationId :: Text,
     operationValue :: Operation,
-    operationExtensions :: [OpenApiSpecificationExtension]
+    operationExtensions :: [OpenApiSpecificationExtension],
+    -- | Whether this operation resolved to 'AllowUnauthenticated'. Tracked
+    -- separately from 'operationValue' because @openapi3@'s generic encoder
+    -- omits an empty @_operationSecurity@ list entirely rather than emitting
+    -- @security: []@; see 'applyOpenApiAnonymousSecurity'.
+    operationAnonymous :: Bool
   }
 
 -- | Build a valid basic OpenAPI operation for every endpoint available in the
@@ -183,19 +252,34 @@ data OpenApiOperation = OpenApiOperation
 -- OpenAPI @content@. An explicitly attached inline schema is shared by every
 -- representation; no schema is inferred from an encoder, and examples remain
 -- a later typed metadata slice.
-buildOpenApiDocument :: OpenApiDocumentDetails -> context -> [OpenApiMountedFamily context] -> Either OpenApiDocumentFailure OpenApiDocument
-buildOpenApiDocument details context mountedFamilies = do
+buildOpenApiDocument ::
+  OpenApiDocumentDetails ->
+  -- | Every resolved AHI-4D authentication profile this document's mounted
+  -- families may reference, keyed by the exact profile name real routing
+  -- uses. A profile a documented endpoint names but this map omits fails
+  -- construction ('UndefinedOpenApiSecurityProfile') rather than being
+  -- silently treated as anonymous or skipped.
+  Map AuthenticationProfileName OpenApiSecurityScheme ->
+  context ->
+  [OpenApiMountedFamily context] ->
+  Either OpenApiDocumentFailure OpenApiDocument
+buildOpenApiDocument details securitySchemes context mountedFamilies = do
   validatedDetails <- validateDocumentDetails details
-  operations <- concatMapM (operationsForMountedFamily context) mountedFamilies
+  operations <- concatMapM (operationsForMountedFamily securitySchemes context) mountedFamilies
   distinctOperations <- validateDistinctOperations operations
   distinctOperationIds <- validateDistinctOperationIds distinctOperations
   pure
     OpenApiDocument
-      { documentModel = modelFor validatedDetails distinctOperationIds,
+      { documentModel = modelFor validatedDetails securitySchemes distinctOperationIds,
         openApiDocumentOperationExtensions =
           [ (operationPath, operationMethod, operationExtensions)
           | OpenApiOperation {operationPath, operationMethod, operationExtensions} <- distinctOperationIds,
             not (null operationExtensions)
+          ],
+        openApiDocumentAnonymousOperations =
+          [ (operationPath, operationMethod)
+          | OpenApiOperation {operationPath, operationMethod, operationAnonymous} <- distinctOperationIds,
+            operationAnonymous
           ]
       }
 
@@ -211,12 +295,19 @@ mapOpenApiDocumentModel :: (OpenApi -> OpenApi) -> OpenApiDocument -> OpenApiDoc
 mapOpenApiDocumentModel transform document =
   document {documentModel = transform (openApiDocumentModel document)}
 
--- | Encode the selected model as OpenAPI 3.0.3 and apply each already
--- validated operation extension.  The adapter modifies only the root
--- @openapi@ member and existing selected operations; it does not turn
--- arbitrary application text into JSON member names.
+-- | Encode the selected model as OpenAPI 3.0.3, apply each already validated
+-- operation extension, and force an explicit empty @security@ array onto
+-- every anonymous operation (see 'applyOpenApiAnonymousSecurity').  The
+-- adapter modifies only the root @openapi@ member and existing selected
+-- operations; it does not turn arbitrary application text into JSON member
+-- names.
 encodeOpenApiDocument :: OpenApiDocument -> ByteString
-encodeOpenApiDocument document = encode (applyOpenApiOperationExtensions (openApiDocumentOperationExtensions document) (toJSON (openApiDocumentModel document)))
+encodeOpenApiDocument document =
+  encode
+    ( applyOpenApiAnonymousSecurity
+        (openApiDocumentAnonymousOperations document)
+        (applyOpenApiOperationExtensions (openApiDocumentOperationExtensions document) (toJSON (openApiDocumentModel document)))
+    )
 
 -- | Apply validated @x-*@ operation members to a raw encoded OpenAPI value.
 -- This is the narrow wire adapter required because @openapi3@ has no typed
@@ -231,31 +322,85 @@ applyOpenApiOperationExtensions extensions value =
     Object root -> Object (KeyMap.insert "openapi" (String "3.0.3") (applyToPaths extensions root))
     _ -> value
 
+-- | Force an explicit empty @security@ array onto every anonymous
+-- operation. @openapi3@'s generic encoder treats an empty list as that
+-- field's default value and omits it entirely from the encoded JSON (its
+-- @AesonDefaultValue [a]@ instance), which would otherwise leave an
+-- anonymous operation with no @security@ member at all — silently inheriting
+-- any top-level security declaration instead of explicitly requiring none.
+-- This mirrors 'applyOpenApiOperationExtensions': the same narrow,
+-- already-established raw-JSON adapter for a typed-model gap, not a second
+-- encoding path. It updates only the named path/method pairs and leaves a
+-- missing path, non-object path item, or non-object operation unchanged.
+applyOpenApiAnonymousSecurity :: [(Text, ApiMethod)] -> Value -> Value
+applyOpenApiAnonymousSecurity anonymousOperations value =
+  case value of
+    Object root -> Object (applyAnonymousToPaths anonymousOperations root)
+    _ -> value
+
+applyAnonymousToPaths :: [(Text, ApiMethod)] -> KeyMap.KeyMap Value -> KeyMap.KeyMap Value
+applyAnonymousToPaths anonymousOperations root =
+  case KeyMap.lookup "paths" root of
+    Just (Object paths) -> KeyMap.insert "paths" (Object (foldr applyOne paths anonymousOperations)) root
+    _ -> root
+  where
+    applyOne (anonymousPath, anonymousMethod) =
+      mapKey (applyAnonymousToPathItem anonymousMethod) (Key.fromText anonymousPath)
+
+applyAnonymousToPathItem :: ApiMethod -> Value -> Value
+applyAnonymousToPathItem method value =
+  case value of
+    Object pathItem -> Object (mapKey applyAnonymousToOperation (Key.fromText (Text.toLower (apiMethodText method))) pathItem)
+    _ -> value
+
+applyAnonymousToOperation :: Value -> Value
+applyAnonymousToOperation value =
+  case value of
+    Object operation -> Object (KeyMap.insert "security" (Array mempty) operation)
+    _ -> value
+
 validateDocumentDetails :: OpenApiDocumentDetails -> Either OpenApiDocumentFailure OpenApiDocumentDetails
 validateDocumentDetails OpenApiDocumentDetails {openApiDocumentTitle, openApiDocumentVersion}
   | Text.null openApiDocumentTitle = Left EmptyOpenApiDocumentTitle
   | Text.null openApiDocumentVersion = Left EmptyOpenApiDocumentVersion
   | otherwise = Right OpenApiDocumentDetails {openApiDocumentTitle, openApiDocumentVersion}
 
-operationsForMountedFamily :: context -> OpenApiMountedFamily context -> Either OpenApiDocumentFailure [OpenApiOperation]
-operationsForMountedFamily context (OpenApiMountedFamily routeMount family) =
+operationsForMountedFamily :: Map AuthenticationProfileName OpenApiSecurityScheme -> context -> OpenApiMountedFamily context -> Either OpenApiDocumentFailure [OpenApiOperation]
+operationsForMountedFamily securitySchemes context (OpenApiMountedFamily routeMount family endpointMetadataForPath requiredScopesFor) =
   catMaybes
     <$> sequenceA
       ( mapApiEndpointFamily
-          (operationForEndpoint context (routeMountPrefix routeMount))
+          (operationForEndpoint securitySchemes context (routeMountPrefix routeMount) endpointMetadataForPath requiredScopesFor)
           family
       )
 
-operationForEndpoint :: context -> NonEmpty.NonEmpty PathSegment -> ApiRouteEndpoint context OpenApiExtension fields body domainFailure response -> Either OpenApiDocumentFailure (Maybe OpenApiOperation)
-operationForEndpoint context mountPrefix endpoint
+-- | Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the @$!@
+-- on 'endpointMetadataForPath's argument below is a confirmed, reproducible
+-- fix, not a guess. Every construction path here is genuinely exercised, but
+-- 'apiPath' is a bare local binding used as a direct argument to an
+-- already-HPC-instrumented call, the documented pattern where HPC
+-- permanently leaves the occurrence unticked despite real execution.
+{-# ANN operationForEndpoint ("HLint: ignore Redundant $!" :: String) #-}
+operationForEndpoint ::
+  Map AuthenticationProfileName OpenApiSecurityScheme ->
+  context ->
+  NonEmpty.NonEmpty PathSegment ->
+  (ApiPath -> EndpointMetadata authorization) ->
+  (authorization -> [Text]) ->
+  ApiRouteEndpoint context OpenApiExtension fields body domainFailure response ->
+  Either OpenApiDocumentFailure (Maybe OpenApiOperation)
+operationForEndpoint securitySchemes context mountPrefix endpointMetadataForPath requiredScopesFor endpoint
   | apiRouteEndpointAvailability endpoint context /= ApiAvailable = Right Nothing
   | otherwise =
       withApiRouteEndpointDeclaration endpoint $ \declaration -> do
-        fullPath <- mountedOperationPath mountPrefix (apiPathText (apiRouteEndpointDeclarationPath declaration))
+        let apiPath = apiRouteEndpointDeclarationPath declaration
+        fullPath <- mountedOperationPath mountPrefix (apiPathText apiPath)
         let contract = apiRouteEndpointDeclarationContract declaration
             extension = apiEndpointContractExtension contract
             method = apiEndpointContractMethod contract
-        operation <- operationForExtension fullPath method (apiEndpointContractBody contract) (apiEndpointContractEncoders contract) extension
+            metadata = endpointMetadataForPath $! apiPath
+        (security, anonymous) <- operationSecurityFor securitySchemes fullPath method requiredScopesFor metadata
+        operation <- operationForExtension fullPath method (apiEndpointContractBody contract) (apiEndpointContractEncoders contract) extension security
         pure
           ( Just
               OpenApiOperation
@@ -263,9 +408,36 @@ operationForEndpoint context mountPrefix endpoint
                   operationMethod = method,
                   operationId = operationIdForExtension fullPath method extension,
                   operationValue = operation,
-                  operationExtensions = openApiExtensionSpecificationExtensions extension
+                  operationExtensions = openApiExtensionSpecificationExtensions extension,
+                  operationAnonymous = anonymous
                 }
           )
+
+-- | Derive one operation's OpenAPI @security@ requirement from the same
+-- 'EndpointMetadata' that governs its real runtime access, never from
+-- docs-only authoring. Returns whether the resolved requirement is anonymous
+-- so 'buildOpenApiDocument' can force an explicit empty array at encoding
+-- time (see 'applyOpenApiAnonymousSecurity').
+operationSecurityFor ::
+  Map AuthenticationProfileName OpenApiSecurityScheme ->
+  Text ->
+  ApiMethod ->
+  (authorization -> [Text]) ->
+  EndpointMetadata authorization ->
+  Either OpenApiDocumentFailure ([SecurityRequirement], Bool)
+operationSecurityFor securitySchemes path method requiredScopesFor metadata =
+  case endpointAccess metadata of
+    AllowUnauthenticated -> Right ([], True)
+    RequireAuthenticated -> resolvedSecurity []
+    RequireAuthorized authorizationValue -> resolvedSecurity (requiredScopesFor authorizationValue)
+  where
+    resolvedSecurity scopes =
+      case endpointAuthenticationProfile metadata of
+        Nothing -> Left (UnresolvedOpenApiSecurityProfile path method)
+        Just profileName ->
+          case Map.lookup profileName securitySchemes of
+            Nothing -> Left (UndefinedOpenApiSecurityProfile (authenticationProfileNameText profileName))
+            Just _scheme -> Right ([SecurityRequirement (InsOrdHashMap.singleton (authenticationProfileNameText profileName) scopes)], False)
 
 mountedOperationPath :: NonEmpty.NonEmpty PathSegment -> Text -> Either OpenApiDocumentFailure Text
 mountedOperationPath mountPrefix localPath
@@ -278,8 +450,8 @@ mountedOperationPath mountPrefix localPath
             <> (if localPath == "/" then "" else localPath)
         )
 
-operationForExtension :: Text -> ApiMethod -> ApiRequestBody body -> NonEmpty.NonEmpty (ApiResponseEncoder response) -> OpenApiExtension fields body response -> Either OpenApiDocumentFailure Operation
-operationForExtension path method requestBody encoders extension = do
+operationForExtension :: Text -> ApiMethod -> ApiRequestBody body -> NonEmpty.NonEmpty (ApiResponseEncoder response) -> OpenApiExtension fields body response -> [SecurityRequirement] -> Either OpenApiDocumentFailure Operation
+operationForExtension path method requestBody encoders extension security = do
   requestBodyValue <- requestBodyFor path method requestBody (openApiExtensionRequestSchema extension) (openApiExtensionRequestExample extension)
   pure
     (mempty :: Operation)
@@ -293,7 +465,8 @@ operationForExtension path method requestBody encoders extension = do
         _operationRequestBody = requestBodyValue,
         _operationDeprecated = Just (openApiExtensionDeprecated extension),
         _operationResponses =
-          responsesForExtension encoders extension
+          responsesForExtension encoders extension,
+        _operationSecurity = security
       }
 
 requestBodyFor :: Text -> ApiMethod -> ApiRequestBody body -> Maybe Schema -> Maybe Value -> Either OpenApiDocumentFailure (Maybe (Referenced RequestBody))
@@ -425,8 +598,8 @@ findDuplicate identify = go []
       | identify value `elem` identities = Just value
       | otherwise = go (identify value : identities) remaining
 
-modelFor :: OpenApiDocumentDetails -> [OpenApiOperation] -> OpenApi
-modelFor OpenApiDocumentDetails {openApiDocumentTitle, openApiDocumentVersion} operations =
+modelFor :: OpenApiDocumentDetails -> Map AuthenticationProfileName OpenApiSecurityScheme -> [OpenApiOperation] -> OpenApi
+modelFor OpenApiDocumentDetails {openApiDocumentTitle, openApiDocumentVersion} securitySchemes operations =
   (mempty :: OpenApi)
     { _openApiInfo =
         (mempty :: Info)
@@ -437,7 +610,17 @@ modelFor OpenApiDocumentDetails {openApiDocumentTitle, openApiDocumentVersion} o
         InsOrdHashMap.fromList
           [ (Text.unpack path, pathItemFor path operations)
           | path <- distinctPaths operations
-          ]
+          ],
+      _openApiComponents =
+        (mempty :: Components)
+          { _componentsSecuritySchemes =
+              SecurityDefinitions
+                ( InsOrdHashMap.fromList
+                    [ (authenticationProfileNameText profileName, openApiSecuritySchemeModel scheme)
+                    | (profileName, scheme) <- Map.toList securitySchemes
+                    ]
+                )
+          }
     }
 
 distinctPaths :: [OpenApiOperation] -> [Text]

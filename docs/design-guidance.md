@@ -1189,6 +1189,49 @@ acceptance criteria. `web-api` documentation, `composed-domains`
 documentation, and the Swagger UI page all remain blocked on this landing
 first.
 
+**Follow-up decision — security-scheme derivation shipped (AHI-4E,
+2026-09-23): implement the shape decided above exactly — `openApiMountedFamily`
+now takes the application's `ApiPath -> EndpointMetadata authorization`
+function plus an `authorization -> [Text]` scope projection, and
+`buildOpenApiDocument` takes a document-level `Map AuthenticationProfileName
+OpenApiSecurityScheme`.** A new closed `HarchWeb.OpenApi.Security` module
+supplies the two AHI-4D scheme kinds (`OpenApiCookieSessionSecurityScheme`,
+naming the session cookie for display only; `OpenApiOAuth2ClientCredentialsSecurityScheme`,
+requiring an absolute `https` token URL — `client_secret_basic` sends a
+confidential secret, so `http`, including for local development, is rejected
+at construction) through smart constructors only, so an invalid scheme cannot
+reach document construction to be re-validated there. `buildOpenApiDocument`
+fails with `UndefinedOpenApiSecurityProfile` when a non-anonymous operation
+names a profile absent from the supplied map, and with
+`UnresolvedOpenApiSecurityProfile` when its real `EndpointMetadata` carries no
+authentication profile to resolve at all (an inherited-default case this
+boundary cannot see) — both prevent an endpoint from being silently
+documented as either anonymous or secured when its real requirement can't be
+confirmed. Two mounted families sharing one profile name share one
+`securitySchemes` component by construction (the map key is that name); two
+families naming different profiles get distinct components automatically.
+
+`_operationSecurity :: [SecurityRequirement]` following `openapi3`'s generic
+`AesonDefaultValue [a]` instance would let an anonymous operation's `security:
+[]` be *omitted* from the encoded JSON entirely (silently inheriting any
+top-level security default) rather than explicitly present — confirmed by
+reading the library's own Aeson options before writing the fix, not assumed.
+`applyOpenApiAnonymousSecurity` extends the existing
+`applyOpenApiOperationExtensions` raw-JSON adapter pattern to force that key
+present for every anonymous operation, the same narrow encoder-gap workaround
+already established for `x-*` extensions and the 3.0.3 version string, not a
+second encoding path. A dedicated test decodes the real encoded JSON (not
+just the Haskell `Operation` value) to prove this, since a plausible-looking
+Haskell shape could still have encoded to the wrong bytes.
+
+This grew `HarchWeb.OpenApi.Document` past this document's own 500-line/
+20-import/10-local-dependency module-health threshold and gave
+`operationForExtension` a sixth positional argument; recorded as a follow-up
+task (`TASKS/ahi-4e-openapi-document-module-health.md`, local/git-ignored)
+rather than done inline, to keep this slice reviewable. `web-api`
+documentation, `composed-domains` documentation, and the Swagger UI page
+remain the next slices, now unblocked.
+
 The public `openapi3-3.2.5` and `insert-ordered-containers-0.3.0` releases
 build and pass their complete upstream suites on the frozen GHC/Aeson/lens
 plan, but both metadata bounds exclude Aeson 2.3.1.0. `openapi3` also emits

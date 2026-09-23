@@ -4,9 +4,11 @@
 
 import Data.ByteString.Lazy.Char8 qualified as ByteString
 import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import HarchWeb.Api qualified as Api
 import HarchWeb.ApplicationModule (RouteMount (..))
+import HarchWeb.EndpointMetadata (AccessRequirement (AllowUnauthenticated), EndpointMetadata, EndpointProtocol (ApiEndpoint), mkEndpointMetadata, requiredEndpointNameOrDie, requiredRouteTemplateOrDie)
 import HarchWeb.OpenApi
 import HarchWeb.Routing (requiredPathSegment)
 import HarchWeb.SecurityEvent (requiredModuleNameOrDie)
@@ -18,8 +20,9 @@ spec =
         requireRight
           ( prepareOpenApiDocumentFromSnapshot
               (OpenApiDocumentDetails "Catalog API" "1.0")
+              Map.empty
               True
-              [openApiMountedFamily catalogMount (family [endpoint "/items"])]
+              [openApiMountedFamily catalogMount (family [endpoint "/items"]) anonymousEndpointMetadata (const [])]
           )
       ByteString.unpack (preparedOpenApiDocumentBytes prepared) `shouldContain` "\"/api/catalog/items\""
 
@@ -28,8 +31,9 @@ spec =
         requireRight
           ( mkCachedOpenApiDocumentProvider
               (OpenApiDocumentDetails "Catalog API" "1.0")
+              Map.empty
               True
-              [openApiMountedFamily catalogMount (family [availabilityEndpoint "/items"])]
+              [openApiMountedFamily catalogMount (family [availabilityEndpoint "/items"]) anonymousEndpointMetadata (const [])]
           )
       enabled <- prepareOpenApiDocument provider True
       disabled <- prepareOpenApiDocument provider False
@@ -45,7 +49,7 @@ spec =
 
     it "fails construction before a malformed default provider can serve a document" $
       expectDocumentFailure
-        (mkCachedOpenApiDocumentProvider (OpenApiDocumentDetails "" "1.0") True [openApiMountedFamily catalogMount (family [endpoint "/items"])])
+        (mkCachedOpenApiDocumentProvider (OpenApiDocumentDetails "" "1.0") Map.empty True [openApiMountedFamily catalogMount (family [endpoint "/items"]) anonymousEndpointMetadata (const [])])
         EmptyOpenApiDocumentTitle
 
     it "lets an application-owned provider report a typed runtime failure" $ do
@@ -64,6 +68,14 @@ catalogMount =
 
 family :: [Api.ApiRouteEndpoint Bool OpenApiExtension fields body domainFailure response] -> Api.ApiEndpointFamily Bool OpenApiExtension
 family endpoints = Api.requireApiEndpointFamily (map Api.SomeApiRouteEndpoint endpoints)
+
+anonymousEndpointMetadata :: Api.ApiPath -> EndpointMetadata ()
+anonymousEndpointMetadata _ =
+  mkEndpointMetadata
+    (requiredEndpointNameOrDie "catalog.item")
+    (requiredRouteTemplateOrDie "/items")
+    ApiEndpoint
+    AllowUnauthenticated
 
 endpoint :: Text -> Api.ApiRouteEndpoint Bool OpenApiExtension () () () Text
 endpoint = availabilityEndpoint

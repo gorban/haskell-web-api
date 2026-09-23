@@ -35,6 +35,7 @@ library
     HarchWeb.OpenApi.Metadata
     HarchWeb.OpenApi.Provider
     HarchWeb.OpenApi.Route
+    HarchWeb.OpenApi.Security
 
   hs-source-dirs: src
   build-depends:
@@ -43,6 +44,7 @@ library
     aeson ^>=2.3.1.0,
     base ^>=4.22.0.0,
     bytestring ^>=0.12.2.0,
+    containers ^>=0.8,
     harch-web ^>=0.1.2.0,
     http-media ^>=0.8.1.1,
     http-types ^>=0.12.5,
@@ -62,6 +64,7 @@ test-suite harch-web-openapi-tests
     Unit.HarchWeb.OpenApi.MetadataSpec
     Unit.HarchWeb.OpenApi.ProviderSpec
     Unit.HarchWeb.OpenApi.RouteSpec
+    Unit.HarchWeb.OpenApi.SecuritySpec
     Unit.HarchWeb.OpenApiSpec
 
   ghc-options:
@@ -80,6 +83,7 @@ test-suite harch-web-openapi-tests
     aeson ^>=2.3.1.0,
     base ^>=4.22.0.0,
     bytestring ^>=0.12.2.0,
+    containers ^>=0.8,
     harch-web ^>=0.1.2.0,
     harch-web-openapi ^>=0.1.2.0,
     hspec ^>=2.11.17,

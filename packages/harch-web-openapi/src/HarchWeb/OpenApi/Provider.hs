@@ -22,6 +22,8 @@ where
 
 import Data.ByteString.Lazy (ByteString)
 import Data.ByteString.Lazy qualified as ByteString
+import Data.Map.Strict (Map)
+import HarchWeb.EndpointMetadata (AuthenticationProfileName)
 import HarchWeb.OpenApi.Document
   ( OpenApiDocumentDetails,
     OpenApiDocumentFailure,
@@ -29,6 +31,7 @@ import HarchWeb.OpenApi.Document
     buildOpenApiDocument,
     encodeOpenApiDocument,
   )
+import HarchWeb.OpenApi.Security (OpenApiSecurityScheme)
 
 -- | A documentation source selected by the application. A custom provider may
 -- return a typed failure for a deliberately dynamic policy; its route adapter
@@ -51,9 +54,9 @@ preparedOpenApiDocumentBytes (PreparedOpenApiDocument bytes) = bytes
 -- | Validate, build, and encode one document from an explicit availability
 -- snapshot. Dynamic providers may call this at a deliberate cache boundary;
 -- the supplied default calls it once during application startup.
-prepareOpenApiDocumentFromSnapshot :: OpenApiDocumentDetails -> context -> [OpenApiMountedFamily context] -> Either OpenApiDocumentFailure PreparedOpenApiDocument
-prepareOpenApiDocumentFromSnapshot details availabilitySnapshot mountedFamilies =
-  prepareDocument <$> buildOpenApiDocument details availabilitySnapshot mountedFamilies
+prepareOpenApiDocumentFromSnapshot :: OpenApiDocumentDetails -> Map AuthenticationProfileName OpenApiSecurityScheme -> context -> [OpenApiMountedFamily context] -> Either OpenApiDocumentFailure PreparedOpenApiDocument
+prepareOpenApiDocumentFromSnapshot details securitySchemes availabilitySnapshot mountedFamilies =
+  prepareDocument <$> buildOpenApiDocument details securitySchemes availabilitySnapshot mountedFamilies
   where
     prepareDocument document =
       PreparedOpenApiDocument
@@ -63,7 +66,7 @@ prepareOpenApiDocumentFromSnapshot details availabilitySnapshot mountedFamilies 
 -- provider exists, so the default application composition treats malformed
 -- documentation as startup failure instead of serving a stale or partially
 -- generated document at runtime.
-mkCachedOpenApiDocumentProvider :: OpenApiDocumentDetails -> context -> [OpenApiMountedFamily context] -> Either OpenApiDocumentFailure (OpenApiDocumentProvider context)
-mkCachedOpenApiDocumentProvider details availabilitySnapshot mountedFamilies = do
-  preparedDocument <- prepareOpenApiDocumentFromSnapshot details availabilitySnapshot mountedFamilies
+mkCachedOpenApiDocumentProvider :: OpenApiDocumentDetails -> Map AuthenticationProfileName OpenApiSecurityScheme -> context -> [OpenApiMountedFamily context] -> Either OpenApiDocumentFailure (OpenApiDocumentProvider context)
+mkCachedOpenApiDocumentProvider details securitySchemes availabilitySnapshot mountedFamilies = do
+  preparedDocument <- prepareOpenApiDocumentFromSnapshot details securitySchemes availabilitySnapshot mountedFamilies
   pure (OpenApiDocumentProvider (const (pure (Right preparedDocument))))

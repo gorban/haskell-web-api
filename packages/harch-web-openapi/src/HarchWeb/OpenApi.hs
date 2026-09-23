@@ -6,9 +6,12 @@
 -- metadata attaches through the existing generic endpoint-extension slot, so
 -- it cannot alter codecs or runtime routing. Its document builder consumes
 -- only explicit families paired with their structural runtime mounts; it does
--- not crawl a completed site. Schema interpretation, resolved security,
--- caching, and a documentation route remain later AHI-4E work.
--- See @docs/design-guidance.md@.
+-- not crawl a completed site.
+--
+-- Decision record (AHI-4E, 2026-09-23): security-scheme derivation now ships
+-- (see @HarchWeb.OpenApi.Document@ and @HarchWeb.OpenApi.Security@). Schema
+-- interpretation, caching, a documentation route, and wiring this into a real
+-- application remain later AHI-4E work. See @docs/design-guidance.md@.
 module HarchWeb.OpenApi
   ( OpenApi,
     OpenApiDocument,
@@ -21,6 +24,7 @@ module HarchWeb.OpenApi
     openApiDocumentModel,
     mapOpenApiDocumentModel,
     applyOpenApiOperationExtensions,
+    applyOpenApiAnonymousSecurity,
     encodeOpenApiDocument,
     OpenApiDocumentProvider (..),
     PreparedOpenApiDocument,
@@ -42,6 +46,10 @@ module HarchWeb.OpenApi
     withOpenApiResponseExample,
     withOpenApiExternalDocs,
     mkOpenApiSpecificationExtension,
+    OpenApiSecurityScheme,
+    OpenApiSecuritySchemeError (..),
+    mkOpenApiCookieSessionSecurityScheme,
+    mkOpenApiOAuth2ClientCredentialsSecurityScheme,
   )
 where
 
@@ -50,3 +58,4 @@ import HarchWeb.OpenApi.Document
 import HarchWeb.OpenApi.Metadata
 import HarchWeb.OpenApi.Provider
 import HarchWeb.OpenApi.Route
+import HarchWeb.OpenApi.Security
