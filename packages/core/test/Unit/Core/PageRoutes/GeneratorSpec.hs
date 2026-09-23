@@ -126,6 +126,7 @@ spec =
                  dispatcherSource `shouldContain` "HomePage -> App.Pages.Home.pageDefinition",
                  dispatcherSource `shouldContain` "PageNotFound -> App.Pages.NotFound.pageDefinition",
                  dispatcherSource `shouldContain` "pageRouteDefinition :: PageRoute -> RouteDefinition",
+                 dispatcherSource `shouldContain` "import App.Routes (TwoPageRoute)",
                  contextDispatcherSource
                    `shouldContain` "pageRouteDefinition :: AppContext -> PageRoute -> RouteDefinition",
                  contextDispatcherSource `shouldContain` "import App.Context (AppContext)",

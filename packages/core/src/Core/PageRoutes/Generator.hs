@@ -242,7 +242,11 @@ renderDispatcherModule config pageSpecs =
         "  )",
         "where",
         "",
-        "import " <> applicationRouteModuleName config <> " (" <> applicationRouteTypeName config <> ")",
+        "import "
+          <> applicationRouteModuleName config
+          <> " ("
+          <> intercalate ", " (filter (/= "()") [applicationRouteTypeName config, requestContextTypeName config, authorizationTypeName config])
+          <> ")",
         "import " <> routeModuleName config <> " (PageRoute (..))",
         "import HarchWeb.Site (RouteDefinition)"
       ]
