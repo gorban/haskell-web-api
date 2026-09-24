@@ -5,8 +5,13 @@
 import Control.Concurrent (forkIO, killThread, newEmptyMVar, putMVar, readMVar, threadDelay)
 import Control.Exception (IOException, SomeException, bracket, bracket_, displayException, throwIO, try)
 import Control.Monad (forM_, void)
+import Data.Aeson (Value (..))
+import Data.Aeson qualified as Aeson
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64 qualified as Base64
+import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (isJust, isNothing)
@@ -649,6 +654,73 @@ spec = do
                  apiSecondResult `shouldBe` HarchWeb.ProtocolResponseResult (expectedApiJsonProtocolResponse "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}")
                ]
         )
+
+    it "serves the complete documented OpenAPI specification through the typed /docs/openapi.json endpoint" $ do
+      renderedResponse <- HarchWeb.renderResponse pureApplication docsOpenApiSpecRequest
+      case renderedResponse of
+        HarchWeb.ProtocolResponseResult protocolResponse -> do
+          HarchWeb.protocolResponseStatus protocolResponse `shouldBe` Http.status200
+          lookup Http.hContentType (HarchWeb.protocolResponseHeaders protocolResponse)
+            `shouldBe` Just "application/vnd.oai.openapi+json;version=3.0"
+          let rawDocument = protocolResponseStrictBody protocolResponse
+          case Aeson.eitherDecode (LazyByteString.fromStrict rawDocument) of
+            Left decodeFailure -> expectationFailure ("served specification is not decodable JSON: " <> decodeFailure)
+            Right document -> do
+              let objectMember key value = case value of
+                    Object members -> KeyMap.lookup key members
+                    _ -> Nothing
+                  memberCount value = case value of
+                    Just (Object members) -> Just (KeyMap.size members)
+                    _ -> Nothing
+                  paths = objectMember (Key.fromText "paths") document
+                  operation pathKey methodKey = paths >>= objectMember pathKey >>= objectMember methodKey
+                  securityOf pathKey methodKey = operation pathKey methodKey >>= objectMember (Key.fromText "security")
+                  operationIdOf pathKey methodKey = operation pathKey methodKey >>= objectMember (Key.fromText "operationId")
+                  components = objectMember (Key.fromText "components") document
+                  securitySchemes = components >>= objectMember (Key.fromText "securitySchemes")
+                  schemeField profileName fieldName = securitySchemes >>= objectMember profileName >>= objectMember fieldName
+                  statusPath = Key.fromText "/api/status"
+                  secondPath = Key.fromText "/api/second"
+                  mePath = Key.fromText "/api/me"
+                  tokenPath = Key.fromText "/api/oauth/token"
+                  bearerScheme profileName =
+                    [ schemeField profileName (Key.fromText "type") `shouldBe` Just (String "http"),
+                      schemeField profileName (Key.fromText "scheme") `shouldBe` Just (String "bearer"),
+                      schemeField profileName (Key.fromText "bearerFormat") `shouldBe` Just (String "JWT")
+                    ]
+              expectAll
+                ( (objectMember (Key.fromText "openapi") document `shouldBe` Just (String "3.0.3"))
+                    :| [ (objectMember (Key.fromText "info") document >>= objectMember (Key.fromText "title"))
+                           `shouldBe` Just (String "Harch Web API"),
+                         (objectMember (Key.fromText "info") document >>= objectMember (Key.fromText "version"))
+                           `shouldBe` Just (String "0.1.2.0"),
+                         memberCount paths `shouldBe` Just 4,
+                         -- Exactly the four real API operations are documented; the
+                         -- specification route itself and every page-support surface
+                         -- stay out of the document.
+                         (paths >>= objectMember statusPath) `shouldSatisfy` isJust,
+                         (paths >>= objectMember secondPath) `shouldSatisfy` isJust,
+                         (paths >>= objectMember mePath) `shouldSatisfy` isJust,
+                         (paths >>= objectMember tokenPath) `shouldSatisfy` isJust,
+                         operationIdOf statusPath (Key.fromText "get") `shouldBe` Just (String "get-api-status"),
+                         operationIdOf secondPath (Key.fromText "get") `shouldBe` Just (String "get-api-second"),
+                         operationIdOf mePath (Key.fromText "get") `shouldBe` Just (String "get-api-me"),
+                         operationIdOf tokenPath (Key.fromText "post") `shouldBe` Just (String "post-api-oauth-token"),
+                         -- Security is derived from the real endpoint metadata:
+                         -- anonymous operations are forced to an explicit empty
+                         -- array, account-only gets the account profile with no
+                         -- scopes, and /api/second demands its real resource scope.
+                         securityOf statusPath (Key.fromText "get") `shouldBe` Just (Array mempty),
+                         securityOf tokenPath (Key.fromText "post") `shouldBe` Just (Array mempty),
+                         securityOf mePath (Key.fromText "get")
+                           `shouldBe` Just (Array (pure (Object (KeyMap.singleton (Key.fromText "account") (Array mempty))))),
+                         securityOf secondPath (Key.fromText "get")
+                           `shouldBe` Just (Array (pure (Object (KeyMap.singleton (Key.fromText "resource") (Array (pure (String "resource:read"))))))),
+                         memberCount securitySchemes `shouldBe` Just 2
+                       ]
+                    <> (bearerScheme (Key.fromText "account") <> bearerScheme (Key.fromText "resource"))
+                )
+        _ -> expectationFailure "expected the specification endpoint's typed protocol response"
 
     it "carries database operations through the typed API response boundary" $ do
       let databaseOperation =

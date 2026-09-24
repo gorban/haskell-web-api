@@ -24,6 +24,7 @@ module WebApi.Route
         SecondApiRoute,
         MeApiRoute,
         TokenApiRoute,
+        DocsOpenApiSpecRoute,
         NotFoundRoute,
         ApiNotFoundRoute
       ),
@@ -90,6 +91,13 @@ data ApiRoute
   | SecondApi
   | MeApi
   | TokenApi
+  | -- | AHI-4E: the prepared OpenAPI document itself, served as an ordinary
+    -- unauthenticated typed GET endpoint at @\/docs\/openapi.json@. It is a
+    -- protocol route like every other 'ApiRoute' (a complete SSR page and
+    -- asset routes remain the later Swagger-UI slice), but its path lives
+    -- outside the @\/api@ prefix the other constructors render — see
+    -- 'apiRouteSegments' and 'parseRouteSegments'.
+    DocsOpenApiSpec
   | ApiNotFound
   deriving (Bounded, Enum, Eq, Show)
 
@@ -143,6 +151,9 @@ pattern MeApiRoute = Api MeApi
 pattern TokenApiRoute :: AppRoute
 pattern TokenApiRoute = Api TokenApi
 
+pattern DocsOpenApiSpecRoute :: AppRoute
+pattern DocsOpenApiSpecRoute = Api DocsOpenApiSpec
+
 pattern NotFoundRoute :: AppRoute
 pattern NotFoundRoute = Page PageNotFound
 
@@ -166,6 +177,7 @@ pattern ApiNotFoundRoute = Api ApiNotFound
   SecondApiRoute,
   MeApiRoute,
   TokenApiRoute,
+  DocsOpenApiSpecRoute,
   ApiNotFoundRoute
   #-}
 
@@ -187,6 +199,7 @@ instance Show AppRoute where
       SecondApiRoute -> "SecondApiRoute"
       MeApiRoute -> "MeApiRoute"
       TokenApiRoute -> "TokenApiRoute"
+      DocsOpenApiSpecRoute -> "DocsOpenApiSpecRoute"
       NotFoundRoute -> "NotFoundRoute"
       ApiNotFoundRoute -> "ApiNotFoundRoute"
 
@@ -279,6 +292,10 @@ apiRouteSegments apiRoute =
     SecondApi -> pathSegment "api" NonEmpty.:| [pathSegment "second"]
     MeApi -> pathSegment "api" NonEmpty.:| [pathSegment "me"]
     TokenApi -> pathSegment "api" NonEmpty.:| [pathSegment "oauth", pathSegment "token"]
+    -- The documentation specification deliberately lives at the task file's
+    -- default @\/docs@ path rather than under @\/api@: it is a support
+    -- surface, not part of the documented API it describes.
+    DocsOpenApiSpec -> pathSegment "docs" NonEmpty.:| [pathSegment "openapi.json"]
     ApiNotFound -> pathSegment "api" NonEmpty.:| [pathSegment "404"]
   where
     pathSegment = HarchWeb.requiredPathSegment
@@ -321,6 +338,11 @@ parseRouteSegments path segments =
     [segment] -> parseSingleSegmentPath path segment
     [prefix, segment]
       | prefix == "api" -> parseApiPath segment
+    -- The AHI-4E specification endpoint is locale-independent and exact:
+    -- only @\/docs\/openapi.json@ matches, while any other @\/docs@ path
+    -- keeps falling through to the ordinary unsupported-path rejection
+    -- below rather than growing a second docs-specific 404 family.
+    ["docs", "openapi.json"] -> Right (Nothing, DocsOpenApiSpecRoute)
     [prefix, segment] -> parsePrefixedPath path prefix segment
     ["api", "oauth", "token"] -> Right (Nothing, TokenApiRoute)
     apiPrefix : _
@@ -429,6 +451,10 @@ endpointMetadata route =
     -- handler runs. See the AHI-4D decision record in
     -- @docs/design-guidance.md@.
     TokenApiRoute -> api "api.oauth-token" "/api/oauth/token"
+    -- AHI-4E: the specification is an ordinary unauthenticated typed API
+    -- endpoint; its security choice stays this application's, exactly like
+    -- every other route's metadata here.
+    DocsOpenApiSpecRoute -> api "api.openapi-spec" "/docs/openapi.json"
     ApiNotFoundRoute -> api "api.not-found" "/api/404"
   where
     html = declaredMetadata HtmlEndpoint AllowUnauthenticated

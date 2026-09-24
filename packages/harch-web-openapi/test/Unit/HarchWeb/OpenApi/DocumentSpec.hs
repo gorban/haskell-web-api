@@ -352,6 +352,27 @@ spec =
                  ]
           )
 
+      it "documents an HTTP bearer profile's scheme and per-operation requirement" $ do
+        let scheme = mkOpenApiHttpBearerSecurityScheme (Just "JWT")
+        extension <- requireRight (mkOpenApiExtension Nothing Nothing [] False [])
+        document <-
+          requireRight
+            ( buildOpenApiDocument
+                (OpenApiDocumentDetails "Catalog API" "1.0")
+                (Map.singleton webProfile scheme)
+                False
+                [openApiMountedFamily catalogMount (family [visibleEndpoint "/items" Api.ApiGet extension]) webAuthenticatedEndpointMetadata noRequiredScopes]
+            )
+        encoded <- decodeDocument document
+        let operation = lookupObject "paths" encoded >>= lookupObject "/api/catalog/items" >>= lookupObject "get"
+        expectAll
+          ( ((operation >>= KeyMap.lookup (Key.fromText "security")) `shouldBe` Just (Array (pure (Object (KeyMap.singleton (Key.fromText "catalog-web") (Array mempty))))))
+              :| [ (lookupObject "components" encoded >>= lookupObject "securitySchemes" >>= lookupObject "catalog-web" >>= lookupText "type") `shouldBe` Just "http",
+                   (lookupObject "components" encoded >>= lookupObject "securitySchemes" >>= lookupObject "catalog-web" >>= lookupText "scheme") `shouldBe` Just "bearer",
+                   (lookupObject "components" encoded >>= lookupObject "securitySchemes" >>= lookupObject "catalog-web" >>= lookupText "bearerFormat") `shouldBe` Just "JWT"
+                 ]
+          )
+
       it "documents an OAuth2 client-credentials profile's scheme and required scopes" $ do
         scheme <- requireRight (mkOpenApiOAuth2ClientCredentialsSecurityScheme "https://api.example.test/oauth/token" [("catalog:read", "Read the catalog")])
         extension <- requireRight (mkOpenApiExtension Nothing Nothing [] False [])

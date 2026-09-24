@@ -50,6 +50,7 @@ module HarchWeb.OpenApi
     OpenApiSecuritySchemeError (..),
     mkOpenApiCookieSessionSecurityScheme,
     mkOpenApiOAuth2ClientCredentialsSecurityScheme,
+    mkOpenApiHttpBearerSecurityScheme,
   )
 where
 

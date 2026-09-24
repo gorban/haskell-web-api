@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | @\/api\/status@ and @\/api\/second@ composed through
@@ -39,6 +40,14 @@
 -- API boundary; see the AHI-4D decision record in @docs\/design-guidance.md@
 -- for why its access requirement, error-body shape, and unavailable-outcome
 -- collapsing were chosen this way.
+--
+-- AHI-4E (2026-09-23): the four API endpoints above are each built ONCE as a
+-- 'SomeApiRouteEndpoint' carrying a real 'OpenApiExtension', so the same
+-- value feeds both its runtime 'RouteDefinition' and the documented
+-- 'webApiOpenApiMountedFamily' — no second, documentation-only declaration
+-- exists. The family is interpreted into one cached document served through
+-- 'docsOpenApiSpecRouteDefinition' at @GET \/docs\/openapi.json@; see the
+-- AHI-4E decision records in @docs\/design-guidance.md@.
 module WebApi.Api.Endpoints
   ( noApiRequestFields,
     meApiRouteDefinition,
@@ -54,6 +63,14 @@ module WebApi.Api.Endpoints
     tokenApiMissingContentTypePolicy,
     requiredApiHeaderNameOrDie,
     requiredApiHeaderValueOrDie,
+    requireOpenApiExtension,
+    webApiOpenApiDocumentProvider,
+    requireWebApiOpenApiDocumentProvider,
+    webApiOpenApiSecuritySchemes,
+    webApiOpenApiEndpointMetadataForPath,
+    webApiApiRouteMount,
+    appAuthorizationScopes,
+    docsOpenApiSpecRouteDefinition,
   )
 where
 
@@ -61,6 +78,9 @@ import Data.Aeson.Encoding qualified as JsonEncoding
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.List.NonEmpty qualified as NonEmpty
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -68,30 +88,39 @@ import HarchWeb.Api
   ( ApiEndpointContract (..),
     ApiEndpointRequest (..),
     ApiFieldFailurePolicy (ApiRenderFieldFailures, ApiUseGenericFieldFailure),
+    ApiForm,
     ApiHeaderName,
     ApiHeaderValue,
     ApiMethod (ApiGet, ApiPost),
+    ApiPath,
     ApiRequestBody (ApiNoRequestBody, ApiUrlEncodedFormRequestBody),
     ApiRequestBodyByteLimit,
     ApiRequestParseError,
     ApiResponse (..),
+    ApiRouteEndpointDeclaration (..),
     MissingContentTypePolicy (RejectMissingContentType),
-    NoApiExtension (NoApiExtension),
     RequestCodec,
+    SomeApiRouteEndpoint (..),
     apiContentType,
     apiHeaderName,
     apiHeaderValue,
+    apiPathText,
     apiResponse,
-    apiRouteDefinitionWithContext,
-    apiRouteDefinitionWithContextNeverFailing,
+    apiRouteDefinition,
+    apiRouteEndpointWithContext,
+    apiRouteEndpointWithContextNeverFailing,
+    at,
     bytesResponseEncoder,
     jsonMediaType,
+    requireApiEndpointFamily,
     requireApiRequestBodyByteLimit,
   )
+import HarchWeb.ApplicationModule (RouteMount (..))
 import HarchWeb.Authentication
   ( OAuth2ClientCredentials,
     OAuth2ClientCredentialsMaximumBytes,
     OAuth2ClientCredentialsRequest,
+    ScopeRequirement (RequireAllScopes, RequireAnyScope),
     encodedJwtBytes,
     oauth2ClientCredentialsRequestCodec,
     oauth2ClientCredentialsScopes,
@@ -99,6 +128,24 @@ import HarchWeb.Authentication
     oauth2ScopeText,
     requiredOAuth2ClientCredentialsMaximumBytesOrDie,
   )
+import HarchWeb.EndpointSecurity (AuthenticationProfileName, EndpointMetadata (endpointRouteTemplate), routeTemplateText)
+import HarchWeb.OpenApi
+  ( OpenApiDocumentDetails (..),
+    OpenApiDocumentFailure,
+    OpenApiDocumentProvider,
+    OpenApiExtension,
+    OpenApiExtensionError,
+    OpenApiMountedFamily,
+    OpenApiSecurityScheme,
+    mkCachedOpenApiDocumentProvider,
+    mkOpenApiExtension,
+    mkOpenApiHttpBearerSecurityScheme,
+    openApiDocumentRouteDefinition,
+    openApiMountedFamily,
+    renderOpenApiDocumentFailure,
+  )
+import HarchWeb.Routing (PathSegment, pathSegmentText, requiredPathSegment)
+import HarchWeb.SecurityEvent (requiredModuleNameOrDie)
 import HarchWeb.Site (RouteDefinition)
 import Network.HTTP.Types qualified as HttpTypes
 import Numeric.Natural (Natural)
@@ -132,7 +179,16 @@ import WebApi.Response
     toHarchDatabaseOperation,
     tokenApiSuccessBody,
   )
-import WebApi.Route (AppAuthorization, AppRequestContext (requestAccountPrincipal), AppRoute (MeApiRoute, SecondApiRoute, StatusApiRoute, TokenApiRoute), endpointMetadata, requestLocale)
+import WebApi.Route
+  ( AppAuthorization,
+    AppRequestContext (requestAccountPrincipal),
+    AppRoute (DocsOpenApiSpecRoute, MeApiRoute, SecondApiRoute, StatusApiRoute, TokenApiRoute),
+    accountAuthenticationProfileName,
+    defaultRequestContext,
+    endpointMetadata,
+    requestLocale,
+    resourceAuthenticationProfileName,
+  )
 import WebApi.RouteData (SecondRouteData (..))
 
 -- | Neither @\/api\/status@ nor @\/api\/second@ decodes any query, header, or
@@ -148,19 +204,74 @@ import WebApi.RouteData (SecondRouteData (..))
 noApiRequestFields :: RequestCodec ()
 noApiRequestFields = pure ()
 
+-- | The one structural prefix web-api's documented API family mounts under.
+-- It mirrors the literal @api@ path segment @WebApi.Route@ already dispatches
+-- on, but documentation observes it exactly once here: both the mounted
+-- family's paths and every local declaration below are derived from this
+-- value and each endpoint's own real @endpointRouteTemplate@, so a
+-- documented path can never disagree with where the endpoint actually
+-- lives. See the AHI-4E decision record in @docs\/design-guidance.md@.
+webApiApiMountPrefix :: NonEmpty.NonEmpty PathSegment
+webApiApiMountPrefix = requiredPathSegment "api" NonEmpty.:| []
+
+-- | 'webApiApiMountPrefix' rendered as its path form (@\"\/api\"@), used to
+-- project a full route template down to its family-local declaration path.
+webApiApiMountPrefixText :: Text.Text
+webApiApiMountPrefixText = "/" <> pathSegmentText (NonEmpty.head webApiApiMountPrefix)
+
+-- | Build a documented endpoint declaration from the SAME real
+-- 'EndpointMetadata' value @WebApi.Route.endpointMetadata@ hands to runtime
+-- dispatch, deriving the family-local path by removing the mount prefix
+-- rather than authoring a second copy of the path (see
+-- 'webApiApiMountPrefix'). A template that does not sit under the mount
+-- prefix still produces a total, invalid local path that
+-- 'HarchWeb.OpenApi.mountedOperationPath' rejects as a typed construction
+-- failure at provider startup — never a silently wrong documented path.
+-- The declaration path is documentation-only: 'HarchWeb.Api.apiRouteDefinition'
+-- reads the method and availability, while route selection itself remains
+-- @WebApi.Route@'s codec. See the AHI-4E decision record in
+-- @docs\/design-guidance.md@.
+apiDocumentedDeclaration :: EndpointMetadata authorization -> ApiEndpointContract extension fields body response -> ApiRouteEndpointDeclaration extension fields body response
+apiDocumentedDeclaration metadata =
+  ApiRouteEndpointDeclaration (at (Text.drop (Text.length webApiApiMountPrefixText) (routeTemplateText (endpointRouteTemplate metadata))))
+
+-- | Unwrap one statically authored documentation extension. Every call below
+-- passes compile-time literals that only fail validation for a genuinely
+-- malformed authored value (a duplicate specification-extension name), so
+-- this keeps the ordinary success path direct while leaving the failure rail
+-- a total, directly testable boundary — exported so @Unit.WebApi.Api.EndpointsSpec@
+-- can exercise it against a real invalid value instead of it staying an
+-- unreachable @error@ branch, matching 'requiredApiHeaderNameOrDie'.
+requireOpenApiExtension :: Either OpenApiExtensionError (OpenApiExtension fields body response) -> OpenApiExtension fields body response
+requireOpenApiExtension =
+  either
+    (error . ("web-api authored an invalid OpenAPI extension: " <>) . show)
+    id
+
+statusApiContract :: ApiEndpointContract OpenApiExtension () () ByteString.ByteString
+statusApiContract =
+  ApiEndpointContract
+    ApiGet
+    noApiRequestFields
+    ApiNoRequestBody
+    (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
+    ApiUseGenericFieldFailure
+    statusApiExtension
+
+statusApiExtension :: OpenApiExtension () () ByteString.ByteString
+statusApiExtension = requireOpenApiExtension (mkOpenApiExtension (Just "Anonymous application status check.") Nothing [] False [])
+
+statusApiEndpoint :: SomeApiRouteEndpoint AppRequestContext OpenApiExtension
+statusApiEndpoint =
+  SomeApiRouteEndpoint (apiRouteEndpointWithContextNeverFailing (apiDocumentedDeclaration (endpointMetadata StatusApiRoute) statusApiContract) statusApiHandler)
+
+statusApiHandler :: AppRequestContext -> ApiEndpointRequest () () -> IO (ApiResponse ByteString.ByteString)
+statusApiHandler requestContext _endpointRequest = pure (apiResponse (jsonBytes (statusApiBody (requestLocale requestContext))))
+
 statusApiRouteDefinition :: RouteDefinition AppRoute AppRequestContext AppAuthorization
 statusApiRouteDefinition =
-  apiRouteDefinitionWithContextNeverFailing
-    ( ApiEndpointContract
-        ApiGet
-        noApiRequestFields
-        ApiNoRequestBody
-        (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
-        ApiUseGenericFieldFailure
-        NoApiExtension
-    )
-    (endpointMetadata StatusApiRoute)
-    (\requestContext _endpointRequest -> pure (apiResponse (jsonBytes (statusApiBody (requestLocale requestContext)))))
+  case statusApiEndpoint of
+    SomeApiRouteEndpoint endpoint -> apiRouteDefinition (endpointMetadata StatusApiRoute) endpoint
 
 -- | @\/api\/me@: the requesting account's own username and email.
 -- 'WebApi.Route.endpointMetadata' declares this route through the existing
@@ -170,22 +281,40 @@ statusApiRouteDefinition =
 -- than partially unwrapping it, since nothing here can re-prove the guard
 -- ran. See the AHI-4D decision record in @docs\/design-guidance.md@ for why
 -- this reuses the account profile instead of a new authorization payload.
+meApiContract :: ApiEndpointContract OpenApiExtension () () ByteString.ByteString
+meApiContract =
+  ApiEndpointContract
+    ApiGet
+    noApiRequestFields
+    ApiNoRequestBody
+    (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
+    ApiUseGenericFieldFailure
+    meApiExtension
+
+-- | Real synthetic username/email values in the example response are the
+-- endpoint's requested resource (see the task file's "web-api documentation"
+-- section); the real response stays @private, no-store@ regardless.
+meApiExtension :: OpenApiExtension () () ByteString.ByteString
+meApiExtension = requireOpenApiExtension (mkOpenApiExtension (Just "The authenticated account's own profile.") Nothing [] False [])
+
+-- | Composition-time dependency realization: the store record is demanded to
+-- WHNF when this endpoint value is composed (in either the runtime route
+-- definition or the documented family), mirroring the provider binding's
+-- startup-failure posture — a malformed or unexpectedly lazy top-level
+-- dependency fails at composition instead of first dispatch. The handler
+-- still consumes the record's fields lazily.
+meApiEndpoint :: AccountProfileStore -> SomeApiRouteEndpoint AppRequestContext OpenApiExtension
+meApiEndpoint !profileStore =
+  SomeApiRouteEndpoint (apiRouteEndpointWithContext (apiDocumentedDeclaration (endpointMetadata MeApiRoute) meApiContract) (meApiHandler profileStore) meApiFailureResponse)
+
+meApiHandler :: AccountProfileStore -> AppRequestContext -> ApiEndpointRequest () () -> IO (Either MeApiFailure (ApiResponse ByteString.ByteString))
+meApiHandler profileStore requestContext _endpointRequest =
+  meApiOutcomeResponse <$> loadProfileForPrincipal profileStore (requestAccountPrincipal requestContext)
+
 meApiRouteDefinition :: AccountProfileStore -> RouteDefinition AppRoute AppRequestContext AppAuthorization
 meApiRouteDefinition profileStore =
-  apiRouteDefinitionWithContext
-    ( ApiEndpointContract
-        ApiGet
-        noApiRequestFields
-        ApiNoRequestBody
-        (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
-        ApiUseGenericFieldFailure
-        NoApiExtension
-    )
-    (endpointMetadata MeApiRoute)
-    ( \requestContext _endpointRequest ->
-        meApiOutcomeResponse <$> loadProfileForPrincipal profileStore (requestAccountPrincipal requestContext)
-    )
-    meApiFailureResponse
+  case meApiEndpoint profileStore of
+    SomeApiRouteEndpoint endpoint -> apiRouteDefinition (endpointMetadata MeApiRoute) endpoint
 
 -- | @\/api\/me@ has one public failure shape: the account-self resource is
 -- momentarily unavailable. A genuinely unauthenticated caller never reaches
@@ -223,34 +352,46 @@ meApiFailureResponse MeApiUnavailable =
     { apiEndpointResponseStatus = HttpTypes.status503
     }
 
-secondApiRouteDefinition :: PageRepository -> RouteDefinition AppRoute AppRequestContext AppAuthorization
-secondApiRouteDefinition pageRepository =
-  apiRouteDefinitionWithContext
-    ( ApiEndpointContract
-        ApiGet
-        noApiRequestFields
-        ApiNoRequestBody
-        (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
-        ApiUseGenericFieldFailure
-        NoApiExtension
-    )
-    (endpointMetadata SecondApiRoute)
-    ( \requestContext _endpointRequest -> do
-        secondPageResult <- loadSecondPage pageRepository (requestLocale requestContext)
-        let databaseOperations = databaseResultOperations secondPageResult
-        pure $ case databaseResultValue secondPageResult of
-          Right secondPageData ->
-            Right
-              ( (apiResponse (jsonBytes (secondRouteApiBody (toSecondRouteData secondPageData))))
-                  { apiEndpointResponseDatabaseOperations = map toHarchDatabaseOperation databaseOperations
-                  }
-              )
-          Left databaseError -> Left (SecondApiFailure databaseOperations databaseError)
-    )
-    secondApiFailureResponse
+secondApiContract :: ApiEndpointContract OpenApiExtension () () ByteString.ByteString
+secondApiContract =
+  ApiEndpointContract
+    ApiGet
+    noApiRequestFields
+    ApiNoRequestBody
+    (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
+    ApiUseGenericFieldFailure
+    secondApiExtension
+
+secondApiExtension :: OpenApiExtension () () ByteString.ByteString
+secondApiExtension = requireOpenApiExtension (mkOpenApiExtension (Just "Second-page resource data.") Nothing [] False [])
+
+-- | See 'meApiEndpoint' for why the repository record is demanded here: the
+-- same value feeds the runtime route and the documented family, so its
+-- composition-time dependency is realized exactly once, at composition.
+secondApiEndpoint :: PageRepository -> SomeApiRouteEndpoint AppRequestContext OpenApiExtension
+secondApiEndpoint !pageRepository =
+  SomeApiRouteEndpoint (apiRouteEndpointWithContext (apiDocumentedDeclaration (endpointMetadata SecondApiRoute) secondApiContract) (secondApiHandler pageRepository) secondApiFailureResponse)
+
+secondApiHandler :: PageRepository -> AppRequestContext -> ApiEndpointRequest () () -> IO (Either SecondApiFailure (ApiResponse ByteString.ByteString))
+secondApiHandler pageRepository requestContext _endpointRequest = do
+  secondPageResult <- loadSecondPage pageRepository (requestLocale requestContext)
+  let databaseOperations = databaseResultOperations secondPageResult
+  pure $ case databaseResultValue secondPageResult of
+    Right secondPageData ->
+      Right
+        ( (apiResponse (jsonBytes (secondRouteApiBody (toSecondRouteData secondPageData))))
+            { apiEndpointResponseDatabaseOperations = map toHarchDatabaseOperation databaseOperations
+            }
+        )
+    Left databaseError -> Left (SecondApiFailure databaseOperations databaseError)
   where
     toSecondRouteData secondPageData =
       SecondRouteData (secondPageDataSummary secondPageData) (secondPageDataHighlights secondPageData)
+
+secondApiRouteDefinition :: PageRepository -> RouteDefinition AppRoute AppRequestContext AppAuthorization
+secondApiRouteDefinition pageRepository =
+  case secondApiEndpoint pageRepository of
+    SomeApiRouteEndpoint endpoint -> apiRouteDefinition (endpointMetadata SecondApiRoute) endpoint
 
 -- | The RFC 6749 client-credentials grant decoded as one endpoint request:
 -- HTTP Basic client authentication (a header field) alongside the grant-type
@@ -299,27 +440,44 @@ tokenApiMissingContentTypePolicy = RejectMissingContentType
 -- store), not through the account session/bearer-JWT rail every other
 -- protected route uses; see the AHI-4D decision record in
 -- @docs\/design-guidance.md@.
+-- | RFC 6749 @\/api\/oauth\/token@: documented alongside the surface it
+-- serves, as the task's @web-api@ documentation section requires. The
+-- operation itself stays anonymous ('AllowUnauthenticated' in
+-- 'WebApi.Route.endpointMetadata'): the OAuth *client* authenticates inside
+-- the grant, so the document's @security@ array truthfully stays empty
+-- rather than inventing a flow the runtime does not enforce here.
+tokenApiContract :: ApiEndpointContract OpenApiExtension (OAuth2ClientCredentials, OAuth2ClientCredentialsRequest) ApiForm ByteString.ByteString
+tokenApiContract =
+  ApiEndpointContract
+    ApiPost
+    tokenApiRequestFields
+    ( ApiUrlEncodedFormRequestBody
+        tokenApiMissingContentTypePolicy
+        tokenApiRequestBodyByteLimit
+        tokenApiRequestMaximumFields
+    )
+    (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
+    (ApiRenderFieldFailures tokenApiInvalidRequestResponse)
+    tokenApiExtension
+
+tokenApiExtension :: OpenApiExtension (OAuth2ClientCredentials, OAuth2ClientCredentialsRequest) ApiForm ByteString.ByteString
+tokenApiExtension = requireOpenApiExtension (mkOpenApiExtension (Just "Issue an OAuth 2.0 access token for a registered API client (RFC 6749 client credentials).") Nothing [] False [])
+
+-- | See 'meApiEndpoint' for why the token-issuance environment is demanded
+-- here.
+tokenApiEndpoint :: ApiClientTokenEnvironment -> SomeApiRouteEndpoint AppRequestContext OpenApiExtension
+tokenApiEndpoint !environment =
+  SomeApiRouteEndpoint (apiRouteEndpointWithContext (apiDocumentedDeclaration (endpointMetadata TokenApiRoute) tokenApiContract) (tokenApiHandler environment) tokenApiFailureResponse)
+
+tokenApiHandler :: ApiClientTokenEnvironment -> AppRequestContext -> ApiEndpointRequest (OAuth2ClientCredentials, OAuth2ClientCredentialsRequest) ApiForm -> IO (Either TokenApiFailure (ApiResponse ByteString.ByteString))
+tokenApiHandler environment _requestContext endpointRequest =
+  let (credentials, tokenRequest) = apiEndpointRequestFields endpointRequest
+   in tokenApiOutcomeResponse <$> issueApiClientToken environment credentials (oauth2ClientCredentialsScopes tokenRequest)
+
 tokenApiRouteDefinition :: ApiClientTokenEnvironment -> RouteDefinition AppRoute AppRequestContext AppAuthorization
 tokenApiRouteDefinition environment =
-  apiRouteDefinitionWithContext
-    ( ApiEndpointContract
-        ApiPost
-        tokenApiRequestFields
-        ( ApiUrlEncodedFormRequestBody
-            tokenApiMissingContentTypePolicy
-            tokenApiRequestBodyByteLimit
-            tokenApiRequestMaximumFields
-        )
-        (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
-        (ApiRenderFieldFailures tokenApiInvalidRequestResponse)
-        NoApiExtension
-    )
-    (endpointMetadata TokenApiRoute)
-    ( \_requestContext endpointRequest ->
-        let (credentials, tokenRequest) = apiEndpointRequestFields endpointRequest
-         in tokenApiOutcomeResponse <$> issueApiClientToken environment credentials (oauth2ClientCredentialsScopes tokenRequest)
-    )
-    tokenApiFailureResponse
+  case tokenApiEndpoint environment of
+    SomeApiRouteEndpoint endpoint -> apiRouteDefinition (endpointMetadata TokenApiRoute) endpoint
 
 -- | RFC 6749 clients need a stable @invalid_request@ body for a rejected
 -- token request, but parse failures can include the missing or malformed
@@ -433,3 +591,157 @@ secondApiFailureResponse (SecondApiFailure databaseOperations databaseError) =
 -- 'TextEncoding.decodeUtf8' on a request path.
 jsonBytes :: JsonEncoding.Encoding -> ByteString.ByteString
 jsonBytes = LazyByteString.toStrict . JsonEncoding.encodingToLazyByteString
+
+-- ---------------------------------------------------------------------------
+-- AHI-4E: web-api's documented API surface
+--
+-- One 'OpenApiMountedFamily' aggregates the four documented endpoint values
+-- above under the real @\/api@ mount, and every operation's OpenAPI
+-- @security@ is derived from the same 'WebApi.Route.endpointMetadata' value
+-- that governs real enforcement ('webApiOpenApiEndpointMetadataForPath' plus
+-- 'appAuthorizationScopes') — there is no docs-only security vocabulary.
+-- The resulting immutable document is served through the ordinary typed
+-- route adapter at @\/docs\/openapi.json@ ('docsOpenApiSpecRouteDefinition').
+-- The complete SSR Swagger page, self-hosted assets, and OAuth panel remain
+-- the later AHI-4E slices. See the AHI-4E decision records in
+-- @docs\/design-guidance.md@.
+-- ---------------------------------------------------------------------------
+
+-- | The closed set of routes whose endpoints are documented. Kept beside the
+-- family so a newly documented endpoint that is forgotten here fails at
+-- provider startup ('webApiOpenApiEndpointMetadataForPath's error rail)
+-- rather than being silently dropped from the document.
+webApiDocumentedRoutes :: [AppRoute]
+webApiDocumentedRoutes = [StatusApiRoute, SecondApiRoute, MeApiRoute, TokenApiRoute]
+
+-- | The structural mount web-api's documented family is recorded under. The
+-- prism is the identity on this closed route type: web-api composes no child
+-- module at runtime — 'WebApi.Route' dispatches each route directly — so
+-- this value exists to record the one structural prefix already true of the
+-- real paths, not to install a second dispatcher. The mount name namespaces
+-- only module-chain attribution; documentation reads the prefix.
+webApiApiRouteMount :: RouteMount AppRoute AppRoute
+webApiApiRouteMount =
+  RouteMount
+    { routeMountName = requiredModuleNameOrDie "web-api",
+      routeMountPrefix = webApiApiMountPrefix,
+      embedChildRoute = id,
+      projectChildRoute = Just
+    }
+
+-- | Resolve a family-local declaration path (e.g. @\/status@) back to the
+-- ONE real 'EndpointMetadata' that route dispatch already uses, by
+-- re-projecting the local path under the mount prefix and comparing full
+-- route templates — no second path table and no partial stripping. An
+-- unknown family path is an authored-table defect and fails document
+-- construction at startup; exported so a Unit test exercises that rail
+-- directly against a genuinely unknown path.
+webApiOpenApiEndpointMetadataForPath :: ApiPath -> EndpointMetadata AppAuthorization
+webApiOpenApiEndpointMetadataForPath apiPath =
+  case [ metadata
+       | route <- webApiDocumentedRoutes,
+         let metadata = endpointMetadata route,
+         routeTemplateText (endpointRouteTemplate metadata) == webApiApiMountPrefixText <> apiPathText apiPath
+       ] of
+    metadata : _ -> metadata
+    [] ->
+      error
+        ( "web-api documents no API endpoint at family path "
+            <> Text.unpack (webApiApiMountPrefixText <> apiPathText apiPath)
+        )
+
+-- | Project one endpoint's real authorization value into the OpenAPI scope
+-- names it demands. Both 'RequireAllScopes' and 'RequireAnyScope' are
+-- rendered as the same scope-name list because the document records WHICH
+-- scopes the runtime requirement names; the all-versus-any enforcement
+-- distinction stays entirely in the real guard, where it already lives.
+appAuthorizationScopes :: AppAuthorization -> [Text.Text]
+appAuthorizationScopes scopeRequirement =
+  case scopeRequirement of
+    RequireAllScopes scopes -> oauth2ScopeText <$> NonEmpty.toList scopes
+    RequireAnyScope scopes -> oauth2ScopeText <$> NonEmpty.toList scopes
+
+-- | The document-level profile-to-scheme map keyed by the exact
+-- 'AuthenticationProfileName' real routing uses. Both real profiles admit
+-- the same credential shape at one transport boundary — a signed JWT
+-- presented as a bearer @Authorization@ header — so both map to the closed
+-- HTTP-bearer scheme; the account profile *additionally* accepts its
+-- @__Host-@ session cookie, a cookie-or-bearer union that lives at this
+-- application's transport boundary and cannot be expressed by any single
+-- OpenAPI scheme (see the follow-up decision record in
+-- 'HarchWeb.OpenApi.Security'). An OAuth2 client-credentials scheme for the
+-- token flow needs an application-supplied absolute @https@ token URL — the
+-- public origin this example does not configure — and is deliberately left
+-- to the Swagger UI OAuth-panel slice that actually requires it.
+webApiOpenApiSecuritySchemes :: Map AuthenticationProfileName OpenApiSecurityScheme
+webApiOpenApiSecuritySchemes =
+  Map.fromList
+    [ (accountAuthenticationProfileName, jwtBearerScheme),
+      (resourceAuthenticationProfileName, jwtBearerScheme)
+    ]
+  where
+    jwtBearerScheme = mkOpenApiHttpBearerSecurityScheme (Just "JWT")
+
+-- | Document identity. The version tracks the @haskell-web-api@ package
+-- version this example application ships, so a version bump that changes the
+-- API surface moves the published document's version with it.
+webApiOpenApiDocumentDetails :: OpenApiDocumentDetails
+webApiOpenApiDocumentDetails =
+  OpenApiDocumentDetails
+    { openApiDocumentTitle = "Harch Web API",
+      openApiDocumentVersion = "0.1.2.0"
+    }
+
+-- | Build the startup-cached provider for web-api's one documented family
+-- from an explicit @defaultRequestContext@ availability snapshot: validation,
+-- generation, and encoding all happen here (once), never per request, and a
+-- construction failure is surfaced by 'requireWebApiOpenApiDocumentProvider'
+-- as application startup failure rather than a stale or malformed document.
+webApiOpenApiDocumentProvider :: PageRepository -> AccountProfileStore -> ApiClientTokenEnvironment -> Either OpenApiDocumentFailure (OpenApiDocumentProvider AppRequestContext)
+webApiOpenApiDocumentProvider pageRepository profileStore tokenEnvironment =
+  mkCachedOpenApiDocumentProvider
+    webApiOpenApiDocumentDetails
+    webApiOpenApiSecuritySchemes
+    defaultRequestContext
+    [webApiOpenApiMountedFamily pageRepository profileStore tokenEnvironment]
+
+-- | The documented family itself: the same four endpoint values that feed
+-- the real per-route 'RouteDefinition's above, aggregated once for
+-- documentation. 'requireApiEndpointFamily' re-checks that the declaration
+-- table is non-empty and duplicate-free; every operation's security is
+-- derived from 'webApiOpenApiEndpointMetadataForPath' and
+-- 'appAuthorizationScopes' over the mount recorded in 'webApiApiRouteMount'.
+webApiOpenApiMountedFamily :: PageRepository -> AccountProfileStore -> ApiClientTokenEnvironment -> OpenApiMountedFamily AppRequestContext
+webApiOpenApiMountedFamily pageRepository profileStore tokenEnvironment =
+  openApiMountedFamily
+    webApiApiRouteMount
+    ( requireApiEndpointFamily
+        [ statusApiEndpoint,
+          secondApiEndpoint pageRepository,
+          meApiEndpoint profileStore,
+          tokenApiEndpoint tokenEnvironment
+        ]
+    )
+    webApiOpenApiEndpointMetadataForPath
+    appAuthorizationScopes
+
+-- | Resolve the application's static documentation provider, naming the
+-- typed construction failure if the authored document is invalid. Exported
+-- so its failure rail is directly testable against a synthetic failure, and
+-- applied exactly once at application composition (see the bang binding in
+-- 'WebApi.App.buildAppWithDatabaseAndOptionalReportersAndSecurity') so a
+-- malformed document is startup failure, never a first-request surprise.
+requireWebApiOpenApiDocumentProvider :: Either OpenApiDocumentFailure (OpenApiDocumentProvider context) -> OpenApiDocumentProvider context
+requireWebApiOpenApiDocumentProvider =
+  either (error . Text.unpack . renderOpenApiDocumentFailure) id
+
+-- | @GET \/docs\/openapi.json@: the ordinary typed route adapter from
+-- 'HarchWeb.OpenApi.Route' over the application-selected provider, declared
+-- with this route's own 'endpointMetadata' like every other route here.
+-- Access stays this route's own 'AllowUnauthenticated' choice (the task's
+-- reference-example default); HEAD and OPTIONS come from the shared
+-- dispatcher, and a provider construction failure was already raised at
+-- startup before any request could reach this handler.
+docsOpenApiSpecRouteDefinition :: OpenApiDocumentProvider AppRequestContext -> RouteDefinition AppRoute AppRequestContext AppAuthorization
+docsOpenApiSpecRouteDefinition =
+  openApiDocumentRouteDefinition (endpointMetadata DocsOpenApiSpecRoute)

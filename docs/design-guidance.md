@@ -1354,6 +1354,115 @@ no API-family interpretation, schema generation, document provider, Swagger
 renderer, asset route, or documentation security mapping ships yet. The next
 AHI-4E slices close those concrete gaps.
 
+**Follow-up decision — web-api's documented API surface and typed
+specification route (AHI-4E, 2026-09-24): aggregate the four real endpoints
+as one documented family whose paths and security are both derived from the
+existing route metadata, and serve the cached bytes through one ordinary
+typed GET route.** The slice builds on the two landed prerequisites (the
+closed security-scheme vocabulary and the context-aware endpoint family):
+
+- **One value per endpoint, one authored path per route.** `status`, `second`,
+  `me`, and `token` are each built once as a `SomeApiRouteEndpoint` carrying a
+  real `OpenApiExtension`; the same value feeds both its runtime
+  `RouteDefinition` (via `apiRouteDefinition`, unchanged) and the documented
+  `ApiEndpointFamily`. A declaration's family-local path is no longer a second
+  authored literal: `apiDocumentedDeclaration` derives it from the endpoint's
+  own `endpointRouteTemplate` minus the single `webApiApiMountPrefix` constant,
+  applying the same reuse rule `apiRouteDefinitionWithContext`'s decision
+  record already celebrated — a documented path cannot disagree with where the
+  endpoint actually lives. A template that ever stops sitting under `/api`
+  still produces a total local path that `mountedOperationPath` rejects as a
+  typed construction failure at provider startup, never a silently wrong
+  document path.
+
+- **Reverse projection instead of a second lookup table.**
+  `webApiOpenApiEndpointMetadataForPath` re-projects each family-local path
+  under the same mount prefix and compares *full route templates* against the
+  closed `webApiDocumentedRoutes` list, returning the exact
+  `WebApi.Route.endpointMetadata` value real dispatch already uses; an unknown
+  family path is an authored-table defect raised as a testable error rail
+  (exported, exercised directly) during document construction. The `RouteMount`
+  recorded for the family is the identity prism over this closed route type:
+  web-api composes no child module at runtime, so the value records the one
+  structural prefix already true of the real paths rather than installing a
+  second dispatcher — documentation reads only `routeMountPrefix`.
+
+- **Security schemes: the HTTP bearer case, with the OAuth2 scheme deferred by
+  a named gap.** Both real profiles (the account cookie-or-bearer profile and
+  the API-client `resource` profile) map to the closed HTTP bearer scheme the
+  shipped `mkOpenApiHttpBearerSecurityScheme` supplies: both accept the same
+  credential shape at one transport boundary, while the account profile's
+  *additional* cookie acceptance is a cookie-or-bearer union that lives at
+  this application's transport boundary and cannot be expressed by any single
+  OpenAPI scheme (the `HarchWeb.OpenApi.Security` follow-up record says the
+  same). The task file's OAuth2 client-credentials scheme for the token flow
+  remains deliberately unimplemented here: `mkOpenApiOAuth2ClientCredentialsSecurityScheme`
+  requires an absolute `https` token URL, and this example configures no
+  public origin to build one from. Closing that obligation belongs to the
+  Swagger UI OAuth-panel slice, which is the surface that actually needs the
+  scheme; no origin configuration is invented just to satisfy a document
+  nobody reads yet. `appAuthorizationScopes` renders both `RequireAllScopes`
+  and `RequireAnyScope` as the same scope-name list because the document
+  records *which* scopes the real requirement names; the all-versus-any
+  enforcement distinction stays entirely in the already-running guard.
+
+- **Startup failure, not first-request failure.** The provider is resolved
+  once through `requireWebApiOpenApiDocumentProvider` in a bang-bound
+  `where` binding of
+  `WebApi.App.buildAppWithDatabaseAndOptionalReportersAndSecurity`, the same
+  eager-binding discipline `!accountWorkflow` uses one function above: while
+  the framework forces this application value to build its request dispatcher,
+  a typed document-construction failure aborts application startup with the
+  rendered `OpenApiDocumentFailure`, and only an already-validated immutable
+  byte string can ever reach the route.
+
+- **The specification route is an ordinary route.** A new `DocsOpenApiSpec`
+  constructor in the closed `ApiRoute` family (pattern `DocsOpenApiSpecRoute`)
+  owns exactly `GET /docs/openapi.json` — locale-independent, parsed by one
+  explicit `parseRouteSegments` case with no docs-specific 404 family — and
+  gets its metadata, method policy (shared GET/HEAD/OPTIONS synthesis), and
+  `ProtocolRouteHandler` adapter from the same boundaries as every other route.
+  It is declared `AllowUnauthenticated` as the task's reference-example
+  default, and it is deliberately *not* a member of the documented family: the
+  document describes the API, not the support surface that serves it.
+
+- **Composition-time realization of dependencies and the snapshot.** The
+  strict coverage gate (100% expressions, no ignore pragmas) surfaced that
+  three whole classes of value in this slice were structurally unreachable:
+  the store records captured by the endpoint constructors flow lazily into
+  handler closures a *documentation* build never runs; the provider's
+  `defaultRequestContext` snapshot is discarded by every default
+  context-free availability decision; and the route adapter stores route
+  metadata in a lazy field. Each was closed by a genuine realization point
+  rather than a masking `seq`: `secondApiEndpoint`/`meApiEndpoint`/
+  `tokenApiEndpoint` demand their record to WHNF when the endpoint value is
+  composed — the same composition that feeds both the runtime route and the
+  documented family, so a malformed or unexpectedly lazy top-level dependency
+  fails at composition, beside the provider's existing startup-failure
+  posture, while handlers still consume record fields lazily; and
+  `mkCachedOpenApiDocumentProvider` demands its availability-snapshot
+  parameter when the constructor is applied, which is precisely the boundary
+  whose own documented contract says the snapshot is one value *consumed
+  during startup* — realizing it there keeps the framework's context-free
+  availability path from silently discarding the caller's thunk forever.
+  The route-metadata field is forced and asserted by a dedicated
+  `EndpointsSpec` case (`routeMetadata` of the specification route equals its
+  own `endpointMetadata`), extending the test rather than the code, where
+  the value's consumer already existed.
+
+Verified by the new `Unit.WebApi.Api.EndpointsSpec` cases (extension failure
+rail, all four family-path resolutions plus the unknown-path rail, both scope
+forms, both profile-to-scheme entries, every mount field including the prism
+law, provider pass-through versus rendered startup failure, and the
+specification route's carried metadata), the RouteSpec
+enumeration/parse/render/metadata additions for the new constructor, and a new
+`Unit.WebApi.AppSpec` end-to-end case that renders the real composed
+application's `/docs/openapi.json` response and asserts the served JSON: the
+3.0.3 version, document identity, exactly the four real paths with their
+default operationIds, the explicit empty `security` arrays on anonymous
+operations, the account and resource requirements on `/api/me` and
+`/api/second`, and both `http`/`bearer`/`JWT` scheme components.
+
 **Follow-up decision — startup-cached explicit OpenAPI provider (AHI-4E,
 2026-09-22): add `OpenApiDocumentProvider` only in the optional OpenAPI
 package, and make its supplied constructor prepare strict encoded bytes from

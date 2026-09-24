@@ -54,6 +54,7 @@ module Unit.WebApi.TestSupport
     apiMeRequest,
     apiTokenRequest,
     apiNotFoundRequest,
+    docsOpenApiSpecRequest,
     expectedApiJsonProtocolResponse,
     pureRouteMatcher,
     renderedShell,
@@ -443,6 +444,16 @@ apiNotFoundRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 apiNotFoundRequest =
   HarchWeb.RouteRequest
     { HarchWeb.requestRoute = ApiNotFoundRoute,
+      HarchWeb.requestContext = defaultRequestContext
+    }
+
+-- | The AHI-4E OpenAPI specification endpoint at @\/docs\/openapi.json@:
+-- locale-independent like every protocol route, so its request carries the
+-- plain default context.
+docsOpenApiSpecRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+docsOpenApiSpecRequest =
+  HarchWeb.RouteRequest
+    { HarchWeb.requestRoute = DocsOpenApiSpecRoute,
       HarchWeb.requestContext = defaultRequestContext
     }
 

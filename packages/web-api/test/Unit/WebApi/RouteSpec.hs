@@ -64,7 +64,7 @@ spec = do
                      WebApi.Route.HelpPage,
                      WebApi.Route.PageNotFound
                    ]
-      apiRoutes `shouldBe` [StatusApi, SecondApi, MeApi, TokenApi, ApiNotFound]
+      apiRoutes `shouldBe` [StatusApi, SecondApi, MeApi, TokenApi, DocsOpenApiSpec, ApiNotFound]
       minBound `shouldBe` WebApi.Route.HomePage
       maxBound `shouldBe` WebApi.Route.PageNotFound
       succ WebApi.Route.HomePage `shouldBe` WebApi.Route.SecondPage
@@ -92,16 +92,17 @@ spec = do
       minBound `shouldBe` StatusApi
       maxBound `shouldBe` ApiNotFound
       succ StatusApi `shouldBe` SecondApi
-      pred ApiNotFound `shouldBe` TokenApi
+      pred ApiNotFound `shouldBe` DocsOpenApiSpec
       StatusApi `shouldNotBe` SecondApi
       enumFrom StatusApi `shouldBe` apiRoutes
       enumFromThen StatusApi SecondApi `shouldBe` apiRoutes
       enumFromThenTo StatusApi SecondApi ApiNotFound `shouldBe` apiRoutes
-      map show apiRoutes `shouldBe` ["StatusApi", "SecondApi", "MeApi", "TokenApi", "ApiNotFound"]
-      showList apiRoutes "" `shouldBe` "[StatusApi,SecondApi,MeApi,TokenApi,ApiNotFound]"
+      map show apiRoutes `shouldBe` ["StatusApi", "SecondApi", "MeApi", "TokenApi", "DocsOpenApiSpec", "ApiNotFound"]
+      showList apiRoutes "" `shouldBe` "[StatusApi,SecondApi,MeApi,TokenApi,DocsOpenApiSpec,ApiNotFound]"
       show SecondApiRoute `shouldBe` "SecondApiRoute"
       show MeApiRoute `shouldBe` "MeApiRoute"
       show TokenApiRoute `shouldBe` "TokenApiRoute"
+      show DocsOpenApiSpecRoute `shouldBe` "DocsOpenApiSpecRoute"
       show ApiNotFoundRoute `shouldBe` "ApiNotFoundRoute"
       show LanguageRoute `shouldBe` "LanguageRoute"
       show HelpRoute `shouldBe` "HelpRoute"
@@ -165,6 +166,18 @@ spec = do
       parseRoute defaultRequestContext "/api/status/extra" `shouldBe` Just apiNotFoundRequest
       parseRoute defaultRequestContext "/api/oauth" `shouldBe` Just apiNotFoundRequest
       parseRoute defaultRequestContext "/api/oauth/token/extra" `shouldBe` Just apiNotFoundRequest
+
+    it "parses the locale-independent OpenAPI specification path exactly" $ do
+      parseRoute defaultRequestContext "/docs/openapi.json" `shouldBe` Just docsOpenApiSpecRequest
+      parseRoute defaultRequestContext "/docs/openapi.json?pretty=1"
+        `shouldBe` Just docsOpenApiSpecRequest {HarchWeb.requestContext = defaultRequestContext {requestQueryParameters = [("pretty", "1")]}}
+      -- Only the exact specification path matches; every other /docs shape
+      -- keeps the ordinary unsupported-path outcome instead of growing a
+      -- second docs-specific not-found family.
+      parseRoute defaultRequestContext "/docs" `shouldBe` Nothing
+      parseRoute defaultRequestContext "/docs/other" `shouldBe` Nothing
+      parseRoute defaultRequestContext "/docs/openapi.json/extra" `shouldBe` Nothing
+      parseRoute defaultRequestContext "/es/docs/openapi.json" `shouldBe` Nothing
 
     it "parses the second page path" $ parseRoute defaultRequestContext "/second" `shouldBe` Just secondRequest
 
@@ -252,6 +265,7 @@ spec = do
       parseRoute defaultRequestContext (renderRoutePath apiMeRequest) `shouldBe` Just apiMeRequest
       parseRoute defaultRequestContext (renderRoutePath apiTokenRequest) `shouldBe` Just apiTokenRequest
       parseRoute defaultRequestContext (renderRoutePath apiNotFoundRequest) `shouldBe` Just apiNotFoundRequest
+      parseRoute defaultRequestContext (renderRoutePath docsOpenApiSpecRequest) `shouldBe` Just docsOpenApiSpecRequest
 
     it "renders default and explicit locale prefixes" $ do
       renderRoutePath homeRequest `shouldBe` "/"
@@ -272,6 +286,7 @@ spec = do
       renderRoutePath apiMeRequest `shouldBe` "/api/me"
       renderRoutePath apiTokenRequest `shouldBe` "/api/oauth/token"
       renderRoutePath apiNotFoundRequest `shouldBe` "/api/404"
+      renderRoutePath docsOpenApiSpecRequest `shouldBe` "/docs/openapi.json"
       renderRoutePath notFoundRequest `shouldBe` "/404"
       HarchWeb.safeUrlText (renderRouteUrl spanishTodoRequest) `shouldBe` "/es/todo"
 
@@ -306,6 +321,7 @@ spec = do
               (SecondApiRoute, "api.second", "/api/second", HarchWeb.ApiEndpoint),
               (MeApiRoute, "api.me", "/api/me", HarchWeb.ApiEndpoint),
               (TokenApiRoute, "api.oauth-token", "/api/oauth/token", HarchWeb.ApiEndpoint),
+              (DocsOpenApiSpecRoute, "api.openapi-spec", "/docs/openapi.json", HarchWeb.ApiEndpoint),
               (ApiNotFoundRoute, "api.not-found", "/api/404", HarchWeb.ApiEndpoint)
             ]
           expectedAccess route
@@ -343,6 +359,7 @@ spec = do
       ("matches an API me path into the API route family", "/api/me", apiMeRequest),
       ("matches the OAuth token path into the API route family", "/api/oauth/token", apiTokenRequest),
       ("matches an unknown API path into the API route family's not-found outcome", "/api/missing", apiNotFoundRequest),
+      ("matches the OpenAPI specification path into the API route family", "/docs/openapi.json", docsOpenApiSpecRequest),
       ("falls back to the stable not-found route for unknown paths", "/missing", notFoundRequest)
       ]
       `forM_` \(label, path, expected) ->

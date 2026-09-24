@@ -81,13 +81,14 @@ import Data.Text.IO qualified as TextIO
 import HarchWeb qualified
 import HarchWeb.Action (decodeAction)
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.OpenApi (OpenApiDocumentProvider)
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
 import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush)
 import WebApi.AccountJwt (AccountJwtLoadError, AccountJwtRuntime, accountJwtAuthenticationPipeline, loadAccountJwtRuntime)
 import WebApi.AccountPages (AccountAction, accountActionEndpointMetadata, accountActionRoute, accountActions, accountCsrfProtection, handleAccountAction)
-import WebApi.Api.Endpoints (meApiRouteDefinition, secondApiRouteDefinition, statusApiRouteDefinition, tokenApiRouteDefinition)
+import WebApi.Api.Endpoints (docsOpenApiSpecRouteDefinition, meApiRouteDefinition, requireWebApiOpenApiDocumentProvider, secondApiRouteDefinition, statusApiRouteDefinition, tokenApiRouteDefinition, webApiOpenApiDocumentProvider)
 import WebApi.ApiClientToken qualified as ApiClientToken
 import WebApi.App.AccountWorkflow (buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwt, buildRuntimeAccountWorkflowWithJwtRuntime, unavailableAccountWorkflow)
 import WebApi.App.Observability
@@ -230,7 +231,7 @@ buildAppWithDatabaseAndOptionalReportersAndSecurity config pageRepository !accou
                     Site.simpleSiteCsrfProtection = accountCsrfProtection accountWorkflow,
                     Site.simpleSitePageShell = buildAppPageShellConfig config . HarchWeb.pageContext,
                     Site.simpleSiteNavigationRoutes = appNavigationRoutes,
-                    Site.simpleSiteRouteDefinition = buildAppRouteDefinition config pageRepository accountWorkflow
+                    Site.simpleSiteRouteDefinition = buildAppRouteDefinition config pageRepository accountWorkflow docsOpenApiDocumentProvider
                   }
             )
               { Site.siteRequestContextFromRequest =
@@ -271,6 +272,23 @@ buildAppWithDatabaseAndOptionalReportersAndSecurity config pageRepository !accou
   where
     appRequestLocale = HarchWeb.locale . renderLocale
 
+    -- AHI-4E: resolve the startup-cached OpenAPI provider exactly once, with
+    -- the same eager-binding discipline 'buildRuntimeAppWithAccountJwt'
+    -- already applies to @!accountWorkflow@. A typed document-construction
+    -- failure (an invalid title, a duplicate operation, an unresolvable
+    -- security profile) therefore surfaces while the framework forces this
+    -- application value to build its request dispatcher — application
+    -- startup failure — instead of a first-request crash or a stale served
+    -- document. The prepared bytes are immutable, so every later
+    -- @/docs/openapi.json@ request serves exactly what startup validated.
+    !docsOpenApiDocumentProvider =
+      requireWebApiOpenApiDocumentProvider
+        ( webApiOpenApiDocumentProvider
+            pageRepository
+            (accountWorkflowProfileStore accountWorkflow)
+            (accountWorkflowApiClientTokenEnvironment accountWorkflow)
+        )
+
     -- A cookie (including the same JWT also supplied as bearer) remains an
     -- ambient browser credential. Only the source-aware post-match guard can
     -- establish the bearer-only state that omits the CSRF transport check.
@@ -302,14 +320,16 @@ buildAppRouteDefinition ::
   AppConfig ->
   PageRepository ->
   AccountWorkflow ->
+  OpenApiDocumentProvider AppRequestContext ->
   AppRoute ->
   Site.RouteDefinition AppRoute AppRequestContext AppAuthorization
-buildAppRouteDefinition config pageRepository accountWorkflow route =
+buildAppRouteDefinition config pageRepository accountWorkflow docsOpenApiDocumentProvider route =
   case route of
     StatusApiRoute -> statusApiRouteDefinition
     SecondApiRoute -> secondApiRouteDefinition pageRepository
     MeApiRoute -> meApiRouteDefinition (accountWorkflowProfileStore accountWorkflow)
     TokenApiRoute -> tokenApiRouteDefinition (accountWorkflowApiClientTokenEnvironment accountWorkflow)
+    DocsOpenApiSpecRoute -> docsOpenApiSpecRouteDefinition docsOpenApiDocumentProvider
     HomeRoute ->
       protocolRouteDefinition route $
         \routeRequest -> pure (HarchWeb.nonPageRedirectResponse Http.status302 (todoLocation routeRequest))

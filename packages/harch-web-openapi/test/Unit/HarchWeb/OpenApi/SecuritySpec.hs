@@ -43,15 +43,27 @@ spec =
       anotherCookieScheme <- requireRight (mkOpenApiCookieSessionSecurityScheme "__Host-harch-session")
       differentCookieScheme <- requireRight (mkOpenApiCookieSessionSecurityScheme "__Host-other-session")
       oauthScheme <- requireRight (mkOpenApiOAuth2ClientCredentialsSecurityScheme "https://api.example.test/oauth/token" [("catalog:read", "Read the catalog")])
+      let bearerScheme = mkOpenApiHttpBearerSecurityScheme (Just "JWT")
+          anotherBearerScheme = mkOpenApiHttpBearerSecurityScheme (Just "JWT")
+          differentBearerScheme = mkOpenApiHttpBearerSecurityScheme Nothing
       expectAll
         ( ((cookieScheme == anotherCookieScheme) `shouldBe` True)
             :| [ (cookieScheme /= anotherCookieScheme) `shouldBe` False,
                  (cookieScheme /= differentCookieScheme) `shouldBe` True,
                  (cookieScheme == oauthScheme) `shouldBe` False,
                  (oauthScheme == cookieScheme) `shouldBe` False,
+                 (bearerScheme == anotherBearerScheme) `shouldBe` True,
+                 (bearerScheme /= anotherBearerScheme) `shouldBe` False,
+                 (bearerScheme /= differentBearerScheme) `shouldBe` True,
+                 (bearerScheme == oauthScheme) `shouldBe` False,
+                 (oauthScheme == bearerScheme) `shouldBe` False,
+                 (bearerScheme == cookieScheme) `shouldBe` False,
+                 (cookieScheme == bearerScheme) `shouldBe` False,
                  show cookieScheme `shouldBe` "OpenApiCookieSessionSecurityScheme \"__Host-harch-session\"",
                  show oauthScheme `shouldBe` "OpenApiOAuth2ClientCredentialsSecurityScheme \"https://api.example.test/oauth/token\" [(\"catalog:read\",\"Read the catalog\")]",
-                 show [cookieScheme, oauthScheme] `shouldBe` "[OpenApiCookieSessionSecurityScheme \"__Host-harch-session\",OpenApiOAuth2ClientCredentialsSecurityScheme \"https://api.example.test/oauth/token\" [(\"catalog:read\",\"Read the catalog\")]]"
+                 show bearerScheme `shouldBe` "OpenApiHttpBearerSecurityScheme (Just \"JWT\")",
+                 show differentBearerScheme `shouldBe` "OpenApiHttpBearerSecurityScheme Nothing",
+                 show [cookieScheme, oauthScheme, bearerScheme] `shouldBe` "[OpenApiCookieSessionSecurityScheme \"__Host-harch-session\",OpenApiOAuth2ClientCredentialsSecurityScheme \"https://api.example.test/oauth/token\" [(\"catalog:read\",\"Read the catalog\")],OpenApiHttpBearerSecurityScheme (Just \"JWT\")]"
                ]
         )
 

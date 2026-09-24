@@ -1,3 +1,5 @@
+{-# LANGUAGE BangPatterns #-}
+
 -- | Cached, application-selected OpenAPI document providers.
 --
 -- Decision record (AHI-4E, 2026-09-22): document generation is an optional
@@ -65,8 +67,13 @@ prepareOpenApiDocumentFromSnapshot details securitySchemes availabilitySnapshot 
 -- | Create the supplied startup-cached provider. Failure happens before a
 -- provider exists, so the default application composition treats malformed
 -- documentation as startup failure instead of serving a stale or partially
--- generated document at runtime.
+-- generated document at runtime. The availability snapshot parameter is
+-- demanded when this constructor is applied: the task contract makes the
+-- snapshot one value consumed during startup, so realizing it here — at the
+-- boundary that owns that contract — is what keeps it from being silently
+-- discarded per endpoint (every default availability decision is
+-- context-free) or re-derived after startup.
 mkCachedOpenApiDocumentProvider :: OpenApiDocumentDetails -> Map AuthenticationProfileName OpenApiSecurityScheme -> context -> [OpenApiMountedFamily context] -> Either OpenApiDocumentFailure (OpenApiDocumentProvider context)
-mkCachedOpenApiDocumentProvider details securitySchemes availabilitySnapshot mountedFamilies = do
+mkCachedOpenApiDocumentProvider details securitySchemes !availabilitySnapshot mountedFamilies = do
   preparedDocument <- prepareOpenApiDocumentFromSnapshot details securitySchemes availabilitySnapshot mountedFamilies
   pure (OpenApiDocumentProvider (const (pure (Right preparedDocument))))
