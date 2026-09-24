@@ -1450,6 +1450,26 @@ closed security-scheme vocabulary and the context-aware endpoint family):
   own `endpointMetadata`), extending the test rather than the code, where
   the value's consumer already existed.
 
+- **The Swagger UI surface is an ordinary page over the existing lifecycle
+  (AHI-4E, 2026-09-24).** `HarchWeb.OpenApi.Swagger` supplies the typed
+  `GET /docs` SSR page, its page-scoped stylesheet, and its behavior module
+  as one replaceable unit: the page is a plain `Page` value whose
+  server-rendered fallback is complete and script-free (the scripts-disabled
+  acceptance case), the behavior module is a plain `PageEnhancementModule`
+  descriptor whose `setupPageEnhancement`/disposer contract gives the
+  PR-C1 initialize/dispose lifecycle through the existing navigation
+  kernel (one call per document, disposer invoked before the next enhanced
+  entry), and the pinned Swagger UI 5.33.0 distribution rides the existing
+  `StaticAssetRoot` boundary at `/docs/assets`. No CSP relaxation is
+  required or permitted: probing 5.33.0 showed the main bundle injects no
+  `style` elements and its single `new Function` is webpack's guarded,
+  dead `globalThis` polyfill, so the framework's default
+  `script-src 'self'; style-src 'self'` policy stands unmodified (the
+  standalone preset, which does inject a style element, is deliberately
+  not vendored). The `swaggerUiFallbackBody`, asset-URL, and whole-page
+  renderer are each replaceable in place; untrusted display text renders
+  only inside Swagger's runtime DOM under that strict policy.
+
 Verified by the new `Unit.WebApi.Api.EndpointsSpec` cases (extension failure
 rail, all four family-path resolutions plus the unknown-path rail, both scope
 forms, both profile-to-scheme entries, every mount field including the prism
