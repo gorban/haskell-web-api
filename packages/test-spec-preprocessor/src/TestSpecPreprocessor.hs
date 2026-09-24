@@ -7,6 +7,13 @@
 -- @TestCore.Prelude@; @spec-prelude=@ selects a different standard prelude.
 -- @E2E_SPEC@ always imports @TestCore.E2EPrelude@.
 --
+-- The import section after the pragma may contain multi-line import lists:
+-- this repository's formatter preserves src-style broken import lists, so a
+-- continuation line is ordinary valid input and must never be mistaken for
+-- the end of the imports (that would inject the generated @spec :: Spec@
+-- signature into the middle of an import list).  See
+-- 'processTillEndOfImports'.
+--
 -- Its direct Hspec suite is also this package's runtime coverage owner.  It
 -- deliberately does not import the @TestCore@ compatibility facade: that
 -- direction would recreate the package cycle this extraction avoids.
@@ -93,20 +100,68 @@ specPreludeModule :: String -> SpecMode -> String
 specPreludeModule _ E2ESpec = "TestCore.E2EPrelude"
 specPreludeModule standardPrelude StandardSpec = standardPrelude
 
+-- | Collect the contiguous import section that follows the spec pragma,
+-- returning how many input lines it consumed, the collected lines in order,
+-- and every remaining input line.
+--
+-- Multi-line import lists are ordinary valid Haskell in this repository
+-- (the formatter preserves @src@-style broken import lists), so a
+-- continuation line belongs to the section: any line still inside an
+-- unbalanced import's parentheses continues it, as does an import-list
+-- opener that sits alone on the line after its @import@ declaration.
+-- Blank lines, comment lines, and new @import@ declarations continue the
+-- section as before; any other line ends it, which is where the generated
+-- @spec :: Spec@ signature belongs.  Previously every continuation line
+-- ended the section, silently injecting the signature and a @LINE@ pragma
+-- into the middle of the import list and producing an unrelated parse
+-- error far from the real cause.
 processTillEndOfImports :: [String] -> (Int, [String], [String])
-processTillEndOfImports (header : rest) =
-  let trimmed = dropWhile isSpace header
-   in if keep trimmed
-        then
-          let (count, imports, remaining) = processTillEndOfImports rest
-           in (count + 1, header : imports, remaining)
-        else (0, [], header : rest)
+processTillEndOfImports = go 0 0 []
   where
+    go count parenDepth kept (line : rest)
+      | continuesSection parenDepth line =
+          go (count + 1) (advanceDepth parenDepth line) (line : kept) rest
+      | otherwise = (count, reverse kept, line : rest)
+    go count _parenDepth kept [] = (count, reverse kept, [])
+
+    continuesSection parenDepth line
+      | parenDepth > 0 = True
+      | otherwise = startsImportListOperator || keep (dropWhile isSpace line)
+      where
+        startsImportListOperator = case dropWhile isSpace line of
+          '(' : _ -> True
+          _ -> False
+
+    -- A comment is stripped before counting, so unbalanced parens in
+    -- comment text (trailing or full-line) never shift the import-list
+    -- depth; blanks naturally count zero.
+    advanceDepth parenDepth line = parenDepth + parenDelta (stripLineComment line)
+
+    -- Drop a Haskell line comment: a run of at least two dashes whose end
+    -- is not a symbol character (or the end of the line).  Scanning one
+    -- character past a rejected dash-run keeps operators such as @(--)@
+    -- intact while still finding a later real comment.
+    stripLineComment input@('-' : '-' : rest)
+      | startsDashComment rest = []
+      | otherwise = take 1 input ++ stripLineComment (drop 1 input)
+    stripLineComment (character : rest) = character : stripLineComment rest
+    stripLineComment [] = []
+
+    startsDashComment rest = case rest of
+      character : _ | isSymbolCharacter character -> False
+      _ -> True
+
+    isSymbolCharacter character =
+      character
+        `elem` ("!#$%&*+.,/:;<=>?@\\^|-~:" :: String)
+
+    parenDelta line =
+      length (filter (== '(') line) - length (filter (== ')') line)
+
     keep [] = True
     keep ('-' : '-' : _) = True
     keep ('i' : 'm' : 'p' : 'o' : 'r' : 't' : ' ' : _) = True
     keep _ = False
-processTillEndOfImports [] = (0, [], [])
 
 parseArgs :: String -> String -> [String] -> [String] -> (String, String, [String])
 parseArgs hsSourceDir standardPrelude files [] = (hsSourceDir, standardPrelude, files)

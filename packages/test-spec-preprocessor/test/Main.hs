@@ -161,6 +161,42 @@ spec = do
           output = runPure "test" absolutePath pureSpecContents
       output `shouldContain'` "{-# LINE 2 \"C:/work/test/PureSpec.hs\" #-}"
 
+    it "keeps a multi-line import list intact and injects the spec signature after its final line" $ do
+      let contents =
+            unlines
+              [ "{-# SPEC #-}",
+                "",
+                "import WebApi.Route",
+                "  ( AppRoute (..), -- the closed route (family",
+                "  --- grouped together (see docs",
+                "",
+                "    endpointMetadata",
+                "  )",
+                "import Data.Text (Text)",
+                "",
+                "spec = describe \"example\" $ do",
+                "  pure ()"
+              ]
+          output = runPure "test" "/abs/test/PureSpec.hs" contents
+      lines output
+        `shouldBe` [ "module PureSpec (spec) where",
+                     "",
+                     "import TestCore.Prelude",
+                     "",
+                     "import WebApi.Route",
+                     "  ( AppRoute (..), -- the closed route (family",
+                     "  --- grouped together (see docs",
+                     "",
+                     "    endpointMetadata",
+                     "  )",
+                     "import Data.Text (Text)",
+                     "",
+                     "spec :: Spec",
+                     "{-# LINE 11 \"/abs/test/PureSpec.hs\" #-}",
+                     "spec = describe \"example\" $ do",
+                     "  pure ()"
+                   ]
+
     forM_
       [ ("SPEC", pureSpecContents, "import TestCore.Prelude"),
         ("E2E_SPEC", e2ePureSpecContents, "import TestCore.E2EPrelude")
