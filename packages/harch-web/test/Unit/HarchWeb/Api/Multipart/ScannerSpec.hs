@@ -97,6 +97,68 @@ spec =
                 :| [normalizeEvents events `shouldBe` [MultipartPartStarted fieldPartHeaders, MultipartPartBodyChunk "partial"]]
             )
 
+    it "accepts space- and tab-padded mid-body delimiters exactly like the unpadded form" $
+      let paddedBody =
+            "--"
+              <> boundaryToken
+              <> " \r\n"
+              <> fieldPartHeaders
+              <> "\r\n\r\n"
+              <> "value1"
+              <> "\r\n--"
+              <> boundaryToken
+              <> "\t\r\n"
+              <> filePartHeaders
+              <> "\r\n\r\n"
+              <> "file content here"
+              <> "\r\n--"
+              <> boundaryToken
+              <> "--\r\n"
+       in normalizeEvents (runScanner boundaryToken [paddedBody]) `shouldBe` expectedTwoPartEvents
+
+    it "accepts transport padding after a close delimiter" $
+      let paddedClose =
+            "--"
+              <> boundaryToken
+              <> "\r\n"
+              <> fieldPartHeaders
+              <> "\r\n\r\n"
+              <> "body"
+              <> "\r\n--"
+              <> boundaryToken
+              <> "-- \r\n"
+       in do
+            (MultipartFinished `elem` runScanner boundaryToken [paddedClose]) `shouldBe` True
+            (MultipartMalformed `notElem` runScanner boundaryToken [paddedClose]) `shouldBe` True
+
+    it "keeps a padded delimiter split across feeds undecided until the CRLF arrives" $
+      let events =
+            runScanner
+              boundaryToken
+              [ "--" <> boundaryToken <> "\r\n" <> fieldPartHeaders <> "\r\n\r\n" <> "body",
+                "\r\n--" <> boundaryToken,
+                " ",
+                "\r",
+                "\n" <> fieldPartHeaders <> "\r\n\r\n" <> "more",
+                "\r\n--" <> boundaryToken <> "--\r\n"
+              ]
+       in do
+            (MultipartMalformed `notElem` events) `shouldBe` True
+            (MultipartFinished `elem` events) `shouldBe` True
+
+    it "rejects junk after the boundary token as malformed" $
+      MultipartMalformed
+        `elem` runScanner boundaryToken ["--" <> boundaryToken <> "junk\r\n"]
+          `shouldBe` True
+
+    it "rejects transport padding beyond the fixed bound as malformed" $
+      let excessivePadding = ByteString.replicate (maxTransportPadding + 1) 32
+       in MultipartMalformed
+            `elem` runScanner
+              boundaryToken
+              ["--" <> boundaryToken <> excessivePadding <> "\r\n"]
+              `shouldBe` True
+
     it "flags a delimiter followed by neither -- nor CRLF as malformed" $
       runScanner boundaryToken ["--" <> boundaryToken <> "XYZ"]
         `shouldBe` [MultipartMalformed]

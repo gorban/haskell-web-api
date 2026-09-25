@@ -32,10 +32,12 @@
 -- handoff.
 module HarchWeb.Api.Multipart
   ( MultipartEvent (..),
+    maxTransportPadding,
     MultipartScanner,
     newMultipartScanner,
     feedMultipartChunk,
     finishMultipartScanner,
+    MultipartDispositionParse (..),
     MultipartFieldDisposition (..),
     parseMultipartFieldDisposition,
     MultipartByteLimit,
@@ -464,8 +466,12 @@ applyMultipartEvent consumer event currentPart partCounts =
 startMultipartPart :: MultipartConsumer stored -> MultipartPartCounts -> ByteString -> ExceptT MultipartConsumeError IO (PartAccumulator stored)
 startMultipartPart consumer partCounts headerBlock =
   case parseMultipartFieldDisposition headerBlock of
-    Nothing -> throwError MultipartMissingDisposition
-    Just disposition ->
+    MultipartDispositionAbsent -> throwError MultipartMissingDisposition
+    -- A repeated Content-Disposition line is a malformed part-header block;
+    -- see the decision record on 'parseMultipartFieldDisposition'.
+    MultipartDispositionRepeated -> throwError MultipartMalformedBody
+    MultipartDispositionInvalid -> throwError MultipartMissingDisposition
+    MultipartDispositionParsed disposition ->
       case multipartFieldName disposition of
         Nothing -> throwError MultipartMissingDisposition
         Just fieldName ->

@@ -6,6 +6,7 @@
 module HarchWeb.Api.Multipart.Scanner
   ( MultipartEvent (..),
     MultipartScanner,
+    maxTransportPadding,
     newMultipartScanner,
     newBoundedMultipartScanner,
     feedMultipartChunk,
@@ -207,21 +208,38 @@ rejectOversizedHeader scanner headerBytes
       Just (MultipartPartHeaderLimitExceeded, scanner {scannerPhase = ScannerFinished})
   | otherwise = Nothing
 
+-- | RFC 2046 transport padding: the grammar admits @transport-padding := *LWSP@
+-- between a boundary token and its terminating CRLF (both for
+-- @dash-boundary transport-padding CRLF@ and @close-delimiter transport-padding@),
+-- so a delimiter line like @\\r\\n--BOUNDARY123 \\r\\n@ is valid. The accepted
+-- run is capped so an endless stream of spaces cannot pin the scanner's
+-- retained buffer; a longer run is a grammar violation.
+maxTransportPadding :: Int
+maxTransportPadding = 8
+
 -- | The buffer starts immediately after a consumed delimiter marker (leading
--- or mid-body). Classify what follows once enough bytes have arrived: @--@
--- closes the stream, a CRLF begins the next part's headers, and anything
--- else is a boundary-grammar violation.
+-- or mid-body). Consume optional transport padding first, then classify what
+-- follows once enough bytes have arrived: @--@ closes the stream (tolerating
+-- trailing bytes after the close token, as before), a CRLF begins the next
+-- part's headers, and anything else is a boundary-grammar violation. Partial
+-- padding or one-byte trailers keep returning the need-more-bytes result
+-- instead of deciding early.
 advancePastDelimiter :: MultipartScanner -> Maybe (MultipartEvent, MultipartScanner)
-advancePastDelimiter scanner
-  | "--" `ByteString.isPrefixOf` afterMarker =
-      Just (MultipartFinished, scanner {scannerPhase = ScannerFinished})
-  | "\r\n" `ByteString.isPrefixOf` afterMarker =
-      stepAwaitingHeaders scanner {scannerBuffer = ByteString.drop 2 afterMarker}
-  | ByteString.length afterMarker < 2 = Nothing
-  | otherwise =
-      Just (MultipartMalformed, scanner {scannerPhase = ScannerFinished})
+advancePastDelimiter scanner =
+  case ByteString.span isTransportPaddingByte afterMarker of
+    (padding, rest)
+      | ByteString.length padding > maxTransportPadding ->
+          Just (MultipartMalformed, scanner {scannerPhase = ScannerFinished})
+      | "--" `ByteString.isPrefixOf` rest ->
+          Just (MultipartFinished, scanner {scannerPhase = ScannerFinished})
+      | "\r\n" `ByteString.isPrefixOf` rest ->
+          stepAwaitingHeaders scanner {scannerBuffer = ByteString.drop 2 rest}
+      | ByteString.length rest < 2 -> Nothing
+      | otherwise ->
+          Just (MultipartMalformed, scanner {scannerPhase = ScannerFinished})
   where
     afterMarker = scannerBuffer scanner
+    isTransportPaddingByte byte = byte == 32 || byte == 9
 
 exceedsScannerLimit :: Maybe Int -> Int -> Bool
 exceedsScannerLimit maybeMaximumBytes byteCount =

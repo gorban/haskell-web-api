@@ -4,7 +4,8 @@
 -- body. This is deliberately pure: the upload driver decides what storage and
 -- lifetime policy to apply after this module identifies the field.
 module HarchWeb.Api.Multipart.Disposition
-  ( MultipartFieldDisposition (..),
+  ( MultipartDispositionParse (..),
+    MultipartFieldDisposition (..),
     parseMultipartFieldDisposition,
   )
 where
@@ -29,26 +30,51 @@ data MultipartFieldDisposition = MultipartFieldDisposition
   }
   deriving (Eq, Show)
 
+-- | How a part's header block yields (or fails to yield) a
+-- @Content-Disposition@. The line must occur exactly once: first-wins
+-- parsing of a repeated line would let different multipart consumers
+-- disagree about which untrusted value owns a part, while collapsing a
+-- repeat into 'MultipartDispositionAbsent' would misreport ambiguity as a
+-- missing header.
+data MultipartDispositionParse
+  = MultipartDispositionAbsent
+  | MultipartDispositionRepeated
+  | MultipartDispositionInvalid
+  | MultipartDispositionParsed MultipartFieldDisposition
+  deriving (Eq, Show)
+
 -- | Parse a part's @Content-Disposition@ header, if present, from its raw
 -- header block. RFC 7578 admits only @form-data@ dispositions. A parameter
 -- must occur at most once: accepting an arbitrary duplicate would let
 -- different multipart consumers disagree about which untrusted value owns a
 -- part. Missing @name@ remains represented explicitly for the consumer to
 -- report as its existing 'MultipartMissingDisposition' failure.
-parseMultipartFieldDisposition :: ByteString -> Maybe MultipartFieldDisposition
-parseMultipartFieldDisposition headerBlock = do
-  dispositionValue <- lookup "content-disposition" (multipartHeaderFields headerBlock)
+--
+-- Decision record (GR-2): 'MultipartDispositionRepeated' is consumed at the
+-- request boundary as 'MultipartMalformedBody' rather than a new error
+-- constructor: a header block carrying the same untrusted field twice is a
+-- malformed part-header block, which is exactly what that constructor
+-- already names, and keeping the rail small preserves its stability.
+parseMultipartFieldDisposition :: ByteString -> MultipartDispositionParse
+parseMultipartFieldDisposition headerBlock =
+  case filter ((== "content-disposition") . fst) (multipartHeaderFields headerBlock) of
+    [] -> MultipartDispositionAbsent
+    [(_, dispositionValue)] -> parseDispositionLine dispositionValue
+    _ -> MultipartDispositionRepeated
+
+parseDispositionLine :: Text -> MultipartDispositionParse
+parseDispositionLine dispositionValue =
   let (dispositionType, parameters) = parseDispositionParameters dispositionValue
-  if Text.toCaseFold (Text.strip dispositionType) /= "form-data"
-    then Nothing
-    else do
-      name <- atMostOneParameterValue "name" parameters
-      filename <- atMostOneParameterValue "filename" parameters
-      pure
-        MultipartFieldDisposition
-          { multipartFieldName = name,
-            multipartFieldFilename = filename
-          }
+   in if Text.toCaseFold (Text.strip dispositionType) /= "form-data"
+        then MultipartDispositionInvalid
+        else case (atMostOneParameterValue "name" parameters, atMostOneParameterValue "filename" parameters) of
+          (Just name, Just filename) ->
+            MultipartDispositionParsed
+              MultipartFieldDisposition
+                { multipartFieldName = name,
+                  multipartFieldFilename = filename
+                }
+          _ -> MultipartDispositionInvalid
 
 multipartHeaderFields :: ByteString -> [(Text, Text)]
 multipartHeaderFields headerBlock =

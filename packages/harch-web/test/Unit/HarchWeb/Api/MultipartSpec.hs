@@ -560,6 +560,23 @@ spec =
               "--" <> boundaryToken <> "\r\nContent-Type: text/plain\r\n\r\nvalue\r\n--" <> boundaryToken <> "--\r\n"
          in shouldReject (runConsume testLimits [noDispositionBody]) MultipartMissingDisposition
 
+      it "rejects a part with a repeated Content-Disposition header as a malformed header block" $
+        let repeatedDispositionBody =
+              "--"
+                <> boundaryToken
+                <> "\r\n"
+                <> "Content-Disposition: form-data; name=\"a\"\r\n"
+                <> "Content-Disposition: form-data; name=\"b\"\r\n"
+                <> "\r\nvalue\r\n--"
+                <> boundaryToken
+                <> "--\r\n"
+         in shouldReject (runConsume testLimits [repeatedDispositionBody]) MultipartMalformedBody
+
+      it "keeps a disposition that is not form-data on the missing-disposition rail" $
+        let attachmentDispositionBody =
+              "--" <> boundaryToken <> "\r\nContent-Disposition: attachment; name=\"a\"\r\n\r\nvalue\r\n--" <> boundaryToken <> "--\r\n"
+         in shouldReject (runConsume testLimits [attachmentDispositionBody]) MultipartMissingDisposition
+
       it "rejects a part whose Content-Disposition has no name parameter" $
         let noNameBody =
               "--" <> boundaryToken <> "\r\nContent-Disposition: form-data\r\n\r\nvalue\r\n--" <> boundaryToken <> "--\r\n"
