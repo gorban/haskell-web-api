@@ -7,9 +7,9 @@ import Data.Text qualified as Text
 import HarchWeb qualified
 import TestCore.Wai (performWaiRequest, readResponseBody, waiRequest)
 import Unit.WebApi.TestSupport (pureApplication)
-import WebApi.Config (AppConfig (..), defaultAppConfig)
+import WebApi.Config (defaultAppConfig)
 import WebApi.PageModule (PageFailure (..), PageModule (..), pageModulePage, renderPageFailure)
-import WebApi.Route (AppRequestContext, AppRoute (DocsSwaggerRoute, GeneratedPages, ShowcaseAlternateRoute, ShowcaseRoute), RouteMetadata (..), defaultRequestContext, endpointMetadata, renderRoutePath, routeEnhancementHooks, routeMetadata, routePageSegment, routePageTitle)
+import WebApi.Route (AppRoute (DocsSwaggerRoute, ShowcaseAlternateRoute, ShowcaseRoute), RouteMetadata (..), defaultRequestContext, endpointMetadata, renderRoutePath, routeEnhancementHooks, routeMetadata, routePageSegment, routePageTitle)
 
 spec = describe "WebApi.Pages showcase family" $ do
   describe "route presentation (the shared tables)" $ do

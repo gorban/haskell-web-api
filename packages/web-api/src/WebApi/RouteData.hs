@@ -92,6 +92,10 @@ routeDataPlan route =
     -- Generated pages load their own data inside their page module
     -- ('WebApi.PageModule'); this application-side plan is unreachable for
     -- them and exists only for the hand-owned page family.
+    -- The docs page renders its typed Swagger surface through its own
+    -- 'Site.pageRoute' definition ('WebApi.DocsSwagger'); this plan is
+    -- likewise unreachable for it.
+    DocsSwaggerRoute -> UseStaticRouteData NotFoundRouteDataResult
     GeneratedPages _ -> UseStaticRouteData NotFoundRouteDataResult
     Page pageRoute ->
       case pageRoute of
@@ -106,6 +110,7 @@ routeDataPlan route =
         ProfilePage -> UseStaticRouteData ProfileRouteDataResult
         LanguagePage -> UseStaticRouteData LanguageRouteDataResult
         HelpPage -> UseStaticRouteData HelpRouteDataResult
+        DocsSwaggerPage -> UseStaticRouteData NotFoundRouteDataResult
         PageNotFound -> UseStaticRouteData NotFoundRouteDataResult
     Api _ -> UseStaticRouteData NotFoundRouteDataResult
 

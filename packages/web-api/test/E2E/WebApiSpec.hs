@@ -27,7 +27,6 @@ import HarchWeb.Time qualified as Time
 import HarchWeb.Totp qualified as Totp
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
-import TestCore.Browser (computedStyle)
 import TestSupport.AccountJwt (withTestAccountJwtFixture)
 import TestSupport.BrowserApp (withBrowserApp, withBrowserServer)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..), VerificationResendAdmission (..), VerificationResendClaim (..), VerificationResendClaimSettlement (..))
