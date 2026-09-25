@@ -6,11 +6,13 @@
 {-# E2E_SPEC #-}
 
 import Control.Monad (when)
+import Control.Monad.IO.Class (liftIO)
 import Crypto.Error qualified as Crypto
 import Data.Aeson qualified as Aeson
 import Data.ByteString qualified as ByteString
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Data.List (find)
+import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -25,6 +27,7 @@ import HarchWeb.Time qualified as Time
 import HarchWeb.Totp qualified as Totp
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
+import TestCore.Browser (computedStyle)
 import TestSupport.AccountJwt (withTestAccountJwtFixture)
 import TestSupport.BrowserApp (withBrowserApp, withBrowserServer)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..), VerificationResendAdmission (..), VerificationResendClaim (..), VerificationResendClaimSettlement (..))
@@ -64,6 +67,30 @@ spec =
                 assertAllObserved do
                   currentUrl `shouldEqual` (HarchWeb.localServerBaseUrl server <> "/todo")
                   byRole Heading `shouldHaveText` "TODO"
+
+            it "keeps scoped page styles isolated across the deliberate class collision" $ \(browser, server) -> do
+              let showcaseUrl = HarchWeb.localServerBaseUrl server <> "/showcase"
+                  alternateUrl = HarchWeb.localServerBaseUrl server <> "/showcase-alternate"
+              runBrowserSpec browser do
+                visit showcaseUrl
+                showcaseCard <- computedStyle ".harch-showcase-card" "background-color"
+                showcaseHeading <- computedStyle ".harch-showcase-heading" "font-size"
+                crossBleedIntoShowcase <- computedStyle ".harch-showcase-alternate-card" "background-color"
+                visit alternateUrl
+                alternateCard <- computedStyle ".harch-showcase-alternate-card" "background-color"
+                alternateHeading <- computedStyle ".harch-showcase-alternate-heading" "font-size"
+                crossBleedIntoAlternate <- computedStyle ".harch-showcase-card" "background-color"
+                liftIO
+                  ( expectAll
+                      ( (showcaseCard `shouldBe` Just "rgb(238, 242, 250)")
+                          :| [ showcaseHeading `shouldBe` Just "18px",
+                               alternateCard `shouldBe` Just "rgb(250, 238, 238)",
+                               alternateHeading `shouldBe` Just "28px",
+                               crossBleedIntoShowcase `shouldBe` Nothing,
+                               crossBleedIntoAlternate `shouldBe` Nothing
+                             ]
+                      )
+                  )
 
             it "keeps direct second-page loads and script-disabled root redirects usable" $ \(browser, server) -> do
               let homeUrl = HarchWeb.localServerBaseUrl server <> "/"

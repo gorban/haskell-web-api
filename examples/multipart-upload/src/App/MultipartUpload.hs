@@ -218,6 +218,10 @@ successPage filename byteCount =
     ( Markup.element
         Markup.divTag
         [Markup.dataAttribute "page" "native-upload-success"]
+        -- VERBOSE EXAMPLE (intentional): every manual element below is kept
+        -- to demonstrate the non-EDSL authoring path. Prefer the quasiquoter
+        -- style - see web-api's src/WebApi/Pages/Showcase.hs or
+        -- examples/two-pages for the cleaner [harch| ... |] approach.
         [ Markup.element Markup.headingOneTag [] [Markup.text "Upload received"],
           Markup.element
             Markup.paragraphTag
@@ -234,6 +238,10 @@ errorPage statusCode message =
     ( Markup.element
         Markup.divTag
         [Markup.dataAttribute "page" "native-upload-error"]
+        -- VERBOSE EXAMPLE (intentional): every manual element below is kept
+        -- to demonstrate the non-EDSL authoring path. Prefer the quasiquoter
+        -- style - see web-api's src/WebApi/Pages/Showcase.hs or
+        -- examples/two-pages for the cleaner [harch| ... |] approach.
         [ Markup.element Markup.headingOneTag [] [Markup.text "Upload failed"],
           Markup.element Markup.paragraphTag [] [Markup.text message],
           Markup.element
@@ -256,6 +264,9 @@ uploadFormBody csrfToken =
   Markup.element
     Markup.formTag
     [Markup.formAction nativeUploadPath, Markup.method "POST", Markup.enctype "multipart/form-data", Markup.ariaLabel "Upload a file"]
+    -- VERBOSE EXAMPLE (intentional): each manual element below demonstrates
+    -- the non-EDSL authoring path. Prefer the quasiquoter style - see
+    -- web-api's src/WebApi/Pages/Showcase.hs or examples/two-pages.
     [ Markup.element Markup.headingOneTag [] [Markup.text "Upload a file"],
       Markup.voidElement Markup.inputTag [Markup.inputType "hidden", Markup.name "_harch_csrf", Markup.value (csrfTokenText csrfToken)],
       Markup.element Markup.labelTag [Markup.labelFor (Markup.literalElementId "native-upload-file")] [Markup.text "File"],

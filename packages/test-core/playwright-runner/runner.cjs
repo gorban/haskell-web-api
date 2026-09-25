@@ -81,6 +81,7 @@ async function execute(request) {
     case 'visit': return visit(request.url, true);
     case 'visitWithoutScripts': return visit(request.url, false);
     case 'setCookie': return setCookie(request.url, request.name, request.value);
+    case 'computedStyle': return computedStyle({ selector: String(request.selector), property: String(request.property) });
     case 'setViewportSize': return requirePage().setViewportSize({ width: positiveInteger(request.width, 'viewport width'), height: positiveInteger(request.height, 'viewport height') });
     case 'emulateMobileViewport': return emulateMobileViewport(request.width, request.height);
     case 'reload': return requirePage().reload({ waitUntil: 'commit', timeout: timeout() });
@@ -545,3 +546,16 @@ main().catch(async (error) => {
   process.stderr.write(`${error && error.stack ? error.stack : String(error)}\n`);
   process.exitCode = 1;
 });
+
+
+// Read one computed CSS property of the first element matching a selector.
+// Missing elements resolve to null so callers can assert absence directly.
+async function computedStyle({ selector, property }) {
+  return requirePage().evaluate(
+    ([targetSelector, targetProperty]) => {
+      const element = document.querySelector(targetSelector);
+      return element ? getComputedStyle(element)[targetProperty] : null;
+    },
+    [selector, property]
+  );
+}

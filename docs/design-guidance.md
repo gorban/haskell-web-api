@@ -5310,6 +5310,20 @@ real-browser adapter tests distinguish empty/exact/hidden text, accessible names
 input values, absent attributes, missing elements and ambiguous locators.
 
 
+### Give the browser scenarios computed-style observation (2026-09-25)
+
+For the deliberate scoped-CSS collision proof, `test-core`'s browser DSL gains
+`computedStyle :: Text -> Text -> BrowserScenario (Maybe Text)` (a thin
+`BrowserScenario` command over the existing protocol; `Nothing` asserts an
+element's absence) and `BrowserScenario` derives `MonadIO` so dependent checks
+can run after batched observations — the Pattern module's documented split
+("pattern bindings are discarded: dependent checks belong outside the block").
+The E2E collision test reads each page's own `card`/`heading` values and
+asserts the other page's classes are absent, proving scoped renames isolate the
+deliberately colliding local class names. `examples/multipart-upload` remains
+the intentional verbose non-EDSL reference with per-group comments pointing to
+`web-api`'s `Pages/Showcase.hs` and `examples/two-pages`.
+
 ### Treat pinned vendored stylesheets as reviewed policy inputs, not findings (2026-09-25)
 
 `tools/check-scoped-css.sh` governs styles this repository *authors*; the

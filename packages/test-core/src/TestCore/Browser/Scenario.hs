@@ -40,6 +40,7 @@ module TestCore.Browser.Scenario
     setInputFiles,
     setViewportSize,
     submit,
+    computedStyle,
     visit,
     visitWithoutScripts,
     waitForBlockedRequestCountMatching,
@@ -52,9 +53,9 @@ import Control.Concurrent (threadDelay)
 import Control.Exception (SomeException, displayException, fromException, mask, onException, throwIO, try)
 import Control.Monad (void)
 import Control.Monad.Except (ExceptT (..), MonadError (throwError), runExceptT)
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (ReaderT (..), ask, runReaderT)
-import Data.Aeson (Value, (.=))
+import Data.Aeson (Value (String), (.=))
 import Data.Aeson.Types (Pair)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
@@ -83,7 +84,7 @@ import TestCore.CustomAssertions (expectAll)
 newtype BrowserScenario a = BrowserScenario
   { unBrowserScenario :: ReaderT BrowserSession (ExceptT BrowserRunnerError IO) a
   }
-  deriving newtype (Functor, Applicative, Monad)
+  deriving newtype (Functor, Applicative, Monad, MonadIO)
 
 askSession :: BrowserScenario BrowserSession
 askSession = BrowserScenario ask
@@ -147,6 +148,17 @@ command commandName fields = do
 
 simpleCommand :: Text -> [Pair] -> BrowserScenario ()
 simpleCommand commandName fields = void (command commandName fields)
+
+-- | Read one computed CSS property of the first element matching a selector;
+-- 'Nothing' means the element is absent from the current document. Scoped-CSS
+-- isolation tests rely on this to prove one page's rules cannot reach another
+-- page's elements.
+computedStyle :: Text -> Text -> BrowserScenario (Maybe Text)
+computedStyle selector property = do
+  result <- command "computedStyle" ["selector" .= selector, "property" .= property]
+  pure $ case result of
+    String value -> Just value
+    _ -> Nothing
 
 visit :: Text -> BrowserScenario ()
 visit url = simpleCommand "visit" ["url" .= url]
