@@ -9,6 +9,7 @@ module WebApi.Route
     AppRoute
       ( Page,
         Api,
+        GeneratedPages,
         HomeRoute,
         SecondRoute,
         TodoRoute,
@@ -26,7 +27,9 @@ module WebApi.Route
         TokenApiRoute,
         DocsOpenApiSpecRoute,
         NotFoundRoute,
-        ApiNotFoundRoute
+        ApiNotFoundRoute,
+        ShowcaseRoute,
+        ShowcaseAlternateRoute
       ),
     ApiRoute (..),
     PageRoute (..),
@@ -38,6 +41,7 @@ module WebApi.Route
     requiredOAuth2ScopeOrDie,
     defaultRequestContext,
     endpointMetadata,
+    html,
     matchRoute,
     parseRoute,
     appRouteMethods,
@@ -64,6 +68,7 @@ import HarchWeb.EndpointSecurity
     requiredEndpointNameOrDie,
     requiredRouteTemplateOrDie,
   )
+import WebApi.Pages.Route.Generated qualified as Generated
 import WebApi.Route.Context
 
 data RouteSelectionError
@@ -104,10 +109,19 @@ data ApiRoute
 data AppRoute
   = Page PageRoute
   | Api ApiRoute
+  | GeneratedPages Generated.PageRoute
   deriving (Eq)
 
 pattern HomeRoute :: AppRoute
 pattern HomeRoute = Page HomePage
+
+-- | The generated page family mounts beside the hand-owned routes: the
+-- generator derives these from the 'WebApi.Pages' file names.
+pattern ShowcaseRoute :: AppRoute
+pattern ShowcaseRoute = GeneratedPages Generated.ShowcasePage
+
+pattern ShowcaseAlternateRoute :: AppRoute
+pattern ShowcaseAlternateRoute = GeneratedPages Generated.ShowcaseAlternatePage
 
 pattern SecondRoute :: AppRoute
 pattern SecondRoute = Page SecondPage
@@ -160,26 +174,7 @@ pattern NotFoundRoute = Page PageNotFound
 pattern ApiNotFoundRoute :: AppRoute
 pattern ApiNotFoundRoute = Api ApiNotFound
 
-{-# COMPLETE
-  HomeRoute,
-  SecondRoute,
-  TodoRoute,
-  RegistrationRoute,
-  EmailVerificationRoute,
-  MfaEnrollmentRoute,
-  LoginRoute,
-  LogoutRoute,
-  ProfileRoute,
-  LanguageRoute,
-  HelpRoute,
-  NotFoundRoute,
-  StatusApiRoute,
-  SecondApiRoute,
-  MeApiRoute,
-  TokenApiRoute,
-  DocsOpenApiSpecRoute,
-  ApiNotFoundRoute
-  #-}
+{-# COMPLETE HomeRoute, SecondRoute, TodoRoute, RegistrationRoute, EmailVerificationRoute, MfaEnrollmentRoute, LoginRoute, LogoutRoute, ProfileRoute, LanguageRoute, HelpRoute, NotFoundRoute, StatusApiRoute, SecondApiRoute, MeApiRoute, TokenApiRoute, DocsOpenApiSpecRoute, ApiNotFoundRoute, GeneratedPages #-}
 
 instance Show AppRoute where
   show route =
@@ -202,6 +197,7 @@ instance Show AppRoute where
       DocsOpenApiSpecRoute -> "DocsOpenApiSpecRoute"
       NotFoundRoute -> "NotFoundRoute"
       ApiNotFoundRoute -> "ApiNotFoundRoute"
+      GeneratedPages generatedPage -> "GeneratedPages " <> show generatedPage
 
 data RouteMetadata = RouteMetadata
   { routePageSegment :: Maybe Text,
@@ -231,6 +227,7 @@ appRouteMethods route =
     Api ApiNotFound -> []
     Api TokenApi -> [HarchWeb.RoutePost]
     Api _ -> [HarchWeb.RouteGet]
+    GeneratedPages _ -> [HarchWeb.RouteGet]
 
 parseRoute :: AppRequestContext -> HarchWeb.RouteLocation -> HarchWeb.RouteParseResult AppRoute AppRequestContext
 parseRoute requestContext location =
@@ -279,6 +276,8 @@ renderRouteLocation routeRequest =
       case HarchWeb.requestRoute routeRequest of
         Api apiRoute -> NonEmpty.toList (apiRouteSegments apiRoute)
         Page pageRoute -> localeSegments <> maybe [] (pure . HarchWeb.requiredPathSegment) (routePageSegment (pageRouteMetadata pageRoute))
+        GeneratedPages generatedPage ->
+          localeSegments <> map HarchWeb.requiredPathSegment (filter (not . Text.null) (Text.splitOn "/" (Text.dropWhile (== '/') (Generated.pageRoutePath generatedPage))))
     localeSegments =
       case (requestLocale requestContext, requestLocaleIsExplicit requestContext) of
         (English, False) -> []
@@ -354,12 +353,15 @@ parseSingleSegmentPath fullPath segment =
   case routeFromSegment segment of
     Just route -> Right (Nothing, route)
     Nothing ->
-      case localeFromPrefix segment of
-        Just locale -> Right (Just locale, HomeRoute)
+      case Generated.parsePageRoute ("/" <> segment) of
+        Just generatedPage -> Right (Nothing, GeneratedPages generatedPage)
         Nothing ->
-          if looksLikeLocalePrefix segment
-            then Left (UnsupportedLocalePrefix segment)
-            else Left (UnsupportedPath fullPath)
+          case localeFromPrefix segment of
+            Just locale -> Right (Just locale, HomeRoute)
+            Nothing ->
+              if looksLikeLocalePrefix segment
+                then Left (UnsupportedLocalePrefix segment)
+                else Left (UnsupportedPath fullPath)
 
 parsePrefixedPath ::
   Text ->
@@ -371,7 +373,10 @@ parsePrefixedPath fullPath prefix segment =
     Just locale ->
       case routeFromSegment segment of
         Just route -> Right (Just locale, route)
-        Nothing -> Left (UnsupportedPath fullPath)
+        Nothing ->
+          case Generated.parsePageRoute ("/" <> segment) of
+            Just generatedPage -> Right (Just locale, GeneratedPages generatedPage)
+            Nothing -> Left (UnsupportedPath fullPath)
     Nothing ->
       if looksLikeLocalePrefix prefix
         then Left (UnsupportedLocalePrefix prefix)
@@ -408,6 +413,13 @@ routeMetadata route =
   case route of
     Page pageRoute -> pageRouteMetadata pageRoute
     Api _ -> RouteMetadata Nothing "/api/404" "Not Found" []
+    -- Generated pages keep their route presentation in this same table; their
+    -- page modules read these values for titles and hooks while owning their
+    -- model, body, and scoped styles.
+    GeneratedPages Generated.ShowcasePage ->
+      RouteMetadata (Just "showcase") "" "Showcase" ["web-api-showcase"]
+    GeneratedPages Generated.ShowcaseAlternatePage ->
+      RouteMetadata (Just "showcase-alternate") "" "Showcase alternate" ["web-api-showcase-alternate"]
 
 -- | Stable, application-authored endpoint identities for the existing route
 -- table. AHI-4C's configured root guard establishes a principal before the
@@ -456,17 +468,11 @@ endpointMetadata route =
     -- every other route's metadata here.
     DocsOpenApiSpecRoute -> api "api.openapi-spec" "/docs/openapi.json"
     ApiNotFoundRoute -> api "api.not-found" "/api/404"
-  where
-    html = declaredMetadata HtmlEndpoint AllowUnauthenticated
-    protectedHtml name template =
-      HarchWeb.withAuthenticationProfile
-        accountAuthenticationProfileName
-        (declaredMetadata HtmlEndpoint RequireAuthenticated name template)
-    api = declaredMetadata ApiEndpoint AllowUnauthenticated
-    protectedApi name template =
-      HarchWeb.withAuthenticationProfile
-        accountAuthenticationProfileName
-        (declaredMetadata ApiEndpoint RequireAuthenticated name template)
+    -- Generated pages keep their route presentation here (the single source
+    -- every web-api route uses); their page modules read these values for
+    -- titles and hooks while owning their model, body, and scoped styles.
+    GeneratedPages Generated.ShowcasePage -> html "web.showcase" "/{locale}/showcase"
+    GeneratedPages Generated.ShowcaseAlternatePage -> html "web.showcase-alternate" "/{locale}/showcase-alternate"
 
 declaredMetadata :: EndpointProtocol -> AccessRequirement AppAuthorization -> Text -> Text -> EndpointMetadata AppAuthorization
 declaredMetadata protocol accessRequirement name template =
@@ -475,6 +481,27 @@ declaredMetadata protocol accessRequirement name template =
     (requiredRouteTemplateOrDie template)
     protocol
     accessRequirement
+
+-- | Endpoint-metadata builders shared by the route table and the generated
+-- page family ('WebApi.Pages'): plain declarations for public surfaces and
+-- profile-protected variants for authenticated ones.
+html :: Text -> Text -> EndpointMetadata AppAuthorization
+html = declaredMetadata HtmlEndpoint AllowUnauthenticated
+
+protectedHtml :: Text -> Text -> EndpointMetadata AppAuthorization
+protectedHtml name template =
+  HarchWeb.withAuthenticationProfile
+    accountAuthenticationProfileName
+    (declaredMetadata HtmlEndpoint RequireAuthenticated name template)
+
+api :: Text -> Text -> EndpointMetadata AppAuthorization
+api = declaredMetadata ApiEndpoint AllowUnauthenticated
+
+protectedApi :: Text -> Text -> EndpointMetadata AppAuthorization
+protectedApi name template =
+  HarchWeb.withAuthenticationProfile
+    accountAuthenticationProfileName
+    (declaredMetadata ApiEndpoint RequireAuthenticated name template)
 
 pageRouteMetadata :: PageRoute -> RouteMetadata
 pageRouteMetadata pageRoute =

@@ -14,7 +14,6 @@ import HarchWeb
     Page (..),
     PageShell (..),
     RuntimeDescriptor (..),
-    Stylesheet,
     literalElementId,
     locale,
     stylesheet,

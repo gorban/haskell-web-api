@@ -89,6 +89,10 @@ emptyRouteDataSelection result = RouteDataSelection result []
 routeDataPlan :: AppRoute -> RouteDataPlan
 routeDataPlan route =
   case route of
+    -- Generated pages load their own data inside their page module
+    -- ('WebApi.PageModule'); this application-side plan is unreachable for
+    -- them and exists only for the hand-owned page family.
+    GeneratedPages _ -> UseStaticRouteData NotFoundRouteDataResult
     Page pageRoute ->
       case pageRoute of
         HomePage -> UseStaticRouteData NotFoundRouteDataResult

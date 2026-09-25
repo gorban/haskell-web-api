@@ -111,6 +111,7 @@ import WebApi.Config
     loadAppStartupConfig,
   )
 import WebApi.Database (PageRepository, defaultPageRepository)
+import WebApi.Pages.Generated qualified as PagesGenerated
 import WebApi.Postgres.Pool (PostgresPool, closePostgresPool, newPostgresPool)
 import WebApi.Postgres.Runtime (buildRuntimePostgresPageRepository)
 import WebApi.ResourceAuthentication qualified as ResourceAuthentication
@@ -337,6 +338,11 @@ buildAppRouteDefinition config pageRepository accountWorkflow docsOpenApiDocumen
       protocolRouteDefinition route $
         \_ ->
           pure (HarchWeb.NonPageBodyResponse apiNotFoundResponse)
+    -- The generated page family carries its own composed definition
+    -- (see 'WebApi.PageModule'): title, hooks, scoped styles, load rail, and
+    -- body all arrive from the page module.
+    GeneratedPages generatedPage ->
+      PagesGenerated.pageRouteDefinition config generatedPage
     _ ->
       Site.RouteDefinition
         { Site.routeNavigationLabel = routeNavigationLabel route,

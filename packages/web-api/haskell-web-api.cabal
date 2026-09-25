@@ -40,6 +40,9 @@ category: Web
 build-type: Hooks
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
 extra-doc-files: CHANGELOG.md
+extra-source-files:
+  src/WebApi/Pages/**/*.hs
+  src/WebApi/Pages/*.hs
 
 custom-setup
   setup-depends:
@@ -52,7 +55,6 @@ custom-setup
     process ^>=1.6.26.1,
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
--- extra-source-files:
 common common
   -- Common warning flags.
   ghc-options:
@@ -105,6 +107,11 @@ library
     WebApi.Mfa
     WebApi.MfaEnrollment
     WebApi.Page
+    WebApi.PageModule
+    WebApi.Pages.Generated
+    WebApi.Pages.Route.Generated
+    WebApi.Pages.Showcase
+    WebApi.Pages.ShowcaseAlternate
     WebApi.PageShell
     WebApi.PendingRegistrationAudit
     WebApi.Postgres
@@ -188,6 +195,10 @@ library
     wai ^>=3.2.5,
 
   -- Directories containing source files.
+  autogen-modules:
+    WebApi.Pages.Generated
+    WebApi.Pages.Route.Generated
+
   hs-source-dirs: src
 
 executable haskell-web-api
@@ -254,6 +265,7 @@ test-suite haskell-web-api-tests
     Unit.WebApi.MfaEnrollmentSpec
     Unit.WebApi.Page.BuildingSpec
     Unit.WebApi.Page.RenderingSpec
+    Unit.WebApi.Pages.ShowcaseSpec
     Unit.WebApi.PageSpec
     Unit.WebApi.Postgres.AccountRepositorySpec
     Unit.WebApi.Postgres.AccountSessionAuditRepositorySpec
