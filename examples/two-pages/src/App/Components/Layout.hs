@@ -45,15 +45,9 @@ twoPageShell page =
             }
         ],
       shellNavigationLifecycle = Nothing,
-      shellStylesheets = stylesheet (AssetPath "/assets/two-pages.css") : pageStylesheets (pageRoute page),
+      shellStylesheets = [stylesheet (AssetPath "/assets/two-pages.css")],
       shellRuntimeDescriptors = pageEnhancements (pageRoute page)
     }
-
-pageStylesheets :: TwoPageRoute -> [Stylesheet]
-pageStylesheets route =
-  case route of
-    Routes.Page HomePage -> [stylesheet (AssetPath "/assets/home-enhancement.css")]
-    _ -> []
 
 pageEnhancements :: TwoPageRoute -> [RuntimeDescriptor]
 pageEnhancements route =

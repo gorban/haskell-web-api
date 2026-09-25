@@ -19,7 +19,7 @@ import Data.Maybe ()
 import Data.Text ()
 import Data.Text qualified as Text (isInfixOf, isSuffixOf, length)
 import Data.Text.Encoding qualified as TextEncoding ()
-import HarchWeb (AssetPath (AssetPath), CssClass (GlobalCssClass), Document (Document, documentBodyAttributes, documentBootstrapHooks, documentLanguage, documentMainAttributes, documentMainContent, documentMainId, documentNavigation, documentNavigationAttributes, documentNavigationLifecycle, documentRuntimeDescriptors, documentStylesheets, documentTitle, documentViewportPolicy), HtmlAttribute (HtmlAttribute, attributeName, attributeValue), LiveRegion (AssertiveAlert, PoliteStatus), NavigationAnnouncement (AnnounceElementText), NavigationFocusTarget (FocusElement), NavigationLifecycle (navigationAnnouncement, navigationFocusTarget, navigationSkipLink, navigationStatusClass), NavigationSkipLink (NavigationSkipLink, skipLinkClass, skipLinkLabel), Page (Page, pageBody, pageBootstrapHooks, pageContext, pageRoute, pageTitle), PageShell (shellMainAttributes, shellNavigationItems, shellNavigationLifecycle), ResolvedNavigationItem (ResolvedNavigationItem, navigationHref, navigationIsActive, navigationLabel, navigationRoute), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (DeferredModule, PageEnhancementModule), RuntimeNonce (runtimeNonceValue), ViewportPolicy (ResponsiveViewport), buildNavigation, buildPageShell, generateRuntimeNonce, literalElementId, liveRegionAttributes, locale, mainNavigationLifecycle, responsiveViewport, stylesheet)
+import HarchWeb (AssetPath (AssetPath), CssClass (GlobalCssClass), Document (Document, documentBodyAttributes, documentBootstrapHooks, documentLanguage, documentMainAttributes, documentMainContent, documentMainId, documentNavigation, documentNavigationAttributes, documentNavigationLifecycle, documentRuntimeDescriptors, documentStylesheets, documentTitle, documentViewportPolicy), HtmlAttribute (HtmlAttribute, attributeName, attributeValue), LiveRegion (AssertiveAlert, PoliteStatus), NavigationAnnouncement (AnnounceElementText), NavigationFocusTarget (FocusElement), NavigationLifecycle (navigationAnnouncement, navigationFocusTarget, navigationSkipLink, navigationStatusClass), NavigationSkipLink (NavigationSkipLink, skipLinkClass, skipLinkLabel), Page (Page, pageBody, pageBootstrapHooks, pageContext, pageRoute, pageStylesheets, pageTitle), PageShell (shellMainAttributes, shellNavigationItems, shellNavigationLifecycle, shellStylesheets), ResolvedNavigationItem (ResolvedNavigationItem, navigationHref, navigationIsActive, navigationLabel, navigationRoute), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (DeferredModule, PageEnhancementModule), RuntimeNonce (runtimeNonceValue), ViewportPolicy (ResponsiveViewport), buildNavigation, buildPageShell, generateRuntimeNonce, literalElementId, liveRegionAttributes, locale, mainNavigationLifecycle, responsiveViewport, stylesheet)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -132,6 +132,21 @@ movedSpec = do
         (renderDocument document)
         `shouldBe` True
 
+    it "renders page-owned stylesheets after the shell's base styles" $ do
+      let styledPage =
+            (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
+              { pageStylesheets = [stylesheet (AssetPath "/assets/page.css")]
+              }
+          document =
+            buildPageShell
+              sampleCodec
+              (sampleShell {shellStylesheets = [stylesheet (AssetPath "/assets/base.css")]})
+              styledPage
+      documentStylesheets document
+        `shouldBe` [stylesheet (AssetPath "/assets/base.css"), stylesheet (AssetPath "/assets/page.css")]
+      (styledPage {pageStylesheets = []} == styledPage) `shouldBe` False
+      show styledPage `shouldContain` "pageStylesheets"
+
     it "keeps the closed responsive viewport policy comparable and inspectable" $ do
       responsiveViewport `shouldBe` ResponsiveViewport
       (responsiveViewport /= ResponsiveViewport) `shouldBe` False
@@ -174,7 +189,8 @@ movedSpec = do
             sampleCodec
             sampleShell
             ( Page
-                { pageTitle = "Known",
+                { pageStylesheets = [],
+                  pageTitle = "Known",
                   pageRoute = KnownRoute,
                   pageContext = defaultContext,
                   pageBody = trustedMarkup "<h1>Known</h1>",

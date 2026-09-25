@@ -24,7 +24,8 @@ liveDataPage :: PageSecurity -> RouteRequest TwoPageRoute () -> IO (Page TwoPage
 liveDataPage _ routeRequest =
   pure
     Page
-      { pageTitle = "Live updates",
+      { pageStylesheets = [],
+        pageTitle = "Live updates",
         pageRoute = Routes.Page LiveDataPage,
         pageContext = requestContext routeRequest,
         pageBody =

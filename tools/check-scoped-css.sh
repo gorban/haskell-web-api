@@ -38,6 +38,37 @@ cd "$repo_root"
 
 mapfile -t stylesheets < <(git ls-files -- '*.css' | sort)
 
+# Vendored third-party distributions are not authored CSS: their stylesheets
+# ship byte-for-byte with a pinned upstream release, reviewed in the
+# distribution's own README.md beside its LICENSE attribution and
+# package.json pin. The scoping convention governs styles this repository
+# authors, so the list below is a reviewed policy input — the same mechanism
+# as check-build-diagnostics.sh's --allow-ghc-9-14-* flags — not a finding
+# suppression: every other tracked stylesheet stays fully checked, and adding
+# a vendored stylesheet requires editing this list in review.
+# Reviewed exemption (2026-09-25): the pinned swagger-ui-dist 5.33.0
+# distribution stylesheet.
+vendored_stylesheets=(
+  'packages/harch-web-openapi/assets/swagger-ui/swagger-ui.css'
+)
+
+if [ "${#stylesheets[@]}" -gt 0 ] && [ "${#vendored_stylesheets[@]}" -gt 0 ]; then
+  filtered_stylesheets=()
+  for stylesheet in "${stylesheets[@]}"; do
+    keep=true
+    for vendored in "${vendored_stylesheets[@]}"; do
+      if [ "$stylesheet" = "$vendored" ]; then
+        keep=false
+        break
+      fi
+    done
+    if [ "$keep" = true ]; then
+      filtered_stylesheets+=("$stylesheet")
+    fi
+  done
+  stylesheets=("${filtered_stylesheets[@]}")
+fi
+
 if [ "${#stylesheets[@]}" -eq 0 ]; then
   printf '%s\n' 'No tracked stylesheets were found.' >&2
   exit 1

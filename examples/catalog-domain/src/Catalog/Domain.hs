@@ -124,7 +124,8 @@ catalogRouteDefinition queries CatalogIndex =
         pure
           ( RenderedPage
               Page
-                { pageTitle = "Catalog",
+                { pageStylesheets = [],
+                  pageTitle = "Catalog",
                   pageRoute = CatalogIndex,
                   pageContext = requestContext request,
                   pageBody = element headingOneTag [] [text summary],

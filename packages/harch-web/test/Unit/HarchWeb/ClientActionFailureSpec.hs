@@ -7,7 +7,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text (isInfixOf)
 import HarchWeb (ClientActionFailurePresentation (..), ClientActionTerminalFailure (clientActionTerminalFailurePage))
 import HarchWeb.ClientActionFailure
-import HarchWeb.Document (Page (pageBody, pageBootstrapHooks, pageContext, pageRoute, pageTitle))
+import HarchWeb.Document (Page (pageBody, pageBootstrapHooks, pageContext, pageRoute, pageStylesheets, pageTitle))
 import HarchWeb.Markup (renderHtml)
 import HarchWeb.RequestId (RequestId, mkRequestId)
 import HarchWeb.Routing (RouteRequest (RouteRequest))

@@ -190,7 +190,8 @@ spec =
           apiApplication = buildSiteApplication apiSite
           fallbackPage =
             Page
-              { pageTitle = "Fallback",
+              { pageStylesheets = [],
+                pageTitle = "Fallback",
                 pageRoute = HomeRoute,
                 pageContext = SampleContext "",
                 pageBody = HarchWeb.text "fallback",
@@ -238,7 +239,8 @@ spec =
                       writeIORef seenRouteContext (Just (HarchWeb.requestContext routeRequest))
                       pure
                         Page
-                          { pageTitle = "Security-aware home",
+                          { pageStylesheets = [],
+                            pageTitle = "Security-aware home",
                             pageRoute = HomeRoute,
                             pageContext = HarchWeb.requestContext routeRequest,
                             pageBody = HarchWeb.text "home",
@@ -343,7 +345,8 @@ spec =
                       ( HarchWeb.RenderedPageWithMetadata
                           metadataResponse
                           Page
-                            { pageTitle = "Metadata",
+                            { pageStylesheets = [],
+                              pageTitle = "Metadata",
                               pageRoute = HomeRoute,
                               pageContext = requestContext routeRequest,
                               pageBody = HarchWeb.text "metadata",
@@ -371,7 +374,8 @@ spec =
                       ( HarchWeb.RenderedPageWithHeaders
                           HarchWeb.noStoreNoReferrerPageHeaders
                           Page
-                            { pageTitle = "Terminal browser failure",
+                            { pageStylesheets = [],
+                              pageTitle = "Terminal browser failure",
                               pageRoute = HomeRoute,
                               pageContext = requestContext routeRequest,
                               pageBody = HarchWeb.text "safe failure",
@@ -641,7 +645,8 @@ homeRouteDefinition =
   Site.pageRoute (sampleMetadata HarchWeb.HtmlEndpoint HomeRoute) (Just "Home") $ \_ routeRequest ->
     pure
       Page
-        { pageTitle = "Home",
+        { pageStylesheets = [],
+          pageTitle = "Home",
           pageRoute = HomeRoute,
           pageContext = requestContext routeRequest,
           pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml ("<h1>Home</h1><p><a href=\"" <> renderRouteHref (requestContext routeRequest) SecondRoute <> "\">Browse second</a></p>")),
@@ -653,7 +658,8 @@ secondRouteDefinition =
   Site.pageRoute (sampleMetadata HarchWeb.HtmlEndpoint SecondRoute) (Just "Second") $ \_ routeRequest ->
     pure
       Page
-        { pageTitle = "Second",
+        { pageStylesheets = [],
+          pageTitle = "Second",
           pageRoute = SecondRoute,
           pageContext = requestContext routeRequest,
           pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml ("<h1>Second</h1><p><a href=\"" <> renderRouteHref (requestContext routeRequest) HomeRoute <> "\">Return home</a></p>")),
@@ -686,7 +692,8 @@ notFoundRouteDefinition =
   ( Site.pageRoute (sampleMetadata HarchWeb.HtmlEndpoint NotFoundRoute) Nothing $ \_ routeRequest ->
       pure
         Page
-          { pageTitle = "Not Found",
+          { pageStylesheets = [],
+            pageTitle = "Not Found",
             pageRoute = NotFoundRoute,
             pageContext = requestContext routeRequest,
             pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml ("<h1>Not Found</h1><p><a href=\"" <> renderRouteHref (requestContext routeRequest) HomeRoute <> "\">Return home</a></p>")),

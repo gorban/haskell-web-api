@@ -126,7 +126,8 @@ ordersRouteDefinition queries OrdersIndex =
         pure
           ( RenderedPage
               Page
-                { pageTitle = "Orders",
+                { pageStylesheets = [],
+                  pageTitle = "Orders",
                   pageRoute = OrdersIndex,
                   pageContext = requestContext request,
                   pageBody = element headingOneTag [] [text summary],

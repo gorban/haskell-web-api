@@ -84,7 +84,8 @@ renderPageModel config routeRequest pageModel =
           [ renderPageBodyForLocale (HarchWeb.requestContext routeRequest) (requestLocale (HarchWeb.requestContext routeRequest)) pageModel,
             appControls (HarchWeb.requestContext routeRequest) (HarchWeb.requestRoute routeRequest)
           ],
-      HarchWeb.pageBootstrapHooks = pageEnhancementHooks (HarchWeb.requestRoute routeRequest)
+      HarchWeb.pageBootstrapHooks = pageEnhancementHooks (HarchWeb.requestRoute routeRequest),
+      HarchWeb.pageStylesheets = []
     }
 
 routeTitle :: AppRoute -> Text.Text

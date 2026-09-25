@@ -25,7 +25,8 @@ secondPage :: PageSecurity -> RouteRequest TwoPageRoute () -> IO (Page TwoPageRo
 secondPage _ routeRequest =
   pure
     Page
-      { pageTitle = "Second",
+      { pageStylesheets = [],
+        pageTitle = "Second",
         pageRoute = Routes.Page SecondPage,
         pageContext = requestContext routeRequest,
         pageBody =

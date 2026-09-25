@@ -33,7 +33,8 @@ import App.Routes
 import App.Routes qualified as Routes
 import Data.Text (Text)
 import HarchWeb
-  ( CssClass (..),
+  ( AssetPath (..),
+    CssClass (..),
     EndpointProtocol (HtmlEndpoint),
     Html,
     Page (..),
@@ -60,6 +61,7 @@ import HarchWeb
     region,
     role,
     sectionTag,
+    stylesheet,
     text,
     value,
     voidElement,
@@ -82,7 +84,8 @@ homePage :: PageSecurity -> RouteRequest TwoPageRoute () -> IO (Page TwoPageRout
 homePage pageSecurity routeRequest =
   pure
     Page
-      { pageTitle = "Home",
+      { pageStylesheets = [stylesheet (AssetPath "/assets/home-enhancement.css")],
+        pageTitle = "Home",
         pageRoute = Routes.Page HomePage,
         pageContext = requestContext routeRequest,
         pageBody =
@@ -148,7 +151,8 @@ nativeSubscriptionResultPage :: PageSecurity -> RouteRequest TwoPageRoute () -> 
 nativeSubscriptionResultPage _ routeRequest =
   pure
     Page
-      { pageTitle = "Subscription received",
+      { pageStylesheets = [],
+        pageTitle = "Subscription received",
         pageRoute = Routes.Custom NativeSubscriptionResult,
         pageContext = requestContext routeRequest,
         pageBody = element sectionTag [dataAttribute "page" "native-subscription"] [element headingOneTag [] [text "Subscription received"], element paragraphTag [] [text "The native fallback accepted this submission."]],

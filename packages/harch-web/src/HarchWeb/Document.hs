@@ -53,12 +53,26 @@ import HarchWeb.PathPrefix (PathPrefix, applyPathPrefix, mkUrlPath, urlPathText)
 import HarchWeb.Routing (RouteCodec, routeHref)
 import HarchWeb.StaticAssets (AssetPath (..), CssClass, Stylesheet (..), cssClassText)
 
+-- | One server-rendered page. Decision record (2026-09-24, authoring-quality
+-- exemplar work): the page carries the styles it owns
+-- ('pageStylesheets'), colocated with its module the way a Svelte component
+-- carries its scoped @<style>@ block. Styles remain application-owned static
+-- CSS files in the 'HarchWeb.StaticAssets' 'CssScope'\/'CssClass' convention
+-- (AHI-1's decision stands: no CSS-in-Haskell), authored with
+-- @harch-<scope>-<local>@ selectors and verified by
+-- @tools/check-scoped-css.sh@; 'buildPageShell' renders them after the
+-- shell's base styles so page rules win the cascade. This is a narrow
+-- slice: per-component style attachment stays application-owned, and the
+-- remaining authoring-quality gaps are tracked in
+-- @TASKS\/web-api-template-authoring-quality.md@.
 data Page route context = Page
   { pageTitle :: Text,
     pageRoute :: route,
     pageContext :: context,
     pageBody :: Html,
-    pageBootstrapHooks :: [Text]
+    pageBootstrapHooks :: [Text],
+    -- | Page-owned stylesheets, rendered after the shell's base styles.
+    pageStylesheets :: [Stylesheet]
   }
 
 instance (Eq route, Eq context) => Eq (Page route context) where
@@ -68,6 +82,7 @@ instance (Eq route, Eq context) => Eq (Page route context) where
       && pageContext left == pageContext right
       && renderHtml (pageBody left) == renderHtml (pageBody right)
       && pageBootstrapHooks left == pageBootstrapHooks right
+      && pageStylesheets left == pageStylesheets right
 
 instance (Show route, Show context) => Show (Page route context) where
   showsPrec precedence page =
@@ -82,6 +97,8 @@ instance (Show route, Show context) => Show (Page route context) where
         . shows (renderHtml (pageBody page))
         . showString ", pageBootstrapHooks = "
         . shows (pageBootstrapHooks page)
+        . showString ", pageStylesheets = "
+        . shows (pageStylesheets page)
         . showString "}"
 
 data HtmlAttribute = HtmlAttribute
@@ -1302,6 +1319,10 @@ buildNavigation codec page =
     )
 
 buildPageShell :: (Eq route) => RouteCodec route context -> PageShell route context -> Page route context -> Document route
+
+-- | Decision record: page-owned stylesheets render after the shell's base
+-- styles ('shellStylesheets'), so a page's scoped rules win the cascade
+-- without the shell knowing which page it wraps.
 buildPageShell codec shell page =
   Document
     { documentTitle = pageTitle page,
@@ -1314,7 +1335,7 @@ buildPageShell codec shell page =
       documentMainContent = pageBody page,
       documentBootstrapHooks = pageBootstrapHooks page,
       documentNavigationLifecycle = shellNavigationLifecycle shell,
-      documentStylesheets = shellStylesheets shell,
+      documentStylesheets = shellStylesheets shell ++ pageStylesheets page,
       documentViewportPolicy = responsiveViewport,
       documentRuntimeDescriptors = shellRuntimeDescriptors shell
     }

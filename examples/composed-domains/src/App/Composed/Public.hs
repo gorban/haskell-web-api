@@ -249,7 +249,8 @@ publicRouteDefinition staticAssetsConfig csrfProtection maybeAdmissionWorkflow a
             pure
               ( RenderedPage
                   Page
-                    { pageTitle = "Admission",
+                    { pageStylesheets = [],
+                      pageTitle = "Admission",
                       pageRoute = Public (PublicAdmission returnTarget),
                       pageContext = requestContext request,
                       pageBody = admissionPage pageSecurity (requestContext request) returnTarget maybeAdmissionWorkflow admissionActions,
@@ -287,7 +288,8 @@ publicRouteDefinition staticAssetsConfig csrfProtection maybeAdmissionWorkflow a
             pure
               ( RenderedPage
                   Page
-                    { pageTitle = "Login",
+                    { pageStylesheets = [],
+                      pageTitle = "Login",
                       pageRoute = Public PublicLogin,
                       pageContext = requestContext request,
                       pageBody = element headingOneTag [] [text "Login"],
@@ -314,7 +316,8 @@ publicRouteDefinition staticAssetsConfig csrfProtection maybeAdmissionWorkflow a
             pure
               ( RenderedPage
                   Page
-                    { pageTitle = "Not Found",
+                    { pageStylesheets = [],
+                      pageTitle = "Not Found",
                       pageRoute = Public PublicNotFound,
                       pageContext = requestContext request,
                       pageBody = element headingOneTag [] [text "Not Found"],

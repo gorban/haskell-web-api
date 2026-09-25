@@ -1106,7 +1106,8 @@ spec =
                 HarchWeb.responseDatabaseOperations = expectedSecondDatabaseOperations
               }
             ( HarchWeb.Page
-                { HarchWeb.pageTitle = "web-api: Second",
+                { HarchWeb.pageStylesheets = [],
+                  HarchWeb.pageTitle = "web-api: Second",
                   HarchWeb.pageRoute = SecondRoute,
                   HarchWeb.pageContext = defaultRequestContext,
                   HarchWeb.pageBody =

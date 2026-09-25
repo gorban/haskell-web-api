@@ -103,7 +103,8 @@ parseFailureReference = fmap FailureReference . mkRequestId
 defaultClientActionFailurePage :: FailureReference -> RouteRequest route context -> Page route context
 defaultClientActionFailurePage reference routeRequest =
   Page
-    { pageTitle = "Request could not be completed",
+    { pageStylesheets = [],
+      pageTitle = "Request could not be completed",
       pageRoute = requestRoute routeRequest,
       pageContext = requestContext routeRequest,
       pageBody =
@@ -133,7 +134,8 @@ defaultTerminalPage :: ClientActionFailurePresentation route context -> Page rou
 defaultTerminalPage presentation =
   let routeRequest = clientActionFailureRoute presentation
    in Page
-        { pageTitle = "Request could not be completed",
+        { pageStylesheets = [],
+          pageTitle = "Request could not be completed",
           pageRoute = requestRoute routeRequest,
           pageContext = requestContext routeRequest,
           pageBody =

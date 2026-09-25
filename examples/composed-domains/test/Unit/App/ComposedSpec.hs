@@ -1237,7 +1237,7 @@ spec = describe "Unit.App.Composed" $ do
         assetRoute = StaticAssetRoute [requiredPathSegment "public", requiredPathSegment "assets", requiredPathSegment "app.css"]
         englishAssetRoute = Localized (locale "en") (Public (PublicAsset assetRoute))
         defaultSite = buildComposedSiteWithDependencies defaultComposedSiteDependencies
-        shell = Site.sitePageShell defaultSite (Page "Login" rootRoute (spanishContext defaultComposedContext) (error "page body is not inspected") [])
+        shell = Site.sitePageShell defaultSite (Page "Login" rootRoute (spanishContext defaultComposedContext) (error "page body is not inspected") [] [])
     moduleName rootModule `shouldBe` requiredModuleName "root"
     moduleDeclaredRoutes rootModule
       `shouldBe` [ Localized (locale "en") (Public (PublicAdmission ReturnToAccountLogin)),
@@ -1343,7 +1343,7 @@ spec = describe "Unit.App.Composed" $ do
         composedSite = buildComposedSiteWithDependencies (withLocalePolicy customPolicy defaultComposedSiteDependencies)
         requestFor path headers = Wai.defaultRequest {Wai.pathInfo = path, Wai.requestHeaders = headers}
         requestContext request = Site.siteRequestContextFromRequest composedSite request testRequestId defaultComposedContext
-        shell = Site.sitePageShell composedSite (Page "Catalog" (Localized (locale "es") (Catalog CatalogIndex)) (spanishContext defaultComposedContext) (error "page body is not inspected") [])
+        shell = Site.sitePageShell composedSite (Page "Catalog" (Localized (locale "es") (Catalog CatalogIndex)) (spanishContext defaultComposedContext) (error "page body is not inspected") [] [])
     shellNavigationItems shell
       `shouldBe` [ NavigationItem "Sign in" (Localized (locale "es") (Public PublicLogin)),
                    NavigationItem "Catalog" (Localized (locale "es") (Catalog CatalogIndex)),
@@ -1765,7 +1765,8 @@ spec = describe "Unit.App.Composed" $ do
                 pure
                   ( RenderedPage
                       Page
-                        { pageTitle =
+                        { pageStylesheets = [],
+                          pageTitle =
                             case requestRoute localRequest of
                               Public PublicLogin
                                 | usesSpanishContext (requestContext localRequest) -> "Spanish child"

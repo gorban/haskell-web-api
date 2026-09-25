@@ -406,7 +406,8 @@ spec =
                   pure
                     ( RenderedPage
                         Page
-                          { pageTitle = "page:" <> requestContext childRequest,
+                          { pageStylesheets = [],
+                            pageTitle = "page:" <> requestContext childRequest,
                             pageRoute = requestRoute childRequest,
                             pageContext = requestContext childRequest,
                             pageBody = text "Item",
@@ -798,7 +799,17 @@ otherDefinitionWithMetadata metadata =
   Site.pageRoute
     metadata
     Nothing
-    (\_ request -> pure Page {pageTitle = "Other", pageRoute = requestRoute request, pageContext = requestContext request, pageBody = text "Other", pageBootstrapHooks = []})
+    ( \_ request ->
+        pure
+          Page
+            { pageStylesheets = [],
+              pageTitle = "Other",
+              pageRoute = requestRoute request,
+              pageContext = requestContext request,
+              pageBody = text "Other",
+              pageBootstrapHooks = []
+            }
+    )
 
 otherEndpointMetadata :: EndpointMetadata.EndpointMetadata ParentAuthorization
 otherEndpointMetadata =
@@ -928,7 +939,17 @@ childDefinition ChildItemRoute =
   Site.pageRoute
     childMetadata
     (Just "Catalog")
-    (\_ request -> pure Page {pageTitle = "Catalog", pageRoute = requestRoute request, pageContext = requestContext request, pageBody = text "Item", pageBootstrapHooks = []})
+    ( \_ request ->
+        pure
+          Page
+            { pageStylesheets = [],
+              pageTitle = "Catalog",
+              pageRoute = requestRoute request,
+              pageContext = requestContext request,
+              pageBody = text "Item",
+              pageBootstrapHooks = []
+            }
+    )
 
 childDefinitionWithResponse :: ChildResponseKind -> RouteDefinition ChildRoute Text ChildAuthorization
 childDefinitionWithResponse responseKind =
@@ -950,7 +971,17 @@ childDefinitionWithAccess accessRequirement template =
         accessRequirement
     )
     (Just "Catalog")
-    (\_ request -> pure Page {pageTitle = "Catalog", pageRoute = requestRoute request, pageContext = requestContext request, pageBody = text "Item", pageBootstrapHooks = []})
+    ( \_ request ->
+        pure
+          Page
+            { pageStylesheets = [],
+              pageTitle = "Catalog",
+              pageRoute = requestRoute request,
+              pageContext = requestContext request,
+              pageBody = text "Item",
+              pageBootstrapHooks = []
+            }
+    )
 
 childResponseFor :: ChildResponseKind -> RouteRequest ChildRoute Text -> NonPageResponse ChildRoute Text
 childResponseFor responseKind _request =

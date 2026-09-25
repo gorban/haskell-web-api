@@ -25,7 +25,8 @@ notFoundPage :: PageSecurity -> RouteRequest TwoPageRoute () -> IO (Page TwoPage
 notFoundPage _ routeRequest =
   pure
     Page
-      { pageTitle = "Not Found",
+      { pageStylesheets = [],
+        pageTitle = "Not Found",
         pageRoute = Routes.Page PageNotFound,
         pageContext = requestContext routeRequest,
         pageBody =

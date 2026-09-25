@@ -24,7 +24,8 @@ previewPageDefinition previewSlug =
   Site.pageRoute twoPagePreviewEndpointMetadata Nothing $ \_ routeRequest ->
     pure
       Page
-        { pageTitle = "Preview: " <> previewSlugText previewSlug,
+        { pageStylesheets = [],
+          pageTitle = "Preview: " <> previewSlugText previewSlug,
           pageRoute = Routes.Custom (PreviewPage previewSlug),
           pageContext = requestContext routeRequest,
           pageBody =

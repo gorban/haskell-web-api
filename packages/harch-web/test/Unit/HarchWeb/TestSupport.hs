@@ -231,7 +231,8 @@ sampleRequestId =
 samplePage :: RouteRequest TestRoute TestContext -> Page TestRoute TestContext
 samplePage request =
   Page
-    { pageTitle = "Known",
+    { pageStylesheets = [],
+      pageTitle = "Known",
       pageRoute = requestRoute request,
       pageContext = requestContext request,
       pageBody = trustedMarkup "<h1>Known</h1>",
@@ -241,7 +242,8 @@ samplePage request =
 sampleMissingPage :: RouteRequest TestRoute TestContext -> Page TestRoute TestContext
 sampleMissingPage request =
   Page
-    { pageTitle = "Missing",
+    { pageStylesheets = [],
+      pageTitle = "Missing",
       pageRoute = requestRoute request,
       pageContext = requestContext request,
       pageBody = trustedMarkup "<h1>Missing</h1>",

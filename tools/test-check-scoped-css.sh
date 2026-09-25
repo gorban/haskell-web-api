@@ -118,3 +118,23 @@ EOF
 expect_rejection 'a comma-separated list with one unscoped member' "$mixed_list_fixture" '.unscoped-two'
 
 printf '%s\n' 'Scoped-CSS check fixture checks passed.'
+
+# The reviewed vendored-distribution exemption: the pinned third-party
+# stylesheet is exempt by explicit path, while authored stylesheets beside it
+# remain fully checked (proving the exemption is not a suppression).
+vendored_fixture="$(mktemp -d)"
+mkdir -p "$vendored_fixture/packages/harch-web-openapi/assets/swagger-ui"
+cat >"$vendored_fixture/packages/harch-web-openapi/assets/swagger-ui/swagger-ui.css" <<'EOF'
+html.dark-mode .swagger-ui .models { color: red }
+EOF
+cat >"$vendored_fixture/author.css" <<'EOF'
+.harch-demo-root { display: grid }
+EOF
+(cd "$vendored_fixture" && git init -q && git add -A)
+expect_pass 'a fixture whose only unscoped stylesheet is the reviewed vendored distribution stylesheet' "$vendored_fixture"
+
+cat >"$vendored_fixture/other.css" <<'EOF'
+.plain-card { color: red }
+EOF
+(cd "$vendored_fixture" && git add -A)
+expect_rejection 'an authored stylesheet outside the reviewed vendored path' "$vendored_fixture" '.plain-card'

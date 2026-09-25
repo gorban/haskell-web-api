@@ -5310,6 +5310,42 @@ real-browser adapter tests distinguish empty/exact/hidden text, accessible names
 input values, absent attributes, missing elements and ambiguous locators.
 
 
+### Treat pinned vendored stylesheets as reviewed policy inputs, not findings (2026-09-25)
+
+`tools/check-scoped-css.sh` governs styles this repository *authors*; the
+vendored `swagger-ui-dist` distribution stylesheet ships byte-for-byte with its
+pinned upstream release (reviewed in `assets/swagger-ui/README.md` beside the
+LICENSE attribution and `package.json` pin) and cannot adopt `harch-<scope>-`
+selectors. The check therefore carries an explicit, reviewed exemption list —
+the same mechanism as `check-build-diagnostics.sh`'s `--allow-ghc-9-14-*` flags
+— and its fixture suite proves the exemption is not a suppression: the pinned
+path passes while an authored stylesheet beside it is still rejected by name.
+This is a policy input fixed in review, not an ignore pragma; adding any
+further vendored stylesheet requires editing the list in a reviewed change.
+Recorded because it changes what the scoping gate covers (CI caught the
+unexempted vendored file on `b43bb3e0`; this rides the next batch).
+
+### Give pages ownership of their scoped styles (2026-09-24)
+
+Under the approved authoring-quality exemplar plan, `Page` gains
+`pageStylesheets :: [Stylesheet]`, and `buildPageShell` renders page-owned styles
+after the shell's base styles so page rules win the cascade. Decision frame
+(extend-vs-new): extend the existing page record rather than keep per-route
+style mappings on the shell (the `examples/two-pages` Layout pattern this
+replaces), because the page already owns its markup, title, and hooks and should
+own its scoped styles the same way a Svelte component carries its scoped
+`<style>` block. Styles remain application-owned static CSS files in the
+`CssScope`/`CssClass` convention (AHI-1's no-CSS-in-Haskell decision stands),
+authored as `harch-<scope>-<local>` selectors and verified by
+`tools/check-scoped-css.sh` (AHI-1S landed the gate). Narrow-slice record: this
+covers per-page style ownership only; per-component style attachment stays
+application-owned, and the remaining authoring-quality work (the
+`Pages/<Name>.hs` file-implied routing + `pageModule` exemplar, the deliberate
+scoped-CSS collision proof, and the verbose manual-markup exemplar) is tracked
+in `TASKS/web-api-template-authoring-quality.md`. `examples/two-pages` now
+demonstrates the page-owned form: its local `pageStylesheets` route mapping is
+deleted and `App.Pages.Home` declares its own stylesheet.
+
 ### Browser element snapshots (2026-09-10)
 
 **Decision: extend the existing BrowserObservation algebra and Playwright

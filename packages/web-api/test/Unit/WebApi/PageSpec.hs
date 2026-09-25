@@ -139,7 +139,8 @@ spec = do
     it "selects a distinct second page model" $
       renderPage defaultAppConfig secondRequest
         `shouldReturn` HarchWeb.Page
-          { HarchWeb.pageTitle = "web-api: Second",
+          { HarchWeb.pageStylesheets = [],
+            HarchWeb.pageTitle = "web-api: Second",
             HarchWeb.pageRoute = SecondRoute,
             HarchWeb.pageContext = defaultRequestContext,
             HarchWeb.pageBody = appPageBody defaultRequestContext SecondRoute "<section data-page=\"second\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Second</h1><p class=\"harch-page-frame-summary\">Second page content with stubbed data ready for future loaders.</p><div class=\"harch-page-frame-content\"><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></div></section>",
@@ -149,7 +150,8 @@ spec = do
     it "renders the TODO page entirely on the server" $
       renderPage defaultAppConfig todoRequest
         `shouldReturn` HarchWeb.Page
-          { HarchWeb.pageTitle = "web-api: TODO",
+          { HarchWeb.pageStylesheets = [],
+            HarchWeb.pageTitle = "web-api: TODO",
             HarchWeb.pageRoute = TodoRoute,
             HarchWeb.pageContext = defaultRequestContext,
             HarchWeb.pageBody = appPageBody defaultRequestContext TodoRoute "<section data-page=\"todo\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">TODO</h1><p class=\"harch-page-frame-summary\">Placeholder page.</p><div class=\"harch-page-frame-content\"></div></section>",
@@ -159,7 +161,8 @@ spec = do
     it "selects a stable not-found page model" $
       renderPage defaultAppConfig notFoundRequest
         `shouldReturn` HarchWeb.Page
-          { HarchWeb.pageTitle = "web-api: Not Found",
+          { HarchWeb.pageStylesheets = [],
+            HarchWeb.pageTitle = "web-api: Not Found",
             HarchWeb.pageRoute = NotFoundRoute,
             HarchWeb.pageContext = defaultRequestContext,
             HarchWeb.pageBody = appPageBody defaultRequestContext NotFoundRoute "<section data-page=\"not-found\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Not Found</h1><p class=\"harch-page-frame-summary\">The requested page could not be found.</p><div class=\"harch-page-frame-content\"><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></div></section>",
@@ -169,7 +172,8 @@ spec = do
     it "selects a Spanish not-found page model" $
       renderPage defaultAppConfig spanishNotFoundRequest
         `shouldReturn` HarchWeb.Page
-          { HarchWeb.pageTitle = "web-api: Not Found",
+          { HarchWeb.pageStylesheets = [],
+            HarchWeb.pageTitle = "web-api: Not Found",
             HarchWeb.pageRoute = NotFoundRoute,
             HarchWeb.pageContext = spanishRequestContext,
             HarchWeb.pageBody = appPageBody spanishRequestContext NotFoundRoute "<section data-page=\"not-found\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">No encontrado</h1><p class=\"harch-page-frame-summary\">No se pudo encontrar la pagina solicitada.</p><div class=\"harch-page-frame-content\"><p><a href=\"/es\" data-page-link=\"true\">Volver al inicio</a></p></div></section>",
@@ -189,7 +193,8 @@ spec = do
             )
         )
         `shouldBe` HarchWeb.Page
-          { HarchWeb.pageTitle = "web-api: Second",
+          { HarchWeb.pageStylesheets = [],
+            HarchWeb.pageTitle = "web-api: Second",
             HarchWeb.pageRoute = SecondRoute,
             HarchWeb.pageContext = defaultRequestContext,
             HarchWeb.pageBody = appPageBody defaultRequestContext SecondRoute "<section data-page=\"second\" class=\"harch-page-frame-root\"><h1 data-page-title=\"true\" class=\"harch-page-frame-title\">Second</h1><p class=\"harch-page-frame-summary\">Shared domain summary.</p><div class=\"harch-page-frame-content\"><ul><li>Shared loader</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></div></section>",

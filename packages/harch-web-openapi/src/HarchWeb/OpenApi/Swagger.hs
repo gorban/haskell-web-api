@@ -130,7 +130,8 @@ swaggerUiFallback specUrl =
 swaggerUiPage :: SwaggerUiProps route context -> Page route context
 swaggerUiPage props =
   Page
-    { pageTitle = swaggerUiTitle props,
+    { pageStylesheets = [],
+      pageTitle = swaggerUiTitle props,
       pageRoute = swaggerUiRoute props,
       pageContext = swaggerUiContext props,
       pageBody =
