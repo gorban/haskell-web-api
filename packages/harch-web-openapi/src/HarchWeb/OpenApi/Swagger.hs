@@ -76,6 +76,13 @@ data SwaggerUiProps route context = SwaggerUiProps
     swaggerUiStylesheetUrl :: Text,
     -- | Where this package's behavior module is served from.
     swaggerUiModuleUrl :: Text,
+    -- | The application's token endpoint for the optional automatic OAuth
+    -- panel (client credentials). The panel keeps its bearer state
+    -- memory-only and never persists tokens.
+    swaggerUiTokenEndpoint :: Text,
+    -- | Example-mode hints shown as labels only (never prefilled).
+    swaggerUiExampleClientId :: Maybe Text,
+    swaggerUiExampleClientSecret :: Maybe Text,
     -- | The script-free server-rendered body; see 'swaggerUiFallback'.
     swaggerUiFallbackBody :: Html
   }
@@ -94,6 +101,9 @@ defaultSwaggerUiProps routeValue context =
       swaggerUiBundleUrl = "/docs/assets/swagger-ui-bundle.js",
       swaggerUiStylesheetUrl = "/docs/assets/swagger-ui.css",
       swaggerUiModuleUrl = "/docs/assets/swagger-enhancement.js",
+      swaggerUiTokenEndpoint = "/api/oauth/token",
+      swaggerUiExampleClientId = Nothing,
+      swaggerUiExampleClientSecret = Nothing,
       swaggerUiFallbackBody = swaggerUiFallback (requiredSwaggerSpecUrlOrDie "/docs/openapi.json")
     }
 
@@ -139,7 +149,10 @@ swaggerUiPage props =
           <section data-page="docs">
             <h1>{text (swaggerUiTitle props)}</h1>
             {swaggerUiFallbackBody props}
-            <div data-swagger-ui="true" data-swagger-spec-url={safeUrlText (swaggerUiSpecUrl props)} data-swagger-bundle-url={swaggerUiBundleUrl props}></div>
+            <div data-swagger-ui="true" data-swagger-spec-url={safeUrlText (swaggerUiSpecUrl props)} data-swagger-bundle-url={swaggerUiBundleUrl props}
+                  data-swagger-token-endpoint={swaggerUiTokenEndpoint props}
+                  data-swagger-example-client-id={maybe "" id (swaggerUiExampleClientId props)}
+                  data-swagger-example-client-secret={maybe "" id (swaggerUiExampleClientSecret props)}></div>
           </section>
         |],
       pageBootstrapHooks = []

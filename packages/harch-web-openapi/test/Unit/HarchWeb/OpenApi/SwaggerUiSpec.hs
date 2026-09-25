@@ -19,6 +19,9 @@ spec = describe "HarchWeb.OpenApi.Swagger" $ do
     swaggerUiBundleUrl props `shouldBe` "/docs/assets/swagger-ui-bundle.js"
     swaggerUiStylesheetUrl props `shouldBe` "/docs/assets/swagger-ui.css"
     swaggerUiModuleUrl props `shouldBe` "/docs/assets/swagger-enhancement.js"
+    swaggerUiTokenEndpoint props `shouldBe` "/api/oauth/token"
+    swaggerUiExampleClientId props `shouldBe` Nothing
+    swaggerUiExampleClientSecret props `shouldBe` Nothing
 
   it "renders a complete script-free SSR page with an enhancement mount" $ do
     let props = defaultSwaggerUiProps ("route-value" :: String) ("context-value" :: String)
@@ -33,6 +36,7 @@ spec = describe "HarchWeb.OpenApi.Swagger" $ do
                rendered `shouldContain` "data-swagger-ui=\"true\"",
                rendered `shouldContain` "data-swagger-spec-url=\"/docs/openapi.json\"",
                rendered `shouldContain` "data-swagger-bundle-url=\"/docs/assets/swagger-ui-bundle.js\"",
+               rendered `shouldContain` "data-swagger-token-endpoint=\"/api/oauth/token\"",
                rendered `shouldContain` "Open the OpenAPI document",
                rendered `shouldContain` "href=\"/docs/openapi.json\""
              ]
@@ -86,3 +90,14 @@ spec = describe "HarchWeb.OpenApi.Swagger" $ do
       `shouldThrow` \case
         ErrorCall message ->
           message == "HarchWeb.Markup: HarchWeb.OpenApi.Swagger: invalid specification URL: javascript:alert(1)"
+
+  it "never reads cookies or browser storage in the behavior module" $ do
+    root <- swaggerUiAssetsRoot "/docs/assets"
+    source <- readFile (staticDirectory root </> "swagger-enhancement.js")
+    expectAll
+      ( (source `shouldNotContain` "document.cookie")
+          :| [ source `shouldNotContain` "localStorage",
+               source `shouldNotContain` "sessionStorage",
+               source `shouldContain` "memory-only"
+             ]
+      )

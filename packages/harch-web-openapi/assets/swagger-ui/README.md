@@ -26,3 +26,16 @@ webpack's dead `globalThis` polyfill (guarded by an earlier return and a
 try/catch), it injects no `<style>` elements, and its inline styling goes
 through CSSOM (which CSP does not block). The real-browser E2E proof in the
 wiring slice asserts this under the unmodified default policy.
+
+## Authentication assistance
+
+The behavior module renders a small assistance panel above the mount: an
+editable complete `Authorization` header value (`None` or e.g. `Bearer ey...`,
+including intentionally malformed values for testing) and an optional
+automatic OAuth client-credentials exchange against the application's token
+endpoint. Bearer state is memory-only — the module reads no cookies and
+touches no local/session storage (pinned by test) — and the client secret is
+a one-use value: cleared from input, DOM, and module state after a successful
+exchange, replaced by a fixed-length placeholder that reveals neither value
+nor length, and announced through a polite live region. Example-mode
+configuration surfaces seeded client hints as labels only, never prefills.
