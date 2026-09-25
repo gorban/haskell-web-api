@@ -11,6 +11,7 @@ module TestSupport.BrowserApp
 where
 
 import HarchWeb qualified
+import HarchWeb.OpenApi.Swagger (swaggerUiAssetsRoot)
 import System.Directory (copyFile, createDirectory, doesFileExist, getCurrentDirectory)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -31,6 +32,7 @@ withBrowserServer makeApplication action (browser, appConfig) =
 
 withBrowserApp :: ((BrowserConfig, AppConfig) -> IO a) -> IO a
 withBrowserApp action = do
+  swaggerAssetsRoot <- swaggerUiAssetsRoot "/docs/assets"
   browser <- requirePlaywrightBrowserConfig
   withSystemTempDirectory "web-api-e2e-assets" $ \assetDirectory ->
     do
@@ -47,7 +49,8 @@ withBrowserApp action = do
                       [ StaticAssetRoot
                           { staticUrlPrefix = "/assets",
                             staticDirectory = assetDirectory
-                          }
+                          },
+                        swaggerAssetsRoot
                       ],
                     staticAssetContentTypes = defaultStaticAssetContentTypes,
                     staticCacheControlSeconds = Nothing

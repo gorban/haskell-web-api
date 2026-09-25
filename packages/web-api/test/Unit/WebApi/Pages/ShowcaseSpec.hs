@@ -9,7 +9,7 @@ import TestCore.Wai (performWaiRequest, readResponseBody, waiRequest)
 import Unit.WebApi.TestSupport (pureApplication)
 import WebApi.Config (AppConfig (..), defaultAppConfig)
 import WebApi.PageModule (PageFailure (..), PageModule (..), pageModulePage, renderPageFailure)
-import WebApi.Route (AppRequestContext, AppRoute (..), RouteMetadata (..), defaultRequestContext, endpointMetadata, renderRoutePath, routeEnhancementHooks, routeMetadata, routePageSegment, routePageTitle)
+import WebApi.Route (AppRequestContext, AppRoute (DocsSwaggerRoute, GeneratedPages, ShowcaseAlternateRoute, ShowcaseRoute), RouteMetadata (..), defaultRequestContext, endpointMetadata, renderRoutePath, routeEnhancementHooks, routeMetadata, routePageSegment, routePageTitle)
 
 spec = describe "WebApi.Pages showcase family" $ do
   describe "route presentation (the shared tables)" $ do
@@ -93,3 +93,28 @@ spec = describe "WebApi.Pages showcase family" $ do
         "boom"
         (HarchWeb.renderHtml (renderPageFailure (PageFailureMessage "boom")))
         `shouldBe` True
+
+  describe "the /docs Swagger page as an ordinary typed surface" $ do
+    it "renders complete SSR with the fallback, mount, prefixed assets, and enhancement descriptor" $ do
+      response <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["docs"])
+      responseBody <- readResponseBody response
+      expectAll
+        ( (Text.isInfixOf "data-page=\"docs\"" responseBody `shouldBe` True)
+            :| [ Text.isInfixOf "data-swagger-fallback=\"true\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "href=\"/docs/openapi.json\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "data-swagger-ui=\"true\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "data-swagger-spec-url=\"/docs/openapi.json\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "data-swagger-bundle-url=\"/docs/assets/swagger-ui-bundle.js\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "href=\"/docs/assets/swagger-ui.css\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "data-harch-page-enhancement=\"harch-swagger-ui\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "src=\"/docs/assets/swagger-enhancement.js\"" responseBody `shouldBe` True
+               ]
+        )
+
+    it "keeps the route presentation in the shared tables" $ do
+      expectAll
+        ( (routePageSegment (routeMetadata DocsSwaggerRoute) `shouldBe` Just "docs")
+            :| [ routePageTitle (routeMetadata DocsSwaggerRoute) `shouldBe` "Documentation",
+                 routeEnhancementHooks (routeMetadata DocsSwaggerRoute) `shouldBe` ["web-api-docs"]
+               ]
+        )

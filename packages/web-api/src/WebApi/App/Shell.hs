@@ -8,6 +8,7 @@ module WebApi.App.Shell
 where
 
 import HarchWeb qualified
+import HarchWeb.OpenApi.Swagger (defaultSwaggerUiProps, swaggerUiPageEnhancement)
 import WebApi.App.Reauthentication (reauthenticationRuntimeAsset)
 import WebApi.Components.Shell (AppShellProps (..), appPageShell)
 import WebApi.Config (AppConfig (..))
@@ -21,10 +22,21 @@ import WebApi.Route
 
 buildAppPageShell :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> HarchWeb.Document AppRoute
 buildAppPageShell config page =
-  HarchWeb.buildPageShell
-    routeCodec
-    (standalonePageShell (buildAppPageShellConfig config (HarchWeb.pageContext page)))
-    page
+  let document =
+        HarchWeb.buildPageShell
+          routeCodec
+          (standalonePageShell (buildAppPageShellConfig config (HarchWeb.pageContext page)))
+          page
+   in if HarchWeb.pageRoute page == DocsSwaggerRoute
+        then
+          document
+            { HarchWeb.documentRuntimeDescriptors =
+                HarchWeb.documentRuntimeDescriptors document
+                  <> [ swaggerUiPageEnhancement
+                         (defaultSwaggerUiProps (HarchWeb.pageRoute page) (HarchWeb.pageContext page))
+                     ]
+            }
+        else document
 
 -- | The compatibility renderer is a complete standalone document builder, so
 -- it supplies the same declared navigation that 'HarchWeb.Site' supplies for

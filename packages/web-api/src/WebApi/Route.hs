@@ -28,6 +28,7 @@ module WebApi.Route
         DocsOpenApiSpecRoute,
         NotFoundRoute,
         ApiNotFoundRoute,
+        DocsSwaggerRoute,
         ShowcaseRoute,
         ShowcaseAlternateRoute
       ),
@@ -88,6 +89,7 @@ data PageRoute
   | ProfilePage
   | LanguagePage
   | HelpPage
+  | DocsSwaggerPage
   | PageNotFound
   deriving (Bounded, Enum, Eq, Show)
 
@@ -117,6 +119,9 @@ pattern HomeRoute = Page HomePage
 
 -- | The generated page family mounts beside the hand-owned routes: the
 -- generator derives these from the 'WebApi.Pages' file names.
+pattern DocsSwaggerRoute :: AppRoute
+pattern DocsSwaggerRoute = Page DocsSwaggerPage
+
 pattern ShowcaseRoute :: AppRoute
 pattern ShowcaseRoute = GeneratedPages Generated.ShowcasePage
 
@@ -197,6 +202,7 @@ instance Show AppRoute where
       DocsOpenApiSpecRoute -> "DocsOpenApiSpecRoute"
       NotFoundRoute -> "NotFoundRoute"
       ApiNotFoundRoute -> "ApiNotFoundRoute"
+      DocsSwaggerRoute -> "DocsSwaggerRoute"
       GeneratedPages generatedPage -> "GeneratedPages " <> show generatedPage
 
 data RouteMetadata = RouteMetadata
@@ -438,6 +444,7 @@ endpointMetadata route =
     ProfileRoute -> protectedHtml "account.profile" "/{locale}/profile"
     LanguageRoute -> html "web.language" "/{locale}/language"
     HelpRoute -> html "web.help" "/{locale}/help"
+    DocsSwaggerRoute -> html "web.docs" "/{locale}/docs"
     NotFoundRoute -> html "web.not-found" "/{locale}/404"
     StatusApiRoute -> api "api.status" "/api/status"
     -- AHI-4D slice 5: an account cookie/bearer session is authorized
@@ -517,4 +524,5 @@ pageRouteMetadata pageRoute =
     ProfilePage -> RouteMetadata (Just "profile") "/profile" "Profile" []
     LanguagePage -> RouteMetadata (Just "language") "/language" "Language" []
     HelpPage -> RouteMetadata (Just "help") "/help" "Help and support" []
+    DocsSwaggerPage -> RouteMetadata (Just "docs") "/docs" "Documentation" ["web-api-docs"]
     PageNotFound -> RouteMetadata (Just "404") "/404" "Not Found" []

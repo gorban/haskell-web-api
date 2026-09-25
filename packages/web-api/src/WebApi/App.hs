@@ -82,6 +82,7 @@ import HarchWeb qualified
 import HarchWeb.Action (decodeAction)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.OpenApi (OpenApiDocumentProvider)
+import HarchWeb.OpenApi.Swagger (swaggerUiAssetsRoot)
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
 import System.Directory (doesFileExist)
@@ -111,6 +112,7 @@ import WebApi.Config
     loadAppStartupConfig,
   )
 import WebApi.Database (PageRepository, defaultPageRepository)
+import WebApi.DocsSwagger (docsSwaggerPage)
 import WebApi.Pages.Generated qualified as PagesGenerated
 import WebApi.Postgres.Pool (PostgresPool, closePostgresPool, newPostgresPool)
 import WebApi.Postgres.Runtime (buildRuntimePostgresPageRepository)
@@ -343,6 +345,14 @@ buildAppRouteDefinition config pageRepository accountWorkflow docsOpenApiDocumen
     -- body all arrive from the page module.
     GeneratedPages generatedPage ->
       PagesGenerated.pageRouteDefinition config generatedPage
+    -- AHI-4E slice 6: the docs page is an ordinary typed page route; its
+    -- SSR, stylesheet, and enhancement descriptor all arrive from the
+    -- typed Swagger surface in 'WebApi.DocsSwagger'.
+    DocsSwaggerRoute ->
+      Site.pageRoute
+        (endpointMetadata route)
+        Nothing
+        (\_security request -> pure (docsSwaggerPage request))
     _ ->
       Site.RouteDefinition
         { Site.routeNavigationLabel = routeNavigationLabel route,
@@ -530,7 +540,16 @@ runLoadedStartupConfig
       startupAppConfig = appConfig
     } = do
     announceConfigFileStatuses outputHandle configFileStatuses
-    runWithConfig outputHandle appConfig environmentConfig
+    do
+      swaggerAssetsRoot <- swaggerUiAssetsRoot "/docs/assets"
+      let appConfigWithDocs =
+            appConfig
+              { staticAssets =
+                  (staticAssets appConfig)
+                    { HarchWeb.staticAssetRoots = HarchWeb.staticAssetRoots (staticAssets appConfig) <> [swaggerAssetsRoot]
+                    }
+              }
+      runWithConfig outputHandle appConfigWithDocs environmentConfig
 
 loadDefaultStartupConfigFileStatuses :: IO [(FilePath, Bool)]
 loadDefaultStartupConfigFileStatuses =
