@@ -81,6 +81,7 @@ module HarchWeb.Api
     apiHeaderName,
     apiHeaderNameText,
     ApiFieldValue,
+    mkApiFieldValue,
     RequestField,
     RequestCodec,
     ApiRequestDecodeResult (..),

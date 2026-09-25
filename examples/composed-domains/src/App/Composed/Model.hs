@@ -34,6 +34,7 @@ module App.Composed.Model
 where
 
 import App.Composed.Admission.Types (AdmissionLoginName, AdmissionPrincipal)
+import Catalog.Api (CatalogApiRoute)
 import Catalog.Domain
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NonEmpty
@@ -56,6 +57,7 @@ import HarchWeb.StaticAssets
   )
 import HarchWeb.StaticAssets.Route (StaticAssetRoute)
 import HarchWeb.Totp (TotpCode)
+import Orders.Api (OrdersApiRoute)
 import Orders.Domain
 
 data PublicRoute
@@ -94,7 +96,9 @@ admissionReturnTargetText returnTarget =
 data LocalizedRoute
   = Public PublicRoute
   | Catalog CatalogRoute
+  | CatalogApi CatalogApiRoute
   | Orders OrdersRoute
+  | OrdersApi OrdersApiRoute
   deriving (Eq, Show)
 
 admissionReturnTargetRoute :: AdmissionReturnTarget -> LocalizedRoute

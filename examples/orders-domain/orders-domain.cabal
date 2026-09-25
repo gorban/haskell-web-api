@@ -24,10 +24,15 @@ common common
 
 library
   import: common
-  exposed-modules: Orders.Domain
+  exposed-modules:
+    Orders.Api
+    Orders.Domain
+
   hs-source-dirs: src
   build-depends:
+    aeson,
     base ^>=4.22.0.0,
+    bytestring,
     harch-web ^>=0.1.2.0,
     http-types ^>=0.12.5,
     text ^>=2.1.3,

@@ -6,12 +6,15 @@
 -- package, so domains remain independently buildable and cannot import the
 -- application composition root.
 module App.Composed.Mounts
-  ( catalogModuleMount,
+  ( catalogApiModuleMount,
+    catalogModuleMount,
+    ordersApiModuleMount,
     ordersModuleMount,
   )
 where
 
 import App.Composed.Model
+import Catalog.Api (CatalogApiAction, CatalogApiActionTarget, CatalogApiRoute (..))
 import Catalog.Domain
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (listToMaybe)
@@ -25,6 +28,7 @@ import HarchWeb.Localization (localeText)
 import HarchWeb.RequestContext (ContextProjection (..), RequestContext (..), requestCore, requestIdentity, requestLocale)
 import HarchWeb.Routing (requiredPathSegment)
 import HarchWeb.SecurityEvent (requiredModuleNameOrDie)
+import Orders.Api (OrdersApiAction, OrdersApiActionTarget, OrdersApiRoute (..))
 import Orders.Domain
 
 catalogModuleMount :: ModuleMount LocalizedRoute RootActionTarget RootAction ComposedContext RootAuthorization CatalogRoute CatalogActionTarget CatalogAction CatalogContext CatalogPolicy
@@ -108,3 +112,77 @@ ordersAuthorization policy =
   case policy of
     MayReadOrders -> RootMayReadOrders
     MaySubmitOrders -> RootMaySubmitOrders
+
+-- | Mount the domain's API module at @/api/catalog@ beside its web module.
+-- The extension-parameterized module itself is assembled in
+-- 'App.Composed'; this mount only composes root-owned route identity,
+-- projections, and the bearer-only authentication profile.
+catalogApiModuleMount ::
+  ModuleMount
+    LocalizedRoute
+    RootActionTarget
+    RootAction
+    ComposedContext
+    RootAuthorization
+    CatalogApiRoute
+    CatalogApiActionTarget
+    CatalogApiAction
+    CatalogContext
+    CatalogPolicy
+catalogApiModuleMount =
+  ModuleMount
+    { mountedRoutes =
+        RouteMount
+          { routeMountName = requiredModuleNameOrDie "root.catalog.api",
+            routeMountPrefix = requiredPathSegment "api" :| [requiredPathSegment "catalog"],
+            embedChildRoute = CatalogApi,
+            projectChildRoute = \case
+              CatalogApi route -> Just route
+              _ -> Nothing
+          },
+      mountedActions =
+        ActionMount
+          { embedChildActionTarget = \case {},
+            projectChildActionTarget = const Nothing,
+            embedChildAction = \case {},
+            projectChildAction = const Nothing
+          },
+      mountedContext = ContextProjection catalogContext,
+      mountedAuthorization = AuthorizationProjection catalogAuthorization,
+      mountedAuthenticationProfile = Nothing
+    }
+
+ordersApiModuleMount ::
+  ModuleMount
+    LocalizedRoute
+    RootActionTarget
+    RootAction
+    ComposedContext
+    RootAuthorization
+    OrdersApiRoute
+    OrdersApiActionTarget
+    OrdersApiAction
+    OrdersContext
+    OrdersPolicy
+ordersApiModuleMount =
+  ModuleMount
+    { mountedRoutes =
+        RouteMount
+          { routeMountName = requiredModuleNameOrDie "root.orders.api",
+            routeMountPrefix = requiredPathSegment "api" :| [requiredPathSegment "orders"],
+            embedChildRoute = OrdersApi,
+            projectChildRoute = \case
+              OrdersApi route -> Just route
+              _ -> Nothing
+          },
+      mountedActions =
+        ActionMount
+          { embedChildActionTarget = \case {},
+            projectChildActionTarget = const Nothing,
+            embedChildAction = \case {},
+            projectChildAction = const Nothing
+          },
+      mountedContext = ContextProjection ordersContext,
+      mountedAuthorization = AuthorizationProjection ordersAuthorization,
+      mountedAuthenticationProfile = Nothing
+    }

@@ -205,7 +205,7 @@ import App.Composed.DeploymentConfig
   )
 import App.Composed.Localized (localizeApplicationModule, requestContextFromWai)
 import App.Composed.Model
-import App.Composed.Mounts (catalogModuleMount, ordersModuleMount)
+import App.Composed.Mounts (catalogApiModuleMount, catalogModuleMount, ordersApiModuleMount, ordersModuleMount)
 import App.Composed.Postgres
   ( ComposedDatabaseConnectionString (..),
     composedDatabaseChanges,
@@ -236,8 +236,11 @@ import App.Composed.Postgres.SynchronizerStore
     mkSynchronizerStoragePolicy,
   )
 import App.Composed.Public (buildPublicModule, buildPublicModuleWithAdmissionWorkflow)
+import Catalog.Api (buildCatalogApiModule)
 import Catalog.Domain (CatalogCommands, CatalogQueries, CatalogRoute (CatalogIndex), buildCatalogModule)
+import Data.ByteString qualified as ByteString
 import Data.List.NonEmpty (NonEmpty (..))
+import HarchWeb.Api (ApiForm)
 import HarchWeb.ApplicationModule
   ( ApplicationModule (..),
     applicationModuleSite,
@@ -255,11 +258,13 @@ import HarchWeb.Document
 import HarchWeb.EndpointMetadata (EndpointMetadata (..))
 import HarchWeb.EndpointSecurity (ApplicationSecurity (AuthenticationDisabled))
 import HarchWeb.Markup (literalElementId)
+import HarchWeb.OpenApi (OpenApiExtension, OpenApiExtensionError, mkOpenApiExtension)
 import HarchWeb.RequestContext (CoreRequestContext (..), RequestContext (..))
 import HarchWeb.SecurityEvent (RouteObservation (..))
 import HarchWeb.Site (Site)
 import HarchWeb.Site qualified as Site
 import HarchWeb.StaticAssets (StaticAssetsConfig)
+import Orders.Api (SubmitOrderCommand, buildOrdersApiModule)
 import Orders.Domain (OrdersCommands, OrdersQueries, OrdersRoute (OrdersIndex), buildOrdersModule)
 
 -- | The Catalog and Orders capabilities installed by this composed root.
@@ -370,7 +375,31 @@ buildComposedModuleWithPublicModule dependencies publicModule =
     domainCapabilities = composedDomainCapabilities dependencies
     catalogModule = requiredModuleConfiguration (mountApplicationModule catalogModuleMount (buildCatalogModule (composedCatalogQueries domainCapabilities) (composedCatalogCommands domainCapabilities)))
     ordersModule = requiredModuleConfiguration (mountApplicationModule ordersModuleMount (buildOrdersModule (composedOrdersQueries domainCapabilities) (composedOrdersCommands domainCapabilities)))
-    localizedModule = requiredModuleConfiguration (combineApplicationModules (publicModule :| [catalogModule, ordersModule]))
+    -- The domain API modules take the documentation extension at assembly:
+    -- the composed root is the one documented surface (AHI-4E), while the
+    -- domain packages themselves compile unchanged with 'NoApiExtension'.
+    catalogApiModule = requiredModuleConfiguration (mountApplicationModule catalogApiModuleMount (buildCatalogApiModule composedCatalogItemsExtension (composedCatalogQueries domainCapabilities)))
+    ordersApiModule = requiredModuleConfiguration (mountApplicationModule ordersApiModuleMount (buildOrdersApiModule composedOrdersSubmitExtension (composedOrdersCommands domainCapabilities)))
+    localizedModule = requiredModuleConfiguration (combineApplicationModules (publicModule :| [catalogModule, ordersModule, catalogApiModule, ordersApiModule]))
+
+-- | The composed root's authored documentation extensions for the two
+-- documented operations (AHI-4E): one combined document, separate
+-- Catalog/Orders tags, and the ordinary scope requirements.
+-- | Unwrap one statically authored documentation extension; a failure here
+-- is a composition-time defect in authored literals, exactly like the
+-- framework's required-or-die boundaries.
+requireOpenApiExtension :: Either OpenApiExtensionError (OpenApiExtension fields body response) -> OpenApiExtension fields body response
+requireOpenApiExtension = either (error . ("composed-domains authored an invalid OpenAPI extension: " <>) . show) id
+
+composedCatalogItemsExtension :: OpenApiExtension () () ByteString.ByteString
+composedCatalogItemsExtension =
+  requireOpenApiExtension
+    (mkOpenApiExtension (Just "List the catalog summary.") Nothing ["Catalog"] False [])
+
+composedOrdersSubmitExtension :: OpenApiExtension SubmitOrderCommand ApiForm ByteString.ByteString
+composedOrdersSubmitExtension =
+  requireOpenApiExtension
+    (mkOpenApiExtension (Just "Submit one order.") Nothing ["Orders"] False [])
 
 admissionWorkflow :: AdmissionPolicy -> Maybe (AdmissionConfig, AdmissionProofConfig)
 admissionWorkflow policy =

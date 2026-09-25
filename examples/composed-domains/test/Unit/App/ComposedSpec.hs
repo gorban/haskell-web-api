@@ -5,6 +5,7 @@
 module Unit.App.ComposedSpec (spec) where
 
 import App.Composed
+import Catalog.Api (CatalogApiRoute (CatalogItems))
 import Catalog.Domain
 import Control.Concurrent (forkIO, newEmptyMVar, putMVar, readMVar, takeMVar)
 import Control.Exception (ErrorCall, bracket, evaluate, finally, try)
@@ -102,6 +103,7 @@ import HarchWeb.Time (unixTimeNanoseconds, unixTimeNanosecondsValue, unixTimeSec
 import HarchWeb.Totp (mkTotpCode, mkTotpSecret, renderTotpSecret, totpCode, totpCodeText)
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
+import Orders.Api (OrdersApiRoute (OrdersSubmit))
 import Orders.Domain
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
@@ -1245,7 +1247,9 @@ spec = describe "Unit.App.Composed" $ do
                    Localized (locale "en") (Public (PublicAsset assetRoute)),
                    Localized (locale "en") (Public PublicNotFound),
                    Localized (locale "en") (Catalog CatalogIndex),
-                   Localized (locale "en") (Orders OrdersIndex)
+                   Localized (locale "en") (Orders OrdersIndex),
+                   Localized (locale "en") (CatalogApi CatalogItems),
+                   Localized (locale "en") (OrdersApi OrdersSubmit)
                  ]
     map (endpointName . routeMetadata . moduleEndpoints rootModule) (moduleDeclaredRoutes rootModule)
       `shouldBe` [ requiredEndpointName "root.public.admission",
@@ -1253,7 +1257,9 @@ spec = describe "Unit.App.Composed" $ do
                    requiredEndpointName "root.public.assets",
                    requiredEndpointName "root.public.not-found",
                    requiredEndpointName "root.catalog.catalog.index",
-                   requiredEndpointName "root.orders.orders.index"
+                   requiredEndpointName "root.orders.orders.index",
+                   requiredEndpointName "root.catalog.api.catalog.items",
+                   requiredEndpointName "root.orders.api.orders.submit"
                  ]
     map endpointName (Action.declaredActionEndpointMetadata (moduleActionCodec rootModule))
       `shouldBe` [requiredEndpointName "root.catalog.catalog.refresh", requiredEndpointName "root.orders.orders.submit"]

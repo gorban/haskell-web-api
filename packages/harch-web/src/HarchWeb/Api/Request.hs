@@ -12,7 +12,8 @@
 -- field-failure renderer can never receive an empty error list. See
 -- @docs/design-guidance.md@.
 module HarchWeb.Api.Request
-  ( ApiRequestData (..),
+  ( mkApiFieldValue,
+    ApiRequestData (..),
     apiRequestDataFromWaiRequest,
     ApiRequestSource (..),
     ApiRequestParseError (..),
@@ -131,6 +132,11 @@ data ApiRequestParseError
 newtype ApiFieldValue value = ApiFieldValue
   { runApiFieldValue :: Text -> Maybe value
   }
+
+-- | Build an application-authored typed form-field parser: 'Nothing' is the
+-- field's explained parse failure on the ordinary typed error rail.
+mkApiFieldValue :: (Text -> Maybe value) -> ApiFieldValue value
+mkApiFieldValue = ApiFieldValue
 
 apiTextValue :: ApiFieldValue Text
 apiTextValue = ApiFieldValue Just
