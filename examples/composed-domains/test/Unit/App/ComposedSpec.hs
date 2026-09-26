@@ -6,11 +6,11 @@ module Unit.App.ComposedSpec (spec) where
 
 import App.Composed
 import App.Composed.Document (composedAuthorizationScopes, composedEndpointMetadataForPath, requireOpenApiExtension)
-import Catalog.Api (CatalogApiRoute (CatalogItems))
+import Catalog.Api (CatalogApiRoute (CatalogApiNotFound, CatalogItems, CatalogUnlistedPreview))
 import Catalog.Domain
 import Control.Concurrent (forkIO, newEmptyMVar, putMVar, readMVar, takeMVar)
 import Control.Exception (ErrorCall, bracket, evaluate, finally, try)
-import Control.Monad (replicateM, when)
+import Control.Monad (forM_, replicateM, when)
 import Core.Config (ConfigParseError (..))
 import Crypto.Error (maybeCryptoError)
 import Data.ByteString qualified as ByteString
@@ -108,7 +108,7 @@ import HarchWeb.Time (unixTimeNanoseconds, unixTimeNanosecondsValue, unixTimeSec
 import HarchWeb.Totp (mkTotpCode, mkTotpSecret, renderTotpSecret, totpCode, totpCodeText)
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
-import Orders.Api (OrdersApiRoute (OrdersSubmit))
+import Orders.Api (OrdersApiRoute (OrdersApiNotFound, OrdersSubmit))
 import Orders.Domain
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll, shouldContain')
@@ -1254,7 +1254,10 @@ spec = describe "Unit.App.Composed" $ do
                    Localized (locale "en") (Catalog CatalogIndex),
                    Localized (locale "en") (Orders OrdersIndex),
                    UnlocalizedCatalogApi CatalogItems,
+                   UnlocalizedCatalogApi CatalogUnlistedPreview,
+                   UnlocalizedCatalogApi CatalogApiNotFound,
                    UnlocalizedOrdersApi OrdersSubmit,
+                   UnlocalizedOrdersApi OrdersApiNotFound,
                    UnlocalizedDocs DocsSpec,
                    UnlocalizedDocs DocsUi
                  ]
@@ -1266,7 +1269,10 @@ spec = describe "Unit.App.Composed" $ do
                    requiredEndpointName "root.catalog.catalog.index",
                    requiredEndpointName "root.orders.orders.index",
                    requiredEndpointName "root.catalog.api.catalog.items",
+                   requiredEndpointName "root.catalog.api.catalog.unlisted-preview",
+                   requiredEndpointName "root.catalog.api.catalog.not-found",
                    requiredEndpointName "root.orders.api.orders.submit",
+                   requiredEndpointName "root.orders.api.orders.not-found",
                    requiredEndpointName "root.docs.docs.openapi-spec",
                    requiredEndpointName "root.docs.docs.swagger"
                  ]
@@ -1943,6 +1949,35 @@ spec = describe "Unit.App.Composed" $ do
     case providerFailure of
       Left failure -> Text.isInfixOf "could not build its documentation" (Text.pack (show failure)) `shouldBe` True
       Right _ -> expectationFailure "a failed document construction must fail composition loudly"
+
+  it "prunes the hidden catalog preview out of the merged document" $ do
+    composedSite <- requiredComposedSite
+    waiApplication <- toWaiApplication (Site.buildSiteApplication composedSite)
+    specResponse <- performWaiRequest (pure waiApplication) (waiRequest ["docs", "openapi.json"])
+    specBody <- readResponseBody specResponse
+    expectAll
+      ( (Text.isInfixOf "unlisted-preview" specBody `shouldBe` False)
+          :| [ Text.isInfixOf "\"/api/catalog/items\"" specBody `shouldBe` True
+             ]
+      )
+
+  it "keeps the hidden catalog preview indistinguishable from an undeclared route without running its handler" $ do
+    catalogCalls <- newIORef (0 :: Int)
+    let countingQueries = CatalogQueries (\domainContext -> modifyIORef' catalogCalls (+ 1) >> pure (catalogLocaleCode domainContext <> " summary"))
+        countingSite = buildComposedSiteWithDependencies (withDomainCapabilities countingQueries catalogCommands ordersQueries ordersCommands defaultComposedSiteDependencies)
+    waiApplication <- toWaiApplication (Site.buildSiteApplication countingSite)
+    let probe method segments = do
+          response <- performWaiRequest (pure waiApplication) ((waiRequest segments) {Wai.requestMethod = method})
+          body <- readResponseBody response
+          pure (Wai.responseStatus response, lookup Http.hAllow (Wai.responseHeaders response), body)
+    forM_
+      ["GET", "HEAD", "OPTIONS", "POST"]
+      ( \method -> do
+          hidden <- probe method ["api", "catalog", "unlisted-preview"]
+          undeclared <- probe method ["api", "catalog", "no-such-path"]
+          hidden `shouldBe` undeclared
+      )
+    readIORef catalogCalls `shouldReturn` 0
 
 -- | Deterministic security is used only to inspect how a halted page response
 -- is remapped by module composition.  Production page security is constructed

@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The @orders.api@ application module (AHI-4E composed-domains slice):
@@ -34,13 +33,15 @@ import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb
-  ( AccessRequirement (RequireAuthorized),
+  ( AccessRequirement (AllowUnauthenticated, RequireAuthorized),
     EndpointMetadata,
     EndpointProtocol (ApiEndpoint),
+    NonPageResponse (NonPageProtocolResponse),
     mkEndpointMetadata,
     requiredEndpointNameOrDie,
     requiredModuleNameOrDie,
     requiredRouteTemplateOrDie,
+    unboundedRouteExecutionPolicy,
   )
 import HarchWeb.Action (emptyActionCodec)
 import HarchWeb.Api
@@ -51,6 +52,7 @@ import HarchWeb.Api
     ApiFieldFailurePolicy (ApiUseGenericFieldFailure),
     ApiFieldValue,
     ApiForm,
+    ApiHttpResponse (..),
     ApiMethod (ApiPost),
     ApiRequestBody (ApiUrlEncodedFormRequestBody),
     ApiRequestBodyByteLimit,
@@ -61,6 +63,7 @@ import HarchWeb.Api
     SomeApiRouteEndpoint (..),
     apiContentType,
     apiEndpointFamily,
+    apiHttpResponseToProtocolResponse,
     apiResponse,
     apiRouteDefinition,
     apiRouteEndpointWithContextNeverFailing,
@@ -77,13 +80,14 @@ import HarchWeb.Routing
   ( RouteCodec (..),
     RouteLocation (..),
     RouteMethod (RoutePost),
-    RouteParseResult (RouteNotMatched, RouteParsed),
+    RouteParseResult (RouteParsed),
     RouteRequest (..),
+    requiredPathSegment,
     routeMethodPolicy,
     routePathSegments,
   )
-import HarchWeb.Site (RouteDefinition)
-import Network.HTTP.Types (status202)
+import HarchWeb.Site (RouteDefinition (..), RouteHandler (..))
+import Network.HTTP.Types (status202, status404)
 import Orders.Domain (OrderId (..), OrdersCommands (submitOrder), OrdersContext, OrdersPolicy (MaySubmitOrders))
 
 -- | The API module's declared routes. @OrdersSubmit@ is the local fragment
@@ -98,6 +102,12 @@ data OrdersApiAction
 
 data OrdersApiRoute
   = OrdersSubmit
+  | -- | The API family's own not-found route (AHI-4E), mirroring web-api's
+    -- @ApiNotFound@ convention: the module's codec parses every unmatched
+    -- sub-path here so an undeclared @/api/orders/@ path renders exactly the
+    -- representation the protocol's empty 404 renders, instead of falling
+    -- through to the root HTML not-found page.
+    OrdersApiNotFound
   deriving (Eq, Show)
 
 -- | The small typed command the POST decodes: one non-empty item name.
@@ -168,10 +178,10 @@ buildOrdersApiModule ::
 buildOrdersApiModule extension commands =
   ApplicationModule
     { moduleName = requiredModuleNameOrDie "orders.api",
-      moduleOwnsRoute = \case OrdersSubmit -> True,
+      moduleOwnsRoute = const True,
       moduleRouteMountChain = const (requiredModuleNameOrDie "orders.api" :| []),
       moduleRouteCodec = ordersApiRouteCodec,
-      moduleDeclaredRoutes = [OrdersSubmit],
+      moduleDeclaredRoutes = [OrdersSubmit, OrdersApiNotFound],
       moduleEndpoints = ordersRouteDefinition extension commands,
       moduleActionCodec = emptyActionCodec,
       moduleActionRoute = \_ _ -> Nothing,
@@ -185,10 +195,16 @@ ordersApiRouteCodec =
     { parseRoute = \requestContext location ->
         case routePathSegments location of
           [] -> RouteParsed (RouteRequest OrdersSubmit requestContext)
-          _ -> RouteNotMatched,
-      renderRoute = const (RouteLocation [] []),
-      notFoundRequest = RouteRequest OrdersSubmit,
-      routeMethods = const (routeMethodPolicy [RoutePost])
+          (_ : _) -> RouteParsed (RouteRequest OrdersApiNotFound requestContext),
+      renderRoute = \routeRequest ->
+        case requestRoute routeRequest of
+          OrdersSubmit -> RouteLocation [] []
+          OrdersApiNotFound -> RouteLocation [requiredPathSegment "404"] [],
+      notFoundRequest = RouteRequest OrdersApiNotFound,
+      routeMethods = \routeRequest ->
+        case requestRoute routeRequest of
+          OrdersSubmit -> routeMethodPolicy [RoutePost]
+          OrdersApiNotFound -> routeMethodPolicy []
     }
 
 -- | The endpoint as a typed family member: the same value the module's
@@ -219,14 +235,42 @@ ordersFamily ::
 ordersFamily extension commands =
   apiEndpointFamily [ordersApiEndpoint extension $! commands]
 
+{-# ANN ordersRouteDefinition ("HLint: ignore Redundant $!" :: String) #-}
 ordersRouteDefinition ::
   extension SubmitOrderCommand ApiForm ByteString.ByteString ->
   OrdersCommands ->
   OrdersApiRoute ->
   RouteDefinition OrdersApiRoute OrdersContext OrdersPolicy
-ordersRouteDefinition extension commands OrdersSubmit =
-  case ordersApiEndpoint extension commands of
-    SomeApiRouteEndpoint endpoint -> apiRouteDefinition ordersEndpointMetadata endpoint
+ordersRouteDefinition extension commands route =
+  case route of
+    OrdersSubmit ->
+      case (ordersApiEndpoint $! extension) $! commands of
+        SomeApiRouteEndpoint endpoint -> apiRouteDefinition ordersEndpointMetadata $! endpoint
+    OrdersApiNotFound -> ordersApiNotFoundDefinition
+
+-- | The API family's own not-found representation: exactly the protocol's
+-- empty 404 that a hidden endpoint's availability gate renders, so a hidden
+-- endpoint and an undeclared sub-path are identical at the response surface.
+-- Mirrors web-api's @ApiNotFound@ route definition; the empty method policy
+-- renders this one representation for every method — no @Allow@ line, no
+-- 405, no handler execution.
+{-# ANN ordersApiNotFoundDefinition ("HLint: ignore Redundant $!" :: String) #-}
+ordersApiNotFoundDefinition :: RouteDefinition OrdersApiRoute OrdersContext OrdersPolicy
+ordersApiNotFoundDefinition =
+  RouteDefinition
+    { routeNavigationLabel = Nothing,
+      routeMetadata = ordersApiNotFoundEndpointMetadata,
+      routeMethods = const (routeMethodPolicy []),
+      routeExecutionPolicy = unboundedRouteExecutionPolicy,
+      routeHandler =
+        ProtocolRouteHandler
+          ( \_ _ ->
+              pure
+                ( NonPageProtocolResponse
+                    (apiHttpResponseToProtocolResponse ((ApiHttpResponse status404 $! []) $! Nothing))
+                )
+          )
+    }
 
 ordersEndpointMetadata :: EndpointMetadata OrdersPolicy
 ordersEndpointMetadata =
@@ -235,3 +279,13 @@ ordersEndpointMetadata =
     (requiredRouteTemplateOrDie "/")
     ApiEndpoint
     (RequireAuthorized MaySubmitOrders)
+
+{-# ANN ordersApiNotFoundEndpointMetadata ("HLint: ignore Redundant $!" :: String) #-}
+ordersApiNotFoundEndpointMetadata :: EndpointMetadata OrdersPolicy
+ordersApiNotFoundEndpointMetadata =
+  ( mkEndpointMetadata
+      (requiredEndpointNameOrDie "orders.not-found")
+      (requiredRouteTemplateOrDie "/404")
+      $! ApiEndpoint
+  )
+    $! AllowUnauthenticated

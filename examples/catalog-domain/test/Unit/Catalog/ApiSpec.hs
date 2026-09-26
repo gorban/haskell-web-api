@@ -7,7 +7,8 @@ import Catalog.Domain (CatalogContext (..), CatalogPolicy (MayReadCatalog), Cata
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import HarchWeb.Action qualified as Action
 import HarchWeb.Api
-  ( ApiEndpointContract (..),
+  ( ApiAvailability (ApiAvailable, ApiHidden),
+    ApiEndpointContract (..),
     ApiEndpointRequest (..),
     ApiFieldFailurePolicy (ApiRenderFieldFailures, ApiUseGenericFieldFailure),
     ApiMethod (ApiGet),
@@ -21,16 +22,17 @@ import HarchWeb.Api
     apiContentType,
     apiPathText,
     apiResponseEncoderContentType,
+    apiRouteEndpointAvailability,
     jsonMediaType,
     mapApiEndpointFamily,
     runRequestCodec,
     withApiRouteEndpointDeclaration,
   )
 import HarchWeb.ApplicationModule (ApplicationModule (..))
-import HarchWeb.EndpointMetadata (AccessRequirement (RequireAuthorized), EndpointProtocol (ApiEndpoint), endpointAccess, endpointName, endpointNameText, endpointProtocol, endpointRouteTemplate, routeTemplateText)
+import HarchWeb.EndpointMetadata (AccessRequirement (AllowUnauthenticated, RequireAuthorized), EndpointProtocol (ApiEndpoint), endpointAccess, endpointName, endpointNameText, endpointProtocol, endpointRouteTemplate, routeTemplateText)
 import HarchWeb.Routing (RouteCodec (..), RouteLocation (..), RouteMethod (RouteGet), RouteParseResult (..), RouteRequest (..), requiredPathSegment, routeMethodPolicy)
 import HarchWeb.Routing qualified as Routing
-import HarchWeb.Server (NonPageResponse (..), ProtocolResponse (..), ProtocolResponseBody (..))
+import HarchWeb.Server (NonPageResponse (..), ProtocolResponse (..), ProtocolResponseBody (..), unboundedRouteExecutionPolicy)
 import HarchWeb.Site (RouteDefinition (..), RouteHandler (..))
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
@@ -70,7 +72,7 @@ spec = describe "Unit.Catalog.Api" $ do
     show (moduleName moduleValue) `shouldBe` "ModuleName \"catalog.api\""
     moduleOwnsRoute moduleValue CatalogItems `shouldBe` True
     moduleRouteMountChain moduleValue CatalogItems `shouldBe` moduleName moduleValue :| []
-    moduleDeclaredRoutes moduleValue `shouldBe` [CatalogItems]
+    moduleDeclaredRoutes moduleValue `shouldBe` [CatalogItems, CatalogUnlistedPreview, CatalogApiNotFound]
     case moduleGuards moduleValue of
       [] -> pure ()
       _ -> expectationFailure "catalog api module must not install guards"
@@ -80,16 +82,27 @@ spec = describe "Unit.Catalog.Api" $ do
     parseRoute (moduleRouteCodec moduleValue) catalogContext (RouteLocation [requiredPathSegment "items"] [])
       `shouldBe` RouteParsed (RouteRequest CatalogItems catalogContext)
     parseRoute (moduleRouteCodec moduleValue) catalogContext (RouteLocation [] [])
-      `shouldBe` RouteNotMatched
+      `shouldBe` RouteParsed (RouteRequest CatalogApiNotFound catalogContext)
     parseRoute (moduleRouteCodec moduleValue) catalogContext (RouteLocation [requiredPathSegment "other"] [])
-      `shouldBe` RouteNotMatched
+      `shouldBe` RouteParsed (RouteRequest CatalogApiNotFound catalogContext)
     parseRoute (moduleRouteCodec moduleValue) catalogContext (RouteLocation [requiredPathSegment "items", requiredPathSegment "extra"] [])
-      `shouldBe` RouteNotMatched
+      `shouldBe` RouteParsed (RouteRequest CatalogApiNotFound catalogContext)
+    parseRoute (moduleRouteCodec moduleValue) catalogContext (RouteLocation [requiredPathSegment "unlisted-preview"] [])
+      `shouldBe` RouteParsed (RouteRequest CatalogUnlistedPreview catalogContext)
+    moduleOwnsRoute moduleValue CatalogUnlistedPreview `shouldBe` True
+    checkDerived CatalogUnlistedPreview
+    checkDerived CatalogApiNotFound
     renderRoute (moduleRouteCodec moduleValue) (RouteRequest CatalogItems catalogContext)
-      `shouldBe` RouteLocation [] []
+      `shouldBe` RouteLocation [requiredPathSegment "items"] []
+    renderRoute (moduleRouteCodec moduleValue) (RouteRequest CatalogUnlistedPreview catalogContext)
+      `shouldBe` RouteLocation [requiredPathSegment "unlisted-preview"] []
+    renderRoute (moduleRouteCodec moduleValue) (RouteRequest CatalogApiNotFound catalogContext)
+      `shouldBe` RouteLocation [requiredPathSegment "404"] []
     notFoundRequest (moduleRouteCodec moduleValue) catalogContext
-      `shouldBe` RouteRequest CatalogItems catalogContext
+      `shouldBe` RouteRequest CatalogApiNotFound catalogContext
     Routing.routeMethods (moduleRouteCodec moduleValue) (RouteRequest CatalogItems catalogContext) `shouldBe` routeMethodPolicy [RouteGet]
+    Routing.routeMethods (moduleRouteCodec moduleValue) (RouteRequest CatalogUnlistedPreview catalogContext) `shouldBe` routeMethodPolicy []
+    Routing.routeMethods (moduleRouteCodec moduleValue) (RouteRequest CatalogApiNotFound catalogContext) `shouldBe` routeMethodPolicy []
     -- The API module's action algebra is uninhabited, so both projections are
     -- constant on values that cannot exist; the tests supply bottom stand-ins
     -- to pin that constant behavior.
@@ -105,6 +118,33 @@ spec = describe "Unit.Catalog.Api" $ do
     endpointProtocol (routeMetadata definition) `shouldBe` ApiEndpoint
     endpointAccess (routeMetadata definition) `shouldBe` RequireAuthorized MayReadCatalog
     Site.routeMethods definition (RouteRequest CatalogItems catalogContext) `shouldBe` routeMethodPolicy [RouteGet]
+    let hiddenDefinition = moduleEndpoints moduleValue CatalogUnlistedPreview
+    endpointNameText (endpointName (routeMetadata hiddenDefinition)) `shouldBe` "catalog.unlisted-preview"
+    routeTemplateText (endpointRouteTemplate (routeMetadata hiddenDefinition)) `shouldBe` "/unlisted-preview"
+    endpointAccess (routeMetadata hiddenDefinition) `shouldBe` RequireAuthorized MayReadCatalog
+    case routeHandler hiddenDefinition of
+      ProtocolRouteHandler _ -> pure ()
+      PageRouteHandler _ -> expectationFailure "the unlisted preview is a protocol endpoint"
+    let notFoundDefinition = moduleEndpoints moduleValue CatalogApiNotFound
+    routeNavigationLabel notFoundDefinition `shouldBe` Nothing
+    routeExecutionPolicy notFoundDefinition `shouldBe` unboundedRouteExecutionPolicy
+    endpointNameText (endpointName (routeMetadata notFoundDefinition)) `shouldBe` "catalog.not-found"
+    routeTemplateText (endpointRouteTemplate (routeMetadata notFoundDefinition)) `shouldBe` "/404"
+    endpointProtocol (routeMetadata notFoundDefinition) `shouldBe` ApiEndpoint
+    endpointAccess (routeMetadata notFoundDefinition) `shouldBe` AllowUnauthenticated
+    Site.routeMethods notFoundDefinition (RouteRequest CatalogApiNotFound catalogContext) `shouldBe` routeMethodPolicy []
+    case routeHandler notFoundDefinition of
+      ProtocolRouteHandler renderNotFound -> do
+        notFoundResponse <- renderNotFound Wai.defaultRequest (RouteRequest CatalogApiNotFound catalogContext)
+        case notFoundResponse of
+          NonPageProtocolResponse protocolResponse -> do
+            protocolResponseStatus protocolResponse `shouldBe` Http.status404
+            protocolResponseHeaders protocolResponse `shouldBe` []
+            case protocolResponseBody protocolResponse of
+              ProtocolResponseBytes bodyBytes -> bodyBytes `shouldBe` ""
+              _ -> expectationFailure "expected strict protocol bytes"
+          _ -> expectationFailure "expected a protocol response"
+      PageRouteHandler _ -> expectationFailure "the catalog api not-found route is a protocol endpoint"
     case routeHandler definition of
       ProtocolRouteHandler renderProtocol -> do
         nonPage <- renderProtocol Wai.defaultRequest (RouteRequest CatalogItems catalogContext)
@@ -121,9 +161,11 @@ spec = describe "Unit.Catalog.Api" $ do
     let queries = CatalogQueries (\domainContext -> pure (catalogLocaleCode domainContext <> " summary"))
     case catalogItemsApiEndpoint NoApiExtension queries of
       SomeApiRouteEndpoint _ -> pure ()
-    case catalogItemsFamily NoApiExtension queries of
-      Left _ -> expectationFailure "catalog items family must validate"
-      Right family ->
+    case catalogApiFamily NoApiExtension queries of
+      Left _ -> expectationFailure "catalog api family must validate"
+      Right family -> do
+        mapApiEndpointFamily (\endpoint -> apiRouteEndpointAvailability endpoint (CatalogContext "en" Nothing)) family
+          `shouldBe` [ApiAvailable, ApiHidden]
         mapApiEndpointFamily
           ( \endpoint ->
               withApiRouteEndpointDeclaration endpoint $ \declaration ->
@@ -132,7 +174,7 @@ spec = describe "Unit.Catalog.Api" $ do
                 )
           )
           family
-          `shouldBe` [("/items", ApiGet)]
+          `shouldBe` [("/items", ApiGet), ("/unlisted-preview", ApiGet)]
 
 checkDerived :: (Eq value, Show value) => value -> Expectation
 checkDerived value = do

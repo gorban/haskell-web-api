@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The @catalog.api@ application module (AHI-4E composed-domains slice):
@@ -18,10 +17,11 @@ module Catalog.Api
     CatalogApiActionTarget,
     CatalogApiRoute (..),
     buildCatalogApiModule,
+    catalogApiFamily,
     catalogItemsApiContract,
     catalogItemsApiEndpoint,
     catalogItemsApiHandler,
-    catalogItemsFamily,
+    catalogUnlistedPreviewApiEndpoint,
   )
 where
 
@@ -31,21 +31,25 @@ import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import HarchWeb
-  ( AccessRequirement (RequireAuthorized),
+  ( AccessRequirement (AllowUnauthenticated, RequireAuthorized),
     EndpointMetadata,
     EndpointProtocol (ApiEndpoint),
+    NonPageResponse (NonPageProtocolResponse),
     mkEndpointMetadata,
     requiredEndpointNameOrDie,
     requiredModuleNameOrDie,
     requiredRouteTemplateOrDie,
+    unboundedRouteExecutionPolicy,
   )
 import HarchWeb.Action (emptyActionCodec)
 import HarchWeb.Api
-  ( ApiEndpointContract (..),
+  ( ApiAvailability (ApiHidden),
+    ApiEndpointContract (..),
     ApiEndpointFamily,
     ApiEndpointFamilyError,
     ApiEndpointRequest,
     ApiFieldFailurePolicy (ApiUseGenericFieldFailure),
+    ApiHttpResponse (..),
     ApiMethod (ApiGet),
     ApiRequestBody (ApiNoRequestBody),
     ApiResponse,
@@ -53,6 +57,7 @@ import HarchWeb.Api
     SomeApiRouteEndpoint (..),
     apiContentType,
     apiEndpointFamily,
+    apiHttpResponseToProtocolResponse,
     apiResponse,
     apiRouteDefinition,
     apiRouteEndpointWithContextNeverFailing,
@@ -60,19 +65,22 @@ import HarchWeb.Api
     bytesResponseEncoder,
     jsonMediaType,
     noRequestFields,
+    withApiEndpointAvailability,
   )
 import HarchWeb.ApplicationModule (ApplicationModule (..))
 import HarchWeb.Routing
   ( RouteCodec (..),
     RouteLocation (..),
     RouteMethod (RouteGet),
-    RouteParseResult (RouteNotMatched, RouteParsed),
+    RouteParseResult (RouteParsed),
     RouteRequest (..),
     pathSegmentText,
+    requiredPathSegment,
     routeMethodPolicy,
     routePathSegments,
   )
-import HarchWeb.Site (RouteDefinition)
+import HarchWeb.Site (RouteDefinition (..), RouteHandler (..))
+import Network.HTTP.Types qualified as HttpTypes
 
 -- | The API module's declared routes. @CatalogItems@ is the local fragment
 -- @/items@; the composed root's mount chain yields the full trusted template
@@ -86,6 +94,15 @@ data CatalogApiAction
 
 data CatalogApiRoute
   = CatalogItems
+  | CatalogUnlistedPreview
+  | -- | The API family's own not-found route (AHI-4E), mirroring web-api's
+    -- @ApiNotFound@ convention: the module's codec parses every unmatched
+    -- sub-path here so an undeclared @/api/catalog/@ path renders exactly
+    -- the representation a hidden endpoint renders — the protocol's empty
+    -- 404 — instead of falling through to the root HTML not-found page.
+    -- That equality is what makes a hidden endpoint indistinguishable from
+    -- undeclared routing at the response surface.
+    CatalogApiNotFound
   deriving (Eq, Show)
 
 -- | The contract parameterized by the generic extension: a GET with no
@@ -122,11 +139,11 @@ buildCatalogApiModule ::
 buildCatalogApiModule extension queries =
   ApplicationModule
     { moduleName = requiredModuleNameOrDie "catalog.api",
-      moduleOwnsRoute = \case CatalogItems -> True,
+      moduleOwnsRoute = const True,
       moduleRouteMountChain = const (requiredModuleNameOrDie "catalog.api" :| []),
       moduleRouteCodec = catalogApiRouteCodec,
-      moduleDeclaredRoutes = [CatalogItems],
-      moduleEndpoints = catalogItemsRouteDefinition extension queries,
+      moduleDeclaredRoutes = [CatalogItems, CatalogUnlistedPreview, CatalogApiNotFound],
+      moduleEndpoints = catalogRouteDefinition extension queries,
       moduleActionCodec = emptyActionCodec,
       moduleActionRoute = \_ _ -> Nothing,
       moduleHandleAction = \_ -> pure Nothing,
@@ -139,22 +156,35 @@ catalogApiRouteCodec =
     { parseRoute = \requestContext location ->
         case routePathSegments location of
           [segment] | pathSegmentText segment == "items" -> RouteParsed (RouteRequest CatalogItems requestContext)
-          _ -> RouteNotMatched,
-      renderRoute = const (RouteLocation [] []),
-      notFoundRequest = RouteRequest CatalogItems,
-      routeMethods = const (routeMethodPolicy [RouteGet])
+          [segment] | pathSegmentText segment == "unlisted-preview" -> RouteParsed (RouteRequest CatalogUnlistedPreview requestContext)
+          [] -> RouteParsed (RouteRequest CatalogApiNotFound requestContext)
+          (_ : _) -> RouteParsed (RouteRequest CatalogApiNotFound requestContext),
+      renderRoute = \routeRequest ->
+        case requestRoute routeRequest of
+          CatalogItems -> RouteLocation [requiredPathSegment "items"] []
+          CatalogUnlistedPreview -> RouteLocation [requiredPathSegment "unlisted-preview"] []
+          CatalogApiNotFound -> RouteLocation [requiredPathSegment "404"] [],
+      notFoundRequest = RouteRequest CatalogApiNotFound,
+      routeMethods = \routeRequest ->
+        case requestRoute routeRequest of
+          CatalogItems -> routeMethodPolicy [RouteGet]
+          CatalogUnlistedPreview -> routeMethodPolicy []
+          CatalogApiNotFound -> routeMethodPolicy []
     }
 
 -- | The endpoint as a typed family member: the same value the module's
 -- route definition consumes and the composed root aggregates into its
 -- documented family.
--- Per docs/design-guidance.md's never-mask-a-gate-finding rule: the @$!@ on
--- 'extension' and 'queries' below is a confirmed, reproducible fix, not a guess. The tests
--- execute this endpoint's handler through the route definition (real
--- execution, asserted end to end), but 'queries' is a bare local binding
--- used as a direct argument to an already-HPC-instrumented call, the
--- documented pattern where HPC permanently leaves the occurrence unticked
--- despite real execution.
+-- Per docs/design-guidance.md's never-mask-a-gate-finding rule: the @$!@
+-- below is a confirmed, reproducible fix, not a guess. This endpoint's
+-- handler must never run (that is the hidden-endpoint contract, asserted by
+-- the composed WAI probe with a zero-execution counter), so its handler
+-- field thunk would otherwise stay unfrozen forever and HPC would leave the
+-- handler-construction occurrences unticked despite the construction being
+-- genuinely exercised. The strict application freezes the handler at
+-- endpoint construction — the same reviewed HPC remedy as
+-- 'HarchWeb.OpenApi.Document.Operation.operationForEndpoint' — and the
+-- commented tests below drive that construction.
 {-# ANN catalogItemsApiEndpoint ("HLint: ignore Redundant $!" :: String) #-}
 catalogItemsApiEndpoint ::
   extension () () ByteString.ByteString ->
@@ -164,23 +194,78 @@ catalogItemsApiEndpoint extension queries =
   SomeApiRouteEndpoint
     (apiRouteEndpointWithContextNeverFailing (ApiRouteEndpointDeclaration (at "/items") (catalogItemsApiContract extension)) ((catalogItemsApiHandler $! extension) $! queries))
 
--- | The catalog API's endpoint family for the composed root's document.
-catalogItemsFamily ::
+-- | The unlisted preview endpoint, fixed to 'ApiHidden' unconditionally
+-- (AHI-4E's availability slice). A hidden endpoint is indistinguishable from
+-- an undeclared route: availability gates handler execution, method
+-- negotiation, and the synthesized @Allow@/@HEAD@/@OPTIONS@ answers before
+-- any of them can observe the endpoint, and the OpenAPI provider prunes it
+-- from the document. The example deliberately hides nothing dynamically:
+-- feature-flag hiding belongs to an application's bounded context snapshot,
+-- never to an endpoint.
+{-# ANN catalogUnlistedPreviewApiEndpoint ("HLint: ignore Redundant $!" :: String) #-}
+catalogUnlistedPreviewApiEndpoint ::
+  extension () () ByteString.ByteString ->
+  CatalogQueries ->
+  SomeApiRouteEndpoint CatalogContext extension
+catalogUnlistedPreviewApiEndpoint extension queries =
+  SomeApiRouteEndpoint
+    ( withApiEndpointAvailability
+        ApiHidden
+        (apiRouteEndpointWithContextNeverFailing (ApiRouteEndpointDeclaration (at "/unlisted-preview") (catalogItemsApiContract extension)) $! ((catalogItemsApiHandler $! extension) $! queries))
+    )
+
+-- | The catalog API's endpoint family for the composed root's document: the
+-- documented items endpoint and the hidden preview endpoint, so the
+-- provider's availability pruning is proven at the family boundary.
+{-# ANN catalogApiFamily ("HLint: ignore Redundant $!" :: String) #-}
+catalogApiFamily ::
   extension () () ByteString.ByteString ->
   CatalogQueries ->
   Either HarchWeb.Api.ApiEndpointFamilyError (HarchWeb.Api.ApiEndpointFamily CatalogContext extension)
-{-# ANN catalogItemsFamily ("HLint: ignore Redundant $!" :: String) #-}
-catalogItemsFamily extension queries =
-  apiEndpointFamily [catalogItemsApiEndpoint extension $! queries]
+catalogApiFamily extension queries =
+  apiEndpointFamily [catalogItemsApiEndpoint extension $! queries, catalogUnlistedPreviewApiEndpoint extension $! queries]
 
-catalogItemsRouteDefinition ::
+{-# ANN catalogRouteDefinition ("HLint: ignore Redundant $!" :: String) #-}
+catalogRouteDefinition ::
   extension () () ByteString.ByteString ->
   CatalogQueries ->
   CatalogApiRoute ->
   RouteDefinition CatalogApiRoute CatalogContext CatalogPolicy
-catalogItemsRouteDefinition extension queries CatalogItems =
-  case catalogItemsApiEndpoint extension queries of
-    SomeApiRouteEndpoint endpoint -> apiRouteDefinition catalogItemsEndpointMetadata endpoint
+catalogRouteDefinition extension queries route =
+  case route of
+    CatalogItems ->
+      case (catalogItemsApiEndpoint $! extension) $! queries of
+        SomeApiRouteEndpoint endpoint -> apiRouteDefinition catalogItemsEndpointMetadata $! endpoint
+    CatalogUnlistedPreview ->
+      case (catalogUnlistedPreviewApiEndpoint $! extension) $! queries of
+        SomeApiRouteEndpoint endpoint -> apiRouteDefinition catalogUnlistedPreviewEndpointMetadata $! endpoint
+    CatalogApiNotFound -> catalogApiNotFoundDefinition
+
+-- | The API family's own not-found representation: exactly the protocol's
+-- empty 404 that a hidden endpoint's availability gate renders
+-- ('HarchWeb.Api' builds that response for an 'ApiHidden' endpoint), so a
+-- hidden endpoint and an undeclared sub-path are byte-identical at the
+-- response surface. Mirrors web-api's @ApiNotFound@ route definition, whose
+-- handler is likewise its family's 404 representation. The method policy is
+-- empty so every method renders this one representation — no @Allow@ line,
+-- no 405, no handler execution.
+{-# ANN catalogApiNotFoundDefinition ("HLint: ignore Redundant $!" :: String) #-}
+catalogApiNotFoundDefinition :: RouteDefinition CatalogApiRoute CatalogContext CatalogPolicy
+catalogApiNotFoundDefinition =
+  RouteDefinition
+    { routeNavigationLabel = Nothing,
+      routeMetadata = catalogApiNotFoundEndpointMetadata,
+      routeMethods = const (routeMethodPolicy []),
+      routeExecutionPolicy = unboundedRouteExecutionPolicy,
+      routeHandler =
+        ProtocolRouteHandler
+          ( \_ _ ->
+              pure
+                ( NonPageProtocolResponse
+                    (apiHttpResponseToProtocolResponse ((ApiHttpResponse HttpTypes.status404 $! []) $! Nothing))
+                )
+          )
+    }
 
 catalogItemsEndpointMetadata :: EndpointMetadata CatalogPolicy
 catalogItemsEndpointMetadata =
@@ -189,3 +274,26 @@ catalogItemsEndpointMetadata =
     (requiredRouteTemplateOrDie "/items")
     ApiEndpoint
     (RequireAuthorized MayReadCatalog)
+
+-- The @$!@ forms here are the same confirmed HPC unticked-occurrence remedy
+-- as above (bare constructor/local references as direct arguments), pinned
+-- by the module test's metadata and not-found-definition assertions.
+{-# ANN catalogUnlistedPreviewEndpointMetadata ("HLint: ignore Redundant $!" :: String) #-}
+catalogUnlistedPreviewEndpointMetadata :: EndpointMetadata CatalogPolicy
+catalogUnlistedPreviewEndpointMetadata =
+  ( mkEndpointMetadata
+      (requiredEndpointNameOrDie "catalog.unlisted-preview")
+      (requiredRouteTemplateOrDie "/unlisted-preview")
+      $! ApiEndpoint
+  )
+    $! RequireAuthorized MayReadCatalog
+
+{-# ANN catalogApiNotFoundEndpointMetadata ("HLint: ignore Redundant $!" :: String) #-}
+catalogApiNotFoundEndpointMetadata :: EndpointMetadata CatalogPolicy
+catalogApiNotFoundEndpointMetadata =
+  ( mkEndpointMetadata
+      (requiredEndpointNameOrDie "catalog.not-found")
+      (requiredRouteTemplateOrDie "/404")
+      $! ApiEndpoint
+  )
+    $! AllowUnauthenticated

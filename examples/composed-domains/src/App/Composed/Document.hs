@@ -21,7 +21,7 @@ where
 
 import App.Composed.Model (ComposedContext, RootAuthorization (..))
 import App.Composed.Mounts (catalogApiRootMount, ordersApiRootMount)
-import Catalog.Api (catalogItemsApiEndpoint)
+import Catalog.Api (catalogItemsApiEndpoint, catalogUnlistedPreviewApiEndpoint)
 import Catalog.Domain (CatalogQueries)
 import Data.ByteString qualified as ByteString
 import Data.Map.Strict (Map)
@@ -150,7 +150,7 @@ composedCatalogMountedFamily composedCatalogQueriesValue =
    in case mountedContext $! mount of
         ContextProjection projectCatalogContext ->
           let project = projectCatalogContext
-           in ((((openApiMountedFamily $! mountedRoutes mount) $! ((hoistApiEndpointFamily $! project) $! requireApiEndpointFamily [(catalogItemsApiEndpoint $! extension) $! queries])) $! composedEndpointMetadataForPath) $! composedAuthorizationScopes)
+           in ((((openApiMountedFamily $! mountedRoutes mount) $! ((hoistApiEndpointFamily $! project) $! requireApiEndpointFamily [(catalogItemsApiEndpoint $! extension) $! queries, (catalogUnlistedPreviewApiEndpoint $! extension) $! queries])) $! composedEndpointMetadataForPath) $! composedAuthorizationScopes)
 
 composedOrdersMountedFamily :: OrdersCommands -> OpenApiMountedFamily ComposedContext
 composedOrdersMountedFamily composedOrdersCommandsValue =

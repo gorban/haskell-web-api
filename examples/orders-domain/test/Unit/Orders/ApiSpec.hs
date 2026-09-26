@@ -29,10 +29,10 @@ import HarchWeb.Api
     withApiRouteEndpointDeclaration,
   )
 import HarchWeb.ApplicationModule (ApplicationModule (..))
-import HarchWeb.EndpointMetadata (AccessRequirement (RequireAuthorized), EndpointProtocol (ApiEndpoint), endpointAccess, endpointName, endpointNameText, endpointProtocol, endpointRouteTemplate, routeTemplateText)
+import HarchWeb.EndpointMetadata (AccessRequirement (AllowUnauthenticated, RequireAuthorized), EndpointProtocol (ApiEndpoint), endpointAccess, endpointName, endpointNameText, endpointProtocol, endpointRouteTemplate, routeTemplateText)
 import HarchWeb.Routing (RouteCodec (..), RouteLocation (..), RouteMethod (RoutePost), RouteParseResult (..), RouteRequest (..), requiredPathSegment, routeMethodPolicy)
 import HarchWeb.Routing qualified as Routing
-import HarchWeb.Server (NonPageResponse (..), ProtocolResponse (..), ProtocolResponseBody (..))
+import HarchWeb.Server (NonPageResponse (..), ProtocolResponse (..), ProtocolResponseBody (..), unboundedRouteExecutionPolicy)
 import HarchWeb.Site (RouteDefinition (..), RouteHandler (..))
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
@@ -86,7 +86,7 @@ spec = describe "Unit.Orders.Api" $ do
     show (moduleName moduleValue) `shouldBe` "ModuleName \"orders.api\""
     moduleOwnsRoute moduleValue OrdersSubmit `shouldBe` True
     moduleRouteMountChain moduleValue OrdersSubmit `shouldBe` moduleName moduleValue :| []
-    moduleDeclaredRoutes moduleValue `shouldBe` [OrdersSubmit]
+    moduleDeclaredRoutes moduleValue `shouldBe` [OrdersSubmit, OrdersApiNotFound]
     case moduleGuards moduleValue of
       [] -> pure ()
       _ -> expectationFailure "orders api module must not install guards"
@@ -96,14 +96,18 @@ spec = describe "Unit.Orders.Api" $ do
     parseRoute (moduleRouteCodec moduleValue) ordersContext (RouteLocation [] [])
       `shouldBe` RouteParsed (RouteRequest OrdersSubmit ordersContext)
     parseRoute (moduleRouteCodec moduleValue) ordersContext (RouteLocation [requiredPathSegment "items"] [])
-      `shouldBe` RouteNotMatched
+      `shouldBe` RouteParsed (RouteRequest OrdersApiNotFound ordersContext)
     parseRoute (moduleRouteCodec moduleValue) ordersContext (RouteLocation [requiredPathSegment "submit"] [])
-      `shouldBe` RouteNotMatched
+      `shouldBe` RouteParsed (RouteRequest OrdersApiNotFound ordersContext)
     renderRoute (moduleRouteCodec moduleValue) (RouteRequest OrdersSubmit ordersContext)
       `shouldBe` RouteLocation [] []
+    renderRoute (moduleRouteCodec moduleValue) (RouteRequest OrdersApiNotFound ordersContext)
+      `shouldBe` RouteLocation [requiredPathSegment "404"] []
     notFoundRequest (moduleRouteCodec moduleValue) ordersContext
-      `shouldBe` RouteRequest OrdersSubmit ordersContext
+      `shouldBe` RouteRequest OrdersApiNotFound ordersContext
     Routing.routeMethods (moduleRouteCodec moduleValue) (RouteRequest OrdersSubmit ordersContext) `shouldBe` routeMethodPolicy [RoutePost]
+    Routing.routeMethods (moduleRouteCodec moduleValue) (RouteRequest OrdersApiNotFound ordersContext) `shouldBe` routeMethodPolicy []
+    checkDerived OrdersApiNotFound
     -- The API module's action algebra is uninhabited, so both projections are
     -- constant on values that cannot exist; the tests supply bottom stand-ins
     -- to pin that constant behavior.
@@ -144,6 +148,26 @@ spec = describe "Unit.Orders.Api" $ do
               _ -> expectationFailure "expected strict protocol bytes"
           _ -> expectationFailure "expected a protocol response"
       PageRouteHandler _ -> expectationFailure "orders submit is a protocol endpoint"
+    let notFoundDefinition = moduleEndpoints moduleValue OrdersApiNotFound
+    routeNavigationLabel notFoundDefinition `shouldBe` Nothing
+    routeExecutionPolicy notFoundDefinition `shouldBe` unboundedRouteExecutionPolicy
+    endpointNameText (endpointName (routeMetadata notFoundDefinition)) `shouldBe` "orders.not-found"
+    routeTemplateText (endpointRouteTemplate (routeMetadata notFoundDefinition)) `shouldBe` "/404"
+    endpointProtocol (routeMetadata notFoundDefinition) `shouldBe` ApiEndpoint
+    endpointAccess (routeMetadata notFoundDefinition) `shouldBe` AllowUnauthenticated
+    Site.routeMethods notFoundDefinition (RouteRequest OrdersApiNotFound ordersContext) `shouldBe` routeMethodPolicy []
+    case routeHandler notFoundDefinition of
+      ProtocolRouteHandler renderNotFound -> do
+        notFoundResponse <- renderNotFound Wai.defaultRequest (RouteRequest OrdersApiNotFound ordersContext)
+        case notFoundResponse of
+          NonPageProtocolResponse protocolResponse -> do
+            protocolResponseStatus protocolResponse `shouldBe` Http.status404
+            protocolResponseHeaders protocolResponse `shouldBe` []
+            case protocolResponseBody protocolResponse of
+              ProtocolResponseBytes bodyBytes -> bodyBytes `shouldBe` ""
+              _ -> expectationFailure "expected strict protocol bytes"
+          _ -> expectationFailure "expected a protocol response"
+      PageRouteHandler _ -> expectationFailure "the orders api not-found route is a protocol endpoint"
 
   it "exposes its endpoint and documented family over the submit port" $ do
     let commands = OrdersCommands (\_ -> pure (OrderId "order-7"))
