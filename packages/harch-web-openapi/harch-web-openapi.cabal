@@ -51,6 +51,8 @@ library
     HarchWeb.OpenApi.Swagger
 
   other-modules:
+    HarchWeb.OpenApi.Document.Encoding
+    HarchWeb.OpenApi.Document.Operation
     Paths_harch_web_openapi
 
   autogen-modules:
