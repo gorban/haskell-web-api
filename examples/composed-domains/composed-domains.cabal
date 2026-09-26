@@ -24,7 +24,10 @@ common common
 
 library
   import: common
-  exposed-modules: App.Composed
+  exposed-modules:
+    App.Composed
+    App.Composed.Document
+
   other-modules:
     App.Composed.Admission
     App.Composed.Admission.Proof
@@ -33,6 +36,7 @@ library
     App.Composed.AdmissionSetup
     App.Composed.CsrfSynchronizer
     App.Composed.DeploymentConfig
+    App.Composed.Docs
     App.Composed.Localized
     App.Composed.Model
     App.Composed.Mounts
@@ -50,6 +54,7 @@ library
     base ^>=4.22.0.0,
     bytestring ^>=0.12.2.0,
     catalog-domain ^>=0.1.0.0,
+    containers ^>=0.8,
     core ^>=0.1.2.0,
     crypton ^>=1.1.5,
     harch-web ^>=0.1.2.0,
@@ -114,6 +119,7 @@ test-suite composed-domains-tests
     core ^>=0.1.2.0,
     crypton ^>=1.1.5,
     harch-web ^>=0.1.2.0,
+    harch-web-openapi ^>=0.1.2.0,
     haskell-web-api ^>=0.1.2.0,
     hspec ^>=2.11.17,
     http-types ^>=0.12.5,

@@ -98,7 +98,7 @@ import WebApi.App.Observability
     runtimeConnectionObservabilityReporter,
     runtimeRequestObservabilityReporter,
   )
-import WebApi.App.Shell (appRuntimeAssets, buildAppPageShellConfig)
+import WebApi.App.Shell (appPageShellForPage, appRuntimeAssets)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config
   ( AppConfig (..),
@@ -232,7 +232,7 @@ buildAppWithDatabaseAndOptionalReportersAndSecurity config pageRepository !accou
                     Site.simpleSiteRouteCodec = routeCodec,
                     Site.simpleSiteSecurity = applicationSecurity,
                     Site.simpleSiteCsrfProtection = accountCsrfProtection accountWorkflow,
-                    Site.simpleSitePageShell = buildAppPageShellConfig config . HarchWeb.pageContext,
+                    Site.simpleSitePageShell = appPageShellForPage config,
                     Site.simpleSiteNavigationRoutes = appNavigationRoutes,
                     Site.simpleSiteRouteDefinition = buildAppRouteDefinition config pageRepository accountWorkflow docsOpenApiDocumentProvider
                   }
@@ -319,6 +319,7 @@ appNavigationRoutes :: [AppRoute]
 appNavigationRoutes =
   [HomeRoute, SecondRoute, TodoRoute, RegistrationRoute, LoginRoute, ProfileRoute]
 
+{-# ANN buildAppRouteDefinition ("HLint: ignore Redundant $!" :: String) #-}
 buildAppRouteDefinition ::
   AppConfig ->
   PageRepository ->
@@ -349,9 +350,11 @@ buildAppRouteDefinition config pageRepository accountWorkflow docsOpenApiDocumen
     -- SSR, stylesheet, and enhancement descriptor all arrive from the
     -- typed Swagger surface in 'WebApi.DocsSwagger'.
     DocsSwaggerRoute ->
-      Site.pageRoute
-        (endpointMetadata route)
-        Nothing
+      -- Per docs/design-guidance.md's never-mask-a-gate-finding rule: the
+      -- @$!@ on the navigation label below is a confirmed, reproducible fix
+      -- for the documented HPC pattern where a directly passed literal stays
+      -- unticked despite real execution through this definition.
+      (Site.pageRoute (endpointMetadata route) $! Nothing)
         (\_security request -> pure (docsSwaggerPage request))
     _ ->
       Site.RouteDefinition

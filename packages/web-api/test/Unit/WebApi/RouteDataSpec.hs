@@ -2,8 +2,11 @@
 
 {-# SPEC #-}
 
+import HarchWeb qualified
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi.Database (DatabaseOperation (..), DatabaseSeed (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed)
+import WebApi.Pages.Route.Generated qualified as Generated
+import WebApi.Route (AppRoute (GeneratedPages), defaultRequestContext)
 import WebApi.RouteData (RouteDataResult (..), RouteDataSelection (..), SecondRouteData (..), selectRouteData, selectRouteDataSelectionWithDatabase, selectRouteDataWithDatabase)
 
 spec =
@@ -86,6 +89,11 @@ spec =
         `shouldBe` "[SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = [\"Shared loader\"]}]"
       show [TodoRouteDataResult] `shouldBe` "[TodoRouteDataResult]"
       show [NotFoundRouteDataResult] `shouldBe` "[NotFoundRouteDataResult]"
+
+    it "keeps the docs and generated routes on the static not-found selection" $ do
+      selectRouteData docsSwaggerRequest `shouldReturn` NotFoundRouteDataResult
+      selectRouteData (HarchWeb.RouteRequest (GeneratedPages Generated.ShowcasePage) defaultRequestContext) `shouldReturn` NotFoundRouteDataResult
+      selectRouteData (HarchWeb.RouteRequest (GeneratedPages Generated.ShowcaseAlternatePage) defaultRequestContext) `shouldReturn` NotFoundRouteDataResult
 
     it "selects default stubbed route data without extra wiring" $ do
       selectRouteData secondRequest

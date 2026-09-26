@@ -92,6 +92,7 @@ spec =
               pageRoute page `shouldBe` OrdersIndex
               pageContext page `shouldBe` ordersContext
               pageBootstrapHooks page `shouldBe` []
+              pageStylesheets page `shouldBe` []
               show (pageBody page) `shouldBe` "\"<h1>en summary</h1>\""
             _ -> expectationFailure "expected orders page"
         _ -> expectationFailure "expected a page route handler"

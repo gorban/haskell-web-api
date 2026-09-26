@@ -7,7 +7,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text (isInfixOf)
 import HarchWeb (ClientActionFailurePresentation (..), ClientActionTerminalFailure (clientActionTerminalFailurePage))
 import HarchWeb.ClientActionFailure
-import HarchWeb.Document (Page (pageBody, pageBootstrapHooks, pageContext, pageRoute, pageTitle))
+import HarchWeb.Document (Page (pageBody, pageBootstrapHooks, pageContext, pageRoute, pageStylesheets, pageTitle))
 import HarchWeb.Markup (renderHtml)
 import HarchWeb.RequestId (RequestId, mkRequestId)
 import HarchWeb.Routing (RouteRequest (RouteRequest))
@@ -53,6 +53,7 @@ spec = describe "HarchWeb.ClientActionFailure" $ do
                rendered `shouldSatisfy` ("Request could not be completed" `Text.isInfixOf`),
                rendered `shouldSatisfy` (failureReferenceText reference `Text.isInfixOf`),
                pageBootstrapHooks page `shouldBe` [],
+               pageStylesheets page `shouldBe` [],
                harchClientFailureCode StorageCleanupFailed `Text.isInfixOf` rendered `shouldBe` False
              ]
       )
@@ -71,7 +72,8 @@ spec = describe "HarchWeb.ClientActionFailure" $ do
       ( (pageTitle terminalPage `shouldBe` "Request could not be completed")
           :| [ rendered `shouldSatisfy` ("Request could not be completed" `Text.isInfixOf`),
                rendered `shouldSatisfy` ("3a99e441-7c35-4b87-91bf-c3583c008a0f" `Text.isInfixOf`),
-               pageBootstrapHooks terminalPage `shouldBe` []
+               pageBootstrapHooks terminalPage `shouldBe` [],
+               pageStylesheets terminalPage `shouldBe` []
              ]
       )
 

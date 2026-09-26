@@ -20,7 +20,9 @@
 -- values stay explicit at their protocol boundary; the native admission
 -- fallback likewise groups only its installed stable capabilities.
 module App.Composed
-  ( ComposedContext,
+  ( composedDocumentationProviderOrDie,
+    DocsRoute (..),
+    ComposedContext,
     AdmissionPrincipal,
     AdmissionReturnTarget (..),
     AdmissionPrincipalId,
@@ -203,9 +205,11 @@ import App.Composed.DeploymentConfig
     composedDeploymentDatabase,
     parseComposedDeploymentConfig,
   )
+import App.Composed.Docs (buildDocsModule)
+import App.Composed.Document (composedCatalogItemsExtension, composedOpenApiDocumentProvider, composedOrdersSubmitExtension)
 import App.Composed.Localized (localizeApplicationModule, requestContextFromWai)
 import App.Composed.Model
-import App.Composed.Mounts (catalogApiModuleMount, catalogModuleMount, ordersApiModuleMount, ordersModuleMount)
+import App.Composed.Mounts (catalogApiRootMount, catalogModuleMount, docsRootMount, ordersApiRootMount, ordersModuleMount)
 import App.Composed.Postgres
   ( ComposedDatabaseConnectionString (..),
     composedDatabaseChanges,
@@ -238,9 +242,7 @@ import App.Composed.Postgres.SynchronizerStore
 import App.Composed.Public (buildPublicModule, buildPublicModuleWithAdmissionWorkflow)
 import Catalog.Api (buildCatalogApiModule)
 import Catalog.Domain (CatalogCommands, CatalogQueries, CatalogRoute (CatalogIndex), buildCatalogModule)
-import Data.ByteString qualified as ByteString
 import Data.List.NonEmpty (NonEmpty (..))
-import HarchWeb.Api (ApiForm)
 import HarchWeb.ApplicationModule
   ( ApplicationModule (..),
     applicationModuleSite,
@@ -258,13 +260,14 @@ import HarchWeb.Document
 import HarchWeb.EndpointMetadata (EndpointMetadata (..))
 import HarchWeb.EndpointSecurity (ApplicationSecurity (AuthenticationDisabled))
 import HarchWeb.Markup (literalElementId)
-import HarchWeb.OpenApi (OpenApiExtension, OpenApiExtensionError, mkOpenApiExtension)
+import HarchWeb.OpenApi (OpenApiDocumentFailure, OpenApiDocumentProvider)
+import HarchWeb.OpenApi.Swagger (defaultSwaggerUiProps, swaggerUiPageEnhancement)
 import HarchWeb.RequestContext (CoreRequestContext (..), RequestContext (..))
 import HarchWeb.SecurityEvent (RouteObservation (..))
 import HarchWeb.Site (Site)
 import HarchWeb.Site qualified as Site
 import HarchWeb.StaticAssets (StaticAssetsConfig)
-import Orders.Api (SubmitOrderCommand, buildOrdersApiModule)
+import Orders.Api (buildOrdersApiModule)
 import Orders.Domain (OrdersCommands, OrdersQueries, OrdersRoute (OrdersIndex), buildOrdersModule)
 
 -- | The Catalog and Orders capabilities installed by this composed root.
@@ -338,6 +341,18 @@ buildComposedSiteWithAdmissionWorkflow dependencies maybeAdmissionWorkflow rootS
         rootModule
     rootModule = buildComposedModuleWithAdmissionWorkflow dependencies maybeAdmissionWorkflow
 
+-- | Unwrap the composed documentation provider; a failure here is an
+-- authored-composition defect and must fail loudly at construction. Exported
+-- so a Unit test exercises that rail directly against a genuine failure
+-- value, exactly like the template's required-or-die boundaries.
+composedDocumentationProviderOrDie :: Either OpenApiDocumentFailure (OpenApiDocumentProvider ComposedContext) -> OpenApiDocumentProvider ComposedContext
+composedDocumentationProviderOrDie = either (\_ -> error "composed-domains could not build its documentation") id
+
+-- Per docs/design-guidance.md's never-mask-a-gate-finding rule: the @$!@
+-- forms in this module are confirmed, reproducible fixes for the documented
+-- HPC pattern where directly passed bindings and literals stay unticked
+-- despite real execution (proved end to end by the composed WAI tests).
+{-# ANN composedPageShell ("HLint: ignore Redundant $!" :: String) #-}
 composedPageShell :: Page RootRoute ComposedContext -> PageShell RootRoute ComposedContext
 composedPageShell page =
   PageShell
@@ -353,10 +368,17 @@ composedPageShell page =
       shellMainAttributes = [],
       shellNavigationLifecycle = Nothing,
       shellStylesheets = [],
-      shellRuntimeDescriptors = []
+      shellRuntimeDescriptors = docsEnhancement
     }
   where
     selectedLocale = requestLocale (requestCore (pageContext page))
+    -- The Swagger UI page contributes its page-enhancement descriptor to the
+    -- shell, mirroring web-api's DocsSwagger wiring, so its SSR carries the
+    -- behavior module beside the page-owned stylesheet.
+    docsEnhancement =
+      case pageRoute page of
+        UnlocalizedDocs DocsUi -> [swaggerUiPageEnhancement ((defaultSwaggerUiProps $! pageRoute page) $! pageContext page)]
+        _ -> []
 
 buildComposedModuleWithDependencies :: ComposedSiteDependencies -> ApplicationModule RootRoute RootActionTarget RootAction ComposedContext RootAuthorization
 buildComposedModuleWithDependencies dependencies =
@@ -370,7 +392,7 @@ buildComposedModuleWithAdmissionWorkflow dependencies maybeAdmissionWorkflow =
 
 buildComposedModuleWithPublicModule :: ComposedSiteDependencies -> ApplicationModule LocalizedRoute RootActionTarget RootAction ComposedContext RootAuthorization -> ApplicationModule RootRoute RootActionTarget RootAction ComposedContext RootAuthorization
 buildComposedModuleWithPublicModule dependencies publicModule =
-  requiredModuleConfiguration (localizeApplicationModule (composedLocalePolicy dependencies) localizedModule)
+  rootModule
   where
     domainCapabilities = composedDomainCapabilities dependencies
     catalogModule = requiredModuleConfiguration (mountApplicationModule catalogModuleMount (buildCatalogModule (composedCatalogQueries domainCapabilities) (composedCatalogCommands domainCapabilities)))
@@ -378,28 +400,21 @@ buildComposedModuleWithPublicModule dependencies publicModule =
     -- The domain API modules take the documentation extension at assembly:
     -- the composed root is the one documented surface (AHI-4E), while the
     -- domain packages themselves compile unchanged with 'NoApiExtension'.
-    catalogApiModule = requiredModuleConfiguration (mountApplicationModule catalogApiModuleMount (buildCatalogApiModule composedCatalogItemsExtension (composedCatalogQueries domainCapabilities)))
-    ordersApiModule = requiredModuleConfiguration (mountApplicationModule ordersApiModuleMount (buildOrdersApiModule composedOrdersSubmitExtension (composedOrdersCommands domainCapabilities)))
-    localizedModule = requiredModuleConfiguration (combineApplicationModules (publicModule :| [catalogModule, ordersModule, catalogApiModule, ordersApiModule]))
-
--- | The composed root's authored documentation extensions for the two
--- documented operations (AHI-4E): one combined document, separate
--- Catalog/Orders tags, and the ordinary scope requirements.
--- | Unwrap one statically authored documentation extension; a failure here
--- is a composition-time defect in authored literals, exactly like the
--- framework's required-or-die boundaries.
-requireOpenApiExtension :: Either OpenApiExtensionError (OpenApiExtension fields body response) -> OpenApiExtension fields body response
-requireOpenApiExtension = either (error . ("composed-domains authored an invalid OpenAPI extension: " <>) . show) id
-
-composedCatalogItemsExtension :: OpenApiExtension () () ByteString.ByteString
-composedCatalogItemsExtension =
-  requireOpenApiExtension
-    (mkOpenApiExtension (Just "List the catalog summary.") Nothing ["Catalog"] False [])
-
-composedOrdersSubmitExtension :: OpenApiExtension SubmitOrderCommand ApiForm ByteString.ByteString
-composedOrdersSubmitExtension =
-  requireOpenApiExtension
-    (mkOpenApiExtension (Just "Submit one order.") Nothing ["Orders"] False [])
+    catalogApiModule = requiredModuleConfiguration (mountApplicationModule catalogApiRootMount (buildCatalogApiModule composedCatalogItemsExtension (composedCatalogQueries domainCapabilities)))
+    ordersApiModule = requiredModuleConfiguration (mountApplicationModule ordersApiRootMount (buildOrdersApiModule composedOrdersSubmitExtension (composedOrdersCommands domainCapabilities)))
+    localizedModule = requiredModuleConfiguration (combineApplicationModules (publicModule :| [catalogModule, ordersModule]))
+    -- The API modules mount at the root outside the locale wrapper: their
+    -- documented templates are the locale-free root-composed
+    -- /api/catalog/items and /api/orders (AHI-4E).
+    docsProvider = composedDocumentationProviderOrDie ((composedOpenApiDocumentProvider defaultComposedContext $! composedCatalogQueries domainCapabilities) $! composedOrdersCommands domainCapabilities)
+    docsModule = requiredModuleConfiguration (mountApplicationModule docsRootMount (buildDocsModule docsProvider))
+    rootModule =
+      requiredModuleConfiguration
+        ( combineApplicationModules
+            ( requiredModuleConfiguration (localizeApplicationModule (composedLocalePolicy dependencies) localizedModule)
+                :| [catalogApiModule, ordersApiModule, docsModule]
+            )
+        )
 
 admissionWorkflow :: AdmissionPolicy -> Maybe (AdmissionConfig, AdmissionProofConfig)
 admissionWorkflow policy =

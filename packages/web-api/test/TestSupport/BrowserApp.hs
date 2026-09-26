@@ -12,7 +12,7 @@ where
 
 import HarchWeb qualified
 import HarchWeb.OpenApi.Swagger (swaggerUiAssetsRoot)
-import System.Directory (copyFile, createDirectory, doesFileExist, getCurrentDirectory)
+import System.Directory (copyFile, createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import TestCore.E2EPrelude (BrowserConfig, requirePlaywrightBrowserConfig)
@@ -36,10 +36,8 @@ withBrowserApp action = do
   browser <- requirePlaywrightBrowserConfig
   withSystemTempDirectory "web-api-e2e-assets" $ \assetDirectory ->
     do
-      let stylesDirectory = assetDirectory </> "styles"
-      createDirectory stylesDirectory
-      sourceStylesheet <- findSourceStylesheet
-      copyFile sourceStylesheet (stylesDirectory </> "app.css")
+      sourcePublicDirectory <- findSourcePublicDirectory
+      copyDirectoryTree sourcePublicDirectory assetDirectory
       action
         ( browser,
           defaultAppConfig
@@ -58,28 +56,48 @@ withBrowserApp action = do
             }
         )
 
-findSourceStylesheet :: IO FilePath
-findSourceStylesheet = getCurrentDirectory >>= searchFrom
+-- | Locate the package's @public@ asset directory by its stable base
+-- stylesheet marker, walking up from the test working directory so the
+-- fixture works from the package directory and the repository root alike.
+findSourcePublicDirectory :: IO FilePath
+findSourcePublicDirectory = getCurrentDirectory >>= searchFrom
   where
     searchFrom directory = do
       let candidates =
-            [ directory </> "public/styles/app.css",
-              directory </> "packages/web-api/public/styles/app.css"
+            [ directory </> "public",
+              directory </> "packages/web-api/public"
             ]
       existing <- firstExisting candidates
       case existing of
-        Just stylesheet -> pure stylesheet
+        Just publicDirectory -> pure publicDirectory
         Nothing ->
           let parent = takeDirectory directory
            in if parent == directory
-                then ioError (userError "could not locate packages/web-api/public/styles/app.css")
+                then ioError (userError "could not locate packages/web-api/public")
                 else searchFrom parent
 
     firstExisting paths =
       case paths of
         [] -> pure Nothing
         path : remaining -> do
-          exists <- doesFileExist path
+          exists <- doesFileExist (path </> "styles" </> "app.css")
           if exists
             then pure (Just path)
             else firstExisting remaining
+
+-- | Mirror one directory tree into an existing destination directory so the
+-- temporary asset root serves every authored static file (base and
+-- page-owned stylesheets alike) without touching the repository.
+copyDirectoryTree :: FilePath -> FilePath -> IO ()
+copyDirectoryTree source destination =
+  listDirectory source >>= mapM_ copyEntry
+  where
+    copyEntry name = do
+      let sourcePath = source </> name
+          destinationPath = destination </> name
+      isDirectory <- doesDirectoryExist sourcePath
+      if isDirectory
+        then do
+          createDirectory destinationPath
+          copyDirectoryTree sourcePath destinationPath
+        else copyFile sourcePath destinationPath

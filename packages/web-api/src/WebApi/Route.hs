@@ -179,6 +179,12 @@ pattern NotFoundRoute = Page PageNotFound
 pattern ApiNotFoundRoute :: AppRoute
 pattern ApiNotFoundRoute = Api ApiNotFound
 
+-- Completeness is declared over both views: the constructor triple is the
+-- exact covering set (GHC misattributes pattern-synonym coverage when only
+-- synonym names are listed), while the synonym set keeps the hand-authored
+-- name tables complete on their own terms.
+{-# COMPLETE Page, Api, GeneratedPages #-}
+
 {-# COMPLETE HomeRoute, SecondRoute, TodoRoute, RegistrationRoute, EmailVerificationRoute, MfaEnrollmentRoute, LoginRoute, LogoutRoute, ProfileRoute, LanguageRoute, HelpRoute, NotFoundRoute, StatusApiRoute, SecondApiRoute, MeApiRoute, TokenApiRoute, DocsOpenApiSpecRoute, ApiNotFoundRoute, GeneratedPages #-}
 
 instance Show AppRoute where
@@ -481,11 +487,17 @@ endpointMetadata route =
     GeneratedPages Generated.ShowcasePage -> html "web.showcase" "/{locale}/showcase"
     GeneratedPages Generated.ShowcaseAlternatePage -> html "web.showcase-alternate" "/{locale}/showcase-alternate"
 
+-- Per docs/design-guidance.md's never-mask-a-gate-finding rule: the @$!@ on
+-- the name and template below is a confirmed, reproducible fix for the
+-- documented HPC pattern where a binding used as a direct argument to an
+-- instrumented call stays unticked despite real execution (every table row's
+-- literals are validated end to end by the route-table tests).
+{-# ANN declaredMetadata ("HLint: ignore Redundant $!" :: String) #-}
 declaredMetadata :: EndpointProtocol -> AccessRequirement AppAuthorization -> Text -> Text -> EndpointMetadata AppAuthorization
 declaredMetadata protocol accessRequirement name template =
   mkEndpointMetadata
-    (requiredEndpointNameOrDie name)
-    (requiredRouteTemplateOrDie template)
+    (requiredEndpointNameOrDie $! name)
+    (requiredRouteTemplateOrDie $! template)
     protocol
     accessRequirement
 

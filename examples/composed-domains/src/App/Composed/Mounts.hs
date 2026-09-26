@@ -6,9 +6,10 @@
 -- package, so domains remain independently buildable and cannot import the
 -- application composition root.
 module App.Composed.Mounts
-  ( catalogApiModuleMount,
+  ( catalogApiRootMount,
+    docsRootMount,
     catalogModuleMount,
-    ordersApiModuleMount,
+    ordersApiRootMount,
     ordersModuleMount,
   )
 where
@@ -117,9 +118,9 @@ ordersAuthorization policy =
 -- The extension-parameterized module itself is assembled in
 -- 'App.Composed'; this mount only composes root-owned route identity,
 -- projections, and the bearer-only authentication profile.
-catalogApiModuleMount ::
+catalogApiRootMount ::
   ModuleMount
-    LocalizedRoute
+    RootRoute
     RootActionTarget
     RootAction
     ComposedContext
@@ -129,15 +130,15 @@ catalogApiModuleMount ::
     CatalogApiAction
     CatalogContext
     CatalogPolicy
-catalogApiModuleMount =
+catalogApiRootMount =
   ModuleMount
     { mountedRoutes =
         RouteMount
           { routeMountName = requiredModuleNameOrDie "root.catalog.api",
             routeMountPrefix = requiredPathSegment "api" :| [requiredPathSegment "catalog"],
-            embedChildRoute = CatalogApi,
+            embedChildRoute = UnlocalizedCatalogApi,
             projectChildRoute = \case
-              CatalogApi route -> Just route
+              UnlocalizedCatalogApi route -> Just route
               _ -> Nothing
           },
       mountedActions =
@@ -152,9 +153,9 @@ catalogApiModuleMount =
       mountedAuthenticationProfile = Nothing
     }
 
-ordersApiModuleMount ::
+ordersApiRootMount ::
   ModuleMount
-    LocalizedRoute
+    RootRoute
     RootActionTarget
     RootAction
     ComposedContext
@@ -164,15 +165,15 @@ ordersApiModuleMount ::
     OrdersApiAction
     OrdersContext
     OrdersPolicy
-ordersApiModuleMount =
+ordersApiRootMount =
   ModuleMount
     { mountedRoutes =
         RouteMount
           { routeMountName = requiredModuleNameOrDie "root.orders.api",
             routeMountPrefix = requiredPathSegment "api" :| [requiredPathSegment "orders"],
-            embedChildRoute = OrdersApi,
+            embedChildRoute = UnlocalizedOrdersApi,
             projectChildRoute = \case
-              OrdersApi route -> Just route
+              UnlocalizedOrdersApi route -> Just route
               _ -> Nothing
           },
       mountedActions =
@@ -184,5 +185,43 @@ ordersApiModuleMount =
           },
       mountedContext = ContextProjection ordersContext,
       mountedAuthorization = AuthorizationProjection ordersAuthorization,
+      mountedAuthenticationProfile = Nothing
+    }
+
+-- | Mount the documentation surface at @/docs@ at the root, outside the
+-- locale wrapper: the typed specification and the Swagger page keep
+-- locale-free templates exactly like the API subtree.
+docsRootMount ::
+  ModuleMount
+    RootRoute
+    RootActionTarget
+    RootAction
+    ComposedContext
+    RootAuthorization
+    DocsRoute
+    DocsActionTarget
+    DocsAction
+    ComposedContext
+    RootAuthorization
+docsRootMount =
+  ModuleMount
+    { mountedRoutes =
+        RouteMount
+          { routeMountName = requiredModuleNameOrDie "root.docs",
+            routeMountPrefix = requiredPathSegment "docs" :| [],
+            embedChildRoute = UnlocalizedDocs,
+            projectChildRoute = \case
+              UnlocalizedDocs route -> Just route
+              _ -> Nothing
+          },
+      mountedActions =
+        ActionMount
+          { embedChildActionTarget = \case {},
+            projectChildActionTarget = const Nothing,
+            embedChildAction = \case {},
+            projectChildAction = const Nothing
+          },
+      mountedContext = ContextProjection id,
+      mountedAuthorization = AuthorizationProjection id,
       mountedAuthenticationProfile = Nothing
     }

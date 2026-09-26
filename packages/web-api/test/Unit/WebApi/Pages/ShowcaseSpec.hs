@@ -5,10 +5,13 @@
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text qualified as Text
 import HarchWeb qualified
+import HarchWeb.Site (RouteDefinition (routeNavigationLabel))
 import TestCore.Wai (performWaiRequest, readResponseBody, waiRequest)
 import Unit.WebApi.TestSupport (pureApplication)
 import WebApi.Config (defaultAppConfig)
 import WebApi.PageModule (PageFailure (..), PageModule (..), pageModulePage, renderPageFailure)
+import WebApi.Pages.Showcase qualified as Showcase
+import WebApi.Pages.ShowcaseAlternate qualified as ShowcaseAlternate
 import WebApi.Route (AppRoute (DocsSwaggerRoute, ShowcaseAlternateRoute, ShowcaseRoute), RouteMetadata (..), defaultRequestContext, endpointMetadata, renderRoutePath, routeEnhancementHooks, routeMetadata, routePageSegment, routePageTitle)
 
 spec = describe "WebApi.Pages showcase family" $ do
@@ -93,6 +96,15 @@ spec = describe "WebApi.Pages showcase family" $ do
         "boom"
         (HarchWeb.renderHtml (renderPageFailure (PageFailureMessage "boom")))
         `shouldBe` True
+      show (PageFailureMessage "boom") `shouldBe` "PageFailureMessage \"boom\""
+      PageFailureMessage "boom" == PageFailureMessage "boom" `shouldBe` True
+      PageFailureMessage "boom" /= PageFailureMessage "bang" `shouldBe` True
+      showsPrec 11 (PageFailureMessage "boom") "" `shouldSatisfy` (not . null)
+      showList [PageFailureMessage "boom"] "" `shouldSatisfy` (not . null)
+
+    it "keeps the generated pages' modules owning no navigation label" $ do
+      routeNavigationLabel (Showcase.pageDefinition defaultAppConfig) `shouldBe` Nothing
+      routeNavigationLabel (ShowcaseAlternate.pageDefinition defaultAppConfig) `shouldBe` Nothing
 
   describe "the /docs Swagger page as an ordinary typed surface" $ do
     it "renders complete SSR with the fallback, mount, prefixed assets, and enhancement descriptor" $ do

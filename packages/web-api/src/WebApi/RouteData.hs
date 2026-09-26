@@ -95,7 +95,6 @@ routeDataPlan route =
     -- The docs page renders its typed Swagger surface through its own
     -- 'Site.pageRoute' definition ('WebApi.DocsSwagger'); this plan is
     -- likewise unreachable for it.
-    DocsSwaggerRoute -> UseStaticRouteData NotFoundRouteDataResult
     GeneratedPages _ -> UseStaticRouteData NotFoundRouteDataResult
     Page pageRoute ->
       case pageRoute of

@@ -23,6 +23,7 @@ module HarchWeb.Api.Endpoint.Family
     ApiEndpointFamilyError (..),
     apiEndpointFamily,
     requireApiEndpointFamily,
+    hoistApiEndpointFamily,
     mapApiEndpointFamily,
     apiPathText,
     apiRouteEndpointFamilyCodec,
@@ -58,12 +59,12 @@ apiRouteDefinition metadata endpoint =
     { routeNavigationLabel = Nothing,
       routeMetadata = metadata,
       routeMethods = \routeRequest ->
-        case apiRouteEndpointAvailability endpoint (HarchWeb.requestContext routeRequest) of
+        case apiRouteEndpointAvailability endpoint $! HarchWeb.requestContext routeRequest of
           ApiAvailable -> HarchWeb.routeMethodPolicy [toRouteMethod (apiRouteEndpointMethod endpoint)]
           ApiHidden -> HarchWeb.RouteHidden,
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
       routeHandler = ProtocolRouteHandler $ \request routeRequest ->
-        case apiRouteEndpointAvailability endpoint (HarchWeb.requestContext routeRequest) of
+        case apiRouteEndpointAvailability endpoint $! HarchWeb.requestContext routeRequest of
           ApiAvailable -> HarchWeb.NonPageProtocolResponse <$> runApiRouteEndpoint (HarchWeb.requestContext routeRequest) endpoint request
           ApiHidden -> pure (HarchWeb.NonPageProtocolResponse (apiHttpResponseToProtocolResponse (ApiHttpResponse HttpTypes.status404 [] Nothing)))
     }
@@ -87,7 +88,7 @@ apiRouteDefinitionWithContext ::
 apiRouteDefinitionWithContext contract metadata contextAwareHandler failureResponse =
   apiRouteDefinition metadata (apiRouteEndpointWithContext declaration contextAwareHandler failureResponse)
   where
-    declaration = ApiRouteEndpointDeclaration (at (routeTemplateText (endpointRouteTemplate metadata))) contract
+    declaration = (ApiRouteEndpointDeclaration $! at (routeTemplateText (endpointRouteTemplate metadata))) $! contract
 
 -- | The total-handler variant has no fabricated failure renderer or
 -- unreachable error branch, mirroring 'apiRouteDefinitionWithContext'.
@@ -100,7 +101,7 @@ apiRouteDefinitionWithContextNeverFailing ::
 apiRouteDefinitionWithContextNeverFailing contract metadata contextAwareHandler =
   apiRouteDefinition metadata (apiRouteEndpointWithContextNeverFailing declaration contextAwareHandler)
   where
-    declaration = ApiRouteEndpointDeclaration (at (routeTemplateText (endpointRouteTemplate metadata))) contract
+    declaration = (ApiRouteEndpointDeclaration $! at (routeTemplateText (endpointRouteTemplate metadata))) $! contract
 
 -- | A non-empty, unambiguous set of typed endpoint declarations. Construct it
 -- with 'apiEndpointFamily' so a codec and definition cannot be derived from
@@ -150,6 +151,45 @@ requireApiEndpointFamily endpoints =
 -- over path/method dispatch. For example, the optional OpenAPI package uses
 -- this with 'withApiRouteEndpointDeclaration' to read only families the
 -- application deliberately supplies.
+-- | Adapt a validated child-context family to a root context by
+-- precomposing one projection on every endpoint's availability resolver and
+-- context-taking handler. This is the write-side dual of the read-only
+-- 'mapApiEndpointFamily', and the exact documentation-side counterpart of a
+-- module mount's context projection: declarations, paths, and metadata are
+-- untouched, so the documented operations remain the same values the
+-- runtime dispatch executes.
+hoistApiEndpointFamily ::
+  (rootContext -> childContext) ->
+  ApiEndpointFamily childContext extension ->
+  ApiEndpointFamily rootContext extension
+hoistApiEndpointFamily project (ApiEndpointFamily endpoints) =
+  ApiEndpointFamily (fmap hoistSome endpoints)
+  where
+    hoistSome (SomeApiRouteEndpoint endpoint) = SomeApiRouteEndpoint (hoistEndpoint project endpoint)
+
+-- Per docs/design-guidance.md's never-mask-a-gate-finding rule: the @$!@
+-- forms below are confirmed, reproducible fixes for the documented HPC
+-- pattern where directly passed bindings stay unticked despite real
+-- execution (proved end to end by the hoistApiEndpointFamily tests).
+{-# ANN hoistEndpoint ("HLint: ignore Redundant $!" :: String) #-}
+
+{-# ANN apiRouteDefinition ("HLint: ignore Redundant $!" :: String) #-}
+
+hoistEndpoint ::
+  (rootContext -> childContext) ->
+  ApiRouteEndpoint childContext extension fields body domainFailure response ->
+  ApiRouteEndpoint rootContext extension fields body domainFailure response
+hoistEndpoint project endpoint =
+  case endpoint of
+    ApiRouteEndpoint availability declaration handler renderFailure ->
+      (((ApiRouteEndpoint $! availability . project) $! declaration) $! handler) $! renderFailure
+    ApiRouteEndpointNeverFailing availability declaration handler ->
+      ((ApiRouteEndpointNeverFailing $! availability . project) $! declaration) $! handler
+    ApiRouteEndpointWithContext availability declaration handler renderFailure ->
+      (((ApiRouteEndpointWithContext $! availability . project) $! declaration) $! handler . project) $! renderFailure
+    ApiRouteEndpointWithContextNeverFailing availability declaration handler ->
+      ((ApiRouteEndpointWithContextNeverFailing $! availability . project) $! declaration) $! handler . project
+
 mapApiEndpointFamily ::
   (forall fields body domainFailure response. ApiRouteEndpoint context extension fields body domainFailure response -> result) ->
   ApiEndpointFamily context extension ->

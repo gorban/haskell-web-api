@@ -5,6 +5,7 @@
 module Unit.App.ComposedSpec (spec) where
 
 import App.Composed
+import App.Composed.Document (composedAuthorizationScopes, composedEndpointMetadataForPath, requireOpenApiExtension)
 import Catalog.Api (CatalogApiRoute (CatalogItems))
 import Catalog.Domain
 import Control.Concurrent (forkIO, newEmptyMVar, putMVar, readMVar, takeMVar)
@@ -23,6 +24,7 @@ import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
 import HarchWeb.Account qualified as Account
 import HarchWeb.Action qualified as Action
+import HarchWeb.Api (at)
 import HarchWeb.ApplicationModule (ApplicationModule (..), mountApplicationModule)
 import HarchWeb.ClientStorage (noClientStorageCleanup)
 import HarchWeb.Csrf (PageSecurity, mkCsrfToken, mkPageCsrf, mkPageSecurity)
@@ -31,10 +33,12 @@ import HarchWeb.Csrf.Signed qualified as Signed
 import HarchWeb.Document (NavigationItem (..), Page (..), PageShell (..), testRuntimeNonce)
 import HarchWeb.EndpointMetadata
   ( AccessRequirement (AllowUnauthenticated, RequireAuthorized),
+    EndpointMetadata,
     EndpointName,
     EndpointProtocol (ApiEndpoint, AssetEndpoint, HtmlEndpoint),
     endpointAccess,
     endpointName,
+    endpointNameText,
     endpointProtocol,
     endpointRouteTemplate,
     requiredEndpointNameOrDie,
@@ -51,6 +55,7 @@ import HarchWeb.EndpointSecurity
 import HarchWeb.Localization (locale)
 import HarchWeb.LoginProtection (defaultLoginProtectionPolicy)
 import HarchWeb.Markup (literalElementId, renderHtml)
+import HarchWeb.OpenApi (OpenApiDocumentFailure (EmptyOpenApiDocumentTitle), OpenApiDocumentProvider, OpenApiExtension, OpenApiExtensionError (InvalidOpenApiSpecificationExtensionName))
 import HarchWeb.RequestContext
   ( CoreRequestContext (..),
     RequestContext (..),
@@ -106,7 +111,7 @@ import Network.Wai qualified as Wai
 import Orders.Api (OrdersApiRoute (OrdersSubmit))
 import Orders.Domain
 import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
+import TestCore.CustomAssertions (expectAll, shouldContain')
 import TestCore.Wai (nextRequestBodyChunk, performWaiRequest, readResponseBody, waiRequest)
 import WebApi.Config qualified as WebApiConfig
 import WebApi.Postgres.Testing qualified as WebApiPostgres
@@ -1248,8 +1253,10 @@ spec = describe "Unit.App.Composed" $ do
                    Localized (locale "en") (Public PublicNotFound),
                    Localized (locale "en") (Catalog CatalogIndex),
                    Localized (locale "en") (Orders OrdersIndex),
-                   Localized (locale "en") (CatalogApi CatalogItems),
-                   Localized (locale "en") (OrdersApi OrdersSubmit)
+                   UnlocalizedCatalogApi CatalogItems,
+                   UnlocalizedOrdersApi OrdersSubmit,
+                   UnlocalizedDocs DocsSpec,
+                   UnlocalizedDocs DocsUi
                  ]
     map (endpointName . routeMetadata . moduleEndpoints rootModule) (moduleDeclaredRoutes rootModule)
       `shouldBe` [ requiredEndpointName "root.public.admission",
@@ -1259,7 +1266,9 @@ spec = describe "Unit.App.Composed" $ do
                    requiredEndpointName "root.catalog.catalog.index",
                    requiredEndpointName "root.orders.orders.index",
                    requiredEndpointName "root.catalog.api.catalog.items",
-                   requiredEndpointName "root.orders.api.orders.submit"
+                   requiredEndpointName "root.orders.api.orders.submit",
+                   requiredEndpointName "root.docs.docs.openapi-spec",
+                   requiredEndpointName "root.docs.docs.swagger"
                  ]
     map endpointName (Action.declaredActionEndpointMetadata (moduleActionCodec rootModule))
       `shouldBe` [requiredEndpointName "root.catalog.catalog.refresh", requiredEndpointName "root.orders.orders.submit"]
@@ -1843,6 +1852,98 @@ spec = describe "Unit.App.Composed" $ do
           unexpectedResult -> expectationFailure ("expected a localized guarded response, got " <> show unexpectedResult)
       _ -> expectationFailure "expected exactly one localized guard"
 
+  it "serves the composed documentation page as complete SSR through the production WAI interpreter" $ do
+    composedSite <- requiredComposedSite
+    waiApplication <- toWaiApplication (Site.buildSiteApplication composedSite)
+    docsResponse <- performWaiRequest (pure waiApplication) (waiRequest ["docs"])
+    docsBody <- readResponseBody docsResponse
+    expectAll
+      ( (Wai.responseStatus docsResponse `shouldBe` Http.status200)
+          :| [ Text.isInfixOf "data-page=\"docs\"" docsBody `shouldBe` True,
+               Text.isInfixOf "data-swagger-fallback=\"true\"" docsBody `shouldBe` True,
+               Text.isInfixOf "href=\"/docs/openapi.json\"" docsBody `shouldBe` True,
+               Text.isInfixOf "data-swagger-ui=\"true\"" docsBody `shouldBe` True,
+               Text.isInfixOf "data-swagger-spec-url=\"/docs/openapi.json\"" docsBody `shouldBe` True,
+               Text.isInfixOf "data-swagger-bundle-url=\"/docs/assets/swagger-ui-bundle.js\"" docsBody `shouldBe` True,
+               Text.isInfixOf "href=\"/docs/assets/swagger-ui.css\"" docsBody `shouldBe` True,
+               Text.isInfixOf "data-harch-page-enhancement=\"harch-swagger-ui\"" docsBody `shouldBe` True,
+               Text.isInfixOf "src=\"/docs/assets/swagger-enhancement.js\"" docsBody `shouldBe` True
+             ]
+      )
+
+  it "serves one merged OpenAPI document for both documented API families" $ do
+    composedSite <- requiredComposedSite
+    waiApplication <- toWaiApplication (Site.buildSiteApplication composedSite)
+    specResponse <- performWaiRequest (pure waiApplication) (waiRequest ["docs", "openapi.json"])
+    specBody <- readResponseBody specResponse
+    repeatResponse <- performWaiRequest (pure waiApplication) (waiRequest ["docs", "openapi.json"])
+    repeatBody <- readResponseBody repeatResponse
+    expectAll
+      ( (Wai.responseStatus specResponse `shouldBe` Http.status200)
+          :| [ Text.unpack specBody `shouldContain'` "\"/api/catalog/items\"",
+               Text.unpack specBody `shouldContain'` "\"/api/orders\"",
+               Text.unpack specBody `shouldContain'` "get-api-catalog-items",
+               Text.unpack specBody `shouldContain'` "post-api-orders",
+               Text.unpack specBody `shouldContain'` "composed-api-bearer",
+               Text.unpack specBody `shouldContain'` "catalog:read",
+               Text.unpack specBody `shouldContain'` "orders:write",
+               Text.unpack specBody `shouldContain'` "\"Catalog\"",
+               Text.unpack specBody `shouldContain'` "\"Orders\"",
+               specBody `shouldBe` repeatBody
+             ]
+      )
+
+  it "executes the mounted catalog and orders API subtree through the production WAI interpreter" $ do
+    let authenticatedSecurity =
+          AuthenticationEnabled
+            []
+            (AuthenticationGuard (pure . ContinueEndpoint . apiRootContext . endpointRouteRequest))
+            []
+        apiSite = buildComposedSiteWithSecurityDependencies defaultComposedSiteDependencies authenticatedSecurity
+    waiApplication <- toWaiApplication (Site.buildSiteApplication apiSite)
+    itemsResponse <- performWaiRequest (pure waiApplication) (waiRequest ["api", "catalog", "items"])
+    itemsBody <- readResponseBody itemsResponse
+    submitRequest <- formPostRequest ["api", "orders"] [("item", "widget")]
+    submitResponse <- performWaiRequest (pure waiApplication) submitRequest
+    submitBody <- readResponseBody submitResponse
+    expectAll
+      ( (Wai.responseStatus itemsResponse `shouldBe` Http.status200)
+          :| [ itemsBody `shouldBe` "{\"summary\":\"Catalog\"}",
+               Wai.responseStatus submitResponse `shouldBe` Http.status202,
+               submitBody `shouldBe` "{\"orderId\":\"order-1\"}"
+             ]
+      )
+
+  it "projects the documented operation metadata, scopes, and authored error rails" $ do
+    let itemsMetadata = composedEndpointMetadataForPath (at "/items")
+        submitMetadata = composedEndpointMetadataForPath (at "/")
+    expectAll
+      ( (endpointNameText (endpointName itemsMetadata) `shouldBe` "root.catalog.api.catalog.items")
+          :| [ routeTemplateText (endpointRouteTemplate itemsMetadata) `shouldBe` "/api/catalog/items",
+               endpointProtocol itemsMetadata `shouldBe` ApiEndpoint,
+               endpointAccess itemsMetadata `shouldBe` RequireAuthorized RootMayReadCatalog,
+               endpointNameText (endpointName submitMetadata) `shouldBe` "root.orders.api.orders.submit",
+               routeTemplateText (endpointRouteTemplate submitMetadata) `shouldBe` "/api/orders",
+               endpointAccess submitMetadata `shouldBe` RequireAuthorized RootMaySubmitOrders,
+               composedAuthorizationScopes RootMayReadCatalog `shouldBe` ["catalog:read"],
+               composedAuthorizationScopes RootMayRefreshCatalog `shouldBe` ["catalog:write"],
+               composedAuthorizationScopes RootMayReadOrders `shouldBe` ["orders:read"],
+               composedAuthorizationScopes RootMaySubmitOrders `shouldBe` ["orders:write"]
+             ]
+      )
+    undocumentedMetadata <- try (evaluate (composedEndpointMetadataForPath (at "/other"))) :: IO (Either ErrorCall (EndpointMetadata RootAuthorization))
+    case undocumentedMetadata of
+      Left failure -> Text.isInfixOf "undocumented path" (Text.pack (show failure)) `shouldBe` True
+      Right _ -> expectationFailure "an undocumented path must fail composition loudly"
+    extensionFailure <- try (evaluate (requireOpenApiExtension (Left (InvalidOpenApiSpecificationExtensionName "bad-extension")) :: OpenApiExtension () () ByteString.ByteString)) :: IO (Either ErrorCall (OpenApiExtension () () ByteString.ByteString))
+    case extensionFailure of
+      Left failure -> Text.isInfixOf "authored an invalid OpenAPI extension" (Text.pack (show failure)) `shouldBe` True
+      Right _ -> expectationFailure "an invalid authored extension must fail composition loudly"
+    providerFailure <- try (evaluate (composedDocumentationProviderOrDie (Left EmptyOpenApiDocumentTitle) :: OpenApiDocumentProvider ComposedContext)) :: IO (Either ErrorCall (OpenApiDocumentProvider ComposedContext))
+    case providerFailure of
+      Left failure -> Text.isInfixOf "could not build its documentation" (Text.pack (show failure)) `shouldBe` True
+      Right _ -> expectationFailure "a failed document construction must fail composition loudly"
+
 -- | Deterministic security is used only to inspect how a halted page response
 -- is remapped by module composition.  Production page security is constructed
 -- by the site after the request has reached its page route.
@@ -1975,6 +2076,34 @@ authenticatedRootContext routeRequest =
   (requestContext routeRequest)
     { requestIdentity = AuthenticatedIdentity (RootPrincipal (Just (locale "es")) ["catalog.read", "orders.read"])
     }
+
+-- | The API subtree's authenticated root identity: every composed
+-- authorization scope, so the mounted API endpoints' access requirements
+-- resolve exactly as the documented scope mapping advertises.
+apiRootContext :: RouteRequest RootRoute ComposedContext -> ComposedContext
+apiRootContext routeRequest =
+  (requestContext routeRequest)
+    { requestIdentity = AuthenticatedIdentity (RootPrincipal (Just (locale "es")) ["catalog.read", "catalog.write", "orders.read", "orders.write"])
+    }
+
+-- | A form POST request for the WAI interpreter: the url-encoded body is
+-- served once from an in-test chunk reader, exactly like a bounded form body
+-- arriving over the wire.
+formPostRequest :: [Text] -> Http.SimpleQuery -> IO Wai.Request
+formPostRequest segments fields = do
+  bodyChunks <- newIORef [encodedBody]
+  pure
+    ( Wai.setRequestBodyChunks
+        (nextRequestBodyChunk bodyChunks)
+        ( (waiRequest segments)
+            { Wai.requestMethod = "POST",
+              Wai.requestHeaders = [("Content-Type", "application/x-www-form-urlencoded")],
+              Wai.requestBodyLength = Wai.KnownLength (fromIntegral (ByteString.length encodedBody))
+            }
+        )
+    )
+  where
+    encodedBody = Http.renderSimpleQuery False fields
 
 requiredModuleName :: Text -> ModuleName
 requiredModuleName value =

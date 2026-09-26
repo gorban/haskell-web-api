@@ -55,6 +55,7 @@ module Unit.WebApi.TestSupport
     apiTokenRequest,
     apiNotFoundRequest,
     docsOpenApiSpecRequest,
+    docsSwaggerRequest,
     expectedApiJsonProtocolResponse,
     pureRouteMatcher,
     renderedShell,
@@ -454,6 +455,16 @@ docsOpenApiSpecRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 docsOpenApiSpecRequest =
   HarchWeb.RouteRequest
     { HarchWeb.requestRoute = DocsOpenApiSpecRoute,
+      HarchWeb.requestContext = defaultRequestContext
+    }
+
+-- | The AHI-4E Swagger UI page at @\/docs@: locale-independent like the
+-- specification endpoint it presents, so its request carries the plain
+-- default context.
+docsSwaggerRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+docsSwaggerRequest =
+  HarchWeb.RouteRequest
+    { HarchWeb.requestRoute = DocsSwaggerRoute,
       HarchWeb.requestContext = defaultRequestContext
     }
 

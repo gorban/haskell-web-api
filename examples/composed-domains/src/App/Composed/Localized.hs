@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Locale-root adaptation for an already-composed local module.  Locale
@@ -50,8 +51,12 @@ localizeApplicationModule localePolicy localizedModule = do
     ApplicationModule
       { moduleName = requiredModuleNameOrDie "root",
         moduleOwnsRoute = isLocalizedRouteOwned localizedModule,
-        moduleRouteMountChain = \(Localized _ localRoute) ->
-          requiredModuleNameOrDie "root" NonEmpty.:| NonEmpty.toList (moduleRouteMountChain localizedModule localRoute),
+        moduleRouteMountChain = \case
+          Localized _ localRoute ->
+            requiredModuleNameOrDie "root" NonEmpty.:| NonEmpty.toList (moduleRouteMountChain localizedModule localRoute)
+          UnlocalizedCatalogApi _ -> requiredModuleNameOrDie "root" NonEmpty.:| []
+          UnlocalizedOrdersApi _ -> requiredModuleNameOrDie "root" NonEmpty.:| []
+          UnlocalizedDocs _ -> requiredModuleNameOrDie "root" NonEmpty.:| [],
         moduleRouteCodec = localeRootCodec localePolicy localizedModule,
         moduleDeclaredRoutes = map (Localized (defaultLocale localePolicy)) (moduleDeclaredRoutes localizedModule),
         moduleEndpoints = localizedRootDefinition localePolicy localizedModule,
@@ -69,6 +74,9 @@ localizeApplicationModule localePolicy localizedModule = do
                         }
                  in fmap (mapLocalizedActionResult selectedLocale localRoute rootRouteRequest)
                       <$> moduleHandleAction localizedModule localActionRequest
+              UnlocalizedCatalogApi _ -> pure Nothing
+              UnlocalizedOrdersApi _ -> pure Nothing
+              UnlocalizedDocs _ -> pure Nothing
           ),
         moduleGuards = map (localizedRootGuard localePolicy localizedModule) (moduleGuards localizedModule)
       }
@@ -88,6 +96,9 @@ localeRootCodec localePolicy localizedModule =
             Routing.routeMethods
               (moduleRouteCodec localizedModule)
               (routeRequest {requestRoute = localRoute})
+          UnlocalizedCatalogApi _ -> Routing.routeMethodPolicy []
+          UnlocalizedOrdersApi _ -> Routing.routeMethodPolicy []
+          UnlocalizedDocs _ -> Routing.routeMethodPolicy []
     }
   where
     parseRootRoute rootContext location =
@@ -103,10 +114,16 @@ localeRootCodec localePolicy localizedModule =
         Localized selectedLocale localRoute ->
           let localLocation = renderRoute (moduleRouteCodec localizedModule) (RouteRequest localRoute (setRequestLocale (defaultLocale localePolicy) selectedLocale (requestContext rootRequest)))
            in localLocation {routePathSegments = requiredPathSegment (localeText selectedLocale) : routePathSegments localLocation}
+        UnlocalizedCatalogApi _ -> RouteLocation [] []
+        UnlocalizedOrdersApi _ -> RouteLocation [] []
+        UnlocalizedDocs _ -> RouteLocation [] []
 
 localizedRootDefinition :: LocalePolicy -> ApplicationModule LocalizedRoute RootActionTarget RootAction ComposedContext RootAuthorization -> RootRoute -> RouteDefinition RootRoute ComposedContext RootAuthorization
 localizedRootDefinition localePolicy localizedModule rootRoute =
   case rootRoute of
+    UnlocalizedCatalogApi _ -> error "composed-domains: catalog API definitions come from their root mount"
+    UnlocalizedOrdersApi _ -> error "composed-domains: orders API definitions come from their root mount"
+    UnlocalizedDocs _ -> error "composed-domains: docs definitions come from their root mount"
     Localized selectedLocale localRoute ->
       let localDefinition = moduleEndpoints localizedModule localRoute
        in localDefinition
@@ -132,6 +149,9 @@ localizedRootGuard :: LocalePolicy -> ApplicationModule LocalizedRoute RootActio
 localizedRootGuard localePolicy localizedModule (EndpointGuard guard) =
   EndpointGuard $ \rootRequest ->
     case requestRoute (endpointRouteRequest rootRequest) of
+      UnlocalizedCatalogApi _ -> pure (ContinueEndpoint (requestContext (endpointRouteRequest rootRequest)))
+      UnlocalizedOrdersApi _ -> pure (ContinueEndpoint (requestContext (endpointRouteRequest rootRequest)))
+      UnlocalizedDocs _ -> pure (ContinueEndpoint (requestContext (endpointRouteRequest rootRequest)))
       Localized selectedLocale localRoute -> do
         let parentContext = requestContext (endpointRouteRequest rootRequest)
             localEndpoint = moduleEndpoints localizedModule localRoute
@@ -152,6 +172,9 @@ isLocalizedRouteOwned :: ApplicationModule LocalizedRoute target action Composed
 isLocalizedRouteOwned localizedModule rootRoute =
   case rootRoute of
     Localized _ localRoute -> moduleOwnsRoute localizedModule localRoute
+    UnlocalizedCatalogApi _ -> False
+    UnlocalizedOrdersApi _ -> False
+    UnlocalizedDocs _ -> False
 
 mapLocalizedNonPageResponse :: Locale -> ComposedContext -> NonPageResponse LocalizedRoute ComposedContext -> NonPageResponse RootRoute ComposedContext
 mapLocalizedNonPageResponse selectedLocale parentContext =

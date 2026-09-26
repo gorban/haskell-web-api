@@ -5,7 +5,10 @@
 -- their local routes, actions, contexts, and policy values at an explicit
 -- mount boundary.
 module App.Composed.Model
-  ( AdmissionPrincipal,
+  ( DocsAction,
+    DocsActionTarget,
+    DocsRoute (..),
+    AdmissionPrincipal,
     AdmissionReturnTarget (..),
     ComposedContext,
     LocalePolicy (..),
@@ -96,9 +99,7 @@ admissionReturnTargetText returnTarget =
 data LocalizedRoute
   = Public PublicRoute
   | Catalog CatalogRoute
-  | CatalogApi CatalogApiRoute
   | Orders OrdersRoute
-  | OrdersApi OrdersApiRoute
   deriving (Eq, Show)
 
 admissionReturnTargetRoute :: AdmissionReturnTarget -> LocalizedRoute
@@ -108,7 +109,24 @@ admissionReturnTargetRoute returnTarget =
     ReturnToCatalogIndex -> Catalog CatalogIndex
     ReturnToOrdersIndex -> Orders OrdersIndex
 
-data RootRoute = Localized Locale LocalizedRoute
+-- | The documentation surface's routes (part of the root algebra's
+-- vocabulary; the surface itself lives in 'App.Composed.Docs').
+data DocsRoute
+  = DocsSpec
+  | DocsUi
+  deriving (Eq, Show)
+
+-- | Uninhabited: the docs surface ships 'emptyActionCodec', so no client
+-- action can ever be produced.
+data DocsActionTarget
+
+data DocsAction
+
+data RootRoute
+  = Localized Locale LocalizedRoute
+  | UnlocalizedCatalogApi CatalogApiRoute
+  | UnlocalizedOrdersApi OrdersApiRoute
+  | UnlocalizedDocs DocsRoute
   deriving (Eq, Show)
 
 data RootActionTarget

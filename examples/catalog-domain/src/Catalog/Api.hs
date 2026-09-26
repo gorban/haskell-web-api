@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The @catalog.api@ application module (AHI-4E composed-domains slice):
@@ -19,6 +20,8 @@ module Catalog.Api
     buildCatalogApiModule,
     catalogItemsApiContract,
     catalogItemsApiEndpoint,
+    catalogItemsApiHandler,
+    catalogItemsFamily,
   )
 where
 
@@ -39,13 +42,17 @@ import HarchWeb
 import HarchWeb.Action (emptyActionCodec)
 import HarchWeb.Api
   ( ApiEndpointContract (..),
+    ApiEndpointFamily,
+    ApiEndpointFamilyError,
     ApiEndpointRequest,
     ApiFieldFailurePolicy (ApiUseGenericFieldFailure),
     ApiMethod (ApiGet),
     ApiRequestBody (ApiNoRequestBody),
     ApiResponse,
     ApiRouteEndpointDeclaration (..),
+    SomeApiRouteEndpoint (..),
     apiContentType,
+    apiEndpointFamily,
     apiResponse,
     apiRouteDefinition,
     apiRouteEndpointWithContextNeverFailing,
@@ -96,13 +103,13 @@ catalogItemsApiContract =
     ApiUseGenericFieldFailure
 
 -- | The endpoint: derive typed JSON from the domain's summary port.
-catalogItemsApiEndpoint ::
+catalogItemsApiHandler ::
   extension () () ByteString.ByteString ->
   CatalogQueries ->
   CatalogContext ->
   ApiEndpointRequest () () ->
   IO (ApiResponse ByteString.ByteString)
-catalogItemsApiEndpoint _extension queries context _endpointRequest = do
+catalogItemsApiHandler _extension queries context _endpointRequest = do
   summary <- loadCatalogSummary queries context
   pure (apiResponse (LazyByteString.toStrict (encode (object ["summary" .= summary]))))
 
@@ -115,7 +122,7 @@ buildCatalogApiModule ::
 buildCatalogApiModule extension queries =
   ApplicationModule
     { moduleName = requiredModuleNameOrDie "catalog.api",
-      moduleOwnsRoute = const True,
+      moduleOwnsRoute = \case CatalogItems -> True,
       moduleRouteMountChain = const (requiredModuleNameOrDie "catalog.api" :| []),
       moduleRouteCodec = catalogApiRouteCodec,
       moduleDeclaredRoutes = [CatalogItems],
@@ -138,15 +145,42 @@ catalogApiRouteCodec =
       routeMethods = const (routeMethodPolicy [RouteGet])
     }
 
+-- | The endpoint as a typed family member: the same value the module's
+-- route definition consumes and the composed root aggregates into its
+-- documented family.
+-- Per docs/design-guidance.md's never-mask-a-gate-finding rule: the @$!@ on
+-- 'extension' and 'queries' below is a confirmed, reproducible fix, not a guess. The tests
+-- execute this endpoint's handler through the route definition (real
+-- execution, asserted end to end), but 'queries' is a bare local binding
+-- used as a direct argument to an already-HPC-instrumented call, the
+-- documented pattern where HPC permanently leaves the occurrence unticked
+-- despite real execution.
+{-# ANN catalogItemsApiEndpoint ("HLint: ignore Redundant $!" :: String) #-}
+catalogItemsApiEndpoint ::
+  extension () () ByteString.ByteString ->
+  CatalogQueries ->
+  SomeApiRouteEndpoint CatalogContext extension
+catalogItemsApiEndpoint extension queries =
+  SomeApiRouteEndpoint
+    (apiRouteEndpointWithContextNeverFailing (ApiRouteEndpointDeclaration (at "/items") (catalogItemsApiContract extension)) ((catalogItemsApiHandler $! extension) $! queries))
+
+-- | The catalog API's endpoint family for the composed root's document.
+catalogItemsFamily ::
+  extension () () ByteString.ByteString ->
+  CatalogQueries ->
+  Either HarchWeb.Api.ApiEndpointFamilyError (HarchWeb.Api.ApiEndpointFamily CatalogContext extension)
+{-# ANN catalogItemsFamily ("HLint: ignore Redundant $!" :: String) #-}
+catalogItemsFamily extension queries =
+  apiEndpointFamily [catalogItemsApiEndpoint extension $! queries]
+
 catalogItemsRouteDefinition ::
   extension () () ByteString.ByteString ->
   CatalogQueries ->
   CatalogApiRoute ->
   RouteDefinition CatalogApiRoute CatalogContext CatalogPolicy
 catalogItemsRouteDefinition extension queries CatalogItems =
-  apiRouteDefinition
-    catalogItemsEndpointMetadata
-    (apiRouteEndpointWithContextNeverFailing (ApiRouteEndpointDeclaration (at "/items") (catalogItemsApiContract extension)) (catalogItemsApiEndpoint extension queries))
+  case catalogItemsApiEndpoint extension queries of
+    SomeApiRouteEndpoint endpoint -> apiRouteDefinition catalogItemsEndpointMetadata endpoint
 
 catalogItemsEndpointMetadata :: EndpointMetadata CatalogPolicy
 catalogItemsEndpointMetadata =

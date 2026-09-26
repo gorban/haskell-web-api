@@ -93,6 +93,7 @@ spec =
               pageRoute page `shouldBe` CatalogIndex
               pageContext page `shouldBe` catalogContext
               pageBootstrapHooks page `shouldBe` []
+              pageStylesheets page `shouldBe` []
               show (pageBody page) `shouldBe` "\"<h1>es summary</h1>\""
             _ -> expectationFailure "expected catalog page"
         _ -> expectationFailure "expected a page route handler"

@@ -24,7 +24,7 @@ spec = describe "shared browser fixture lifetime" $ do
     serverUrls <- newIORef []
     failedRequestResponse <- newIORef Nothing
     let recordApp action = withBrowserApp $ \environment@(_, config) -> do
-          writeIORef assetDirectories (map staticDirectory (staticAssetRoots (staticAssets config)))
+          writeIORef assetDirectories (fixtureOwnedAssetDirectories config)
           action environment
         brokenPageApplication config =
           buildAppWithDatabaseAndAccountWorkflow config (PageRepository (\_ -> ioError (userError "intentional page load failure"))) unavailableAccountWorkflow
@@ -55,7 +55,7 @@ spec = describe "shared browser fixture lifetime" $ do
     assetDirectories <- newIORef []
     exampleRan <- newIORef False
     let recordApp action = withBrowserApp $ \environment@(_, config) -> do
-          writeIORef assetDirectories (map staticDirectory (staticAssetRoots (staticAssets config)))
+          writeIORef assetDirectories (fixtureOwnedAssetDirectories config)
           action environment
     summary <- runFixtureSpec $
       aroundAll recordApp $
@@ -69,6 +69,13 @@ spec = describe "shared browser fixture lifetime" $ do
              length directories `shouldBe` 1,
              forM_ directories (\directory -> doesDirectoryExist directory `shouldReturn` False)
            ]
+
+-- | The fixture-owned temporary @/assets@ scope: the package's permanent
+-- Swagger data root that the fixture also mounts is never released, so the
+-- lifetime assertions track only the temporary root.
+fixtureOwnedAssetDirectories :: AppConfig -> [FilePath]
+fixtureOwnedAssetDirectories config =
+  [staticDirectory root | root <- staticAssetRoots (staticAssets config), staticUrlPrefix root == "/assets"]
 
 -- The child suite deliberately fails. Run it without inheriting the outer CLI
 -- filters or emitting its expected failures into the parent test report.

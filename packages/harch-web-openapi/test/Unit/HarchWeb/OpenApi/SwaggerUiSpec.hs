@@ -30,6 +30,7 @@ spec = describe "HarchWeb.OpenApi.Swagger" $ do
     pageRoute (swaggerUiPage props) `shouldBe` ("route-value" :: String)
     pageContext (swaggerUiPage props) `shouldBe` ("context-value" :: String)
     pageBootstrapHooks (swaggerUiPage props) `shouldBe` []
+    pageStylesheets (swaggerUiPage props) `shouldBe` []
     expectAll
       ( (rendered `shouldContain` "<h1>Documentation</h1>")
           :| [ rendered `shouldContain` "data-swagger-fallback=\"true\"",
@@ -45,6 +46,19 @@ spec = describe "HarchWeb.OpenApi.Swagger" $ do
     -- carry no script elements at all, so the document is complete and
     -- honest before (or without) any enhancement.
     rendered `shouldNotContain` "<script"
+
+  it "renders authored example credentials into the mount attributes" $ do
+    let props =
+          (defaultSwaggerUiProps ("route-value" :: String) ("context-value" :: String))
+            { swaggerUiExampleClientId = Just "demo-client",
+              swaggerUiExampleClientSecret = Just "demo-secret"
+            }
+        rendered = Text.unpack (renderHtml (pageBody (swaggerUiPage props)))
+    expectAll
+      ( (rendered `shouldContain` "data-swagger-example-client-id=\"demo-client\"")
+          :| [ rendered `shouldContain` "data-swagger-example-client-secret=\"demo-secret\""
+             ]
+      )
 
   it "keeps the replaceable fallback swappable without touching the mount" $ do
     let customSpecUrl =

@@ -509,6 +509,21 @@ spec =
                      ]
               )
 
+      it "hides the generated definition's methods for an unavailable endpoint" $ do
+        let hiddenDefinition =
+              apiRouteDefinition
+                testApiMetadata
+                ( withApiEndpointAvailability
+                    ApiHidden
+                    ( Api.apiRouteEndpoint
+                        (ApiRouteEndpointDeclaration (at "/api/hidden-methods") (ApiEndpointContract ApiGet noRequestFields ApiNoRequestBody (textResponseEncoder :| []) ApiUseGenericFieldFailure NoApiExtension))
+                        (\_ -> pure (Right (apiResponse "unreachable")))
+                        (const (apiResponse "unreachable"))
+                    )
+                )
+        routeMethods hiddenDefinition (RouteRequest (at "/api/hidden-methods") ())
+          `shouldBe` HarchWeb.RouteHidden
+
       it "agrees with the codec's routeMethods so the shared dispatcher and the definition never diverge" $
         routeMethods (apiRouteEndpointFamilyDefinition (const testApiMetadata) testEndpointFamily (at "/api/status")) (RouteRequest (at "/api/status") ())
           `shouldBe` HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointFamily) (HarchWeb.RouteRequest (at "/api/status") ())
@@ -701,6 +716,41 @@ spec =
                  apiRouteResponseBody runtimeResponse `shouldBe` "documented"
                ]
         )
+
+    describe "hoistApiEndpointFamily" $
+      it "precomposes one root projection on every endpoint shape's availability and context-taking handler" $ do
+        let projectChildContext :: Int -> Text
+            projectChildContext count = Text.replicate count "a"
+            declarationFor declaredPath =
+              ApiRouteEndpointDeclaration declaredPath (ApiEndpointContract ApiGet noRequestFields ApiNoRequestBody (textResponseEncoder :| []) ApiUseGenericFieldFailure NoApiExtension)
+            availabilityFromChild =
+              withApiEndpointAvailabilityFromContext (\childContext -> if Text.null childContext then ApiHidden else ApiAvailable)
+            childFamily =
+              requireApiEndpointFamily
+                [ SomeApiRouteEndpoint (availabilityFromChild (Api.apiRouteEndpoint (declarationFor (at "/plain")) (\_ -> pure (Right (apiResponse "plain"))) (const (apiResponse "unreachable")))),
+                  SomeApiRouteEndpoint (availabilityFromChild (Api.apiRouteEndpointNeverFailing (declarationFor (at "/total")) (\_ -> pure (apiResponse "total")))),
+                  SomeApiRouteEndpoint (availabilityFromChild (Api.apiRouteEndpointWithContext (declarationFor (at "/with")) (\childContext _ -> pure (Right (apiResponse ("with:" <> childContext)))) (const (apiResponse "unreachable")))),
+                  SomeApiRouteEndpoint (availabilityFromChild (Api.apiRouteEndpointWithContextNeverFailing (declarationFor (at "/with-total")) (\childContext _ -> pure (apiResponse ("withTotal:" <> childContext)))))
+                ]
+            hoistedFamily = hoistApiEndpointFamily projectChildContext childFamily
+            runHoisted declaredPath rootContextValue request =
+              routeResponse (apiRouteEndpointFamilyDefinition (const testApiMetadata) hoistedFamily declaredPath) request (RouteRequest declaredPath rootContextValue)
+        expectAll
+          ( (mapApiEndpointFamily (`apiRouteEndpointAvailability` 0) hoistedFamily `shouldBe` [ApiHidden, ApiHidden, ApiHidden, ApiHidden])
+              :| [ mapApiEndpointFamily (`apiRouteEndpointAvailability` 2) hoistedFamily `shouldBe` [ApiAvailable, ApiAvailable, ApiAvailable, ApiAvailable]
+                 ]
+          )
+        plainResponse <- runHoisted (at "/plain") 2 (Wai.defaultRequest {Wai.requestMethod = "GET"})
+        totalResponse <- runHoisted (at "/total") 2 (Wai.defaultRequest {Wai.requestMethod = "GET"})
+        withResponse <- runHoisted (at "/with") 2 (Wai.defaultRequest {Wai.requestMethod = "GET"})
+        withTotalResponse <- runHoisted (at "/with-total") 2 (Wai.defaultRequest {Wai.requestMethod = "GET"})
+        expectAll
+          ( (apiRouteResponseBody plainResponse `shouldBe` "plain")
+              :| [ apiRouteResponseBody totalResponse `shouldBe` "total",
+                   apiRouteResponseBody withResponse `shouldBe` "with:aa",
+                   apiRouteResponseBody withTotalResponse `shouldBe` "withTotal:aa"
+                 ]
+          )
 
     describe "apiResponseBodyToProtocolResponse" $
       it "converts status, headers, and body into the server protocol response" $

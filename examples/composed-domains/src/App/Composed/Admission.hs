@@ -170,6 +170,9 @@ applyAdmissionPolicy policy applicationSecurity =
           Right (AuthenticationProfiles (admissionGuard config : beforeGuards) profiles defaultProfile afterGuards)
 
 admissionRequirement :: RootRoute -> AdmissionRequirement
+admissionRequirement (UnlocalizedCatalogApi _) = AllowWithoutAdmission
+admissionRequirement (UnlocalizedOrdersApi _) = AllowWithoutAdmission
+admissionRequirement (UnlocalizedDocs _) = AllowWithoutAdmission
 admissionRequirement (Localized _ localRoute) =
   case localRoute of
     Public (PublicAdmission _) -> AllowWithoutAdmission
@@ -178,11 +181,7 @@ admissionRequirement (Localized _ localRoute) =
     Public PublicNotFound -> AllowWithoutAdmission
     Public PublicLogin -> RequireAdmission
     Catalog _ -> RequireAdmission
-    -- API mounts are bearer-only: the session-admission gate and its login
-    -- challenge do not apply to them.
-    CatalogApi _ -> AllowWithoutAdmission
     Orders _ -> RequireAdmission
-    OrdersApi _ -> AllowWithoutAdmission
 
 admissionGuard :: AdmissionConfig -> EndpointGuard RootRoute ComposedContext RootAuthorization
 admissionGuard config = EndpointGuard $ \endpointRequest ->
@@ -210,11 +209,17 @@ admissionChallenge endpointRequest =
       RouteRequest
         { requestRoute =
             case requestRoute routeRequest of
+              UnlocalizedCatalogApi _ -> requestRoute routeRequest
+              UnlocalizedOrdersApi _ -> requestRoute routeRequest
+              UnlocalizedDocs _ -> requestRoute routeRequest
               Localized selectedLocale _ -> Localized selectedLocale (Public (PublicAdmission (admissionReturnTarget (requestRoute routeRequest)))),
           requestContext = requestContext routeRequest
         }
 
 admissionReturnTarget :: RootRoute -> AdmissionReturnTarget
+admissionReturnTarget (UnlocalizedCatalogApi _) = ReturnToAccountLogin
+admissionReturnTarget (UnlocalizedOrdersApi _) = ReturnToAccountLogin
+admissionReturnTarget (UnlocalizedDocs _) = ReturnToAccountLogin
 admissionReturnTarget (Localized _ localRoute) =
   case localRoute of
     Catalog CatalogIndex -> ReturnToCatalogIndex

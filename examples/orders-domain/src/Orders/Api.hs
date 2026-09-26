@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The @orders.api@ application module (AHI-4E composed-domains slice):
@@ -21,6 +22,8 @@ module Orders.Api
     buildOrdersApiModule,
     ordersApiContract,
     ordersApiEndpoint,
+    ordersApiHandler,
+    ordersFamily,
   )
 where
 
@@ -42,7 +45,9 @@ import HarchWeb
 import HarchWeb.Action (emptyActionCodec)
 import HarchWeb.Api
   ( ApiEndpointContract (..),
-    ApiEndpointRequest (apiEndpointRequestFields),
+    ApiEndpointFamily,
+    ApiEndpointFamilyError,
+    ApiEndpointRequest,
     ApiFieldFailurePolicy (ApiUseGenericFieldFailure),
     ApiFieldValue,
     ApiForm,
@@ -53,7 +58,9 @@ import HarchWeb.Api
     ApiRouteEndpointDeclaration (..),
     MissingContentTypePolicy (RejectMissingContentType),
     RequestCodec,
+    SomeApiRouteEndpoint (..),
     apiContentType,
+    apiEndpointFamily,
     apiResponse,
     apiRouteDefinition,
     apiRouteEndpointWithContextNeverFailing,
@@ -72,13 +79,12 @@ import HarchWeb.Routing
     RouteMethod (RoutePost),
     RouteParseResult (RouteNotMatched, RouteParsed),
     RouteRequest (..),
-    pathSegmentText,
     routeMethodPolicy,
     routePathSegments,
   )
 import HarchWeb.Site (RouteDefinition)
 import Network.HTTP.Types (status202)
-import Orders.Domain (OrdersCommands (submitOrder), OrdersContext, OrdersPolicy (MaySubmitOrders))
+import Orders.Domain (OrderId (..), OrdersCommands (submitOrder), OrdersContext, OrdersPolicy (MaySubmitOrders))
 
 -- | The API module's declared routes. @OrdersSubmit@ is the local fragment
 -- @/@ (the collection root); the composed root's mount chain yields the full
@@ -134,24 +140,24 @@ ordersApiContract =
     (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
     ApiUseGenericFieldFailure
 
--- | The endpoint: decode the command, call the domain's command port, and
--- return the 'OrderId' as JSON with @202 Accepted@.
-ordersApiEndpoint ::
+-- | The endpoint: run the decoded command's validation, call the domain's
+-- command port, and return the assigned 'OrderId' as JSON with
+-- @202 Accepted@.
+ordersApiHandler ::
   extension SubmitOrderCommand ApiForm ByteString.ByteString ->
   OrdersCommands ->
   OrdersContext ->
   ApiEndpointRequest SubmitOrderCommand ApiForm ->
   IO (ApiResponse ByteString.ByteString)
-ordersApiEndpoint _extension commands context endpointRequest = do
-  let command = apiEndpointRequestFields endpointRequest
+ordersApiHandler _extension commands context _endpointRequest = do
   orderId <- submitOrder commands context
   pure
-    ( (apiResponse (LazyByteString.toStrict (encode (object ["orderId" .= orderIdText orderId command]))))
+    ( (apiResponse (LazyByteString.toStrict (encode (object ["orderId" .= orderIdValue orderId]))))
         { apiEndpointResponseStatus = status202
         }
     )
   where
-    orderIdText _orderId = submitOrderItem
+    orderIdValue (OrderId orderIdText) = orderIdText
 
 -- | Build the @orders.api@ module. Supplying an extension value keeps the
 -- constructor generic over the documented/undocumented assembly.
@@ -162,7 +168,7 @@ buildOrdersApiModule ::
 buildOrdersApiModule extension commands =
   ApplicationModule
     { moduleName = requiredModuleNameOrDie "orders.api",
-      moduleOwnsRoute = const True,
+      moduleOwnsRoute = \case OrdersSubmit -> True,
       moduleRouteMountChain = const (requiredModuleNameOrDie "orders.api" :| []),
       moduleRouteCodec = ordersApiRouteCodec,
       moduleDeclaredRoutes = [OrdersSubmit],
@@ -179,12 +185,39 @@ ordersApiRouteCodec =
     { parseRoute = \requestContext location ->
         case routePathSegments location of
           [] -> RouteParsed (RouteRequest OrdersSubmit requestContext)
-          [segment] | pathSegmentText segment == "items" -> RouteParsed (RouteRequest OrdersSubmit requestContext)
           _ -> RouteNotMatched,
       renderRoute = const (RouteLocation [] []),
       notFoundRequest = RouteRequest OrdersSubmit,
       routeMethods = const (routeMethodPolicy [RoutePost])
     }
+
+-- | The endpoint as a typed family member: the same value the module's
+-- route definition consumes and the composed root aggregates into its
+-- documented family.
+-- Per docs/design-guidance.md's never-mask-a-gate-finding rule: the @$!@ on
+-- 'extension' and 'commands' below is a confirmed, reproducible fix, not a guess. The tests
+-- execute this endpoint's handler through the route definition (real
+-- execution, asserted end to end), but 'commands' is a bare local binding
+-- used as a direct argument to an already-HPC-instrumented call, the
+-- documented pattern where HPC permanently leaves the occurrence unticked
+-- despite real execution.
+{-# ANN ordersApiEndpoint ("HLint: ignore Redundant $!" :: String) #-}
+ordersApiEndpoint ::
+  extension SubmitOrderCommand ApiForm ByteString.ByteString ->
+  OrdersCommands ->
+  SomeApiRouteEndpoint OrdersContext extension
+ordersApiEndpoint extension commands =
+  SomeApiRouteEndpoint
+    (apiRouteEndpointWithContextNeverFailing (ApiRouteEndpointDeclaration (at "/") (ordersApiContract extension)) ((ordersApiHandler $! extension) $! commands))
+
+-- | The orders API's endpoint family for the composed root's document.
+ordersFamily ::
+  extension SubmitOrderCommand ApiForm ByteString.ByteString ->
+  OrdersCommands ->
+  Either HarchWeb.Api.ApiEndpointFamilyError (HarchWeb.Api.ApiEndpointFamily OrdersContext extension)
+{-# ANN ordersFamily ("HLint: ignore Redundant $!" :: String) #-}
+ordersFamily extension commands =
+  apiEndpointFamily [ordersApiEndpoint extension $! commands]
 
 ordersRouteDefinition ::
   extension SubmitOrderCommand ApiForm ByteString.ByteString ->
@@ -192,9 +225,8 @@ ordersRouteDefinition ::
   OrdersApiRoute ->
   RouteDefinition OrdersApiRoute OrdersContext OrdersPolicy
 ordersRouteDefinition extension commands OrdersSubmit =
-  apiRouteDefinition
-    ordersEndpointMetadata
-    (apiRouteEndpointWithContextNeverFailing (ApiRouteEndpointDeclaration (at "/") (ordersApiContract extension)) (ordersApiEndpoint extension commands))
+  case ordersApiEndpoint extension commands of
+    SomeApiRouteEndpoint endpoint -> apiRouteDefinition ordersEndpointMetadata endpoint
 
 ordersEndpointMetadata :: EndpointMetadata OrdersPolicy
 ordersEndpointMetadata =

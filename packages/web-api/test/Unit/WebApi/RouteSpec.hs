@@ -13,7 +13,8 @@ import Network.Wai qualified as Wai
 import TestCore.Wai (waiRequest)
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi.Config (AppConfig (..), defaultAppConfig)
-import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), PageRoute, RequestAuthenticationTransport (..), RouteSelectionError (..), defaultRequestContext, renderRoutePath, renderRouteUrl)
+import WebApi.Pages.Route.Generated qualified as Generated
+import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), PageRoute, RequestAuthenticationTransport (..), RouteMetadata (..), RouteSelectionError (..), defaultRequestContext, renderRoutePath, renderRouteUrl)
 import WebApi.Route qualified
 
 -- | Tests enter the public route codec through the same raw-target decoder
@@ -62,13 +63,14 @@ spec = do
                      WebApi.Route.ProfilePage,
                      WebApi.Route.LanguagePage,
                      WebApi.Route.HelpPage,
+                     WebApi.Route.DocsSwaggerPage,
                      WebApi.Route.PageNotFound
                    ]
       apiRoutes `shouldBe` [StatusApi, SecondApi, MeApi, TokenApi, DocsOpenApiSpec, ApiNotFound]
       minBound `shouldBe` WebApi.Route.HomePage
       maxBound `shouldBe` WebApi.Route.PageNotFound
       succ WebApi.Route.HomePage `shouldBe` WebApi.Route.SecondPage
-      pred WebApi.Route.PageNotFound `shouldBe` WebApi.Route.HelpPage
+      pred WebApi.Route.PageNotFound `shouldBe` WebApi.Route.DocsSwaggerPage
       WebApi.Route.HomePage `shouldNotBe` WebApi.Route.SecondPage
       enumFrom WebApi.Route.HomePage `shouldBe` pageRoutes
       enumFromThen WebApi.Route.HomePage WebApi.Route.SecondPage `shouldBe` pageRoutes
@@ -85,10 +87,11 @@ spec = do
                      "ProfilePage",
                      "LanguagePage",
                      "HelpPage",
+                     "DocsSwaggerPage",
                      "PageNotFound"
                    ]
       showList pageRoutes ""
-        `shouldBe` "[HomePage,SecondPage,TodoPage,RegistrationPage,EmailVerificationPage,MfaEnrollmentPage,LoginPage,LogoutPage,ProfilePage,LanguagePage,HelpPage,PageNotFound]"
+        `shouldBe` "[HomePage,SecondPage,TodoPage,RegistrationPage,EmailVerificationPage,MfaEnrollmentPage,LoginPage,LogoutPage,ProfilePage,LanguagePage,HelpPage,DocsSwaggerPage,PageNotFound]"
       minBound `shouldBe` StatusApi
       maxBound `shouldBe` ApiNotFound
       succ StatusApi `shouldBe` SecondApi
@@ -106,7 +109,61 @@ spec = do
       show ApiNotFoundRoute `shouldBe` "ApiNotFoundRoute"
       show LanguageRoute `shouldBe` "LanguageRoute"
       show HelpRoute `shouldBe` "HelpRoute"
+      show DocsSwaggerRoute `shouldBe` "DocsSwaggerRoute"
       Page WebApi.Route.HomePage `shouldNotBe` Api ApiNotFound
+
+  describe "generated page family" $ do
+    it "keeps its derived values, paths, and route tables complete" $ do
+      let generatedPages = [minBound .. maxBound] :: [Generated.PageRoute]
+      generatedPages `shouldBe` Generated.allPageRoutes
+      generatedPages `shouldBe` [Generated.ShowcasePage, Generated.ShowcaseAlternatePage]
+      minBound `shouldBe` Generated.ShowcasePage
+      maxBound `shouldBe` Generated.ShowcaseAlternatePage
+      succ Generated.ShowcasePage `shouldBe` Generated.ShowcaseAlternatePage
+      pred Generated.ShowcaseAlternatePage `shouldBe` Generated.ShowcasePage
+      toEnum (fromEnum Generated.ShowcasePage) `shouldBe` Generated.ShowcasePage
+      enumFrom Generated.ShowcasePage `shouldBe` generatedPages
+      enumFromThen Generated.ShowcasePage Generated.ShowcaseAlternatePage `shouldBe` generatedPages
+      enumFromTo Generated.ShowcasePage Generated.ShowcaseAlternatePage `shouldBe` generatedPages
+      enumFromThenTo Generated.ShowcasePage Generated.ShowcaseAlternatePage Generated.ShowcaseAlternatePage `shouldBe` [Generated.ShowcasePage, Generated.ShowcaseAlternatePage]
+      Generated.ShowcasePage == Generated.ShowcasePage `shouldBe` True
+      Generated.ShowcasePage /= Generated.ShowcaseAlternatePage `shouldBe` True
+      shows Generated.ShowcasePage "" `shouldBe` show Generated.ShowcasePage
+      showsPrec 11 Generated.ShowcaseAlternatePage "" `shouldSatisfy` (not . null)
+      showList generatedPages "" `shouldBe` "[ShowcasePage,ShowcaseAlternatePage]"
+      map show generatedPages `shouldBe` ["ShowcasePage", "ShowcaseAlternatePage"]
+      Generated.pageRoutePath Generated.ShowcasePage `shouldBe` "/showcase"
+      Generated.pageRoutePath Generated.ShowcaseAlternatePage `shouldBe` "/showcase-alternate"
+      Generated.parsePageRoute "/showcase" `shouldBe` Just Generated.ShowcasePage
+      Generated.parsePageRoute "/showcase-alternate" `shouldBe` Just Generated.ShowcaseAlternatePage
+      Generated.parsePageRoute "/showcase/extra" `shouldBe` Nothing
+      ( case WebApi.Route.ShowcaseRoute of
+          WebApi.Route.ShowcaseRoute -> True
+          _ -> False
+        )
+        `shouldBe` True
+      ( case WebApi.Route.ShowcaseAlternateRoute of
+          WebApi.Route.ShowcaseAlternateRoute -> True
+          _ -> False
+        )
+        `shouldBe` True
+      show (WebApi.Route.GeneratedPages Generated.ShowcasePage) `shouldBe` "GeneratedPages ShowcasePage"
+      show (WebApi.Route.GeneratedPages Generated.ShowcaseAlternatePage) `shouldBe` "GeneratedPages ShowcaseAlternatePage"
+      WebApi.Route.appRouteMethods (WebApi.Route.GeneratedPages Generated.ShowcasePage) `shouldBe` [HarchWeb.RouteGet]
+      routePageSuffix (WebApi.Route.routeMetadata (WebApi.Route.GeneratedPages Generated.ShowcasePage)) `shouldBe` ""
+      routePageTitle (WebApi.Route.routeMetadata (WebApi.Route.GeneratedPages Generated.ShowcasePage)) `shouldBe` "Showcase"
+      routePageSuffix (WebApi.Route.routeMetadata (WebApi.Route.GeneratedPages Generated.ShowcaseAlternatePage)) `shouldBe` ""
+      HarchWeb.endpointNameText (HarchWeb.endpointName (WebApi.Route.endpointMetadata (WebApi.Route.GeneratedPages Generated.ShowcasePage))) `shouldBe` "web.showcase"
+      HarchWeb.endpointNameText (HarchWeb.endpointName (WebApi.Route.endpointMetadata (WebApi.Route.GeneratedPages Generated.ShowcaseAlternatePage))) `shouldBe` "web.showcase-alternate"
+      HarchWeb.routeTemplateText (HarchWeb.endpointRouteTemplate (WebApi.Route.endpointMetadata (WebApi.Route.GeneratedPages Generated.ShowcasePage))) `shouldBe` "/{locale}/showcase"
+      HarchWeb.routeTemplateText (HarchWeb.endpointRouteTemplate (WebApi.Route.endpointMetadata (WebApi.Route.GeneratedPages Generated.ShowcaseAlternatePage))) `shouldBe` "/{locale}/showcase-alternate"
+
+  describe "docs route tables" $
+    it "keeps the docs page and API metadata complete" $ do
+      HarchWeb.endpointNameText (HarchWeb.endpointName (WebApi.Route.endpointMetadata DocsSwaggerRoute)) `shouldBe` "web.docs"
+      routePageSuffix (WebApi.Route.routeMetadata DocsSwaggerRoute) `shouldBe` "/docs"
+      WebApi.Route.appRouteMethods DocsSwaggerRoute `shouldBe` [HarchWeb.RouteGet]
+      HarchWeb.routeTemplateText (HarchWeb.endpointRouteTemplate (WebApi.Route.endpointMetadata DocsSwaggerRoute)) `shouldBe` "/{locale}/docs"
 
   describe "request authentication transport" $
     it "keeps every source value comparable and inspectable" $ do
@@ -167,17 +224,23 @@ spec = do
       parseRoute defaultRequestContext "/api/oauth" `shouldBe` Just apiNotFoundRequest
       parseRoute defaultRequestContext "/api/oauth/token/extra" `shouldBe` Just apiNotFoundRequest
 
-    it "parses the locale-independent OpenAPI specification path exactly" $ do
+    it "parses the locale-independent docs surface paths exactly" $ do
       parseRoute defaultRequestContext "/docs/openapi.json" `shouldBe` Just docsOpenApiSpecRequest
       parseRoute defaultRequestContext "/docs/openapi.json?pretty=1"
         `shouldBe` Just docsOpenApiSpecRequest {HarchWeb.requestContext = defaultRequestContext {requestQueryParameters = [("pretty", "1")]}}
-      -- Only the exact specification path matches; every other /docs shape
-      -- keeps the ordinary unsupported-path outcome instead of growing a
-      -- second docs-specific not-found family.
-      parseRoute defaultRequestContext "/docs" `shouldBe` Nothing
+      parseRoute defaultRequestContext "/docs" `shouldBe` Just docsSwaggerRequest
+      -- Only the exact page and specification paths match; every other /docs
+      -- shape keeps the ordinary unsupported-path outcome instead of growing
+      -- a second docs-specific not-found family.
       parseRoute defaultRequestContext "/docs/other" `shouldBe` Nothing
       parseRoute defaultRequestContext "/docs/openapi.json/extra" `shouldBe` Nothing
       parseRoute defaultRequestContext "/es/docs/openapi.json" `shouldBe` Nothing
+
+    it "parses the locale-prefixed generated page paths" $ do
+      fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/en/showcase") `shouldBe` Just (WebApi.Route.GeneratedPages Generated.ShowcasePage)
+      fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/es/showcase-alternate") `shouldBe` Just (WebApi.Route.GeneratedPages Generated.ShowcaseAlternatePage)
+      fmap (requestLocale . HarchWeb.requestContext) (parseRoute defaultRequestContext "/en/showcase") `shouldBe` Just English
+      fmap (requestLocale . HarchWeb.requestContext) (parseRoute defaultRequestContext "/es/showcase-alternate") `shouldBe` Just Spanish
 
     it "parses the second page path" $ parseRoute defaultRequestContext "/second" `shouldBe` Just secondRequest
 

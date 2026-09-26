@@ -65,6 +65,7 @@ module HarchWeb.Api
     ApiEndpointFamilyError (..),
     apiEndpointFamily,
     requireApiEndpointFamily,
+    hoistApiEndpointFamily,
     mapApiEndpointFamily,
     apiPathText,
     apiRouteEndpointFamilyCodec,
