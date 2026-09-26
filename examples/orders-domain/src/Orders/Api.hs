@@ -78,7 +78,7 @@ import HarchWeb.Routing
   )
 import HarchWeb.Site (RouteDefinition)
 import Network.HTTP.Types (status202)
-import Orders.Domain (OrderId (..), OrdersCommands (submitOrder), OrdersContext, OrdersPolicy (MaySubmitOrders))
+import Orders.Domain (OrdersCommands (submitOrder), OrdersContext, OrdersPolicy (MaySubmitOrders))
 
 -- | The API module's declared routes. @OrdersSubmit@ is the local fragment
 -- @/@ (the collection root); the composed root's mount chain yields the full

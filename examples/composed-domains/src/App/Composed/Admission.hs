@@ -178,7 +178,11 @@ admissionRequirement (Localized _ localRoute) =
     Public PublicNotFound -> AllowWithoutAdmission
     Public PublicLogin -> RequireAdmission
     Catalog _ -> RequireAdmission
+    -- API mounts are bearer-only: the session-admission gate and its login
+    -- challenge do not apply to them.
+    CatalogApi _ -> AllowWithoutAdmission
     Orders _ -> RequireAdmission
+    OrdersApi _ -> AllowWithoutAdmission
 
 admissionGuard :: AdmissionConfig -> EndpointGuard RootRoute ComposedContext RootAuthorization
 admissionGuard config = EndpointGuard $ \endpointRequest ->
