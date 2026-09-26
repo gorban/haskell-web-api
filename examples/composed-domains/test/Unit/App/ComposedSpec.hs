@@ -1,0 +1,2212 @@
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
+
+module Unit.App.ComposedSpec (spec) where
+
+import App.Composed
+import App.Composed.Document (composedAuthorizationScopes, composedEndpointMetadataForPath, requireOpenApiExtension)
+import Catalog.Api (CatalogApiRoute (CatalogItems))
+import Catalog.Domain
+import Control.Concurrent (forkIO, newEmptyMVar, putMVar, readMVar, takeMVar)
+import Control.Exception (ErrorCall, bracket, evaluate, finally, try)
+import Control.Monad (replicateM, when)
+import Core.Config (ConfigParseError (..))
+import Crypto.Error (maybeCryptoError)
+import Data.ByteString qualified as ByteString
+import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty qualified as NonEmpty
+import Data.Maybe (fromMaybe, isJust, isNothing)
+import Data.Text (Text)
+import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
+import Data.Word (Word64)
+import HarchWeb.Account qualified as Account
+import HarchWeb.Action qualified as Action
+import HarchWeb.Api (at)
+import HarchWeb.ApplicationModule (ApplicationModule (..), mountApplicationModule)
+import HarchWeb.ClientStorage (noClientStorageCleanup)
+import HarchWeb.Csrf (PageSecurity, mkCsrfToken, mkPageCsrf, mkPageSecurity)
+import HarchWeb.Csrf qualified as Csrf
+import HarchWeb.Csrf.Signed qualified as Signed
+import HarchWeb.Document (NavigationItem (..), Page (..), PageShell (..), testRuntimeNonce)
+import HarchWeb.EndpointMetadata
+  ( AccessRequirement (AllowUnauthenticated, RequireAuthorized),
+    EndpointMetadata,
+    EndpointName,
+    EndpointProtocol (ApiEndpoint, AssetEndpoint, HtmlEndpoint),
+    endpointAccess,
+    endpointName,
+    endpointNameText,
+    endpointProtocol,
+    endpointRouteTemplate,
+    requiredEndpointNameOrDie,
+    routeTemplateText,
+  )
+import HarchWeb.EndpointSecurity
+  ( ApplicationSecurity (AuthenticationDisabled, AuthenticationEnabled, AuthenticationProfiles),
+    AuthenticationGuard (..),
+    EndpointDispatchKind (EndpointMatched, EndpointOptions),
+    EndpointGuard (..),
+    EndpointGuardResult (..),
+    EndpointRequest (..),
+  )
+import HarchWeb.Localization (locale)
+import HarchWeb.LoginProtection (defaultLoginProtectionPolicy)
+import HarchWeb.Markup (literalElementId, renderHtml)
+import HarchWeb.OpenApi (OpenApiDocumentFailure (EmptyOpenApiDocumentTitle), OpenApiDocumentProvider, OpenApiExtension, OpenApiExtensionError (InvalidOpenApiSpecificationExtensionName))
+import HarchWeb.RequestContext
+  ( CoreRequestContext (..),
+    RequestContext (..),
+    RequestIdentity (..),
+    correlationRequestId,
+    requestLocale,
+  )
+import HarchWeb.RequestId (RequestId, mkRequestId)
+import HarchWeb.Routing
+  ( RouteCodec (..),
+    RouteDecodeError (InvalidRouteTargetEncoding),
+    RouteLocation (..),
+    RouteParseResult (..),
+    RouteRequest (..),
+    requiredPathSegment,
+  )
+import HarchWeb.Routing qualified as Routing
+import HarchWeb.Secret (encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
+import HarchWeb.Security (clientAddressText, defaultClientAddress)
+import HarchWeb.SecurityEvent (ModuleName, RouteObservation (..), mkModuleName)
+import HarchWeb.Server
+  ( ActionNavigation (NavigateInternal, StayOnCurrentRoute),
+    ClientActionRequest (..),
+    ClientActionResponse (..),
+    ClientActionResult,
+    HistoryMode (ReplaceHistory),
+    NonPageResponse (NonPageBodyResponse),
+    PageResult (RenderedPage, RenderedPageWithHeaders, RenderedPageWithMetadata),
+    ProtocolResponse (..),
+    ProtocolResponseBody (..),
+    Response (..),
+    ResponseBody (..),
+    clientActionResultResponse,
+    noClientActionFailureDestinations,
+    nonPageResponse,
+    toWaiApplication,
+    unboundedRouteExecutionPolicy,
+  )
+import HarchWeb.Session (OpaqueSession (..), SessionCookieExtraction (SessionCookieFound, SessionCookieMissing), SessionCookiePolicy (..), defaultSessionCookiePolicy, extractSessionCookieId, mkSessionCookieName, mkSessionId, renderSessionCookie, sessionCookieName)
+import HarchWeb.Site (RouteDefinition (..), RouteHandler (PageRouteHandler, ProtocolRouteHandler))
+import HarchWeb.Site qualified as Site
+import HarchWeb.StaticAssets
+  ( StaticAssetRoot (..),
+    staticAssetContentTypes,
+    staticAssetRoots,
+    staticCacheControlSeconds,
+  )
+import HarchWeb.StaticAssets.Route (StaticAssetRoute (..))
+import HarchWeb.Time (unixTimeNanoseconds, unixTimeNanosecondsValue, unixTimeSeconds)
+import HarchWeb.Totp (mkTotpCode, mkTotpSecret, renderTotpSecret, totpCode, totpCodeText)
+import Network.HTTP.Types qualified as Http
+import Network.Wai qualified as Wai
+import Orders.Api (OrdersApiRoute (OrdersSubmit))
+import Orders.Domain
+import Test.Hspec
+import TestCore.CustomAssertions (expectAll, shouldContain')
+import TestCore.Wai (nextRequestBodyChunk, performWaiRequest, readResponseBody, waiRequest)
+import WebApi.Config qualified as WebApiConfig
+import WebApi.Postgres.Testing qualified as WebApiPostgres
+import WebApi.Session qualified as WebApiSession
+
+testRequestId :: RequestId
+testRequestId =
+  fromMaybe (error "invalid composed test request identifier") (mkRequestId "550e8400-e29b-41d4-a716-446655440000")
+
+expectDurableSessionWritten :: IO (Either storeError Bool) -> Expectation
+expectDurableSessionWritten action =
+  action >>= \case
+    Right True -> pure ()
+    _ -> expectationFailure "expected the durable session write to succeed"
+
+expectDurableSessionLoaded :: (Eq principal) => IO (Either storeError (Maybe (OpaqueSession principal))) -> OpaqueSession principal -> Expectation
+expectDurableSessionLoaded action expectedSession =
+  action >>= \case
+    Right (Just actualSession)
+      | actualSession == expectedSession -> pure ()
+    _ -> expectationFailure "expected the durable session store to return its own session"
+
+spec :: Spec
+spec = describe "Unit.App.Composed" $ do
+  it "parses deployment secrets without exposing them in diagnostics" $ do
+    parseComposedDeploymentConfig [] [] []
+      `shouldSatisfy` \case Left (MissingConfigValue "COMPOSED_DATABASE_CONNECTION_STRING") -> True; _ -> False
+    parseComposedDeploymentConfig [("COMPOSED_DATABASE_CONNECTION_STRING", "host=database password=secret"), ("COMPOSED_ADMISSION_TOTP_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")] [] []
+      `shouldSatisfy` \result -> either (const False) ((== "ComposedDeploymentConfig <redacted>") . show) result
+    parseComposedDeploymentConfig [("COMPOSED_DATABASE_CONNECTION_STRING", "host=database"), ("COMPOSED_ADMISSION_TOTP_ENCRYPTION_KEY", "short")] [] []
+      `shouldSatisfy` \case Left (InvalidConfigValue "COMPOSED_ADMISSION_TOTP_ENCRYPTION_KEY" "<redacted>") -> True; _ -> False
+
+  it "uses one parameterized composed runtime connection and fails closed after shutdown" $
+    bracket
+      (newComposedDatabaseRuntime (ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_runtime password=web_api connect_timeout=1"))
+      closeComposedDatabaseRuntime
+      ( \runtime -> do
+          runComposedDatabaseQuery runtime "SELECT $1::TEXT, $2::TEXT;" ["literal '; DROP TABLE composed.admission_sessions; --", "second value"]
+            `shouldReturn` Right [["literal '; DROP TABLE composed.admission_sessions; --", "second value"]]
+          runComposedDatabaseQuery runtime "SELECT NULL::TEXT;" []
+            `shouldReturn` Left "database result is malformed"
+          runComposedDatabaseQuery runtime "SET application_name TO 'composed-runtime-test';" []
+            `shouldReturn` Left "database unavailable"
+          closeComposedDatabaseRuntime runtime
+          runComposedDatabaseQuery runtime "SELECT 'unreachable'::TEXT;" []
+            `shouldReturn` Left "database unavailable"
+      )
+  it "fails closed when the composed database cannot be reached" $
+    bracket
+      (newComposedDatabaseRuntime (ComposedDatabaseConnectionString "host=127.0.0.1 port=1 dbname=web_api_dev user=web_api_runtime password=web_api connect_timeout=1"))
+      closeComposedDatabaseRuntime
+      ( \runtime ->
+          runComposedDatabaseQuery runtime "SELECT 'unreachable'::TEXT;" []
+            `shouldReturn` Left "database unavailable"
+      )
+
+  it "keeps encrypted admission provisioning owner-only while the runtime role can use its durable adapters" $
+    bracket
+      (newComposedDatabaseRuntime (ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_owner password=web_api_owner connect_timeout=1"))
+      closeComposedDatabaseRuntime
+      ( \ownerRuntime -> do
+          runComposedDatabaseChanges (ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_owner password=web_api_owner connect_timeout=1")
+            `shouldReturn` Right ()
+          let principalId = requiredCsrf "real PostgreSQL admission principal" (mkAdmissionPrincipalId "composed-runtime-grants-test")
+              loginName = requiredCsrf "real PostgreSQL admission login" (mkAdmissionLoginName "composed_runtime_grants_test")
+              encryptedSecret = requiredCsrf "real PostgreSQL encrypted admission secret" (mkEncryptedAdmissionTotpSecret "v1-test-envelope")
+              cleanUp = do
+                deletedSessions <- runComposedDatabaseQuery ownerRuntime "DELETE FROM composed.admission_sessions WHERE admission_principal_id = $1 RETURNING session_id;" [admissionPrincipalIdText principalId]
+                deletedSessions
+                  `shouldSatisfy` \case Right _ -> True; Left _ -> False
+                deletedCredentials <- runComposedDatabaseQuery ownerRuntime "DELETE FROM composed.admission_credentials WHERE admission_principal_id = $1 RETURNING admission_principal_id;" [admissionPrincipalIdText principalId]
+                deletedCredentials
+                  `shouldSatisfy` \case Right _ -> True; Left _ -> False
+          cleanUp
+          bracket
+            (newComposedDatabaseRuntime (ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_runtime password=web_api connect_timeout=1"))
+            closeComposedDatabaseRuntime
+            ( \runtime ->
+                ( do
+                    runComposedDatabaseQuery
+                      runtime
+                      "SELECT has_schema_privilege(current_user, 'composed', 'USAGE')::TEXT, has_table_privilege(current_user, 'composed.admission_credentials', 'SELECT')::TEXT, has_column_privilege(current_user, 'composed.admission_credentials', 'last_used_totp_counter', 'UPDATE')::TEXT, has_table_privilege(current_user, 'composed.admission_credentials', 'INSERT')::TEXT, has_table_privilege(current_user, 'composed.admission_sessions', 'INSERT')::TEXT, has_function_privilege(current_user, 'composed.reserve_admission_attempt_group(jsonb,bigint,bigint,bigint)'::regprocedure, 'EXECUTE')::TEXT;"
+                      []
+                      `shouldReturn` Right [["true", "true", "true", "false", "true", "true"]]
+                    let ownerCredentialStore = buildPostgresAdmissionCredentialStoreWithRunner runComposedDatabaseQuery ownerRuntime
+                        runtimeCredentialStore = buildPostgresAdmissionCredentialStoreWithRunner runComposedDatabaseQuery runtime
+                    provisionPostgresAdmissionCredentialWithRunner runComposedDatabaseQuery ownerRuntime principalId loginName encryptedSecret
+                      `shouldReturn` Right True
+                    findAdmissionCredential runtimeCredentialStore loginName
+                      `shouldReturn` Right (Just (StoredAdmissionCredential principalId encryptedSecret Nothing))
+                    markAdmissionTotpCounterUsed runtimeCredentialStore principalId 7
+                      `shouldReturn` Right True
+                    provisionPostgresAdmissionCredentialWithRunner runComposedDatabaseQuery runtime principalId loginName encryptedSecret
+                      `shouldReturn` Left AdmissionCredentialStoreUnavailable
+                    findAdmissionCredential ownerCredentialStore loginName
+                      `shouldReturn` Right (Just (StoredAdmissionCredential principalId encryptedSecret (Just 7)))
+                )
+                  `finally` cleanUp
+            )
+      )
+
+  it "serializes real PostgreSQL admission reservations and frees retained capacity at expiry" $
+    bracket
+      (newComposedDatabaseRuntime (ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_owner password=web_api_owner connect_timeout=1"))
+      closeComposedDatabaseRuntime
+      ( \ownerRuntime -> do
+          runComposedDatabaseChanges (ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_owner password=web_api_owner connect_timeout=1")
+            `shouldReturn` Right ()
+          let cleanUp = do
+                deletedAttempts <- runComposedDatabaseQuery ownerRuntime "DELETE FROM composed.admission_attempt_groups RETURNING attempt_group_id::TEXT;" []
+                deletedAttempts `shouldSatisfy` \case Right _ -> True; Left _ -> False
+              runtimeConnection = ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_runtime password=web_api connect_timeout=1"
+              budgetJson = "[{\"key\":\"admission-totp:known:composed-concurrent-reservation-test\",\"maximum\":\"2\",\"window\":\"100\",\"lockout\":\"100\"}]"
+          cleanUp
+          runtimeOne <- newComposedDatabaseRuntime runtimeConnection
+          runtimeTwo <- newComposedDatabaseRuntime runtimeConnection
+          let runtimes = [runtimeOne, runtimeTwo]
+              closeRuntimes = mapM_ closeComposedDatabaseRuntime runtimes
+              reserve runtime now =
+                runComposedDatabaseQuery
+                  runtime
+                  "SELECT outcome, value FROM composed.reserve_admission_attempt_group($1::JSONB, $2::BIGINT, $3::BIGINT, $4::BIGINT);"
+                  [budgetJson, Text.pack (show (now - (1 :: Word64))), Text.pack (show now), "1"]
+          finally
+            ( do
+                start <- newEmptyMVar
+                completions <- replicateM 2 newEmptyMVar
+                sequence_
+                  [ forkIO (readMVar start >> reserve runtime 1000 >>= putMVar completion)
+                  | (runtime, completion) <- zip runtimes completions
+                  ]
+                putMVar start ()
+                concurrentResults <- traverse takeMVar completions
+                length [() | Right [["reserved", _]] <- concurrentResults] `shouldBe` 1
+                length [() | Right [["storage-exhausted", ""]] <- concurrentResults] `shouldBe` 1
+                reservationAfterExpiry <- reserve runtimeOne 1002
+                reservationAfterExpiry
+                  `shouldSatisfy` (\case Right [["reserved", _]] -> True; _ -> False)
+                runComposedDatabaseQuery
+                  ownerRuntime
+                  "SELECT count(*)::TEXT FROM composed.admission_attempt_groups;"
+                  []
+                  `shouldReturn` Right [["1"]]
+            )
+            (closeRuntimes >> cleanUp)
+      )
+
+  it "keeps account, MFA-enrollment, and admission cookies and durable tables isolated with the same opaque session text" $
+    bracket
+      (newComposedDatabaseRuntime (ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_owner password=web_api_owner connect_timeout=1"))
+      closeComposedDatabaseRuntime
+      ( \ownerRuntime -> do
+          let runtimeDatabaseConfig = WebApiConfig.databaseConfig WebApiConfig.defaultAppEnvironmentConfig
+              migrationDatabaseConfig = runtimeDatabaseConfig {WebApiConfig.databaseUser = "web_api_owner", WebApiConfig.databasePassword = "web_api_owner"}
+              runtimeConnection = ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_runtime password=web_api connect_timeout=1"
+              sharedSessionId = requiredCsrf "shared cross-domain session id" (mkSessionId "0123456789abcdef0123456789abcdef")
+              accountId = requiredCsrf "cross-domain account id" (Account.mkAccountId "composed-cross-domain-session-account")
+              admissionPrincipalId = requiredCsrf "cross-domain admission principal" (mkAdmissionPrincipalId "composed-cross-domain-session-principal")
+              admissionLoginName = requiredCsrf "cross-domain admission login" (mkAdmissionLoginName "composed_cross_domain_session")
+              encryptedSecret = requiredCsrf "cross-domain encrypted admission secret" (mkEncryptedAdmissionTotpSecret "v1-cross-domain-envelope")
+              accountSession = OpaqueSession sharedSessionId accountId (unixTimeNanoseconds 100) (unixTimeNanoseconds 200)
+              mfaEnrollmentSession = OpaqueSession sharedSessionId accountId (unixTimeNanoseconds 101) (unixTimeNanoseconds 201)
+              admissionSession = OpaqueSession sharedSessionId admissionPrincipalId (unixTimeNanoseconds 102) (unixTimeNanoseconds 202)
+              cookiePair policy sessionToken = Text.takeWhile (/= ';') (renderSessionCookie policy sessionToken)
+              accountCookie = cookiePair defaultSessionCookiePolicy sharedSessionId
+              mfaCookie = cookiePair WebApiSession.mfaEnrollmentSessionCookiePolicy sharedSessionId
+              admissionCookie = cookiePair defaultAdmissionSessionCookiePolicy sharedSessionId
+              cookies = [(Http.hCookie, TextEncoding.encodeUtf8 (Text.intercalate "; " [accountCookie, mfaCookie, admissionCookie]))]
+              cleanUp = do
+                deletedMfaSessions <- runComposedDatabaseQuery ownerRuntime "DELETE FROM web_api.mfa_enrollment_sessions WHERE account_id = $1 RETURNING session_id;" [Account.accountIdText accountId]
+                deletedMfaSessions `shouldSatisfy` \case Right _ -> True; Left _ -> False
+                deletedAccountSessions <- runComposedDatabaseQuery ownerRuntime "DELETE FROM web_api.account_sessions WHERE account_id = $1 RETURNING session_id;" [Account.accountIdText accountId]
+                deletedAccountSessions `shouldSatisfy` \case Right _ -> True; Left _ -> False
+                deletedAccounts <- runComposedDatabaseQuery ownerRuntime "DELETE FROM web_api.accounts WHERE account_id = $1 RETURNING account_id;" [Account.accountIdText accountId]
+                deletedAccounts `shouldSatisfy` \case Right _ -> True; Left _ -> False
+                deletedAdmissionSessions <- runComposedDatabaseQuery ownerRuntime "DELETE FROM composed.admission_sessions WHERE admission_principal_id = $1 RETURNING session_id;" [admissionPrincipalIdText admissionPrincipalId]
+                deletedAdmissionSessions `shouldSatisfy` \case Right _ -> True; Left _ -> False
+                deletedAdmissionCredentials <- runComposedDatabaseQuery ownerRuntime "DELETE FROM composed.admission_credentials WHERE admission_principal_id = $1 RETURNING admission_principal_id;" [admissionPrincipalIdText admissionPrincipalId]
+                deletedAdmissionCredentials `shouldSatisfy` \case Right _ -> True; Left _ -> False
+          WebApiPostgres.runPostgresMigrationsForRuntime migrationDatabaseConfig runtimeDatabaseConfig `shouldReturn` Right ()
+          runComposedDatabaseChanges (ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_owner password=web_api_owner connect_timeout=1") `shouldReturn` Right ()
+          cleanUp
+          bracket
+            (newComposedDatabaseRuntime runtimeConnection)
+            closeComposedDatabaseRuntime
+            ( \runtime ->
+                finally
+                  ( do
+                      insertedAccount <- runComposedDatabaseQuery ownerRuntime "INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds) VALUES ($1, $2, $3, $4::BIGINT) RETURNING account_id;" [Account.accountIdText accountId, "composed-cross-domain-session@example.test", "test-password-hash", "1"]
+                      insertedAccount `shouldBe` Right [[Account.accountIdText accountId]]
+                      provisionPostgresAdmissionCredentialWithRunner runComposedDatabaseQuery ownerRuntime admissionPrincipalId admissionLoginName encryptedSecret `shouldReturn` Right True
+                      let accountStore = WebApiPostgres.buildRuntimePostgresAccountSessionStoreWithRunner runComposedDatabaseQuery runtime
+                          mfaEnrollmentStore = WebApiPostgres.buildRuntimePostgresMfaEnrollmentSessionStoreWithRunner runComposedDatabaseQuery runtime
+                          admissionStore = buildPostgresAdmissionSessionStoreWithRunner runComposedDatabaseQuery runtime
+                      expectDurableSessionWritten (WebApiSession.saveAccountSession accountStore accountSession)
+                      expectDurableSessionWritten (WebApiSession.saveMfaEnrollmentSession mfaEnrollmentStore mfaEnrollmentSession)
+                      saveAdmissionSession admissionStore admissionSession `shouldReturn` Right True
+                      expectAll
+                        ( expectDurableSessionLoaded (WebApiSession.loadAccountSession accountStore sharedSessionId) accountSession
+                            :| [ expectDurableSessionLoaded (WebApiSession.loadMfaEnrollmentSession mfaEnrollmentStore sharedSessionId) mfaEnrollmentSession,
+                                 loadAdmissionSession admissionStore (mkAdmissionSessionId sharedSessionId) `shouldReturn` Right (Just admissionSession),
+                                 extractSessionCookieId (sessionCookieName defaultSessionCookiePolicy) [(Http.hCookie, TextEncoding.encodeUtf8 mfaCookie)] `shouldBe` SessionCookieMissing,
+                                 extractSessionCookieId (sessionCookieName WebApiSession.mfaEnrollmentSessionCookiePolicy) [(Http.hCookie, TextEncoding.encodeUtf8 admissionCookie)] `shouldBe` SessionCookieMissing,
+                                 extractSessionCookieId (sessionCookieName defaultAdmissionSessionCookiePolicy) [(Http.hCookie, TextEncoding.encodeUtf8 accountCookie)] `shouldBe` SessionCookieMissing,
+                                 extractSessionCookieId (sessionCookieName defaultSessionCookiePolicy) cookies `shouldBe` SessionCookieFound sharedSessionId,
+                                 extractSessionCookieId (sessionCookieName WebApiSession.mfaEnrollmentSessionCookiePolicy) cookies `shouldBe` SessionCookieFound sharedSessionId,
+                                 extractSessionCookieId (sessionCookieName defaultAdmissionSessionCookiePolicy) cookies `shouldBe` SessionCookieFound sharedSessionId
+                               ]
+                        )
+                  )
+                  cleanUp
+            )
+      )
+
+  it "keeps admission login names and encrypted TOTP envelopes distinct and redacted" $ do
+    let loginName = requiredCsrf "admission login" (mkAdmissionLoginName "support_operator")
+        encryptedSecret = requiredCsrf "admission encrypted secret" (mkEncryptedAdmissionTotpSecret "v1-encrypted-envelope")
+        principalId = requiredCsrf "admission principal" (mkAdmissionPrincipalId "support-principal")
+        sessionId = requiredCsrf "admission session" (mkSessionId "0123456789abcdef0123456789abcdef")
+        admissionPrincipal = mkAdmissionPrincipal principalId (mkAdmissionSessionId sessionId) 1234
+    expectAll
+      ( (show loginName `shouldBe` "AdmissionLoginName <redacted>")
+          :| [ show encryptedSecret `shouldBe` "EncryptedAdmissionTotpSecret <redacted>",
+               show principalId `shouldBe` "AdmissionPrincipalId <redacted>",
+               show (mkAdmissionSessionId sessionId) `shouldBe` "AdmissionSessionId <redacted>",
+               show admissionPrincipal `shouldBe` "AdmissionPrincipal <redacted>",
+               mkAdmissionLoginName "invalid login" `shouldBe` Nothing,
+               mkAdmissionLoginName "" `shouldBe` Nothing,
+               mkAdmissionLoginName (Text.replicate 129 "a") `shouldBe` Nothing,
+               mkAdmissionPrincipalId "invalid principal" `shouldBe` Nothing,
+               mkAdmissionPrincipalId "" `shouldBe` Nothing,
+               mkAdmissionPrincipalId (Text.replicate 129 "a") `shouldBe` Nothing,
+               mkAdmissionReturnTarget "login" `shouldBe` Just ReturnToAccountLogin,
+               mkAdmissionReturnTarget "https://attacker.invalid" `shouldBe` Nothing,
+               mkEncryptedAdmissionTotpSecret "" `shouldBe` Nothing,
+               mkEncryptedAdmissionTotpSecret (Text.replicate 4097 "a") `shouldBe` Nothing
+             ]
+      )
+    expectDistinctAndPrintable
+      [ AdmissionCredentialStoreUnavailable,
+        AdmissionCredentialStoreCorrupt
+      ]
+    expectDistinctAndPrintable
+      [ AdmissionAttemptStoreUnavailable,
+        AdmissionAttemptStoreCorrupt
+      ]
+    expectDistinctAndPrintable
+      [ AdmissionProofClockUnavailable,
+        AdmissionProofClockCorrupt
+      ]
+    expectDistinctAndPrintable
+      [ AdmissionProofRejected,
+        AdmissionProofReplayed,
+        AdmissionProofThrottled,
+        AdmissionProofUnavailable
+      ]
+    expectDistinctAndPrintable
+      [ AdmissionSessionStoreUnavailable,
+        AdmissionSessionStoreCorrupt
+      ]
+    expectDistinctAndPrintable
+      [ AdmissionSessionClockUnavailable,
+        AdmissionSessionClockCorrupt
+      ]
+    expectDistinctAndPrintable
+      [ AdmissionSessionStoreIssue AdmissionSessionStoreUnavailable,
+        AdmissionSessionClockIssue AdmissionSessionClockUnavailable
+      ]
+    expectDistinctAndPrintable
+      [ AdmissionCookieMustUseHostPrefix,
+        AdmissionCookieLifetimeMustBeOneDay
+      ]
+    expectDistinctAndPrintable [AdmissionRequiresConfiguredAuthentication]
+    show AdmissionDisabled `shouldBe` "AdmissionDisabled"
+
+  it "uses opaque admission values only for equality and redacted diagnostics" $ do
+    let loginName = requiredCsrf "admission login" (mkAdmissionLoginName "support_operator")
+        otherLoginName = requiredCsrf "second admission login" (mkAdmissionLoginName "other_operator")
+        principalId = requiredCsrf "admission principal" (mkAdmissionPrincipalId "support-principal")
+        otherPrincipalId = requiredCsrf "second admission principal" (mkAdmissionPrincipalId "other-principal")
+        encryptedSecret = requiredCsrf "admission encrypted secret" (mkEncryptedAdmissionTotpSecret "v1-encrypted-envelope")
+        sessionId = requiredCsrf "admission session" (mkSessionId "0123456789abcdef0123456789abcdef")
+        principal = mkAdmissionPrincipal principalId (mkAdmissionSessionId sessionId) 1234
+        credential = StoredAdmissionCredential principalId encryptedSecret Nothing
+    evaluate (loginName == loginName) `shouldReturn` True
+    evaluate (loginName == otherLoginName) `shouldReturn` False
+    evaluate (compare principalId otherPrincipalId) `shouldReturn` GT
+    evaluate (show loginName) `shouldReturn` "AdmissionLoginName <redacted>"
+    evaluate (show principalId) `shouldReturn` "AdmissionPrincipalId <redacted>"
+    evaluate (show (mkAdmissionSessionId sessionId)) `shouldReturn` "AdmissionSessionId <redacted>"
+    evaluate (show encryptedSecret) `shouldReturn` "EncryptedAdmissionTotpSecret <redacted>"
+    evaluate (show principal) `shouldReturn` "AdmissionPrincipal <redacted>"
+    evaluate (show credential) `shouldReturn` "StoredAdmissionCredential <redacted>"
+    map renderDiagnosticValue [DiagnosticValue loginName, DiagnosticValue principalId, DiagnosticValue (mkAdmissionSessionId sessionId), DiagnosticValue encryptedSecret, DiagnosticValue principal, DiagnosticValue credential]
+      `shouldBe` [ "AdmissionLoginName <redacted>",
+                   "AdmissionPrincipalId <redacted>",
+                   "AdmissionSessionId <redacted>",
+                   "EncryptedAdmissionTotpSecret <redacted>",
+                   "AdmissionPrincipal <redacted>",
+                   "StoredAdmissionCredential <redacted>"
+                 ]
+
+  it "uses explicit, durable, cookie, header, and default locale precedence" $ do
+    let anonymous = AnonymousIdentity
+        authenticated = AuthenticatedIdentity (RootPrincipal (Just (locale "es")) ["catalog.read"])
+    resolveLocale defaultLocalePolicy (LocaleResolutionInput (Just (locale "en")) (Just "es") (Just "es-MX") authenticated)
+      `shouldBe` locale "en"
+    resolveLocale defaultLocalePolicy (LocaleResolutionInput Nothing (Just "en") (Just "en-US") authenticated)
+      `shouldBe` locale "es"
+    resolveLocale defaultLocalePolicy (LocaleResolutionInput Nothing (Just "es") (Just "en-US") anonymous)
+      `shouldBe` locale "es"
+    resolveLocale defaultLocalePolicy (LocaleResolutionInput Nothing Nothing (Just "es-MX,en;q=0.8") anonymous)
+      `shouldBe` locale "es"
+    resolveLocale defaultLocalePolicy (LocaleResolutionInput Nothing Nothing (Just "fr-CA") anonymous)
+      `shouldBe` locale "en"
+    supportedLocales defaultLocalePolicy `shouldBe` locale "en" :| [locale "es"]
+    defaultLocale defaultLocalePolicy `shouldBe` locale "en"
+    let equivalentPolicy = LocalePolicy (locale "en" :| [locale "es"]) (locale "en")
+        resolutionInput = LocaleResolutionInput Nothing (Just "es") (Just "en-US") anonymous
+    equivalentPolicy `shouldBe` defaultLocalePolicy
+    show equivalentPolicy `shouldBe` show defaultLocalePolicy
+    resolutionInput `shouldBe` resolutionInput
+    show resolutionInput `shouldBe` "LocaleResolutionInput {localeExplicitPrefix = Nothing, localeCookieValue = Just \"es\", localeAcceptLanguage = Just \"en-US\", localeIdentity = AnonymousIdentity}"
+
+  it "keeps default public/admission helpers inert until the application enables admission" $ do
+    let publicModule = buildPublicModule defaultComposedStaticAssets
+        trustedClient = TrustedNetworkClient BrowserClient defaultClientAddress
+    moduleActionRoute publicModule defaultComposedContext AdmissionActionTarget `shouldBe` Nothing
+    moduleDeclaredRoutes publicModule
+      `shouldBe` [ Public (PublicAdmission ReturnToAccountLogin),
+                   Public PublicLogin,
+                   Public (PublicAsset (StaticAssetRoute [requiredPathSegment "public", requiredPathSegment "assets", requiredPathSegment "app.css"])),
+                   Public PublicNotFound
+                 ]
+    show defaultSynchronizerStoragePolicy `shouldBe` "SynchronizerStoragePolicy 16"
+    show trustedClient `shouldBe` "TrustedNetworkClient BrowserClient <redacted>"
+
+  it "mounts independent local routes/actions under an allowlisted locale root" $ do
+    rootModule <- requiredRootModule
+    let rootContext = defaultComposedContext
+        spanishCatalog = RouteLocation [requiredPathSegment "es", requiredPathSegment "catalog"] []
+    ordersOnlyModule <-
+      case mountApplicationModule ordersModuleMount (buildOrdersModule ordersQueries ordersCommands) of
+        Left mountError -> expectationFailure (show mountError) >> fail "could not mount the Orders module"
+        Right mountedModule -> pure mountedModule
+    fmap isNothing (moduleHandleAction ordersOnlyModule (ClientActionRequest (RouteRequest (Catalog CatalogIndex) rootContext) (CatalogAction RefreshCatalog) Nothing rootContext))
+      `shouldReturn` True
+    case parseRoute (moduleRouteCodec rootModule) rootContext spanishCatalog of
+      RouteParsed request -> do
+        requestRoute request `shouldBe` Localized (locale "es") (Catalog CatalogIndex)
+        requestLocale (requestCore (requestContext request)) `shouldBe` locale "es"
+      RouteNotMatched -> expectationFailure "expected the Spanish catalog route"
+      RouteMalformed routeError -> expectationFailure (show routeError)
+    routePathSegments (renderRoute (moduleRouteCodec rootModule) (RouteRequest (Localized (locale "es") (Orders OrdersIndex)) rootContext))
+      `shouldBe` [requiredPathSegment "es", requiredPathSegment "orders"]
+    Action.decodeAction
+      (moduleActionCodec rootModule)
+      Action.ClientActionPayload
+        { Action.clientActionMethod = "POST",
+          Action.clientActionPath = "/es/catalog/actions/refresh",
+          Action.clientActionFields = [],
+          Action.clientActionCsrfToken = Nothing,
+          Action.clientActionIdempotencyKey = Nothing,
+          Action.clientActionPayloadContext = spanishContext rootContext
+        }
+      `shouldBe` Action.DecodedClientAction (CatalogAction RefreshCatalog)
+    Action.decodeAction
+      (moduleActionCodec rootModule)
+      Action.ClientActionPayload
+        { Action.clientActionMethod = "POST",
+          Action.clientActionPath = "/es/orders/actions/submit",
+          Action.clientActionFields = [],
+          Action.clientActionCsrfToken = Nothing,
+          Action.clientActionIdempotencyKey = Nothing,
+          Action.clientActionPayloadContext = spanishContext rootContext
+        }
+      `shouldBe` Action.DecodedClientAction (OrdersAction SubmitOrder)
+    Action.decodeAction
+      (moduleActionCodec rootModule)
+      Action.ClientActionPayload
+        { Action.clientActionMethod = "POST",
+          Action.clientActionPath = "/es/unknown/actions/missing",
+          Action.clientActionFields = [],
+          Action.clientActionCsrfToken = Nothing,
+          Action.clientActionIdempotencyKey = Nothing,
+          Action.clientActionPayloadContext = spanishContext rootContext
+        }
+      `shouldBe` Action.UnrecognizedClientAction
+    case Action.actionEndpointMetadata (moduleActionCodec rootModule) (spanishContext rootContext) "POST" "/es/catalog/actions/refresh" of
+      Nothing -> expectationFailure "expected localized catalog action metadata"
+      Just metadata -> routeTemplateText (endpointRouteTemplate metadata) `shouldBe` "/{locale}/catalog/actions/refresh"
+    Action.actionPath (moduleActionCodec rootModule) (spanishContext rootContext) (CatalogActionTarget RefreshCatalogTarget)
+      `shouldBe` Just "/es/catalog/actions/refresh"
+    Action.actionPath (moduleActionCodec rootModule) (spanishContext rootContext) (OrdersActionTarget SubmitOrderTarget)
+      `shouldBe` Just "/es/orders/actions/submit"
+
+  it "serves typed public assets through the locale root with public asset metadata" $ do
+    rootModule <- requiredRootModule
+    let rootContext = defaultComposedContext
+        assetLocation = RouteLocation [requiredPathSegment "es", requiredPathSegment "public", requiredPathSegment "assets", requiredPathSegment "app.css"] []
+    case parseRoute (moduleRouteCodec rootModule) rootContext assetLocation of
+      RouteParsed request -> do
+        requestRoute request
+          `shouldBe` Localized (locale "es") (Public (PublicAsset (StaticAssetRoute [requiredPathSegment "public", requiredPathSegment "assets", requiredPathSegment "app.css"])))
+        let definition = moduleEndpoints rootModule (requestRoute request)
+            metadata = routeMetadata definition
+        endpointProtocol metadata `shouldBe` AssetEndpoint
+        endpointAccess metadata `shouldBe` AllowUnauthenticated
+        routeTemplateText (endpointRouteTemplate metadata) `shouldBe` "/{locale}/public/assets/*"
+        response <- runRouteDefinition definition Wai.defaultRequest request
+        case response of
+          ProtocolResponseResult protocolResponse -> do
+            protocolResponseStatus protocolResponse `shouldBe` Http.status200
+            case protocolResponseBody protocolResponse of
+              ProtocolResponseWai waiResponse -> Wai.responseStatus waiResponse `shouldBe` Http.status200
+              _ -> expectationFailure "expected the static adapter to keep a raw WAI response"
+          _ -> expectationFailure "expected the static adapter to return a protocol response"
+      RouteNotMatched -> expectationFailure "expected the Spanish public asset route"
+      RouteMalformed routeError -> expectationFailure (show routeError)
+
+  it "attaches the trusted root/module observation before a child context is projected" $ do
+    rootModule <- requiredRootModule
+    composedSite <- requiredComposedSite
+    let rootContext = defaultComposedContext
+        rootRoute = Localized (locale "es") (Catalog CatalogIndex)
+        metadata = routeMetadata (moduleEndpoints rootModule rootRoute)
+        observedContext = Site.siteAttachRouteObservation composedSite rootRoute metadata (spanishContext rootContext)
+    requestRouteObservation (requestCore observedContext)
+      `shouldBe` Just
+        RouteObservation
+          { observedEndpointName = endpointName metadata,
+            observedMountChain = requiredModuleName "root" :| [requiredModuleName "root.catalog", requiredModuleName "catalog"],
+            observedRouteTemplate = endpointRouteTemplate metadata,
+            observedLocale = locale "es"
+          }
+
+  it "runs the locale-rooted public page through the production WAI interpreter" $ do
+    composedSite <- requiredComposedSite
+    waiApplication <- toWaiApplication (Site.buildSiteApplication composedSite)
+    englishResponse <- performWaiRequest (pure waiApplication) (waiRequest ["public", "login"])
+    spanishResponse <- performWaiRequest (pure waiApplication) (waiRequest ["es", "public", "login"])
+    englishBody <- readResponseBody englishResponse
+    spanishBody <- readResponseBody spanishResponse
+    expectAll
+      ( (Wai.responseStatus englishResponse `shouldBe` Http.status200)
+          :| [ Wai.responseStatus spanishResponse `shouldBe` Http.status200,
+               Text.isInfixOf "href=\"/en/catalog\"" englishBody `shouldBe` True,
+               Text.isInfixOf "href=\"/es/catalog\"" spanishBody `shouldBe` True,
+               Text.isInfixOf "<h1>Login</h1>" englishBody `shouldBe` True,
+               Text.isInfixOf "<h1>Login</h1>" spanishBody `shouldBe` True
+             ]
+      )
+
+  it "executes mounted pages and static assets through the assembled site" $ do
+    let authenticatedSecurity =
+          AuthenticationEnabled
+            []
+            (AuthenticationGuard (pure . ContinueEndpoint . authenticatedRootContext . endpointRouteRequest))
+            []
+        authenticatedSite =
+          buildComposedSiteWithSecurityDependencies defaultComposedSiteDependencies authenticatedSecurity
+    waiApplication <- toWaiApplication (Site.buildSiteApplication authenticatedSite)
+    catalogResponse <- performWaiRequest (pure waiApplication) (waiRequest ["es", "catalog"])
+    ordersResponse <- performWaiRequest (pure waiApplication) (waiRequest ["es", "orders"])
+    assetResponse <- performWaiRequest (pure waiApplication) (waiRequest ["es", "public", "assets", "app.css"])
+    catalogBody <- readResponseBody catalogResponse
+    ordersBody <- readResponseBody ordersResponse
+    assetBody <- readResponseBody assetResponse
+    expectAll
+      ( (Wai.responseStatus catalogResponse `shouldBe` Http.status200)
+          :| [ Wai.responseStatus ordersResponse `shouldBe` Http.status200,
+               Wai.responseStatus assetResponse `shouldBe` Http.status200,
+               Text.isInfixOf "<h1>Catalog</h1>" catalogBody `shouldBe` True,
+               Text.isInfixOf "<h1>Orders</h1>" ordersBody `shouldBe` True,
+               Text.isInfixOf "max-inline-size" assetBody `shouldBe` True
+             ]
+      )
+
+  it "declares the complete public and mounted route algebra with one locale prefix" $ do
+    rootModule <- requiredRootModule
+    let rootContext = defaultComposedContext
+        assetRoute = StaticAssetRoute [requiredPathSegment "public", requiredPathSegment "assets", requiredPathSegment "app.css"]
+        loginRoute = Localized (locale "en") (Public PublicLogin)
+        notFoundRoute = Localized (locale "en") (Public PublicNotFound)
+        catalogRoute = Localized (locale "en") (Catalog CatalogIndex)
+        ordersRoute = Localized (locale "en") (Orders OrdersIndex)
+    staticAssetRoots defaultComposedStaticAssets `shouldBe` [StaticAssetRoot "/public/assets" "public-assets"]
+    staticAssetContentTypes defaultComposedStaticAssets `shouldSatisfy` (not . null)
+    staticCacheControlSeconds defaultComposedStaticAssets `shouldBe` Just 300
+    Public PublicLogin `shouldBe` Public PublicLogin
+    Public (PublicAsset assetRoute) `shouldBe` Public (PublicAsset assetRoute)
+    Public PublicNotFound `shouldBe` Public PublicNotFound
+    Public PublicLogin `shouldNotBe` Public (PublicAsset assetRoute)
+    Public (PublicAsset assetRoute) `shouldNotBe` Public (PublicAsset (StaticAssetRoute [requiredPathSegment "other"]))
+    Public PublicNotFound `shouldNotBe` Public PublicLogin
+    Catalog CatalogIndex `shouldBe` Catalog CatalogIndex
+    Orders OrdersIndex `shouldBe` Orders OrdersIndex
+    Catalog CatalogIndex `shouldNotBe` Orders OrdersIndex
+    CatalogActionTarget RefreshCatalogTarget `shouldBe` CatalogActionTarget RefreshCatalogTarget
+    OrdersActionTarget SubmitOrderTarget `shouldBe` OrdersActionTarget SubmitOrderTarget
+    CatalogActionTarget RefreshCatalogTarget `shouldNotBe` OrdersActionTarget SubmitOrderTarget
+    CatalogAction RefreshCatalog `shouldBe` CatalogAction RefreshCatalog
+    OrdersAction SubmitOrder `shouldBe` OrdersAction SubmitOrder
+    CatalogAction RefreshCatalog `shouldNotBe` OrdersAction SubmitOrder
+    [RootMayReadCatalog, RootMayRefreshCatalog, RootMayReadOrders, RootMaySubmitOrders]
+      `shouldBe` [RootMayReadCatalog, RootMayRefreshCatalog, RootMayReadOrders, RootMaySubmitOrders]
+    RootMayReadCatalog `shouldNotBe` RootMayRefreshCatalog
+    RootMayReadOrders `shouldNotBe` RootMaySubmitOrders
+    BrowserClient `shouldBe` BrowserClient
+    OtherClient `shouldBe` OtherClient
+    BrowserClient `shouldNotBe` OtherClient
+    RootLocal `shouldBe` RootLocal
+    show PublicLogin `shouldBe` "PublicLogin"
+    show (PublicAsset assetRoute) `shouldBe` "PublicAsset (StaticAssetRoute {staticAssetPathSegments = [PathSegment \"public\",PathSegment \"assets\",PathSegment \"app.css\"]})"
+    show PublicNotFound `shouldBe` "PublicNotFound"
+    show (Catalog CatalogIndex) `shouldBe` "Catalog CatalogIndex"
+    show (Orders OrdersIndex) `shouldBe` "Orders OrdersIndex"
+    show (Localized (locale "en") (Catalog CatalogIndex)) `shouldBe` "Localized (Locale \"en\") (Catalog CatalogIndex)"
+    show (CatalogActionTarget RefreshCatalogTarget) `shouldBe` "CatalogActionTarget RefreshCatalogTarget"
+    show (OrdersActionTarget SubmitOrderTarget) `shouldBe` "OrdersActionTarget SubmitOrderTarget"
+    show (CatalogAction RefreshCatalog) `shouldBe` "CatalogAction RefreshCatalog"
+    show (OrdersAction SubmitOrder) `shouldBe` "OrdersAction SubmitOrder"
+    show RootMayReadCatalog `shouldBe` "RootMayReadCatalog"
+    show RootMayRefreshCatalog `shouldBe` "RootMayRefreshCatalog"
+    show RootMayReadOrders `shouldBe` "RootMayReadOrders"
+    show RootMaySubmitOrders `shouldBe` "RootMaySubmitOrders"
+    show BrowserClient `shouldBe` "BrowserClient"
+    show OtherClient `shouldBe` "OtherClient"
+    show RootLocal `shouldBe` "RootLocal"
+    RootPrincipal Nothing [] `shouldNotBe` RootPrincipal (Just (locale "es")) []
+    RootPrincipal (Just (locale "es")) [] `shouldNotBe` RootPrincipal (Just (locale "es")) ["catalog.read"]
+    show (RootPrincipal (Just (locale "es")) ["catalog.read"]) `shouldBe` "RootPrincipal {rootPrincipalLocalePreference = Just (Locale \"es\"), rootPrincipalScopes = [\"catalog.read\"]}"
+    moduleOwnsRoute rootModule loginRoute `shouldBe` True
+    moduleOwnsRoute rootModule notFoundRoute `shouldBe` True
+    moduleOwnsRoute rootModule catalogRoute `shouldBe` True
+    moduleOwnsRoute rootModule ordersRoute `shouldBe` True
+    moduleRouteMountChain rootModule loginRoute
+      `shouldBe` requiredModuleName "root" :| [requiredModuleName "root.public", requiredModuleName "public"]
+    moduleRouteMountChain rootModule ordersRoute
+      `shouldBe` requiredModuleName "root" :| [requiredModuleName "root.orders", requiredModuleName "orders"]
+    Routing.routeMethods (moduleRouteCodec rootModule) (RouteRequest loginRoute rootContext) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
+    Routing.routeMethods (moduleRouteCodec rootModule) (RouteRequest notFoundRoute rootContext) `shouldBe` Routing.RouteHidden
+    Routing.routeMethods (moduleRouteCodec rootModule) (RouteRequest catalogRoute rootContext) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
+    Routing.routeMethods (moduleRouteCodec rootModule) (RouteRequest ordersRoute rootContext) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
+    routePathSegments (renderRoute (moduleRouteCodec rootModule) (RouteRequest loginRoute rootContext))
+      `shouldBe` [requiredPathSegment "en", requiredPathSegment "public", requiredPathSegment "login"]
+    routePathSegments (renderRoute (moduleRouteCodec rootModule) (RouteRequest (Localized (locale "es") (Public (PublicAsset assetRoute))) rootContext))
+      `shouldBe` requiredPathSegment "es" : staticAssetPathSegments assetRoute
+    notFoundRequest (moduleRouteCodec rootModule) rootContext `shouldBe` RouteRequest notFoundRoute rootContext
+    let spanishNotFoundContext = spanishContext rootContext
+    notFoundRequest (moduleRouteCodec rootModule) spanishNotFoundContext
+      `shouldBe` RouteRequest (Localized (locale "es") (Public PublicNotFound)) spanishNotFoundContext
+    parseRoute (moduleRouteCodec rootModule) rootContext (RouteLocation [requiredPathSegment "en", requiredPathSegment "public", requiredPathSegment "login"] [])
+      `shouldBe` RouteParsed (RouteRequest loginRoute (rootContext {requestCore = (requestCore rootContext) {requestLocaleFallbacks = [locale "en"]}}))
+    parseRoute (moduleRouteCodec rootModule) rootContext (RouteLocation [requiredPathSegment "catalog"] [])
+      `shouldBe` RouteParsed (RouteRequest catalogRoute (rootContext {requestCore = (requestCore rootContext) {requestLocaleFallbacks = [locale "en"]}}))
+    parseRoute (moduleRouteCodec rootModule) rootContext (RouteLocation [requiredPathSegment "fr", requiredPathSegment "catalog"] []) `shouldBe` RouteNotMatched
+    parseRoute (moduleRouteCodec rootModule) rootContext (RouteLocation [] []) `shouldBe` RouteNotMatched
+    loginResponse <- runRouteDefinition (moduleEndpoints rootModule loginRoute) Wai.defaultRequest (RouteRequest loginRoute rootContext)
+    assertPageResponse "Login" loginRoute rootContext loginResponse
+    notFoundResponse <- runRouteDefinition (moduleEndpoints rootModule notFoundRoute) Wai.defaultRequest (RouteRequest notFoundRoute rootContext)
+    assertPageResponse "Not Found" notFoundRoute rootContext notFoundResponse
+
+  it "keeps every exported root algebra value distinct and printable" $ do
+    let assetRoute = StaticAssetRoute [requiredPathSegment "public", requiredPathSegment "assets", requiredPathSegment "app.css"]
+        publicRoutes = [PublicLogin, PublicAsset assetRoute, PublicNotFound]
+        localizedRoutes = [Public PublicLogin, Public (PublicAsset assetRoute), Public PublicNotFound, Catalog CatalogIndex, Orders OrdersIndex]
+        rootRoutes = [Localized (locale "en") localRoute | localRoute <- localizedRoutes] <> [Localized (locale "es") (Catalog CatalogIndex)]
+        actionTargets = [CatalogActionTarget RefreshCatalogTarget, OrdersActionTarget SubmitOrderTarget]
+        actions = [CatalogAction RefreshCatalog, OrdersAction SubmitOrder]
+        authorizations = [RootMayReadCatalog, RootMayRefreshCatalog, RootMayReadOrders, RootMaySubmitOrders]
+        principals = [RootPrincipal Nothing [], RootPrincipal (Just (locale "en")) [], RootPrincipal Nothing ["catalog.read"], RootPrincipal (Just (locale "es")) ["orders.read"]]
+        clients = [BrowserClient, OtherClient]
+        policies = [defaultLocalePolicy, LocalePolicy (locale "en" :| []) (locale "en"), LocalePolicy (locale "es" :| [locale "en"]) (locale "es")]
+        resolutionInputs =
+          [ LocaleResolutionInput Nothing Nothing Nothing AnonymousIdentity,
+            LocaleResolutionInput (Just (locale "es")) Nothing Nothing AnonymousIdentity,
+            LocaleResolutionInput Nothing (Just "es") Nothing (AuthenticatedIdentity (RootPrincipal Nothing [])),
+            LocaleResolutionInput Nothing Nothing (Just "en-US") (AuthenticatedIdentity (RootPrincipal (Just (locale "en")) ["catalog.read"]))
+          ]
+    expectDistinctAndPrintable publicRoutes
+    expectDistinctAndPrintable localizedRoutes
+    expectDistinctAndPrintable rootRoutes
+    expectDistinctAndPrintable actionTargets
+    expectDistinctAndPrintable actions
+    expectDistinctAndPrintable authorizations
+    expectDistinctAndPrintable principals
+    expectDistinctAndPrintable clients
+    expectDistinctAndPrintable policies
+    expectDistinctAndPrintable resolutionInputs
+    assertRootLocalEqual (requestLocal defaultComposedContext) RootLocal
+    rootLocalsDiffer (requestLocal defaultComposedContext) RootLocal `shouldBe` False
+    showsPrec 11 RootLocal "" `shouldBe` "RootLocal"
+    showList [RootLocal] "" `shouldBe` "[RootLocal]"
+
+  it "installs one site with the supplied security choice and root module chain" $ do
+    let suppliedSecurity = AuthenticationDisabled []
+        rootRoute = Localized (locale "en") (Public PublicLogin)
+    let composedSite = buildComposedSiteWithSecurityDependencies defaultComposedSiteDependencies suppliedSecurity
+    Site.siteName composedSite `shouldBe` "composed-domains"
+    Site.siteDefaultRequestContext composedSite `shouldBe` defaultComposedContext
+    case Site.siteRouteModuleChain composedSite of
+      Nothing -> expectationFailure "expected a root module chain"
+      Just routeChain -> routeChain rootRoute `shouldBe` requiredModuleName "root" :| [requiredModuleName "root.public", requiredModuleName "public"]
+    Site.siteNavigationRoutes composedSite `shouldBe` []
+    successfulActionResponse (Site.siteHandleClientAction composedSite (rootActionRequest defaultComposedContext (CatalogAction RefreshCatalog)))
+      `shouldReturn` Just (clientActionResponse Http.status200)
+    disabledAdmissionSite <-
+      requiredAdmission
+        "disabled admission retains configured root security"
+        (buildComposedSiteWithAdmissionSecurityDependencies defaultComposedSiteDependencies AdmissionDisabled suppliedSecurity)
+    successfulActionResponse (Site.siteHandleClientAction disabledAdmissionSite (rootActionRequest defaultComposedContext (OrdersAction SubmitOrder)))
+      `shouldReturn` Just (clientActionResponse Http.status202)
+    successfulActionResponse (Site.siteHandleClientAction disabledAdmissionSite (rootActionRequest defaultComposedContext (CatalogAction RefreshCatalog)))
+      `shouldReturn` Just (clientActionResponse Http.status200)
+    case Site.siteSecurity composedSite of
+      AuthenticationDisabled [] -> pure ()
+      AuthenticationDisabled _ -> expectationFailure "expected no additional public guards"
+      AuthenticationEnabled {} -> expectationFailure "expected the supplied public security policy"
+      AuthenticationProfiles {} -> expectationFailure "expected the supplied public security policy"
+
+  it "places durable admission before account authentication without weakening the public route matrix" $ do
+    let admissionPrincipalId = requiredCsrf "admission principal id" (mkAdmissionPrincipalId "beta-operator")
+        admissionSessionId = requiredCsrf "admission session id" (mkSessionId "0123456789abcdef0123456789abcdef")
+        activeSession = OpaqueSession admissionSessionId admissionPrincipalId 1 2000000000
+        activeStore =
+          AdmissionSessionStore
+            { saveAdmissionSession = \_ -> pure (Right True),
+              loadAdmissionSession = \receivedSessionId ->
+                pure (Right (if receivedSessionId == mkAdmissionSessionId admissionSessionId then Just activeSession else Nothing)),
+              invalidateAdmissionSession = \_ _ -> pure (Right True)
+            }
+        unavailableStore = activeStore {loadAdmissionSession = \_ -> pure (Left AdmissionSessionStoreUnavailable)}
+        authenticatedSecurity =
+          AuthenticationEnabled
+            []
+            (AuthenticationGuard (pure . ContinueEndpoint . authenticatedRootContext . endpointRouteRequest))
+            []
+    expiredInvalidations <- newIORef []
+    let expiredStore =
+          activeStore
+            { loadAdmissionSession = \receivedSessionId ->
+                pure
+                  ( Right
+                      ( if receivedSessionId == mkAdmissionSessionId admissionSessionId
+                          then Just (OpaqueSession admissionSessionId admissionPrincipalId 1 500)
+                          else Nothing
+                      )
+                  ),
+              invalidateAdmissionSession = \invalidatedSessionId invalidatedAt -> do
+                modifyIORef' expiredInvalidations (<> [(invalidatedSessionId, invalidatedAt)])
+                pure (Right True)
+            }
+        expiredCleanupUnavailableStore = expiredStore {invalidateAdmissionSession = \_ _ -> pure (Left AdmissionSessionStoreUnavailable)}
+    activeConfig <- requiredAdmission "admission configuration" (mkAdmissionConfig defaultAdmissionSessionCookiePolicy activeStore (pure (Right 500)))
+    unavailableConfig <- requiredAdmission "unavailable admission configuration" (mkAdmissionConfig defaultAdmissionSessionCookiePolicy unavailableStore (pure (Right 500)))
+    expiredConfig <- requiredAdmission "expired admission configuration" (mkAdmissionConfig defaultAdmissionSessionCookiePolicy expiredStore (pure (Right 500)))
+    expiredCleanupUnavailableConfig <- requiredAdmission "expired admission cleanup-unavailable configuration" (mkAdmissionConfig defaultAdmissionSessionCookiePolicy expiredCleanupUnavailableStore (pure (Right 500)))
+    unavailableClockConfig <- requiredAdmission "admission clock configuration" (mkAdmissionConfig defaultAdmissionSessionCookiePolicy activeStore (pure (Left AdmissionSessionClockUnavailable)))
+    activeSite <-
+      requiredAdmission
+        "admission-enabled root"
+        (buildComposedSiteWithAdmissionSecurityDependencies (withCsrfProtection admissionCsrfProtection defaultComposedSiteDependencies) (AdmissionEnabled activeConfig unavailableAdmissionProofConfig) authenticatedSecurity)
+    unavailableSite <-
+      requiredAdmission
+        "unavailable admission-enabled root"
+        (buildComposedSiteWithAdmissionSecurityDependencies (withCsrfProtection admissionCsrfProtection defaultComposedSiteDependencies) (AdmissionEnabled unavailableConfig unavailableAdmissionProofConfig) authenticatedSecurity)
+    expiredSite <-
+      requiredAdmission
+        "expired admission-enabled root"
+        (buildComposedSiteWithAdmissionSecurityDependencies (withCsrfProtection admissionCsrfProtection defaultComposedSiteDependencies) (AdmissionEnabled expiredConfig unavailableAdmissionProofConfig) authenticatedSecurity)
+    expiredCleanupUnavailableSite <-
+      requiredAdmission
+        "expired admission cleanup-unavailable root"
+        (buildComposedSiteWithAdmissionSecurityDependencies (withCsrfProtection admissionCsrfProtection defaultComposedSiteDependencies) (AdmissionEnabled expiredCleanupUnavailableConfig unavailableAdmissionProofConfig) authenticatedSecurity)
+    unavailableClockSite <-
+      requiredAdmission
+        "clock-unavailable admission-enabled root"
+        (buildComposedSiteWithAdmissionSecurityDependencies (withCsrfProtection admissionCsrfProtection defaultComposedSiteDependencies) (AdmissionEnabled unavailableClockConfig unavailableAdmissionProofConfig) authenticatedSecurity)
+    case buildComposedSiteWithAdmissionSecurityDependencies
+      (withCsrfProtection admissionCsrfProtection defaultComposedSiteDependencies)
+      (AdmissionEnabled activeConfig unavailableAdmissionProofConfig)
+      (AuthenticationDisabled []) of
+      Left AdmissionRequiresConfiguredAuthentication -> pure ()
+      Right _ -> expectationFailure "enabled admission must require configured authentication"
+    activeApplication <- toWaiApplication (Site.buildSiteApplication activeSite)
+    unavailableApplication <- toWaiApplication (Site.buildSiteApplication unavailableSite)
+    expiredApplication <- toWaiApplication (Site.buildSiteApplication expiredSite)
+    expiredCleanupUnavailableApplication <- toWaiApplication (Site.buildSiteApplication expiredCleanupUnavailableSite)
+    unavailableClockApplication <- toWaiApplication (Site.buildSiteApplication unavailableClockSite)
+    let requestAdaptedContext = Site.siteRequestContextFromRequest activeSite (waiRequest ["es", "catalog"]) testRequestId defaultComposedContext
+        requestAdaptedClientAddress =
+          case requestClient requestAdaptedContext of
+            TrustedNetworkClient _ clientAddress -> Just (clientAddressText clientAddress)
+            BrowserClient -> Nothing
+            OtherClient -> Nothing
+    admissionResponse <- performWaiRequest (pure activeApplication) (waiRequest ["es", "public", "admission"])
+    assetResponse <- performWaiRequest (pure activeApplication) (waiRequest ["es", "public", "assets", "app.css"])
+    loginChallenge <- performWaiRequest (pure activeApplication) (waiRequest ["es", "public", "login"])
+    catalogChallenge <- performWaiRequest (pure activeApplication) (waiRequest ["es", "catalog"])
+    ordersChallenge <- performWaiRequest (pure activeApplication) (waiRequest ["es", "orders"])
+    notFoundResponse <- performWaiRequest (pure activeApplication) (waiRequest ["es", "public", "404"])
+    actionChallenge <- performWaiRequest (pure activeApplication) ((waiRequest ["es", "catalog", "actions", "refresh"]) {Wai.requestMethod = "POST", Wai.requestHeaders = [("X-Harch-Action", "1")]})
+    admittedLogin <- performWaiRequest (pure activeApplication) ((waiRequest ["es", "public", "login"]) {Wai.requestHeaders = [(Http.hCookie, "__Host-composed-admission=0123456789abcdef0123456789abcdef")]})
+    admittedCatalog <- performWaiRequest (pure activeApplication) ((waiRequest ["es", "catalog"]) {Wai.requestHeaders = [(Http.hCookie, "__Host-composed-admission=0123456789abcdef0123456789abcdef")]})
+    admittedOrders <- performWaiRequest (pure activeApplication) ((waiRequest ["es", "orders"]) {Wai.requestHeaders = [(Http.hCookie, "__Host-composed-admission=0123456789abcdef0123456789abcdef")]})
+    unavailableResponse <- performWaiRequest (pure unavailableApplication) ((waiRequest ["es", "catalog"]) {Wai.requestHeaders = [(Http.hCookie, "__Host-composed-admission=0123456789abcdef0123456789abcdef")]})
+    expiredResponse <- performWaiRequest (pure expiredApplication) ((waiRequest ["es", "catalog"]) {Wai.requestHeaders = [(Http.hCookie, "__Host-composed-admission=0123456789abcdef0123456789abcdef")]})
+    expiredCleanupUnavailableResponse <- performWaiRequest (pure expiredCleanupUnavailableApplication) ((waiRequest ["es", "catalog"]) {Wai.requestHeaders = [(Http.hCookie, "__Host-composed-admission=0123456789abcdef0123456789abcdef")]})
+    unavailableClockResponse <- performWaiRequest (pure unavailableClockApplication) ((waiRequest ["es", "catalog"]) {Wai.requestHeaders = [(Http.hCookie, "__Host-composed-admission=0123456789abcdef0123456789abcdef")]})
+    malformedCookieResponse <- performWaiRequest (pure activeApplication) ((waiRequest ["es", "catalog"]) {Wai.requestHeaders = [(Http.hCookie, "__Host-composed-admission=short")]})
+    ambiguousCookieResponse <- performWaiRequest (pure activeApplication) ((waiRequest ["es", "catalog"]) {Wai.requestHeaders = [(Http.hCookie, "__Host-composed-admission=0123456789abcdef0123456789abcdef; __Host-composed-admission=0123456789abcdef0123456789abcdef")]})
+    actionChallengeBody <- readResponseBody actionChallenge
+    expectAll
+      ( (Wai.responseStatus admissionResponse `shouldBe` Http.status200)
+          :| [ Wai.responseStatus assetResponse `shouldBe` Http.status200,
+               Wai.responseStatus loginChallenge `shouldBe` Http.status303,
+               Wai.responseStatus catalogChallenge `shouldBe` Http.status303,
+               Wai.responseStatus ordersChallenge `shouldBe` Http.status303,
+               Wai.responseStatus notFoundResponse `shouldBe` Http.status404,
+               Wai.responseStatus actionChallenge `shouldBe` Http.status401,
+               lookup "X-Harch-Action-Authentication" (Wai.responseHeaders actionChallenge) `shouldBe` Just "navigate",
+               lookup Http.hLocation (Wai.responseHeaders loginChallenge) `shouldBe` Just "/es/public/admission",
+               lookup Http.hLocation (Wai.responseHeaders catalogChallenge) `shouldBe` Just "/es/public/admission?return=catalog",
+               Text.isInfixOf "\"href\":\"/es/public/admission?return=catalog\"" actionChallengeBody `shouldBe` True,
+               Wai.responseStatus admittedLogin `shouldBe` Http.status200,
+               Wai.responseStatus admittedCatalog `shouldBe` Http.status200,
+               Wai.responseStatus admittedOrders `shouldBe` Http.status200,
+               Wai.responseStatus unavailableResponse `shouldBe` Http.status503,
+               Wai.responseStatus expiredResponse `shouldBe` Http.status303,
+               Wai.responseStatus expiredCleanupUnavailableResponse `shouldBe` Http.status503,
+               Wai.responseStatus unavailableClockResponse `shouldBe` Http.status503,
+               Wai.responseStatus malformedCookieResponse `shouldBe` Http.status303,
+               Wai.responseStatus ambiguousCookieResponse `shouldBe` Http.status303,
+               readIORef expiredInvalidations `shouldReturn` [(mkAdmissionSessionId admissionSessionId, 500)],
+               requestLocale (requestCore requestAdaptedContext) `shouldBe` locale "es",
+               correlationRequestId (requestCorrelation (requestCore requestAdaptedContext)) `shouldBe` Just testRequestId,
+               requestAdaptedClientAddress `shouldSatisfy` maybe False (not . Text.null)
+             ]
+      )
+
+  it "binds composed CSRF to the established admission session and its absolute expiry" $ do
+    let principalId = requiredCsrf "admission principal" (mkAdmissionPrincipalId "beta-operator")
+        sessionId = requiredCsrf "admission session" (mkSessionId "0123456789abcdef0123456789abcdef")
+        admittedContext =
+          defaultComposedContext
+            { requestLocal = AdmissionEstablished (mkAdmissionPrincipal principalId (mkAdmissionSessionId sessionId) 1234)
+            }
+    anonymousBinding <- resolveAdmissionCsrfBinding defaultComposedContext
+    admittedBinding <- resolveAdmissionCsrfBinding admittedContext
+    case (anonymousBinding, admittedBinding) of
+      (Csrf.AnonymousCsrfBinding, Csrf.BoundCsrfBinding _ expiresAt) -> expiresAt `shouldBe` 1234
+      _ -> expectationFailure "expected anonymous and admission-bound CSRF resolutions"
+
+  it "issues a distinct durable 24-hour admission session only after a confirmed write" $ do
+    let principalId = requiredCsrf "admission principal" (mkAdmissionPrincipalId "beta-operator")
+    saved <- newIORef Nothing
+    let durableStore =
+          AdmissionSessionStore
+            { saveAdmissionSession = \session -> writeIORef saved (Just session) >> pure (Right True),
+              loadAdmissionSession = \_ -> pure (Right Nothing),
+              invalidateAdmissionSession = \_ _ -> pure (Right True)
+            }
+        rejectedStore = durableStore {saveAdmissionSession = \_ -> pure (Right False)}
+    durableConfig <- requiredAdmission "durable session configuration" (mkAdmissionConfig defaultAdmissionSessionCookiePolicy durableStore (pure (Right 100)))
+    rejectedConfig <- requiredAdmission "rejected session configuration" (mkAdmissionConfig defaultAdmissionSessionCookiePolicy rejectedStore (pure (Right 100)))
+    unavailableClockConfig <- requiredAdmission "unavailable-clock admission configuration" (mkAdmissionConfig defaultAdmissionSessionCookiePolicy durableStore (pure (Left AdmissionSessionClockUnavailable)))
+    issued <- issueAdmissionSession durableConfig principalId
+    case issued of
+      Left storeError -> expectationFailure (show storeError)
+      Right session -> do
+        readIORef saved `shouldReturn` Just session
+        unixTimeNanosecondsValue (sessionExpiresAtNanoseconds session) `shouldBe` 86400000000100
+        show (mkAdmissionSessionId (sessionId session)) `shouldBe` "AdmissionSessionId <redacted>"
+    issueAdmissionSession rejectedConfig principalId `shouldReturn` Left (AdmissionSessionStoreIssue AdmissionSessionStoreCorrupt)
+    issueAdmissionSession unavailableClockConfig principalId `shouldReturn` Left (AdmissionSessionClockIssue AdmissionSessionClockUnavailable)
+    overflowConfig <- requiredAdmission "overflowing admission session configuration" (mkAdmissionConfig defaultAdmissionSessionCookiePolicy durableStore (pure (Right (unixTimeNanoseconds (maxBound :: Word64)))))
+    issueAdmissionSession overflowConfig principalId `shouldReturn` Left (AdmissionSessionStoreIssue AdmissionSessionStoreCorrupt)
+    evaluate (show durableConfig) `shouldReturn` "AdmissionConfig <redacted>"
+    evaluate (show unavailableAdmissionProofConfig) `shouldReturn` "AdmissionProofConfig <redacted>"
+    evaluate (show (AdmissionEnabled durableConfig unavailableAdmissionProofConfig)) `shouldReturn` "AdmissionEnabled <redacted>"
+
+  it "rejects unsafe admission cookie configuration before session issuance" $ do
+    let sessionStore =
+          AdmissionSessionStore
+            { saveAdmissionSession = \_ -> pure (Right True),
+              loadAdmissionSession = \_ -> pure (Right Nothing),
+              invalidateAdmissionSession = \_ _ -> pure (Right True)
+            }
+        insecureCookie =
+          defaultAdmissionSessionCookiePolicy
+            { sessionCookieName = requiredCsrf "insecure cookie name" (mkSessionCookieName "composed-admission")
+            }
+        shortCookie = defaultAdmissionSessionCookiePolicy {sessionCookieMaxAgeSeconds = 60}
+    case mkAdmissionConfig insecureCookie sessionStore (pure (Right 100)) of
+      Left AdmissionCookieMustUseHostPrefix -> pure ()
+      Left _ -> expectationFailure "expected a host-only cookie-name rejection"
+      Right _ -> expectationFailure "expected unsafe cookie configuration to be rejected"
+    case mkAdmissionConfig shortCookie sessionStore (pure (Right 100)) of
+      Left AdmissionCookieLifetimeMustBeOneDay -> pure ()
+      Left _ -> expectationFailure "expected a 24-hour cookie-lifetime rejection"
+      Right _ -> expectationFailure "expected unsafe cookie configuration to be rejected"
+
+  it "adapts admission session persistence through parameterized composed-schema queries" $ do
+    let principalId = requiredCsrf "admission principal" (mkAdmissionPrincipalId "beta-operator")
+        sessionId = requiredCsrf "admission session" (mkSessionId "0123456789abcdef0123456789abcdef")
+        session = OpaqueSession sessionId principalId 100 200
+    calls <- newIORef ([] :: [(Text, [Text])])
+    let runner _ sql parameters = do
+          modifyIORef' calls (<> [(sql, parameters)])
+          pure
+            ( Right
+                ( if "SELECT admission_principal_id" `Text.isInfixOf` sql
+                    then [["beta-operator", "100", "200"]]
+                    else [["0123456789abcdef0123456789abcdef"] | not ("UPDATE composed.admission_sessions" `Text.isInfixOf` sql)]
+                )
+            )
+        store = buildPostgresAdmissionSessionStoreWithRunner runner ()
+    saveAdmissionSession store session `shouldReturn` Right True
+    loadAdmissionSession store (mkAdmissionSessionId sessionId) `shouldReturn` Right (Just session)
+    invalidateAdmissionSession store (mkAdmissionSessionId sessionId) 300 `shouldReturn` Right False
+    recordedCalls <- readIORef calls
+    map snd recordedCalls
+      `shouldBe` [ ["0123456789abcdef0123456789abcdef", "beta-operator", "100", "200"],
+                   ["0123456789abcdef0123456789abcdef"],
+                   ["0123456789abcdef0123456789abcdef", "300"]
+                 ]
+
+  it "loads encrypted admission credentials and atomically rejects replayed TOTP counters" $ do
+    let loginName = requiredCsrf "admission login" (mkAdmissionLoginName "support_operator")
+        principalId = requiredCsrf "admission principal" (mkAdmissionPrincipalId "beta-operator")
+        encryptedSecret = requiredCsrf "encrypted admission secret" (mkEncryptedAdmissionTotpSecret "v1-envelope")
+        credential = StoredAdmissionCredential principalId encryptedSecret (Just 4)
+    calls <- newIORef ([] :: [(Text, [Text])])
+    let runner _ sql parameters = do
+          modifyIORef' calls (<> [(sql, parameters)])
+          pure (Right [["beta-operator", "v1-envelope", "4"] | "SELECT admission_principal_id" `Text.isInfixOf` sql])
+        store = buildPostgresAdmissionCredentialStoreWithRunner runner ()
+    loadedCredential <- findAdmissionCredential store loginName
+    loadedCredential `shouldBe` Right (Just credential)
+    case loadedCredential of
+      Right (Just storedCredential) -> show storedCredential `shouldBe` "StoredAdmissionCredential <redacted>"
+      _ -> expectationFailure "expected the parameterized credential adapter to load one credential"
+    markAdmissionTotpCounterUsed store principalId 4 `shouldReturn` Right False
+    readIORef calls
+      `shouldReturn` [ ( "SELECT admission_principal_id, encrypted_totp_secret, COALESCE(last_used_totp_counter::TEXT, '') FROM composed.admission_credentials WHERE admission_login_name = $1;",
+                         ["support_operator"]
+                       ),
+                       ( "UPDATE composed.admission_credentials SET last_used_totp_counter = $2::BIGINT WHERE admission_principal_id = $1 AND (last_used_totp_counter IS NULL OR last_used_totp_counter < $2::BIGINT) RETURNING admission_principal_id;",
+                         ["beta-operator", "4"]
+                       )
+                     ]
+
+  it "provisions only encrypted admission credentials through parameterized queries" $ do
+    let loginName = requiredCsrf "admission login" (mkAdmissionLoginName "support_operator")
+        principalId = requiredCsrf "admission principal" (mkAdmissionPrincipalId "beta-operator")
+        encryptedSecret = requiredCsrf "encrypted admission secret" (mkEncryptedAdmissionTotpSecret "v1-envelope")
+    calls <- newIORef ([] :: [(Text, [Text])])
+    let runner _ sql parameters = do
+          modifyIORef' calls (<> [(sql, parameters)])
+          pure (Right [["beta-operator"]])
+    provisionPostgresAdmissionCredentialWithRunner runner () principalId loginName encryptedSecret `shouldReturn` Right True
+    provisionPostgresAdmissionCredentialWithRunner (\_ _ _ -> pure (Right [])) () principalId loginName encryptedSecret `shouldReturn` Right False
+    provisionPostgresAdmissionCredentialWithRunner (\_ _ _ -> pure (Left "database unavailable")) () principalId loginName encryptedSecret `shouldReturn` Left AdmissionCredentialStoreUnavailable
+    readIORef calls
+      `shouldReturn` [ ( "INSERT INTO composed.admission_credentials (admission_principal_id, admission_login_name, encrypted_totp_secret) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING admission_principal_id;",
+                         ["beta-operator", "support_operator", "v1-envelope"]
+                       )
+                     ]
+
+  it "fails closed for malformed and unavailable admission PostgreSQL rows" $ do
+    let loginName = requiredCsrf "admission login" (mkAdmissionLoginName "support_operator")
+        principalId = requiredCsrf "admission principal" (mkAdmissionPrincipalId "beta-operator")
+        sessionId = requiredCsrf "admission session" (mkSessionId "0123456789abcdef0123456789abcdef")
+        session = OpaqueSession sessionId principalId 100 200
+        credentialRunner result _ _ _ = pure result
+        sessionRunner result _ _ _ = pure result
+        credentialStore result = buildPostgresAdmissionCredentialStoreWithRunner (credentialRunner result) ()
+        sessionStore result = buildPostgresAdmissionSessionStoreWithRunner (sessionRunner result) ()
+    findAdmissionCredential (credentialStore (Left "database unavailable")) loginName `shouldReturn` Left AdmissionCredentialStoreUnavailable
+    findAdmissionCredential (credentialStore (Right [["bad id", "envelope", "4"]])) loginName `shouldReturn` Left AdmissionCredentialStoreCorrupt
+    findAdmissionCredential (credentialStore (Right [["beta-operator", "", "not-a-counter"]])) loginName `shouldReturn` Left AdmissionCredentialStoreCorrupt
+    markAdmissionTotpCounterUsed (credentialStore (Left "database unavailable")) principalId 4 `shouldReturn` Left AdmissionCredentialStoreUnavailable
+    markAdmissionTotpCounterUsed (credentialStore (Right [["too", "many"]])) principalId 4 `shouldReturn` Left AdmissionCredentialStoreCorrupt
+    saveAdmissionSession (sessionStore (Left "database unavailable")) session `shouldReturn` Left AdmissionSessionStoreUnavailable
+    saveAdmissionSession (sessionStore (Right [["too", "many"]])) session `shouldReturn` Left AdmissionSessionStoreCorrupt
+    loadAdmissionSession (sessionStore (Left "database unavailable")) (mkAdmissionSessionId sessionId) `shouldReturn` Left AdmissionSessionStoreUnavailable
+    loadAdmissionSession (sessionStore (Right [["bad id", "100", "200"]])) (mkAdmissionSessionId sessionId) `shouldReturn` Left AdmissionSessionStoreCorrupt
+    loadAdmissionSession (sessionStore (Right [["beta-operator", "not-a-time", "200"]])) (mkAdmissionSessionId sessionId) `shouldReturn` Left AdmissionSessionStoreCorrupt
+    invalidateAdmissionSession (sessionStore (Left "database unavailable")) (mkAdmissionSessionId sessionId) 300 `shouldReturn` Left AdmissionSessionStoreUnavailable
+    invalidateAdmissionSession (sessionStore (Right [["too", "many"]])) (mkAdmissionSessionId sessionId) 300 `shouldReturn` Left AdmissionSessionStoreCorrupt
+
+  it "preserves empty, written, and conflict outcomes from admission PostgreSQL adapters" $ do
+    let loginName = requiredCsrf "admission login" (mkAdmissionLoginName "support_operator")
+        principalId = requiredCsrf "admission principal" (mkAdmissionPrincipalId "beta-operator")
+        sessionId = requiredCsrf "admission session" (mkSessionId "0123456789abcdef0123456789abcdef")
+        session = OpaqueSession sessionId principalId 100 200
+        credentialStore result = buildPostgresAdmissionCredentialStoreWithRunner (\_ _ _ -> pure result) ()
+        sessionStore result = buildPostgresAdmissionSessionStoreWithRunner (\_ _ _ -> pure result) ()
+    findAdmissionCredential (credentialStore (Right [])) loginName `shouldReturn` Right Nothing
+    findAdmissionCredential (credentialStore (Right [["beta-operator", "v1-envelope", ""]])) loginName
+      `shouldReturn` Right (Just (StoredAdmissionCredential principalId (requiredCsrf "credential envelope" (mkEncryptedAdmissionTotpSecret "v1-envelope")) Nothing))
+    markAdmissionTotpCounterUsed (credentialStore (Right [])) principalId 4 `shouldReturn` Right False
+    markAdmissionTotpCounterUsed (credentialStore (Right [["beta-operator"]])) principalId 4 `shouldReturn` Right True
+    saveAdmissionSession (sessionStore (Right [])) session `shouldReturn` Right False
+    loadAdmissionSession (sessionStore (Right [])) (mkAdmissionSessionId sessionId) `shouldReturn` Right Nothing
+    invalidateAdmissionSession (sessionStore (Right [["0123456789abcdef0123456789abcdef"]])) (mkAdmissionSessionId sessionId) 300 `shouldReturn` Right True
+
+  it "runs encrypted admission TOTP proof through distinct principal and trusted-peer reservations" $ do
+    let loginName = requiredCsrf "admission login" (mkAdmissionLoginName "support_operator")
+        principalId = requiredCsrf "admission principal" (mkAdmissionPrincipalId "beta-operator")
+        encryptionKey = requiredCsrf "admission encryption key" (mkSecretEncryptionKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        secret = requiredCsrf "admission TOTP secret" (mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
+        now = unixTimeNanoseconds 123456000000000
+        code = totpCode (unixTimeSeconds 123456) secret
+        encryptedSecret =
+          requiredCsrf
+            "encrypted admission TOTP secret"
+            ( mkEncryptedAdmissionTotpSecret
+                =<< maybeCryptoError
+                  ( encryptSecretWithNonce
+                      encryptionKey
+                      (requiredCsrf "admission encryption nonce" (mkEncryptionNonce (ByteString.replicate 12 7)))
+                      (mkSecretPlaintext (TextEncoding.encodeUtf8 (renderTotpSecret secret)))
+                  )
+            )
+        credential = StoredAdmissionCredential principalId encryptedSecret Nothing
+    reservations <- newIORef ([] :: [AdmissionAttemptBudgets])
+    settlements <- newIORef ([] :: [Bool])
+    markedCounters <- newIORef ([] :: [Word64])
+    let attemptStore =
+          AdmissionAttemptStore
+            { reserveAdmissionAttempt = \budgets _ -> modifyIORef' reservations (<> [budgets]) >> pure (Right (AdmissionAttemptReserved (AdmissionAttemptReservation "reservation-1"))),
+              settleAdmissionAttempt = \_ succeeded -> modifyIORef' settlements (<> [succeeded]) >> pure (Right ()),
+              cancelAdmissionAttempt = \_ -> pure (Right ())
+            }
+        credentialStore =
+          AdmissionCredentialStore
+            { findAdmissionCredential = \receivedLogin -> pure (Right (if receivedLogin == loginName then Just credential else Nothing)),
+              markAdmissionTotpCounterUsed = \receivedPrincipal counter -> do
+                when (receivedPrincipal == principalId) (modifyIORef' markedCounters (<> [counter]))
+                pure (Right True)
+            }
+        config =
+          AdmissionProofConfig
+            { admissionProofCredentials = credentialStore,
+              admissionProofAttempts = attemptStore,
+              admissionProofPolicy = defaultLoginProtectionPolicy,
+              admissionProofEncryptionKey = encryptionKey,
+              admissionProofReadClock = pure (Right now)
+            }
+    completeAdmissionProof config defaultClientAddress loginName code `shouldReturn` AdmissionProofAccepted principalId
+    recordedReservations <- readIORef reservations
+    expectAll
+      ( ( map (map (admissionAttemptScopeStorageKey . admissionAttemptScope) . NonEmpty.toList . admissionAttemptBudgetsToList) recordedReservations
+            `shouldBe` [["admission-totp:known:beta-operator", "admission-peer:127.0.0.1"]]
+        )
+          :| [ readIORef settlements `shouldReturn` [True],
+               readIORef markedCounters >>= (`shouldSatisfy` (not . null)),
+               completeAdmissionProof config defaultClientAddress loginName (requiredCsrf "invalid TOTP code" (mkTotpCode "000000")) `shouldReturn` AdmissionProofRejected,
+               readIORef settlements `shouldReturn` [True, False]
+             ]
+      )
+    matchedCounters <- readIORef markedCounters
+    matchedCounter <-
+      case matchedCounters of
+        counter : _ -> pure counter
+        [] -> expectationFailure "expected the accepted proof to record a counter" >> fail "unreachable"
+    let replayedCredential = credential {storedAdmissionLastUsedTotpCounter = Just matchedCounter}
+        replayedConfig =
+          config
+            { admissionProofCredentials =
+                credentialStore
+                  { findAdmissionCredential = \_ -> pure (Right (Just replayedCredential))
+                  }
+            }
+        markFalseConfig =
+          config
+            { admissionProofCredentials =
+                credentialStore
+                  { markAdmissionTotpCounterUsed = \_ _ -> pure (Right False)
+                  }
+            }
+        markUnavailableConfig =
+          config
+            { admissionProofCredentials =
+                credentialStore
+                  { markAdmissionTotpCounterUsed = \_ _ -> pure (Left AdmissionCredentialStoreUnavailable)
+                  }
+            }
+    completeAdmissionProof replayedConfig defaultClientAddress loginName code `shouldReturn` AdmissionProofReplayed
+    completeAdmissionProof markFalseConfig defaultClientAddress loginName code `shouldReturn` AdmissionProofReplayed
+    completeAdmissionProof markUnavailableConfig defaultClientAddress loginName code `shouldReturn` AdmissionProofUnavailable
+
+  it "uses parameterized PostgreSQL group reservation and settlement for admission proof" $ do
+    let loginName = requiredCsrf "admission login" (mkAdmissionLoginName "support_operator")
+        principalId = requiredCsrf "admission principal" (mkAdmissionPrincipalId "beta-operator")
+        encryptionKey = requiredCsrf "admission encryption key" (mkSecretEncryptionKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        secret = requiredCsrf "admission TOTP secret" (mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
+        now = unixTimeNanoseconds 123456000000000
+        code = totpCode (unixTimeSeconds 123456) secret
+        encryptedSecret =
+          requiredCsrf
+            "encrypted admission TOTP secret"
+            ( mkEncryptedAdmissionTotpSecret
+                =<< maybeCryptoError
+                  ( encryptSecretWithNonce
+                      encryptionKey
+                      (requiredCsrf "admission encryption nonce" (mkEncryptionNonce (ByteString.replicate 12 8)))
+                      (mkSecretPlaintext (TextEncoding.encodeUtf8 (renderTotpSecret secret)))
+                  )
+            )
+        credential = StoredAdmissionCredential principalId encryptedSecret Nothing
+    calls <- newIORef ([] :: [(Text, [Text])])
+    let runner _ sql parameters = do
+          modifyIORef' calls (<> [(sql, parameters)])
+          pure (Right (if "SELECT outcome, value" `Text.isInfixOf` sql then [["reserved", "1"]] else [["1"]]))
+        config =
+          AdmissionProofConfig
+            { admissionProofCredentials =
+                AdmissionCredentialStore
+                  { findAdmissionCredential = \_ -> pure (Right (Just credential)),
+                    markAdmissionTotpCounterUsed = \_ _ -> pure (Right True)
+                  },
+              admissionProofAttempts = buildPostgresAdmissionAttemptStoreWithRunner defaultAdmissionAttemptStoragePolicy runner (),
+              admissionProofPolicy = defaultLoginProtectionPolicy,
+              admissionProofEncryptionKey = encryptionKey,
+              admissionProofReadClock = pure (Right now)
+            }
+    completeAdmissionProof config defaultClientAddress loginName code `shouldReturn` AdmissionProofAccepted principalId
+    let epochConfig = config {admissionProofReadClock = pure (Right 0)}
+        epochCode = totpCode (unixTimeSeconds 0) secret
+    completeAdmissionProof epochConfig defaultClientAddress loginName epochCode `shouldReturn` AdmissionProofAccepted principalId
+    recordedCalls <- readIORef calls
+    case recordedCalls of
+      firstCall : _ : epochReservationCall : _ ->
+        expectAll
+          ( (map (length . snd) recordedCalls `shouldBe` [4, 1, 4, 1])
+              :| [ fst firstCall `shouldSatisfy` Text.isInfixOf "composed.reserve_admission_attempt_group",
+                   Text.isInfixOf "support_operator" (Text.intercalate " " (concatMap snd recordedCalls)) `shouldBe` False,
+                   drop 1 (snd epochReservationCall) `shouldBe` ["0", "0", "10000"]
+                 ]
+          )
+      _ -> expectationFailure "expected reservation and settlement queries for both admission attempts"
+
+  it "interprets every PostgreSQL admission-attempt reservation outcome on the proof rail" $ do
+    let loginName = requiredCsrf "admission login" (mkAdmissionLoginName "support_operator")
+        principalId = requiredCsrf "admission principal" (mkAdmissionPrincipalId "beta-operator")
+        encryptionKey = requiredCsrf "admission encryption key" (mkSecretEncryptionKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        secret = requiredCsrf "admission TOTP secret" (mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
+        now = unixTimeNanoseconds 123456000000000
+        code = totpCode (unixTimeSeconds 123456) secret
+        encryptedSecret =
+          requiredCsrf
+            "encrypted admission TOTP secret"
+            ( mkEncryptedAdmissionTotpSecret
+                =<< maybeCryptoError
+                  ( encryptSecretWithNonce
+                      encryptionKey
+                      (requiredCsrf "admission encryption nonce" (mkEncryptionNonce (ByteString.replicate 12 10)))
+                      (mkSecretPlaintext (TextEncoding.encodeUtf8 (renderTotpSecret secret)))
+                  )
+            )
+        credential = StoredAdmissionCredential principalId encryptedSecret Nothing
+        credentials =
+          AdmissionCredentialStore
+            { findAdmissionCredential = \_ -> pure (Right (Just credential)),
+              markAdmissionTotpCounterUsed = \_ _ -> pure (Right True)
+            }
+        proofFor runner =
+          AdmissionProofConfig
+            { admissionProofCredentials = credentials,
+              admissionProofAttempts = buildPostgresAdmissionAttemptStoreWithRunner defaultAdmissionAttemptStoragePolicy runner (),
+              admissionProofPolicy = defaultLoginProtectionPolicy,
+              admissionProofEncryptionKey = encryptionKey,
+              admissionProofReadClock = pure (Right now)
+            }
+        resultRunner result _ _ _ = pure result
+    completeAdmissionProof (proofFor (resultRunner (Right [["throttled", "123456000000001"]]))) defaultClientAddress loginName code
+      `shouldReturn` AdmissionProofThrottled
+    completeAdmissionProof (proofFor (resultRunner (Right [["storage-exhausted", ""]]))) defaultClientAddress loginName code
+      `shouldReturn` AdmissionProofUnavailable
+    completeAdmissionProof (proofFor (resultRunner (Right [["unexpected", "row"]]))) defaultClientAddress loginName code
+      `shouldReturn` AdmissionProofUnavailable
+    completeAdmissionProof (proofFor (resultRunner (Left "database unavailable"))) defaultClientAddress loginName code
+      `shouldReturn` AdmissionProofUnavailable
+    completeAdmissionProof
+      ( proofFor
+          (\_ sql _ -> pure (Right [["reserved", "1"] | "SELECT outcome" `Text.isInfixOf` sql]))
+      )
+      defaultClientAddress
+      loginName
+      (requiredCsrf "invalid TOTP code" (mkTotpCode "000000"))
+      `shouldReturn` AdmissionProofUnavailable
+    let cancelledReservation = AdmissionAttemptReservation "41"
+        cancellationStore result =
+          buildPostgresAdmissionAttemptStoreWithRunner
+            defaultAdmissionAttemptStoragePolicy
+            (\_ _ _ -> pure result)
+            ()
+    cancelAdmissionAttempt (cancellationStore (Right [])) cancelledReservation
+      `shouldReturn` Right ()
+    cancelAdmissionAttempt (cancellationStore (Left "database unavailable")) cancelledReservation
+      `shouldReturn` Left AdmissionAttemptStoreUnavailable
+    let settlementStore result =
+          buildPostgresAdmissionAttemptStoreWithRunner
+            defaultAdmissionAttemptStoragePolicy
+            (\_ _ _ -> pure result)
+            ()
+    settleAdmissionAttempt (settlementStore (Right [["41"]])) cancelledReservation True
+      `shouldReturn` Right ()
+    settleAdmissionAttempt (settlementStore (Left "database unavailable")) cancelledReservation False
+      `shouldReturn` Left AdmissionAttemptStoreUnavailable
+    settleAdmissionAttempt (settlementStore (Right [])) cancelledReservation False
+      `shouldReturn` Left AdmissionAttemptStoreCorrupt
+    case mkAdmissionAttemptStoragePolicy 0 1 of
+      Nothing -> pure ()
+      Just _ -> expectationFailure "zero storage capacity must be rejected"
+    case mkAdmissionAttemptStoragePolicy 1 0 of
+      Nothing -> pure ()
+      Just _ -> expectationFailure "zero storage retention must be rejected"
+    case mkAdmissionAttemptStoragePolicy 1 1 of
+      Nothing -> expectationFailure "positive storage policy must be accepted"
+      Just _ -> pure ()
+
+  it "keeps the default root declaration, shell, and mounted declarations complete" $ do
+    rootModule <- requiredRootModule
+    let rootRoute = Localized (locale "es") (Public PublicLogin)
+        englishLoginRoute = Localized (locale "en") (Public PublicLogin)
+        assetRoute = StaticAssetRoute [requiredPathSegment "public", requiredPathSegment "assets", requiredPathSegment "app.css"]
+        englishAssetRoute = Localized (locale "en") (Public (PublicAsset assetRoute))
+        defaultSite = buildComposedSiteWithDependencies defaultComposedSiteDependencies
+        shell = Site.sitePageShell defaultSite (Page "Login" rootRoute (spanishContext defaultComposedContext) (error "page body is not inspected") [] [])
+    moduleName rootModule `shouldBe` requiredModuleName "root"
+    moduleDeclaredRoutes rootModule
+      `shouldBe` [ Localized (locale "en") (Public (PublicAdmission ReturnToAccountLogin)),
+                   Localized (locale "en") (Public PublicLogin),
+                   Localized (locale "en") (Public (PublicAsset assetRoute)),
+                   Localized (locale "en") (Public PublicNotFound),
+                   Localized (locale "en") (Catalog CatalogIndex),
+                   Localized (locale "en") (Orders OrdersIndex),
+                   UnlocalizedCatalogApi CatalogItems,
+                   UnlocalizedOrdersApi OrdersSubmit,
+                   UnlocalizedDocs DocsSpec,
+                   UnlocalizedDocs DocsUi
+                 ]
+    map (endpointName . routeMetadata . moduleEndpoints rootModule) (moduleDeclaredRoutes rootModule)
+      `shouldBe` [ requiredEndpointName "root.public.admission",
+                   requiredEndpointName "root.public.login",
+                   requiredEndpointName "root.public.assets",
+                   requiredEndpointName "root.public.not-found",
+                   requiredEndpointName "root.catalog.catalog.index",
+                   requiredEndpointName "root.orders.orders.index",
+                   requiredEndpointName "root.catalog.api.catalog.items",
+                   requiredEndpointName "root.orders.api.orders.submit",
+                   requiredEndpointName "root.docs.docs.openapi-spec",
+                   requiredEndpointName "root.docs.docs.swagger"
+                 ]
+    map endpointName (Action.declaredActionEndpointMetadata (moduleActionCodec rootModule))
+      `shouldBe` [requiredEndpointName "root.catalog.catalog.refresh", requiredEndpointName "root.orders.orders.submit"]
+    shellDocumentLanguage shell `shouldBe` locale "es"
+    shellBodyAttributes shell `shouldBe` []
+    shellNavigationAttributes shell `shouldBe` []
+    shellMainId shell `shouldBe` literalElementId "main"
+    shellMainAttributes shell `shouldBe` []
+    shellStylesheets shell `shouldBe` []
+    shellRuntimeDescriptors shell `shouldBe` []
+    case Site.siteSecurity defaultSite of
+      AuthenticationDisabled guards -> null guards `shouldBe` True
+      _ -> expectationFailure "expected the default public root security"
+    case parseRoute (Site.siteRouteCodec defaultSite) defaultComposedContext (RouteLocation [requiredPathSegment "public", requiredPathSegment "login"] []) of
+      RouteParsed request -> do
+        requestRoute request `shouldBe` englishLoginRoute
+        siteResponse <- runRouteDefinition (Site.siteRouteDefinition defaultSite englishLoginRoute) Wai.defaultRequest request
+        assertPageResponse "Login" englishLoginRoute (requestContext request) siteResponse
+      routeResult -> expectationFailure ("expected the installed root codec to parse the public login route, got " <> show routeResult)
+    case parseRoute (Site.siteRouteCodec defaultSite) defaultComposedContext (RouteLocation (staticAssetPathSegments assetRoute) []) of
+      RouteParsed request -> do
+        requestRoute request `shouldBe` englishAssetRoute
+        assetResponse <- runRouteDefinition (Site.siteRouteDefinition defaultSite englishAssetRoute) Wai.defaultRequest request
+        case assetResponse of
+          ProtocolResponseResult protocolResponse -> protocolResponseStatus protocolResponse `shouldBe` Http.status200
+          unexpectedResponse -> expectationFailure ("expected the installed static adapter to return a protocol response, got " <> show unexpectedResponse)
+      routeResult -> expectationFailure ("expected the installed root codec to parse the asset route, got " <> show routeResult)
+    Site.siteDecodeClientAction
+      defaultSite
+      Action.ClientActionPayload
+        { Action.clientActionMethod = "POST",
+          Action.clientActionPath = "/en/catalog/actions/refresh",
+          Action.clientActionFields = [],
+          Action.clientActionCsrfToken = Nothing,
+          Action.clientActionIdempotencyKey = Nothing,
+          Action.clientActionPayloadContext = defaultComposedContext
+        }
+      `shouldBe` Action.DecodedClientAction (CatalogAction RefreshCatalog)
+    successfulActionResponse (Site.siteHandleClientAction defaultSite (rootActionRequest defaultComposedContext (CatalogAction RefreshCatalog)))
+      `shouldReturn` Just (clientActionResponse Http.status200)
+    successfulActionResponse (Site.siteHandleClientAction defaultSite (rootActionRequest defaultComposedContext (OrdersAction SubmitOrder)))
+      `shouldReturn` Just (clientActionResponse Http.status202)
+
+  it "projects authenticated and anonymous root facts into each domain's query and action adapters" $ do
+    catalogQueryContext <- newIORef Nothing
+    catalogActionContext <- newIORef Nothing
+    ordersQueryContext <- newIORef Nothing
+    ordersActionContext <- newIORef Nothing
+    let queries = CatalogQueries (\domainContext -> writeIORef catalogQueryContext (Just domainContext) >> pure "Catalog")
+        commands = CatalogCommands (\domainContext -> writeIORef catalogActionContext (Just domainContext) >> pure "refreshed")
+        orderQueries = OrdersQueries (\domainContext -> writeIORef ordersQueryContext (Just domainContext) >> pure "Orders")
+        orderCommands = OrdersCommands (\domainContext -> writeIORef ordersActionContext (Just domainContext) >> pure (OrderId "order-2"))
+        authenticatedContext =
+          spanishContext
+            defaultComposedContext
+              { requestIdentity = AuthenticatedIdentity (RootPrincipal (Just (locale "en")) ["catalog.read", "orders.read"]),
+                requestClient = OtherClient
+              }
+        anonymousContext = spanishContext defaultComposedContext
+        catalogRoute = Localized (locale "es") (Catalog CatalogIndex)
+        ordersRoute = Localized (locale "es") (Orders OrdersIndex)
+    let configuredPolicy = LocalePolicy (locale "en" :| [locale "es"]) (locale "en")
+    rootModule <- requiredRootModuleWithPolicy configuredPolicy queries commands orderQueries orderCommands
+    endpointAccess (routeMetadata (moduleEndpoints rootModule catalogRoute)) `shouldBe` RequireAuthorized RootMayReadCatalog
+    endpointAccess (routeMetadata (moduleEndpoints rootModule ordersRoute)) `shouldBe` RequireAuthorized RootMayReadOrders
+    Action.actionEndpointMetadata (moduleActionCodec rootModule) authenticatedContext "POST" "/es/catalog/actions/refresh"
+      `shouldSatisfy` maybe False ((== RequireAuthorized RootMayRefreshCatalog) . endpointAccess)
+    Action.actionEndpointMetadata (moduleActionCodec rootModule) authenticatedContext "POST" "/es/orders/actions/submit"
+      `shouldSatisfy` maybe False ((== RequireAuthorized RootMaySubmitOrders) . endpointAccess)
+    catalogResponse <- runRouteDefinition (moduleEndpoints rootModule catalogRoute) Wai.defaultRequest (RouteRequest catalogRoute authenticatedContext)
+    assertPageResponse "Catalog" catalogRoute authenticatedContext catalogResponse
+    ordersResponse <- runRouteDefinition (moduleEndpoints rootModule ordersRoute) Wai.defaultRequest (RouteRequest ordersRoute authenticatedContext)
+    assertPageResponse "Orders" ordersRoute authenticatedContext ordersResponse
+    readIORef catalogQueryContext `shouldReturn` Just (CatalogContext "es" (Just "catalog.read"))
+    readIORef ordersQueryContext `shouldReturn` Just (OrdersContext "es" (Just "catalog.read"))
+    successfulActionResponse (moduleHandleAction rootModule (rootActionRequest authenticatedContext (CatalogAction RefreshCatalog)))
+      `shouldReturn` Just (clientActionResponse Http.status200)
+    successfulActionResponse (moduleHandleAction rootModule (rootActionRequest authenticatedContext (OrdersAction SubmitOrder)))
+      `shouldReturn` Just (clientActionResponse Http.status202)
+    readIORef catalogActionContext `shouldReturn` Just (CatalogContext "es" (Just "catalog.read"))
+    readIORef ordersActionContext `shouldReturn` Just (OrdersContext "es" (Just "catalog.read"))
+    _ <- runRouteDefinition (moduleEndpoints rootModule catalogRoute) Wai.defaultRequest (RouteRequest catalogRoute anonymousContext)
+    readIORef catalogQueryContext `shouldReturn` Just (CatalogContext "es" Nothing)
+
+  it "uses the shell locale and parses only bounded locale candidates from WAI" $ do
+    let customPolicy = LocalePolicy (locale "es" :| [locale "en"]) (locale "en")
+        composedSite = buildComposedSiteWithDependencies (withLocalePolicy customPolicy defaultComposedSiteDependencies)
+        requestFor path headers = Wai.defaultRequest {Wai.pathInfo = path, Wai.requestHeaders = headers}
+        requestContext request = Site.siteRequestContextFromRequest composedSite request testRequestId defaultComposedContext
+        shell = Site.sitePageShell composedSite (Page "Catalog" (Localized (locale "es") (Catalog CatalogIndex)) (spanishContext defaultComposedContext) (error "page body is not inspected") [] [])
+    shellNavigationItems shell
+      `shouldBe` [ NavigationItem "Sign in" (Localized (locale "es") (Public PublicLogin)),
+                   NavigationItem "Catalog" (Localized (locale "es") (Catalog CatalogIndex)),
+                   NavigationItem "Orders" (Localized (locale "es") (Orders OrdersIndex))
+                 ]
+    shellNavigationLifecycle shell `shouldBe` Nothing
+    Site.siteNavigationRuntime composedSite `shouldSatisfy` isJust
+    let prefixedContext = requestContext (requestFor ["es"] [(Http.hCookie, "locale=en"), (Http.hAcceptLanguage, "en-US")])
+    requestLocale (requestCore prefixedContext) `shouldBe` locale "es"
+    requestLocaleFallbacks (requestCore prefixedContext) `shouldBe` [locale "es", locale "en"]
+    requestLocale (requestCore (requestContext (requestFor [] [(Http.hCookie, "locale=es; theme=dark")]))) `shouldBe` locale "es"
+    requestLocale (requestCore (requestContext (requestFor [] [(Http.hAcceptLanguage, "es-MX,en;q=0.8")]))) `shouldBe` locale "es"
+    requestLocale (requestCore (requestContext (requestFor [] [(Http.hCookie, ByteString.pack [108, 111, 99, 97, 108, 101, 61, 255]), (Http.hAcceptLanguage, ByteString.pack [255])]))) `shouldBe` locale "en"
+
+  it "makes the public local module independently composable and rejects a sibling route" $ do
+    let publicModule = buildPublicModule defaultComposedStaticAssets
+        publicContext = defaultComposedContext
+        loginLocation = RouteLocation [requiredPathSegment "public", requiredPathSegment "login"] []
+        assetLocation = RouteLocation [requiredPathSegment "public", requiredPathSegment "assets", requiredPathSegment "app.css"] []
+    moduleOwnsRoute publicModule (Public PublicLogin) `shouldBe` True
+    moduleOwnsRoute publicModule (Catalog CatalogIndex) `shouldBe` False
+    moduleRouteMountChain publicModule (Public PublicLogin)
+      `shouldBe` requiredModuleName "root.public" :| [requiredModuleName "public"]
+    parseRoute (moduleRouteCodec publicModule) publicContext loginLocation
+      `shouldBe` RouteParsed (RouteRequest (Public PublicLogin) publicContext)
+    parseRoute (moduleRouteCodec publicModule) publicContext (RouteLocation [requiredPathSegment "public", requiredPathSegment "missing"] []) `shouldBe` RouteNotMatched
+    case parseRoute (moduleRouteCodec publicModule) publicContext assetLocation of
+      RouteParsed request -> do
+        requestRoute request `shouldBe` Public (PublicAsset (StaticAssetRoute (routePathSegments assetLocation)))
+        requestContext request `shouldBe` publicContext
+      routeResult -> expectationFailure ("expected public asset route, got " <> show routeResult)
+    parseRoute (moduleRouteCodec publicModule) publicContext (RouteLocation [requiredPathSegment "other"] []) `shouldBe` RouteNotMatched
+    Routing.routeMethods (moduleRouteCodec publicModule) (RouteRequest (Public (PublicAsset (StaticAssetRoute (routePathSegments assetLocation)))) publicContext) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
+    Routing.routeMethods (moduleRouteCodec publicModule) (RouteRequest (Catalog CatalogIndex) publicContext) `shouldBe` Routing.RouteHidden
+    notFoundRequest (moduleRouteCodec publicModule) publicContext `shouldBe` RouteRequest (Public PublicNotFound) publicContext
+    moduleActionRoute publicModule publicContext AdmissionActionTarget `shouldBe` Nothing
+    fmap isNothing (moduleHandleAction publicModule (ClientActionRequest (RouteRequest (Public (PublicAdmission ReturnToAccountLogin)) publicContext) (CatalogAction RefreshCatalog) Nothing publicContext)) `shouldReturn` True
+    let admissionDefinition = moduleEndpoints publicModule (Public (PublicAdmission ReturnToAccountLogin))
+        loginDefinition = moduleEndpoints publicModule (Public PublicLogin)
+        assetDefinition = moduleEndpoints publicModule (Public (PublicAsset (StaticAssetRoute (routePathSegments assetLocation))))
+        missingDefinition = moduleEndpoints publicModule (Public PublicNotFound)
+    Routing.routeMethods (moduleRouteCodec publicModule) (RouteRequest (Public (PublicAdmission ReturnToAccountLogin)) publicContext) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
+    directAdmissionResponse <- runRouteDefinition admissionDefinition Wai.defaultRequest (RouteRequest (Public (PublicAdmission ReturnToAccountLogin)) publicContext)
+    case directAdmissionResponse of
+      PageResponse _ page -> do
+        pageTitle page `shouldBe` "Admission"
+        renderHtml (pageBody page) `shouldBe` "<section><h1>Admission</h1><p>Admission is not enabled.</p></section>"
+      _ -> expectationFailure "expected disabled admission page"
+    routeNavigationLabel loginDefinition `shouldBe` Just "Login"
+    endpointName (routeMetadata loginDefinition) `shouldBe` requiredEndpointName "root.public.login"
+    routeTemplateText (endpointRouteTemplate (routeMetadata loginDefinition)) `shouldBe` "/public/login"
+    endpointProtocol (routeMetadata loginDefinition) `shouldBe` HtmlEndpoint
+    endpointAccess (routeMetadata loginDefinition) `shouldBe` AllowUnauthenticated
+    Site.routeMethods loginDefinition (RouteRequest (Public PublicLogin) publicContext) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
+    routeExecutionPolicy loginDefinition `shouldBe` unboundedRouteExecutionPolicy
+    directLoginResponse <- runRouteDefinition loginDefinition Wai.defaultRequest (RouteRequest (Public PublicLogin) publicContext)
+    case directLoginResponse of
+      PageResponse _ page -> do
+        pageTitle page `shouldBe` "Login"
+        pageRoute page `shouldBe` Public PublicLogin
+        pageContext page `shouldBe` publicContext
+        renderHtml (pageBody page) `shouldBe` "<h1>Login</h1>"
+        pageBootstrapHooks page `shouldBe` []
+      _ -> expectationFailure "expected the public login definition to return a page"
+    routeNavigationLabel assetDefinition `shouldBe` Nothing
+    endpointName (routeMetadata assetDefinition) `shouldBe` requiredEndpointName "root.public.assets"
+    routeTemplateText (endpointRouteTemplate (routeMetadata assetDefinition)) `shouldBe` "/public/assets/*"
+    endpointProtocol (routeMetadata assetDefinition) `shouldBe` AssetEndpoint
+    endpointAccess (routeMetadata assetDefinition) `shouldBe` AllowUnauthenticated
+    Site.routeMethods assetDefinition (RouteRequest (Public (PublicAsset (StaticAssetRoute (routePathSegments assetLocation)))) publicContext) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
+    routeExecutionPolicy assetDefinition `shouldBe` unboundedRouteExecutionPolicy
+    routeNavigationLabel missingDefinition `shouldBe` Nothing
+    endpointName (routeMetadata missingDefinition) `shouldBe` requiredEndpointName "root.public.not-found"
+    routeTemplateText (endpointRouteTemplate (routeMetadata missingDefinition)) `shouldBe` "/public/404"
+    endpointProtocol (routeMetadata missingDefinition) `shouldBe` HtmlEndpoint
+    endpointAccess (routeMetadata missingDefinition) `shouldBe` AllowUnauthenticated
+    Site.routeMethods missingDefinition (RouteRequest (Public PublicNotFound) publicContext) `shouldBe` Routing.RouteHidden
+    routeExecutionPolicy missingDefinition `shouldBe` unboundedRouteExecutionPolicy
+    directMissingResponse <- runRouteDefinition missingDefinition Wai.defaultRequest (RouteRequest (Public PublicNotFound) publicContext)
+    case directMissingResponse of
+      PageResponse _ page -> do
+        pageTitle page `shouldBe` "Not Found"
+        pageRoute page `shouldBe` Public PublicNotFound
+        pageContext page `shouldBe` publicContext
+        renderHtml (pageBody page) `shouldBe` "<h1>Not Found</h1>"
+        pageBootstrapHooks page `shouldBe` []
+      _ -> expectationFailure "expected the public not-found definition to return a page"
+    renderFailure <- try (evaluate (renderRoute (moduleRouteCodec publicModule) (RouteRequest (Catalog CatalogIndex) publicContext))) :: IO (Either ErrorCall RouteLocation)
+    case renderFailure of
+      Left failure -> show failure `shouldBe` "attempted to render a non-public route through the public module"
+      Right _ -> expectationFailure "expected public codec to reject its sibling route"
+    definitionFailure <- try (evaluate (moduleEndpoints publicModule (Catalog CatalogIndex))) :: IO (Either ErrorCall (Site.RouteDefinition LocalizedRoute ComposedContext RootAuthorization))
+    case definitionFailure of
+      Left failure -> show failure `shouldBe` "attempted to select a non-public route through the public module"
+      Right _ -> expectationFailure "expected public definition selection to reject its sibling route"
+
+  it "declares admission form, action, and native fallback only with the enabled admission workflow" $ do
+    let admissionSessionStore =
+          AdmissionSessionStore
+            { saveAdmissionSession = \_ -> pure (Right True),
+              loadAdmissionSession = \_ -> pure (Right Nothing),
+              invalidateAdmissionSession = \_ _ -> pure (Right True)
+            }
+        publicContext = defaultComposedContext
+        nativeLocation = RouteLocation [requiredPathSegment "public", requiredPathSegment "admission", requiredPathSegment "native"] []
+        authenticatedSecurity =
+          AuthenticationEnabled
+            []
+            (AuthenticationGuard (pure . ContinueEndpoint . requestContext . endpointRouteRequest))
+            []
+    sessionConfig <- requiredAdmission "admission session configuration" (mkAdmissionConfig defaultAdmissionSessionCookiePolicy admissionSessionStore (pure (Right 100)))
+    enabledSite <-
+      requiredAdmission
+        "admission-enabled public routes"
+        (buildComposedSiteWithAdmissionSecurityDependencies (withCsrfProtection admissionCsrfProtection defaultComposedSiteDependencies) (AdmissionEnabled sessionConfig unavailableAdmissionProofConfig) authenticatedSecurity)
+    let enabledNativeRoute = Localized (locale "en") (Public PublicAdmissionNativeFallback)
+        enabledAdmissionRoute = Localized (locale "en") (Public (PublicAdmission ReturnToAccountLogin))
+        disabledSite = buildComposedSiteWithDependencies defaultComposedSiteDependencies
+        admissionDefinition = Site.siteRouteDefinition enabledSite enabledAdmissionRoute
+        nativeDefinition = Site.siteRouteDefinition enabledSite enabledNativeRoute
+        localizedNativeLocation = RouteLocation (requiredPathSegment "en" : routePathSegments nativeLocation) []
+    parseRoute (Site.siteRouteCodec enabledSite) publicContext localizedNativeLocation
+      `shouldBe` RouteParsed (RouteRequest enabledNativeRoute publicContext)
+    parseRoute (Site.siteRouteCodec disabledSite) publicContext localizedNativeLocation `shouldBe` RouteNotMatched
+    endpointName (routeMetadata nativeDefinition) `shouldBe` requiredEndpointName "root.public.admission.native"
+    endpointProtocol (routeMetadata nativeDefinition) `shouldBe` ApiEndpoint
+    Site.routeMethods nativeDefinition (RouteRequest enabledNativeRoute publicContext) `shouldBe` Routing.routeMethodPolicy [Routing.RoutePost]
+    renderedAdmission <- runRouteDefinition admissionDefinition Wai.defaultRequest (RouteRequest enabledAdmissionRoute publicContext)
+    case renderedAdmission of
+      PageResponse _ page ->
+        expectAll
+          ( (Text.isInfixOf "action=\"/en/public/admission/native\"" (renderHtml (pageBody page)) `shouldBe` True)
+              :| [ Text.isInfixOf "name=\"login\"" (renderHtml (pageBody page)) `shouldBe` True,
+                   Text.isInfixOf "name=\"code\"" (renderHtml (pageBody page)) `shouldBe` True,
+                   Text.isInfixOf "name=\"return\" value=\"login\"" (renderHtml (pageBody page)) `shouldBe` True,
+                   Text.isInfixOf "name=\"_harch_csrf\"" (renderHtml (pageBody page)) `shouldBe` True,
+                   Text.isInfixOf "autocomplete=\"username\"" (renderHtml (pageBody page)) `shouldBe` True,
+                   Text.isInfixOf "autocomplete=\"one-time-code\"" (renderHtml (pageBody page)) `shouldBe` True,
+                   Text.isInfixOf "inputmode=\"numeric\"" (renderHtml (pageBody page)) `shouldBe` True
+                 ]
+          )
+      _ -> expectationFailure "expected an admission page"
+    successfulActionResponse (Site.siteHandleClientAction enabledSite (rootActionRequest publicContext (SubmitAdmission (requiredCsrf "admission login" (mkAdmissionLoginName "operator")) (requiredCsrf "admission code" (mkTotpCode "123456")) ReturnToAccountLogin)))
+      `shouldReturn` Just (clientActionResponse Http.status503)
+
+  it "uses the same admission proof rail for a CSRF-verified native fallback and typed cookie redirect" $ do
+    let loginName = requiredCsrf "admission login" (mkAdmissionLoginName "support_operator")
+        principalId = requiredCsrf "admission principal" (mkAdmissionPrincipalId "beta-operator")
+        encryptionKey = requiredCsrf "admission encryption key" (mkSecretEncryptionKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        secret = requiredCsrf "admission TOTP secret" (mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
+        now = unixTimeNanoseconds 123456000000000
+        code = totpCode (unixTimeSeconds 123456) secret
+        encryptedSecret =
+          requiredCsrf
+            "encrypted admission TOTP secret"
+            ( mkEncryptedAdmissionTotpSecret
+                =<< maybeCryptoError
+                  ( encryptSecretWithNonce
+                      encryptionKey
+                      (requiredCsrf "admission encryption nonce" (mkEncryptionNonce (ByteString.replicate 12 9)))
+                      (mkSecretPlaintext (TextEncoding.encodeUtf8 (renderTotpSecret secret)))
+                  )
+            )
+        credential = StoredAdmissionCredential principalId encryptedSecret Nothing
+        attemptStore =
+          AdmissionAttemptStore
+            { reserveAdmissionAttempt = \_ _ -> pure (Right (AdmissionAttemptReserved (AdmissionAttemptReservation "reservation-native"))),
+              settleAdmissionAttempt = \_ _ -> pure (Right ()),
+              cancelAdmissionAttempt = \_ -> pure (Right ())
+            }
+        proofConfig =
+          AdmissionProofConfig
+            { admissionProofCredentials =
+                AdmissionCredentialStore
+                  { findAdmissionCredential = \receivedLogin -> pure (Right (if receivedLogin == loginName then Just credential else Nothing)),
+                    markAdmissionTotpCounterUsed = \_ _ -> pure (Right True)
+                  },
+              admissionProofAttempts = attemptStore,
+              admissionProofPolicy = defaultLoginProtectionPolicy,
+              admissionProofEncryptionKey = encryptionKey,
+              admissionProofReadClock = pure (Right now)
+            }
+        rejectedProofConfig =
+          proofConfig
+            { admissionProofCredentials =
+                AdmissionCredentialStore
+                  { findAdmissionCredential = \_ -> pure (Right Nothing),
+                    markAdmissionTotpCounterUsed = \_ _ -> pure (Right True)
+                  }
+            }
+        sessionStore =
+          AdmissionSessionStore
+            { saveAdmissionSession = \_ -> pure (Right True),
+              loadAdmissionSession = \_ -> pure (Right Nothing),
+              invalidateAdmissionSession = \_ _ -> pure (Right True)
+            }
+        authenticatedSecurity =
+          AuthenticationEnabled
+            []
+            (AuthenticationGuard (pure . ContinueEndpoint . requestContext . endpointRouteRequest))
+            []
+        publicContext = defaultComposedContext
+    sessionConfig <- requiredAdmission "admission session configuration" (mkAdmissionConfig defaultAdmissionSessionCookiePolicy sessionStore (pure (Right now)))
+    enabledSite <-
+      requiredAdmission
+        "admission-enabled native fallback"
+        (buildComposedSiteWithAdmissionSecurityDependencies defaultComposedSiteDependencies (AdmissionEnabled sessionConfig proofConfig) authenticatedSecurity)
+    rejectedSite <-
+      requiredAdmission
+        "admission rejection native fallback"
+        (buildComposedSiteWithAdmissionSecurityDependencies defaultComposedSiteDependencies (AdmissionEnabled sessionConfig rejectedProofConfig) authenticatedSecurity)
+    unavailableSite <-
+      requiredAdmission
+        "admission unavailable native fallback"
+        (buildComposedSiteWithAdmissionSecurityDependencies defaultComposedSiteDependencies (AdmissionEnabled sessionConfig unavailableAdmissionProofConfig) authenticatedSecurity)
+    csrfRejectedSite <-
+      requiredAdmission
+        "admission CSRF rejection native fallback"
+        (buildComposedSiteWithAdmissionSecurityDependencies (withCsrfProtection (testCsrfProtection {Csrf.verifyCsrfToken = \_ _ -> pure Csrf.CsrfRejected}) defaultComposedSiteDependencies) (AdmissionEnabled sessionConfig proofConfig) authenticatedSecurity)
+    csrfUnavailableSite <-
+      requiredAdmission
+        "admission CSRF unavailable native fallback"
+        (buildComposedSiteWithAdmissionSecurityDependencies (withCsrfProtection (testCsrfProtection {Csrf.verifyCsrfToken = \_ _ -> pure Csrf.CsrfVerificationUnavailable}) defaultComposedSiteDependencies) (AdmissionEnabled sessionConfig proofConfig) authenticatedSecurity)
+    issuance <- Csrf.issueCsrfToken testCsrfProtection publicContext
+    csrfToken <-
+      case issuance of
+        Csrf.CsrfTokenIssued token _ -> pure token
+        Csrf.CsrfProtectionUnavailable -> expectationFailure "expected test CSRF token" >> fail "unreachable"
+    let nativeRequestWith body headers = do
+          bodyChunks <- newIORef [TextEncoding.encodeUtf8 body]
+          pure
+            ( Wai.setRequestBodyChunks
+                (nextRequestBodyChunk bodyChunks)
+                (waiRequest ["en", "public", "admission", "native"])
+                  { Wai.requestMethod = "POST",
+                    Wai.requestHeaders = (Http.hContentType, "application/x-www-form-urlencoded") : headers
+                  }
+            )
+        csrfHeader = (Http.hCookie, TextEncoding.encodeUtf8 ("__Host-harch-csrf=" <> Csrf.csrfTokenText csrfToken))
+        acceptedBody = "login=support_operator&code=" <> totpCodeText code <> "&return=login&_harch_csrf=" <> Csrf.csrfTokenText csrfToken
+    nativeRequest <- nativeRequestWith acceptedBody [csrfHeader]
+    nativeApplication <- toWaiApplication (Site.buildSiteApplication enabledSite)
+    rejectedApplication <- toWaiApplication (Site.buildSiteApplication rejectedSite)
+    unavailableApplication <- toWaiApplication (Site.buildSiteApplication unavailableSite)
+    csrfRejectedApplication <- toWaiApplication (Site.buildSiteApplication csrfRejectedSite)
+    csrfUnavailableApplication <- toWaiApplication (Site.buildSiteApplication csrfUnavailableSite)
+    nativeResponse <- performWaiRequest (pure nativeApplication) nativeRequest
+    let setCookies = [TextEncoding.decodeUtf8 headerValue | (headerName, headerValue) <- Wai.responseHeaders nativeResponse, headerName == "Set-Cookie"]
+    expectAll
+      ( (Wai.responseStatus nativeResponse `shouldBe` Http.status303)
+          :| [ lookup Http.hLocation (Wai.responseHeaders nativeResponse) `shouldBe` Just "/en/public/login",
+               any (Text.isInfixOf "__Host-composed-admission=") setCookies `shouldBe` True,
+               any (Text.isInfixOf "__Host-harch-csrf=") setCookies `shouldBe` True
+             ]
+      )
+    rejectedRequest <- nativeRequestWith acceptedBody [csrfHeader]
+    rejectedResponse <- performWaiRequest (pure rejectedApplication) rejectedRequest
+    unavailableRequest <- nativeRequestWith acceptedBody [csrfHeader]
+    unavailableResponse <- performWaiRequest (pure unavailableApplication) unavailableRequest
+    csrfRejectedRequest <- nativeRequestWith acceptedBody [csrfHeader]
+    csrfRejectedResponse <- performWaiRequest (pure csrfRejectedApplication) csrfRejectedRequest
+    csrfUnavailableRequest <- nativeRequestWith acceptedBody [csrfHeader]
+    csrfUnavailableResponse <- performWaiRequest (pure csrfUnavailableApplication) csrfUnavailableRequest
+    missingCsrfRequest <- nativeRequestWith "login=support_operator&code=123456&return=login" []
+    missingCsrfResponse <- performWaiRequest (pure nativeApplication) missingCsrfRequest
+    invalidActionRequest <- nativeRequestWith ("login=invalid%20name&code=123456&return=login&_harch_csrf=" <> Csrf.csrfTokenText csrfToken) [csrfHeader]
+    invalidActionResponse <- performWaiRequest (pure nativeApplication) invalidActionRequest
+    malformedBodyChunks <- newIORef [ByteString.pack [255]]
+    let malformedFieldsRequest =
+          Wai.setRequestBodyChunks
+            (nextRequestBodyChunk malformedBodyChunks)
+            ( (waiRequest ["en", "public", "admission", "native"])
+                { Wai.requestMethod = "POST",
+                  Wai.requestHeaders = [(Http.hContentType, "application/x-www-form-urlencoded")]
+                }
+            )
+    malformedFieldsResponse <- performWaiRequest (pure nativeApplication) malformedFieldsRequest
+    tooManyFieldsRequest <- nativeRequestWith (Text.intercalate "&" (replicate 9 "noise=value")) []
+    tooManyFieldsResponse <- performWaiRequest (pure nativeApplication) tooManyFieldsRequest
+    tooLargeRequest <- nativeRequestWith (Text.replicate 9000 "x") []
+    tooLargeResponse <- performWaiRequest (pure nativeApplication) tooLargeRequest
+    emptyBodyRequest <- nativeRequestWith "" []
+    emptyBodyResponse <- performWaiRequest (pure nativeApplication) emptyBodyRequest
+    acceptedAction <- successfulActionResponse (Site.siteHandleClientAction enabledSite (rootActionRequest publicContext (SubmitAdmission loginName code ReturnToAccountLogin)))
+    rejectedAction <- successfulActionResponse (Site.siteHandleClientAction rejectedSite (rootActionRequest publicContext (SubmitAdmission loginName code ReturnToAccountLogin)))
+    unavailableAction <- successfulActionResponse (Site.siteHandleClientAction unavailableSite (rootActionRequest publicContext (SubmitAdmission loginName code ReturnToAccountLogin)))
+    expectAll
+      ( (Wai.responseStatus rejectedResponse `shouldBe` Http.status422)
+          :| [ Wai.responseStatus unavailableResponse `shouldBe` Http.status503,
+               Wai.responseStatus csrfRejectedResponse `shouldBe` Http.status403,
+               Wai.responseStatus csrfUnavailableResponse `shouldBe` Http.status503,
+               Wai.responseStatus missingCsrfResponse `shouldBe` Http.status403,
+               Wai.responseStatus invalidActionResponse `shouldBe` Http.status422,
+               Wai.responseStatus malformedFieldsResponse `shouldBe` Http.status422,
+               Wai.responseStatus tooManyFieldsResponse `shouldBe` Http.status413,
+               Wai.responseStatus tooLargeResponse `shouldBe` Http.status413,
+               Wai.responseStatus emptyBodyResponse `shouldBe` Http.status403
+             ]
+      )
+    case acceptedAction of
+      Just actionResponse ->
+        expectAll
+          ( (clientActionStatus actionResponse `shouldBe` Http.status200)
+              :| [ clientActionNavigation actionResponse `shouldBe` NavigateInternal ReplaceHistory (RouteRequest (Localized (locale "en") (Public PublicLogin)) publicContext),
+                   length (clientActionHeaders actionResponse) `shouldBe` 2
+                 ]
+          )
+      Nothing -> expectationFailure "expected enabled admission action response"
+    case rejectedAction of
+      Just actionResponse ->
+        expectAll
+          ( (clientActionStatus actionResponse `shouldBe` Http.status422)
+              :| [ clientActionNavigation actionResponse `shouldBe` StayOnCurrentRoute,
+                   clientActionHeaders actionResponse `shouldBe` []
+                 ]
+          )
+      Nothing -> expectationFailure "expected rejected admission action response"
+    case unavailableAction of
+      Just actionResponse ->
+        expectAll
+          ( (clientActionStatus actionResponse `shouldBe` Http.status503)
+              :| [ clientActionNavigation actionResponse `shouldBe` StayOnCurrentRoute,
+                   clientActionHeaders actionResponse `shouldBe` []
+                 ]
+          )
+      Nothing -> expectationFailure "expected unavailable admission action response"
+
+  it "adapts local guards under the selected locale without changing the root response algebra" $ do
+    observedGuardInput <- newIORef Nothing
+    let publicModule =
+          (buildPublicModule defaultComposedStaticAssets)
+            { moduleGuards =
+                [ EndpointGuard $ \endpointRequest -> do
+                    let localRequest = endpointRouteRequest endpointRequest
+                        hasSecurityEventSink = case endpointSecurityEventSink endpointRequest of
+                          Nothing -> False
+                          Just _ -> True
+                    writeIORef
+                      observedGuardInput
+                      ( Just
+                          ( Wai.rawPathInfo (endpointWaiRequest endpointRequest),
+                            requestRoute localRequest,
+                            requestLocale (requestCore (requestContext localRequest)),
+                            endpointName (endpointMetadata endpointRequest),
+                            hasSecurityEventSink
+                          )
+                      )
+                    case endpointDispatchKind endpointRequest of
+                      EndpointMatched -> pure (ContinueEndpoint (requestContext localRequest))
+                      EndpointOptions -> pure (HaltEndpoint (NonPageBodyResponse guardResponseBody))
+                      _ -> pure (ContinueEndpoint (requestContext localRequest))
+                ]
+            }
+        rootContext = spanishContext defaultComposedContext
+        localizedContext =
+          rootContext
+            { requestCore =
+                (requestCore rootContext)
+                  { requestLocaleFallbacks = [locale "es", locale "en"]
+                  }
+            }
+        rootRoute = Localized (locale "es") (Public PublicLogin)
+    localizedModule <-
+      case localizeApplicationModule defaultLocalePolicy publicModule of
+        Left codecError -> expectationFailure (show codecError) >> fail "could not localize the public module"
+        Right moduleValue -> pure moduleValue
+    let metadata = routeMetadata (moduleEndpoints localizedModule rootRoute)
+        endpointRequest dispatchKind =
+          EndpointRequest
+            { endpointWaiRequest = Wai.defaultRequest,
+              endpointRouteRequest = RouteRequest rootRoute rootContext,
+              endpointMetadata = metadata,
+              endpointSecurityEventSink = Nothing,
+              endpointDispatchKind = dispatchKind
+            }
+    case moduleGuards localizedModule of
+      [localizedGuard] -> do
+        runEndpointGuard localizedGuard (endpointRequest EndpointMatched) `shouldReturn` ContinueEndpoint localizedContext
+        readIORef observedGuardInput
+          `shouldReturn` Just ("", Public PublicLogin, locale "es", requiredEndpointName "root.public.login", False)
+        runEndpointGuard localizedGuard (endpointRequest EndpointOptions) `shouldReturn` HaltEndpoint (NonPageBodyResponse guardResponseBody)
+      _ -> expectationFailure "expected exactly one localized guard"
+
+  it "keeps a malformed child route distinct from an ordinary root miss" $ do
+    let publicModule = buildPublicModule defaultComposedStaticAssets
+        malformedModule =
+          publicModule
+            { moduleRouteCodec =
+                (moduleRouteCodec publicModule)
+                  { parseRoute = \_ _ -> RouteMalformed InvalidRouteTargetEncoding
+                  }
+            }
+        location = RouteLocation [requiredPathSegment "es", requiredPathSegment "public", requiredPathSegment "login"] []
+    localizedModule <-
+      case localizeApplicationModule defaultLocalePolicy malformedModule of
+        Left codecError -> expectationFailure (show codecError) >> fail "could not localize the malformed module"
+        Right moduleValue -> pure moduleValue
+    parseRoute (moduleRouteCodec localizedModule) defaultComposedContext location
+      `shouldBe` RouteMalformed InvalidRouteTargetEncoding
+
+  it "passes the selected locale into child parsing, rendering, definitions, and not-found selection" $ do
+    let publicModule = buildPublicModule defaultComposedStaticAssets
+        contextAwareCodec =
+          (moduleRouteCodec publicModule)
+            { parseRoute = \childContext location ->
+                case routePathSegments location of
+                  [] -> RouteParsed (RouteRequest (Public PublicLogin) childContext)
+                  _ -> parseRoute (moduleRouteCodec publicModule) childContext location,
+              renderRoute = \childRequest ->
+                RouteLocation [requiredPathSegment (if usesSpanishContext (requestContext childRequest) then "spanish" else "english")] [],
+              notFoundRequest = \childContext ->
+                RouteRequest
+                  (if usesSpanishContext childContext then Public PublicLogin else Public PublicNotFound)
+                  childContext
+            }
+        contextAwareDefinitions localRoute =
+          (moduleEndpoints publicModule localRoute)
+            { routeHandler = PageRouteHandler $ \_ localRequest ->
+                pure
+                  ( RenderedPage
+                      Page
+                        { pageStylesheets = [],
+                          pageTitle =
+                            case requestRoute localRequest of
+                              Public PublicLogin
+                                | usesSpanishContext (requestContext localRequest) -> "Spanish child"
+                              _ -> "English child",
+                          pageRoute = localRoute,
+                          pageContext = requestContext localRequest,
+                          pageBody = error "page body is not inspected",
+                          pageBootstrapHooks = []
+                        }
+                  )
+            }
+        contextAwareModule =
+          publicModule
+            { moduleRouteCodec = contextAwareCodec,
+              moduleEndpoints = contextAwareDefinitions
+            }
+        contextPolicy = LocalePolicy (locale "es" :| [locale "en"]) (locale "en")
+        rootContext = spanishContext defaultComposedContext
+        rootRoute = Localized (locale "es") (Public PublicLogin)
+        usesSpanishContext childContext =
+          requestLocale (requestCore childContext) == locale "es"
+            && requestLocaleFallbacks (requestCore childContext) == [locale "es", locale "en"]
+    localizedModule <-
+      case localizeApplicationModule contextPolicy contextAwareModule of
+        Left codecError -> expectationFailure (show codecError) >> fail "could not localize the context-aware module"
+        Right moduleValue -> pure moduleValue
+    parseRoute (moduleRouteCodec localizedModule) rootContext (RouteLocation [] [])
+      `shouldBe` RouteParsed (RouteRequest rootRoute (rootContext {requestCore = (requestCore rootContext) {requestLocaleFallbacks = [locale "es", locale "en"]}}))
+    notFoundRequest (moduleRouteCodec localizedModule) rootContext
+      `shouldBe` RouteRequest rootRoute rootContext
+    routePathSegments (renderRoute (moduleRouteCodec localizedModule) (RouteRequest rootRoute defaultComposedContext))
+      `shouldBe` [requiredPathSegment "es", requiredPathSegment "spanish"]
+    response <- runRouteDefinition (moduleEndpoints localizedModule rootRoute) Wai.defaultRequest (RouteRequest rootRoute defaultComposedContext)
+    case response of
+      PageResponse _ page -> do
+        pageTitle page `shouldBe` "Spanish child"
+        pageRoute page `shouldBe` rootRoute
+        pageContext page `shouldBe` defaultComposedContext
+      _ -> expectationFailure "expected the localized context-aware page"
+
+  it "preserves a non-page halt from a localized local guard" $ do
+    let rootContext = spanishContext defaultComposedContext
+        rootRoute = Localized (locale "es") (Public PublicLogin)
+        guard =
+          EndpointGuard $ \_ ->
+            pure
+              ( HaltEndpoint
+                  (NonPageBodyResponse guardResponseBody)
+              )
+        publicModule = (buildPublicModule defaultComposedStaticAssets) {moduleGuards = [guard]}
+    localizedModule <-
+      case localizeApplicationModule defaultLocalePolicy publicModule of
+        Left codecError -> expectationFailure (show codecError) >> fail "could not localize the guarded module"
+        Right moduleValue -> pure moduleValue
+    let endpointRequest =
+          EndpointRequest
+            { endpointWaiRequest = Wai.defaultRequest,
+              endpointRouteRequest = RouteRequest rootRoute rootContext,
+              endpointMetadata = routeMetadata (moduleEndpoints localizedModule rootRoute),
+              endpointSecurityEventSink = Nothing,
+              endpointDispatchKind = EndpointMatched
+            }
+    case moduleGuards localizedModule of
+      [localizedGuard] -> do
+        result <- runEndpointGuard localizedGuard endpointRequest
+        case result of
+          HaltEndpoint (NonPageBodyResponse responseBodyValue) -> responseBodyValue `shouldBe` guardResponseBody
+          unexpectedResult -> expectationFailure ("expected a localized guarded response, got " <> show unexpectedResult)
+      _ -> expectationFailure "expected exactly one localized guard"
+
+  it "serves the composed documentation page as complete SSR through the production WAI interpreter" $ do
+    composedSite <- requiredComposedSite
+    waiApplication <- toWaiApplication (Site.buildSiteApplication composedSite)
+    docsResponse <- performWaiRequest (pure waiApplication) (waiRequest ["docs"])
+    docsBody <- readResponseBody docsResponse
+    expectAll
+      ( (Wai.responseStatus docsResponse `shouldBe` Http.status200)
+          :| [ Text.isInfixOf "data-page=\"docs\"" docsBody `shouldBe` True,
+               Text.isInfixOf "data-swagger-fallback=\"true\"" docsBody `shouldBe` True,
+               Text.isInfixOf "href=\"/docs/openapi.json\"" docsBody `shouldBe` True,
+               Text.isInfixOf "data-swagger-ui=\"true\"" docsBody `shouldBe` True,
+               Text.isInfixOf "data-swagger-spec-url=\"/docs/openapi.json\"" docsBody `shouldBe` True,
+               Text.isInfixOf "data-swagger-bundle-url=\"/docs/assets/swagger-ui-bundle.js\"" docsBody `shouldBe` True,
+               Text.isInfixOf "href=\"/docs/assets/swagger-ui.css\"" docsBody `shouldBe` True,
+               Text.isInfixOf "data-harch-page-enhancement=\"harch-swagger-ui\"" docsBody `shouldBe` True,
+               Text.isInfixOf "src=\"/docs/assets/swagger-enhancement.js\"" docsBody `shouldBe` True
+             ]
+      )
+
+  it "serves one merged OpenAPI document for both documented API families" $ do
+    composedSite <- requiredComposedSite
+    waiApplication <- toWaiApplication (Site.buildSiteApplication composedSite)
+    specResponse <- performWaiRequest (pure waiApplication) (waiRequest ["docs", "openapi.json"])
+    specBody <- readResponseBody specResponse
+    repeatResponse <- performWaiRequest (pure waiApplication) (waiRequest ["docs", "openapi.json"])
+    repeatBody <- readResponseBody repeatResponse
+    expectAll
+      ( (Wai.responseStatus specResponse `shouldBe` Http.status200)
+          :| [ Text.unpack specBody `shouldContain'` "\"/api/catalog/items\"",
+               Text.unpack specBody `shouldContain'` "\"/api/orders\"",
+               Text.unpack specBody `shouldContain'` "get-api-catalog-items",
+               Text.unpack specBody `shouldContain'` "post-api-orders",
+               Text.unpack specBody `shouldContain'` "composed-api-bearer",
+               Text.unpack specBody `shouldContain'` "catalog:read",
+               Text.unpack specBody `shouldContain'` "orders:write",
+               Text.unpack specBody `shouldContain'` "\"Catalog\"",
+               Text.unpack specBody `shouldContain'` "\"Orders\"",
+               specBody `shouldBe` repeatBody
+             ]
+      )
+
+  it "executes the mounted catalog and orders API subtree through the production WAI interpreter" $ do
+    let authenticatedSecurity =
+          AuthenticationEnabled
+            []
+            (AuthenticationGuard (pure . ContinueEndpoint . apiRootContext . endpointRouteRequest))
+            []
+        apiSite = buildComposedSiteWithSecurityDependencies defaultComposedSiteDependencies authenticatedSecurity
+    waiApplication <- toWaiApplication (Site.buildSiteApplication apiSite)
+    itemsResponse <- performWaiRequest (pure waiApplication) (waiRequest ["api", "catalog", "items"])
+    itemsBody <- readResponseBody itemsResponse
+    submitRequest <- formPostRequest ["api", "orders"] [("item", "widget")]
+    submitResponse <- performWaiRequest (pure waiApplication) submitRequest
+    submitBody <- readResponseBody submitResponse
+    expectAll
+      ( (Wai.responseStatus itemsResponse `shouldBe` Http.status200)
+          :| [ itemsBody `shouldBe` "{\"summary\":\"Catalog\"}",
+               Wai.responseStatus submitResponse `shouldBe` Http.status202,
+               submitBody `shouldBe` "{\"orderId\":\"order-1\"}"
+             ]
+      )
+
+  it "projects the documented operation metadata, scopes, and authored error rails" $ do
+    let itemsMetadata = composedEndpointMetadataForPath (at "/items")
+        submitMetadata = composedEndpointMetadataForPath (at "/")
+    expectAll
+      ( (endpointNameText (endpointName itemsMetadata) `shouldBe` "root.catalog.api.catalog.items")
+          :| [ routeTemplateText (endpointRouteTemplate itemsMetadata) `shouldBe` "/api/catalog/items",
+               endpointProtocol itemsMetadata `shouldBe` ApiEndpoint,
+               endpointAccess itemsMetadata `shouldBe` RequireAuthorized RootMayReadCatalog,
+               endpointNameText (endpointName submitMetadata) `shouldBe` "root.orders.api.orders.submit",
+               routeTemplateText (endpointRouteTemplate submitMetadata) `shouldBe` "/api/orders",
+               endpointAccess submitMetadata `shouldBe` RequireAuthorized RootMaySubmitOrders,
+               composedAuthorizationScopes RootMayReadCatalog `shouldBe` ["catalog:read"],
+               composedAuthorizationScopes RootMayRefreshCatalog `shouldBe` ["catalog:write"],
+               composedAuthorizationScopes RootMayReadOrders `shouldBe` ["orders:read"],
+               composedAuthorizationScopes RootMaySubmitOrders `shouldBe` ["orders:write"]
+             ]
+      )
+    undocumentedMetadata <- try (evaluate (composedEndpointMetadataForPath (at "/other"))) :: IO (Either ErrorCall (EndpointMetadata RootAuthorization))
+    case undocumentedMetadata of
+      Left failure -> Text.isInfixOf "undocumented path" (Text.pack (show failure)) `shouldBe` True
+      Right _ -> expectationFailure "an undocumented path must fail composition loudly"
+    extensionFailure <- try (evaluate (requireOpenApiExtension (Left (InvalidOpenApiSpecificationExtensionName "bad-extension")) :: OpenApiExtension () () ByteString.ByteString)) :: IO (Either ErrorCall (OpenApiExtension () () ByteString.ByteString))
+    case extensionFailure of
+      Left failure -> Text.isInfixOf "authored an invalid OpenAPI extension" (Text.pack (show failure)) `shouldBe` True
+      Right _ -> expectationFailure "an invalid authored extension must fail composition loudly"
+    providerFailure <- try (evaluate (composedDocumentationProviderOrDie (Left EmptyOpenApiDocumentTitle) :: OpenApiDocumentProvider ComposedContext)) :: IO (Either ErrorCall (OpenApiDocumentProvider ComposedContext))
+    case providerFailure of
+      Left failure -> Text.isInfixOf "could not build its documentation" (Text.pack (show failure)) `shouldBe` True
+      Right _ -> expectationFailure "a failed document construction must fail composition loudly"
+
+-- | Deterministic security is used only to inspect how a halted page response
+-- is remapped by module composition.  Production page security is constructed
+-- by the site after the request has reached its page route.
+testPageSecurity :: PageSecurity
+testPageSecurity =
+  mkPageSecurity testRuntimeNonce (mkPageCsrf testCsrfToken "composed-test")
+  where
+    testCsrfToken =
+      case mkCsrfToken "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" of
+        Just csrfToken -> csrfToken
+        Nothing -> error "invalid test CSRF token"
+
+-- | Exercise a route definition's declared handler without bypassing the
+-- page-security argument.  Production requests use 'Site' to construct this
+-- value from the selected CSRF backend; these composition tests use the fixed
+-- redacted fixture solely to inspect route/context mapping.
+runRouteDefinition :: RouteDefinition route context authorization -> Wai.Request -> RouteRequest route context -> IO (Response route context)
+runRouteDefinition definition request routeRequest =
+  case routeHandler definition of
+    PageRouteHandler renderPage -> do
+      pageResult <- renderPage testPageSecurity routeRequest
+      pure $
+        case pageResult of
+          RenderedPage page -> PageResponse testPageSecurity page
+          RenderedPageWithMetadata responseBodyValue page -> PageResponseWithMetadata testPageSecurity responseBodyValue page
+          RenderedPageWithHeaders pageHeaders page -> PageResponseWithHeaders testPageSecurity pageHeaders page
+    ProtocolRouteHandler renderProtocol -> nonPageResponse <$> renderProtocol request routeRequest
+
+requiredRootModule :: IO (ApplicationModule RootRoute RootActionTarget RootAction ComposedContext RootAuthorization)
+requiredRootModule =
+  requiredRootModuleWith catalogQueries catalogCommands ordersQueries ordersCommands
+
+requiredRootModuleWith :: CatalogQueries -> CatalogCommands -> OrdersQueries -> OrdersCommands -> IO (ApplicationModule RootRoute RootActionTarget RootAction ComposedContext RootAuthorization)
+requiredRootModuleWith = requiredRootModuleWithPolicy defaultLocalePolicy
+
+requiredRootModuleWithPolicy :: LocalePolicy -> CatalogQueries -> CatalogCommands -> OrdersQueries -> OrdersCommands -> IO (ApplicationModule RootRoute RootActionTarget RootAction ComposedContext RootAuthorization)
+requiredRootModuleWithPolicy localePolicy queryDependencies commandDependencies orderQueryDependencies orderCommandDependencies =
+  pure
+    ( buildComposedModuleWithDependencies
+        ( withDomainCapabilities
+            queryDependencies
+            commandDependencies
+            orderQueryDependencies
+            orderCommandDependencies
+            (withLocalePolicy localePolicy defaultComposedSiteDependencies)
+        )
+    )
+
+defaultComposedSiteDependencies :: ComposedSiteDependencies
+defaultComposedSiteDependencies =
+  ComposedSiteDependencies
+    { composedStaticAssets = defaultComposedStaticAssets,
+      composedLocalePolicy = defaultLocalePolicy,
+      composedCsrfProtection = testCsrfProtection,
+      composedDomainCapabilities = ComposedDomainCapabilities catalogQueries catalogCommands ordersQueries ordersCommands
+    }
+
+withLocalePolicy :: LocalePolicy -> ComposedSiteDependencies -> ComposedSiteDependencies
+withLocalePolicy localePolicy dependencies = dependencies {composedLocalePolicy = localePolicy}
+
+withCsrfProtection :: Csrf.CsrfProtection ComposedContext -> ComposedSiteDependencies -> ComposedSiteDependencies
+withCsrfProtection csrfProtection dependencies = dependencies {composedCsrfProtection = csrfProtection}
+
+withDomainCapabilities :: CatalogQueries -> CatalogCommands -> OrdersQueries -> OrdersCommands -> ComposedSiteDependencies -> ComposedSiteDependencies
+withDomainCapabilities queryDependencies commandDependencies orderQueryDependencies orderCommandDependencies dependencies =
+  dependencies
+    { composedDomainCapabilities =
+        ComposedDomainCapabilities queryDependencies commandDependencies orderQueryDependencies orderCommandDependencies
+    }
+
+requiredComposedSite :: IO (Site.Site RootRoute RootAction ComposedContext RootAuthorization)
+requiredComposedSite =
+  pure (buildComposedSiteWithDependencies defaultComposedSiteDependencies)
+
+testCsrfProtection :: Csrf.CsrfProtection ComposedContext
+testCsrfProtection =
+  Signed.signedCsrfProtection
+    Signed.SignedCsrfDependencies
+      { Signed.signedCsrfDependenciesKeyring = keyring,
+        Signed.signedCsrfDependenciesPolicy = Signed.defaultSignedCsrfPolicy,
+        Signed.signedCsrfDependenciesCurrentTime = pure 1000000000,
+        Signed.signedCsrfDependenciesResolveBinding = const (pure Csrf.AnonymousCsrfBinding)
+      }
+  where
+    keyId = requiredCsrf "test CSRF key id" (Signed.mkCsrfKeyId "composed-test-v1")
+    signingKey = requiredCsrf "test CSRF signing key" (Signed.mkCsrfSigningKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+    keyring = requiredCsrf "test CSRF keyring" (Signed.mkSignedCsrfKeyring keyId ((keyId, signingKey) :| []))
+
+admissionCsrfProtection :: Csrf.CsrfProtection ComposedContext
+admissionCsrfProtection =
+  Signed.signedCsrfProtection
+    Signed.SignedCsrfDependencies
+      { Signed.signedCsrfDependenciesKeyring = keyring,
+        Signed.signedCsrfDependenciesPolicy = Signed.defaultSignedCsrfPolicy,
+        Signed.signedCsrfDependenciesCurrentTime = pure 1000000000,
+        Signed.signedCsrfDependenciesResolveBinding = resolveAdmissionCsrfBinding
+      }
+  where
+    keyId = requiredCsrf "admission CSRF key id" (Signed.mkCsrfKeyId "composed-test-v1")
+    signingKey = requiredCsrf "admission CSRF signing key" (Signed.mkCsrfSigningKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+    keyring = requiredCsrf "admission CSRF keyring" (Signed.mkSignedCsrfKeyring keyId ((keyId, signingKey) :| []))
+
+requiredCsrf :: String -> Maybe value -> value
+requiredCsrf label = fromMaybe (error ("expected " <> label))
+
+requiredAdmission :: String -> Either failure value -> IO value
+requiredAdmission label = either (\_ -> expectationFailure ("expected " <> label) >> fail "unreachable") pure
+
+unavailableAdmissionProofConfig :: AdmissionProofConfig
+unavailableAdmissionProofConfig =
+  AdmissionProofConfig
+    { admissionProofCredentials =
+        AdmissionCredentialStore
+          { findAdmissionCredential = \_ -> pure (Left AdmissionCredentialStoreUnavailable),
+            markAdmissionTotpCounterUsed = \_ _ -> pure (Left AdmissionCredentialStoreUnavailable)
+          },
+      admissionProofAttempts =
+        AdmissionAttemptStore
+          { reserveAdmissionAttempt = \_ _ -> pure (Left AdmissionAttemptStoreUnavailable),
+            settleAdmissionAttempt = \_ _ -> pure (Left AdmissionAttemptStoreUnavailable),
+            cancelAdmissionAttempt = \_ -> pure (Left AdmissionAttemptStoreUnavailable)
+          },
+      admissionProofPolicy = defaultLoginProtectionPolicy,
+      admissionProofEncryptionKey = requiredCsrf "test admission encryption key" (mkSecretEncryptionKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+      admissionProofReadClock = pure (Left AdmissionProofClockUnavailable)
+    }
+
+authenticatedRootContext :: RouteRequest RootRoute ComposedContext -> ComposedContext
+authenticatedRootContext routeRequest =
+  (requestContext routeRequest)
+    { requestIdentity = AuthenticatedIdentity (RootPrincipal (Just (locale "es")) ["catalog.read", "orders.read"])
+    }
+
+-- | The API subtree's authenticated root identity: every composed
+-- authorization scope, so the mounted API endpoints' access requirements
+-- resolve exactly as the documented scope mapping advertises.
+apiRootContext :: RouteRequest RootRoute ComposedContext -> ComposedContext
+apiRootContext routeRequest =
+  (requestContext routeRequest)
+    { requestIdentity = AuthenticatedIdentity (RootPrincipal (Just (locale "es")) ["catalog.read", "catalog.write", "orders.read", "orders.write"])
+    }
+
+-- | A form POST request for the WAI interpreter: the url-encoded body is
+-- served once from an in-test chunk reader, exactly like a bounded form body
+-- arriving over the wire.
+formPostRequest :: [Text] -> Http.SimpleQuery -> IO Wai.Request
+formPostRequest segments fields = do
+  bodyChunks <- newIORef [encodedBody]
+  pure
+    ( Wai.setRequestBodyChunks
+        (nextRequestBodyChunk bodyChunks)
+        ( (waiRequest segments)
+            { Wai.requestMethod = "POST",
+              Wai.requestHeaders = [("Content-Type", "application/x-www-form-urlencoded")],
+              Wai.requestBodyLength = Wai.KnownLength (fromIntegral (ByteString.length encodedBody))
+            }
+        )
+    )
+  where
+    encodedBody = Http.renderSimpleQuery False fields
+
+requiredModuleName :: Text -> ModuleName
+requiredModuleName value =
+  case mkModuleName value of
+    Left moduleNameError -> error (show moduleNameError)
+    Right moduleName -> moduleName
+
+requiredEndpointName :: Text -> EndpointName
+requiredEndpointName = requiredEndpointNameOrDie
+
+catalogQueries :: CatalogQueries
+catalogQueries = CatalogQueries (const (pure "Catalog"))
+
+catalogCommands :: CatalogCommands
+catalogCommands = CatalogCommands (const (pure "refreshed"))
+
+ordersQueries :: OrdersQueries
+ordersQueries = OrdersQueries (const (pure "Orders"))
+
+ordersCommands :: OrdersCommands
+ordersCommands = OrdersCommands (const (pure (OrderId "order-1")))
+
+spanishContext :: ComposedContext -> ComposedContext
+spanishContext rootContext =
+  rootContext
+    { requestCore =
+        (requestCore rootContext)
+          { requestLocale = locale "es"
+          }
+    }
+
+expectDistinctAndPrintable :: (Eq value, Show value) => [value] -> Expectation
+expectDistinctAndPrintable values = do
+  mapM_ (uncurry shouldNotBe) distinctPairs
+  map (length . show) values `shouldSatisfy` all (> 0)
+  map (\value -> showsPrec 11 value "") values `shouldSatisfy` not . any null
+  showList values "" `shouldSatisfy` not . null
+  where
+    distinctPairs =
+      [ (leftValue, rightValue)
+      | (leftIndex, leftValue) <- zip [0 :: Int ..] values,
+        (rightIndex, rightValue) <- zip [0 :: Int ..] values,
+        leftIndex < rightIndex
+      ]
+
+data DiagnosticValue = forall value. (Show value) => DiagnosticValue value
+
+renderDiagnosticValue :: DiagnosticValue -> String
+renderDiagnosticValue (DiagnosticValue value) = show value
+
+assertRootLocalEqual :: RootLocal -> RootLocal -> Expectation
+assertRootLocalEqual leftRootLocal rightRootLocal = leftRootLocal `shouldBe` rightRootLocal
+
+rootLocalsDiffer :: RootLocal -> RootLocal -> Bool
+rootLocalsDiffer leftRootLocal rightRootLocal = leftRootLocal /= rightRootLocal
+
+assertPageResponse :: Text -> RootRoute -> ComposedContext -> Response RootRoute ComposedContext -> Expectation
+assertPageResponse expectedTitle expectedRoute expectedContext response =
+  case response of
+    PageResponse _ page -> do
+      pageTitle page `shouldBe` expectedTitle
+      pageRoute page `shouldBe` expectedRoute
+      pageContext page `shouldBe` expectedContext
+    _ -> expectationFailure "expected a page response"
+
+clientActionResponse :: Http.Status -> ClientActionResponse RootRoute ComposedContext
+clientActionResponse status =
+  ClientActionResponse
+    { clientActionStatus = status,
+      clientActionPatches = [],
+      clientActionFocusId = Nothing,
+      clientActionNavigation = StayOnCurrentRoute,
+      clientActionStorageCleanup = noClientStorageCleanup,
+      clientActionFailureDestinations = noClientActionFailureDestinations,
+      clientActionHeaders = [],
+      clientActionObservabilityAttributes = [],
+      clientActionLogEntries = []
+    }
+
+rootActionRequest :: ComposedContext -> RootAction -> ClientActionRequest RootRoute RootAction ComposedContext
+rootActionRequest rootContext action =
+  ClientActionRequest
+    (RouteRequest (Localized (requestLocale (requestCore rootContext)) (actionRoute action)) rootContext)
+    action
+    Nothing
+    rootContext
+  where
+    actionRoute rootAction =
+      case rootAction of
+        SubmitAdmission {} -> Public (PublicAdmission ReturnToAccountLogin)
+        CatalogAction {} -> Catalog CatalogIndex
+        OrdersAction {} -> Orders OrdersIndex
+
+successfulActionResponse :: IO (Maybe (ClientActionResult RootRoute ComposedContext)) -> IO (Maybe (ClientActionResponse RootRoute ComposedContext))
+successfulActionResponse = fmap (>>= clientActionResultResponse)
+
+guardResponseBody :: ResponseBody
+guardResponseBody =
+  ResponseBody
+    { responseStatus = Http.status403,
+      responseContentType = "text/plain; charset=utf-8",
+      responseBody = "guarded",
+      responseObservabilityAttributes = [],
+      responseLogEntries = [],
+      responseDatabaseOperations = []
+    }

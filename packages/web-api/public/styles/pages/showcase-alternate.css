@@ -1,0 +1,24 @@
+/* Page-scoped styles for WebApi.Pages.ShowcaseAlternate
+   (harch-showcase-alternate-*). The local class names (root, heading, card)
+   intentionally collide with showcase.css; the scoped renames keep them
+   apart. Every selector is scoped under the check-scoped-css.sh
+   convention. */
+.harch-showcase-alternate-root {
+  display: grid;
+  gap: 1.25rem;
+  padding: 2.5rem;
+  background: #fbf6f6;
+}
+
+.harch-showcase-alternate-heading {
+  color: #771212;
+  font-size: 28px;
+  margin: 0;
+}
+
+.harch-showcase-alternate-card {
+  background: #faeeee;
+  border: 1px solid #eacdd2;
+  border-radius: 14px;
+  padding: 1.75rem;
+}

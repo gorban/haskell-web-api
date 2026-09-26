@@ -1,4 +1,6 @@
 * text=auto
+*.cabal text eol=lf
+*.hs text eol=lf
 /generate-code-coverage.sh eol=lf
 Dockerfile eol=lf
 .dockerignore eol=lf

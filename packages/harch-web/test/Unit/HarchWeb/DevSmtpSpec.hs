@@ -1,0 +1,100 @@
+{-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE OverloadedStrings #-}
+
+{-# SPEC #-}
+
+import Control.Concurrent (threadDelay)
+import Control.Exception (bracket)
+import Data.ByteString qualified as ByteString
+import Data.Maybe (fromMaybe, isNothing)
+import Data.Text qualified as Text
+import Data.Word (Word16)
+import HarchWeb.DevSmtp
+import HarchWeb.Email
+
+spec =
+  describe "DevSmtpServer" $ do
+    it "captures loopback SMTP mail by recipient and consumes the recipient index" $
+      bracket startDevSmtpServer stopDevSmtpServer $ \server -> do
+        let sender = required (mkEmailAddress "noreply@example.test")
+            recipient = required (mkEmailAddress "ada@example.test")
+            message = required (mkEmailMessage (EmailMessageInput recipient "Welcome" "First line\n.second line"))
+            config = required (mkSmtpConfig (smtpConfigInput "127.0.0.1" (devSmtpPort server) "account.example.test" sender Nothing))
+        (null <$> devSmtpReceivedEmails server) `shouldReturn` True
+        deliverSmtpEmail config message
+        delivered <- awaitEmail server "ada@example.test"
+        devSmtpEnvelopeSender delivered `shouldBe` "noreply@example.test"
+        devSmtpRecipients delivered `shouldBe` ["ada@example.test"]
+        devSmtpRawMessage delivered `shouldSatisfy` ByteString.isInfixOf "Subject: Welcome"
+        devSmtpRawMessage delivered `shouldSatisfy` ByteString.isInfixOf ".second line"
+        (isNothing <$> takeLatestDevSmtpEmailTo server "ADA@EXAMPLE.TEST") `shouldReturn` True
+        (null <$> devSmtpReceivedEmails server) `shouldReturn` True
+
+    it "accepts development SMTP AUTH PLAIN" $
+      bracket startDevSmtpServer stopDevSmtpServer $ \server -> do
+        let sender = required (mkEmailAddress "noreply@example.test")
+            recipient = required (mkEmailAddress "ada@example.test")
+            message = required (mkEmailMessage (EmailMessageInput recipient "Authenticated" "Body"))
+            config = required (mkSmtpConfig (smtpConfigInput "127.0.0.1" (devSmtpPort server) "account.example.test" sender (Just (smtpAuthenticationForLocalDevelopment (smtpLoginUsername "local-user") (smtpLoginPassword "local-password")))))
+        deliverSmtpEmail config message
+        delivered <- awaitEmail server "ada@example.test"
+        devSmtpEnvelopeSender delivered `shouldBe` "noreply@example.test"
+        devSmtpRecipients delivered `shouldBe` ["ada@example.test"]
+        devSmtpRawMessage delivered `shouldSatisfy` ByteString.isInfixOf "Subject: Authenticated"
+
+    it "retains arrival order while finding and removing the newest matching email" $
+      bracket startDevSmtpServer stopDevSmtpServer $ \server -> do
+        let sender = required (mkEmailAddress "noreply@example.test")
+            recipient = required (mkEmailAddress "ada@example.test")
+            config = required (mkSmtpConfig (smtpConfigInput "127.0.0.1" (devSmtpPort server) "account.example.test" sender Nothing))
+            firstMessage = required (mkEmailMessage (EmailMessageInput recipient "First" "First body"))
+            secondMessage = required (mkEmailMessage (EmailMessageInput recipient "Second" "Second body"))
+        deliverSmtpEmail config firstMessage
+        deliverSmtpEmail config secondMessage
+        receivedEmails <- awaitEmails server 2
+        latestEmail <- awaitEmail server "ada@example.test"
+        ( map (ByteString.isInfixOf "Subject: First" . devSmtpRawMessage) receivedEmails,
+          map (ByteString.isInfixOf "Subject: Second" . devSmtpRawMessage) receivedEmails
+          )
+          `shouldBe` ([True, False], [False, True])
+        devSmtpRawMessage latestEmail `shouldSatisfy` ByteString.isInfixOf "Subject: Second"
+        (null <$> devSmtpReceivedEmails server) `shouldReturn` True
+
+required :: Maybe value -> value
+required = fromMaybe (error "Expected valid development SMTP fixture")
+
+smtpConfigInput :: Text.Text -> Word16 -> Text.Text -> EmailAddress -> Maybe SmtpAuthentication -> SmtpConfigInput
+smtpConfigInput host port heloName sender authentication =
+  SmtpConfigInput
+    { smtpInputHost = smtpServerHost host,
+      smtpInputPort = port,
+      smtpInputHeloName = smtpServerHeloName heloName,
+      smtpInputEnvelopeSender = sender,
+      smtpInputAuthentication = authentication
+    }
+
+awaitEmail :: DevSmtpServer -> String -> IO DevSmtpEmail
+awaitEmail server recipient = go (100 :: Int)
+  where
+    go remaining = do
+      found <- takeLatestDevSmtpEmailTo server (fromString recipient)
+      case found of
+        Just email -> pure email
+        Nothing
+          | remaining > 0 -> threadDelay 10000 >> go (remaining - 1)
+          | otherwise -> expectationFailure "Timed out waiting for development SMTP mail" >> error "unreachable"
+
+awaitEmails :: DevSmtpServer -> Int -> IO [DevSmtpEmail]
+awaitEmails server expectedCount = go (100 :: Int)
+  where
+    go remaining = do
+      received <- devSmtpReceivedEmails server
+      if length received >= expectedCount
+        then pure received
+        else
+          if remaining > 0
+            then threadDelay 10000 >> go (remaining - 1)
+            else expectationFailure "Timed out waiting for development SMTP mail" >> error "unreachable"
+
+fromString :: String -> Text.Text
+fromString = Text.pack
