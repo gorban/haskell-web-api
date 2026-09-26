@@ -136,6 +136,7 @@ lowerFlagAttribute position attributeName =
   case attributeName of
     "required" -> pure (VarE 'Impl.required)
     "selected" -> pure (VarE 'Impl.selected)
+    "hidden" -> pure (VarE 'Impl.hidden)
     "open" -> pure (VarE 'Impl.dialogOpen)
     _
       | Just suffix <- dataAttributeSuffix attributeName -> applyNamed 'Impl.dataFlag [fromStringLiteral suffix]
