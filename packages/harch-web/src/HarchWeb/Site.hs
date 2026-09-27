@@ -236,7 +236,8 @@ apiOnlyFallbackPageShell =
       shellMainAttributes = [],
       shellNavigationLifecycle = Nothing,
       shellStylesheets = [],
-      shellRuntimeDescriptors = []
+      shellRuntimeDescriptors = [],
+      shellFooter = Nothing
     }
 
 pageRoute ::

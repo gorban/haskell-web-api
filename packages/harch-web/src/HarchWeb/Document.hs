@@ -982,6 +982,10 @@ data Document route = Document
     documentMainId :: ElementId,
     documentMainAttributes :: [HtmlAttribute],
     documentMainContent :: Html,
+    -- | Optional footer content, rendered once per document after @main@.
+    -- The shell owns it so an application composes a site-wide footer in one
+    -- place instead of repeating it in every page body.
+    documentFooter :: Maybe Html,
     documentBootstrapHooks :: [Text],
     documentNavigationLifecycle :: Maybe NavigationLifecycle,
     documentStylesheets :: [Stylesheet],
@@ -1013,7 +1017,9 @@ data PageShell route context = PageShell
     shellMainAttributes :: [HtmlAttribute],
     shellNavigationLifecycle :: Maybe NavigationLifecycle,
     shellStylesheets :: [Stylesheet],
-    shellRuntimeDescriptors :: [RuntimeDescriptor]
+    shellRuntimeDescriptors :: [RuntimeDescriptor],
+    -- | Optional footer content for the document this shell renders.
+    shellFooter :: Maybe Html
   }
   deriving (Eq, Show)
 
@@ -1333,6 +1339,7 @@ buildPageShell codec shell page =
       documentMainId = shellMainId shell,
       documentMainAttributes = navigationMainAttributes (shellNavigationLifecycle shell) (shellMainAttributes shell),
       documentMainContent = pageBody page,
+      documentFooter = shellFooter shell,
       documentBootstrapHooks = pageBootstrapHooks page,
       documentNavigationLifecycle = shellNavigationLifecycle shell,
       documentStylesheets = shellStylesheets shell ++ pageStylesheets page,
@@ -1370,6 +1377,15 @@ renderDocumentWithNonce runtimeNonce = renderDocumentWithNonceAndActionCsrf runt
 -- value.  The value is added only at the document-rendering boundary, never
 -- retained in 'Page', a bootstrap hook, or diagnostics, so capture-phase
 -- action code can submit it while the matching cookie remains @HttpOnly@.
+-- | The document's optional footer, rendered after @main@ as a single
+-- @footer@ element. Absent content renders nothing, so a shell that does not
+-- set one keeps exactly the markup it had before.
+renderDocumentFooter :: Document route -> Text
+renderDocumentFooter document =
+  case documentFooter document of
+    Nothing -> ""
+    Just footerContent -> "<footer>" <> renderHtml footerContent <> "</footer>"
+
 renderDocumentWithNonceAndActionCsrf :: RuntimeNonce -> Maybe Text -> Document route -> Text
 renderDocumentWithNonceAndActionCsrf runtimeNonce maybeActionCsrf document =
   Text.concat
@@ -1396,6 +1412,7 @@ renderDocumentWithNonceAndActionCsrf runtimeNonce maybeActionCsrf document =
       ">",
       renderHtml (documentMainContent document),
       "</main>",
+      renderDocumentFooter document,
       renderNavigationStatus document,
       "</body></html>"
     ]

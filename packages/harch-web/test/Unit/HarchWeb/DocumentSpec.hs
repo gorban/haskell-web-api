@@ -19,7 +19,7 @@ import Data.Maybe ()
 import Data.Text ()
 import Data.Text qualified as Text (isInfixOf, isSuffixOf, length)
 import Data.Text.Encoding qualified as TextEncoding ()
-import HarchWeb (AssetPath (AssetPath), CssClass (GlobalCssClass), Document (Document, documentBodyAttributes, documentBootstrapHooks, documentLanguage, documentMainAttributes, documentMainContent, documentMainId, documentNavigation, documentNavigationAttributes, documentNavigationLifecycle, documentRuntimeDescriptors, documentStylesheets, documentTitle, documentViewportPolicy), HtmlAttribute (HtmlAttribute, attributeName, attributeValue), LiveRegion (AssertiveAlert, PoliteStatus), NavigationAnnouncement (AnnounceElementText), NavigationFocusTarget (FocusElement), NavigationLifecycle (navigationAnnouncement, navigationFocusTarget, navigationSkipLink, navigationStatusClass), NavigationSkipLink (NavigationSkipLink, skipLinkClass, skipLinkLabel), Page (Page, pageBody, pageBootstrapHooks, pageContext, pageRoute, pageStylesheets, pageTitle), PageShell (shellMainAttributes, shellNavigationItems, shellNavigationLifecycle, shellStylesheets), ResolvedNavigationItem (ResolvedNavigationItem, navigationHref, navigationIsActive, navigationLabel, navigationRoute), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (DeferredModule, PageEnhancementModule), RuntimeNonce (runtimeNonceValue), ViewportPolicy (ResponsiveViewport), buildNavigation, buildPageShell, generateRuntimeNonce, literalElementId, liveRegionAttributes, locale, mainNavigationLifecycle, responsiveViewport, stylesheet)
+import HarchWeb (AssetPath (AssetPath), CssClass (GlobalCssClass), Document (Document, documentBodyAttributes, documentBootstrapHooks, documentFooter, documentLanguage, documentMainAttributes, documentMainContent, documentMainId, documentNavigation, documentNavigationAttributes, documentNavigationLifecycle, documentRuntimeDescriptors, documentStylesheets, documentTitle, documentViewportPolicy), HtmlAttribute (HtmlAttribute, attributeName, attributeValue), LiveRegion (AssertiveAlert, PoliteStatus), NavigationAnnouncement (AnnounceElementText), NavigationFocusTarget (FocusElement), NavigationLifecycle (navigationAnnouncement, navigationFocusTarget, navigationSkipLink, navigationStatusClass), NavigationSkipLink (NavigationSkipLink, skipLinkClass, skipLinkLabel), Page (Page, pageBody, pageBootstrapHooks, pageContext, pageRoute, pageStylesheets, pageTitle), PageShell (shellMainAttributes, shellNavigationItems, shellNavigationLifecycle, shellStylesheets), ResolvedNavigationItem (ResolvedNavigationItem, navigationHref, navigationIsActive, navigationLabel, navigationRoute), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (DeferredModule, PageEnhancementModule), RuntimeNonce (runtimeNonceValue), ViewportPolicy (ResponsiveViewport), buildNavigation, buildPageShell, generateRuntimeNonce, literalElementId, liveRegionAttributes, locale, mainNavigationLifecycle, responsiveViewport, shellFooter, stylesheet, text)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -80,6 +80,7 @@ movedSpec = do
       buildPageShell sampleCodec sampleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
         `shouldBe` Document
           { documentTitle = "Known",
+            documentFooter = Nothing,
             documentLanguage = locale "en",
             documentBodyAttributes =
               [ HtmlAttribute
@@ -153,6 +154,13 @@ movedSpec = do
       show responsiveViewport `shouldBe` "ResponsiveViewport"
       show [responsiveViewport] `shouldBe` "[ResponsiveViewport]"
 
+    it "renders one footer after main when the shell sets it, and none when it does not" $ do
+      let footerShell = sampleShell {shellFooter = Just (text "Copyright example")}
+          renderWith shellValue =
+            renderDocument (buildPageShell sampleCodec shellValue (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext})))
+      renderWith footerShell `shouldSatisfy` Text.isInfixOf "</main><footer>Copyright example</footer>"
+      renderWith sampleShell `shouldSatisfy` (not . Text.isInfixOf "<footer>")
+
     it "renders the shared HTML document for the supplied page and shell options" $
       renderDocument (buildPageShell sampleCodec sampleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext})))
         `shouldBe` "<!DOCTYPE html><html lang=\"en\"><head><title>Known</title><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><script type=\"module\" src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
@@ -161,6 +169,7 @@ movedSpec = do
       renderDocument
         Document
           { documentTitle = "Known",
+            documentFooter = Nothing,
             documentLanguage = locale "en\" onload=\"steal()",
             documentBodyAttributes = [],
             documentNavigationAttributes = [],

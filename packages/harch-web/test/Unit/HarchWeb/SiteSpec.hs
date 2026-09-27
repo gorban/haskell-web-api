@@ -547,7 +547,8 @@ spec =
                         shellMainAttributes = [],
                         shellNavigationLifecycle = Nothing,
                         shellStylesheets = [],
-                        shellRuntimeDescriptors = []
+                        shellRuntimeDescriptors = [],
+                        shellFooter = Nothing
                       }
               }
           siteApplication = buildSiteApplication bareShellSite
@@ -730,7 +731,8 @@ samplePageShell page =
           ],
         shellNavigationLifecycle = Nothing,
         shellStylesheets = [],
-        shellRuntimeDescriptors = []
+        shellRuntimeDescriptors = [],
+        shellFooter = Nothing
       }
 
 sampleRouteCodec :: RouteCodec SampleRoute SampleContext

@@ -285,7 +285,8 @@ sampleShell =
         ],
       shellNavigationLifecycle = Nothing,
       shellStylesheets = [],
-      shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]
+      shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"],
+      shellFooter = Nothing
     }
 
 emptyStaticAssets :: StaticAssetsConfig
