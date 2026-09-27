@@ -5,6 +5,7 @@ module HarchWeb.Markup.Elements
     TrustedHtml,
     VoidTag,
     anchorTag,
+    articleTag,
     buttonTag,
     breakTag,
     codeTag,

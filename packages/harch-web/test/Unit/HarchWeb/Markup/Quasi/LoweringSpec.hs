@@ -126,6 +126,11 @@ spec =
           quoted = [harch|<p>Literal &amp; unsafe &lt;literal&gt; {interpolatedText} {safeChild}</p>|]
       renderHtml quoted `shouldBe` "<p>Literal &amp; unsafe &lt;literal&gt; &lt;reviewed&gt; <code>safe</code></p>"
 
+    it "lowers the article element through the same builder as the direct path" $ do
+      let quoted = [harch|<article><p>Status</p></article>|]
+          direct = element articleTag [] [element paragraphTag [] [text "Status"]]
+      renderHtml quoted `shouldBe` renderHtml direct
+
     it "lowers the hidden boolean attribute through the same builder as the direct path" $ do
       let quoted = [harch|<p hidden>Status</p>|]
           direct = element paragraphTag [hidden] [text "Status"]

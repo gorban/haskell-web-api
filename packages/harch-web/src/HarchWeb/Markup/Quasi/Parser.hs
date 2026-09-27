@@ -126,6 +126,7 @@ nativeTagConstructor tagName = lookup tagName nativeTagConstructors
 nativeTagConstructors :: [(String, String)]
 nativeTagConstructors =
   [ ("a", "anchorTag"),
+    ("article", "articleTag"),
     ("button", "buttonTag"),
     ("br", "breakTag"),
     ("code", "codeTag"),

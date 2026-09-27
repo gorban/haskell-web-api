@@ -15,6 +15,7 @@ module HarchWeb.Markup.Implementation
     TrustedHtml,
     VoidTag,
     anchorTag,
+    articleTag,
     ariaControls,
     ariaCurrentPage,
     ariaDescribedBy,
@@ -407,6 +408,9 @@ spanTag = NormalTag "span"
 
 anchorTag :: NormalTag
 anchorTag = NormalTag "a"
+
+articleTag :: NormalTag
+articleTag = NormalTag "article"
 
 buttonTag :: NormalTag
 buttonTag = NormalTag "button"

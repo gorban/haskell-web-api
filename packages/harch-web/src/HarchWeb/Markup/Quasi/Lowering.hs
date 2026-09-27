@@ -284,6 +284,7 @@ markupAttributePosition attribute =
 nativeTagNames :: [(String, Name)]
 nativeTagNames =
   [ ("anchorTag", 'Impl.anchorTag),
+    ("articleTag", 'Impl.articleTag),
     ("breakTag", 'Impl.breakTag),
     ("buttonTag", 'Impl.buttonTag),
     ("codeTag", 'Impl.codeTag),
