@@ -26,6 +26,7 @@ library
   import: common
   exposed-modules:
     App.Composed
+    App.Composed.Auth
     App.Composed.Document
 
   other-modules:
@@ -60,6 +61,8 @@ library
     harch-web ^>=0.1.2.0,
     harch-web-openapi ^>=0.1.2.0,
     http-types ^>=0.12.5,
+    jose ^>=0.13,
+    lens ^>=5.3,
     mtl ^>=2.3.1,
     orders-domain ^>=0.1.0.0,
     postgres-database-changes ^>=0.1.2.0,
@@ -108,6 +111,7 @@ test-suite composed-domains-tests
     Unit.App.Composed.AdmissionProofSpec
     Unit.App.Composed.AdmissionSetupSpec
     Unit.App.Composed.AdmissionTypesSpec
+    Unit.App.Composed.AuthSpec
     Unit.App.Composed.CsrfSynchronizerSpec
     Unit.App.ComposedSpec
 
@@ -123,6 +127,8 @@ test-suite composed-domains-tests
     haskell-web-api ^>=0.1.2.0,
     hspec ^>=2.11.17,
     http-types ^>=0.12.5,
+    jose ^>=0.13,
+    lens ^>=5.3,
     orders-domain ^>=0.1.0.0,
     postgres-database-changes ^>=0.1.2.0,
     test-core ^>=0.1.2.0,
