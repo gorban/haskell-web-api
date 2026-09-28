@@ -2,7 +2,7 @@
 
 -- | Framework-owned, opaque correlation identifiers for HTTP requests.
 --
--- Decision record (AHI-5-RID, 2026-09-05): request correlation extends the
+-- Decision record (request correlation, 2026-09-05): request correlation extends the
 -- existing request-context ingress and response-finalization boundaries rather
 -- than adding an application-local header convention. This module owns the
 -- cryptographically random UUIDv4 representation, bounded validation, and an

@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | The @catalog.api@ application module (AHI-4E composed-domains slice):
+-- | The @catalog.api@ application module (the composed-domains slice of the
+-- OpenAPI documentation and Swagger UI work):
 -- a second, distinct module the composed root mounts at @/api/catalog@ while
 -- @catalog.web@ keeps the HTML surface at @/catalog@. Both are transports
 -- over the same 'CatalogQueries' port: this module exposes
@@ -95,7 +96,8 @@ data CatalogApiAction
 data CatalogApiRoute
   = CatalogItems
   | CatalogUnlistedPreview
-  | -- | The API family's own not-found route (AHI-4E), mirroring web-api's
+  | -- | The API family's own not-found route (part of the OpenAPI
+    -- documentation and Swagger UI work), mirroring web-api's
     -- @ApiNotFound@ convention: the module's codec parses every unmatched
     -- sub-path here so an undeclared @/api/catalog/@ path renders exactly
     -- the representation a hidden endpoint renders — the protocol's empty
@@ -195,7 +197,8 @@ catalogItemsApiEndpoint extension queries =
     (apiRouteEndpointWithContextNeverFailing (ApiRouteEndpointDeclaration (at "/items") (catalogItemsApiContract extension)) ((catalogItemsApiHandler $! extension) $! queries))
 
 -- | The unlisted preview endpoint, fixed to 'ApiHidden' unconditionally
--- (AHI-4E's availability slice). A hidden endpoint is indistinguishable from
+-- (the availability slice of the OpenAPI documentation and Swagger UI work).
+-- A hidden endpoint is indistinguishable from
 -- an undeclared route: availability gates handler execution, method
 -- negotiation, and the synthesized @Allow@/@HEAD@/@OPTIONS@ answers before
 -- any of them can observe the endpoint, and the OpenAPI provider prunes it

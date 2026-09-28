@@ -86,7 +86,7 @@ newtype ObservabilityStartupPlan = ObservabilityStartupPlan
 -- configuration or startup plans is useful during startup failures, but it
 -- must never turn those values into application-log payloads. Keep only the
 -- stable fact that each field was configured; the exporter runtime still
--- receives the original values (PR-SEC5, 2026-08-28).
+-- receives the original values (review finding, 2026-08-28).
 instance Show OtlpExporter where
   showsPrec precedence exporter =
     showParen

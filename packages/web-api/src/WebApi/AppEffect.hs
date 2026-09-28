@@ -91,8 +91,8 @@ data AccountWorkflow = AccountWorkflow
     -- accounts, so this stays its own record field rather than widening any
     -- account-specific field above; it shares the process-wide password-work
     -- gate and clock with the rest of this workflow, and the account JWT
-    -- runtime's already-startup-proven signing key, exactly as AHI-4D
-    -- requires one issuer/audience/key for both principal kinds.
+    -- runtime's already-startup-proven signing key, exactly as the scoped
+    -- API-authentication design requires one issuer/audience/key for both principal kinds.
     accountWorkflowApiClientTokenEnvironment :: ApiClientToken.ApiClientTokenEnvironment
   }
 

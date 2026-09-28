@@ -2,7 +2,7 @@
 
 -- | Trusted application request-context construction.
 --
--- Decision (AHI-4D-MH2, 2026-09-19): this module owns the explicit context
+-- Decision (authentication-context module split, 2026-09-19): this module owns the explicit context
 -- value and its WAI ingress enrichment. 'WebApi.Route' retains the one closed
 -- route codec, parsing folds, and endpoint declarations. Keeping those folds
 -- together avoids a second route matcher; keeping ingress enrichment here
@@ -42,10 +42,11 @@ import WebApi.Session (mfaEnrollmentSessionCookiePolicy)
 -- declaration still resolves through 'HarchWeb.AllowUnauthenticated' or
 -- 'HarchWeb.RequireAuthenticated', so widening this one shared type
 -- parameter from @()@ is a pure type-signature change with no behavior
--- difference. It exists ahead of its first user (the AHI-4D combined
+-- difference. It exists ahead of its first user (the scoped
+-- API-authentication design's combined
 -- account-or-API-client-bearer profile securing @\/api\/second@) so that
 -- follow-up work extends one already-published type instead of widening it
--- and every call site a second time; see the AHI-4D decision record in
+-- and every call site a second time; see the scoped API-authentication design's decision record in
 -- @docs\/design-guidance.md@.
 type AppAuthorization = HarchWeb.ScopeRequirement HarchWeb.OAuth2Scope
 
@@ -55,7 +56,7 @@ type AppAuthorization = HarchWeb.ScopeRequirement HarchWeb.OAuth2Scope
 accountAuthenticationProfileName :: HarchWeb.AuthenticationProfileName
 accountAuthenticationProfileName = HarchWeb.requiredAuthenticationProfileNameOrDie "account"
 
--- | The AHI-4D combined account-or-API-client-bearer profile
+-- | The scoped API-authentication design's combined account-or-API-client-bearer profile
 -- ('WebApi.ResourceAuthentication.resourceAuthenticationPipeline'), declared
 -- here rather than in that module: the pipeline itself never needs its own
 -- registered name (mirroring 'accountAuthenticationProfileName', which

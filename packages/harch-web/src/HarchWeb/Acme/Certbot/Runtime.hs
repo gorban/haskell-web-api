@@ -4,12 +4,12 @@
 --
 -- The public facade re-exports the supported plan and preparation helpers, but
 -- this module owns temporary state, certbot process execution, and the TLS
--- server lifecycle that consumes the acquired certificate. Decision (DM,
+-- server lifecycle that consumes the acquired certificate. Decision (review finding,
 -- 2026-08-25): its temporary state directory (which contains the ACME account
 -- key) is removed on every failed preparation. A successful return transfers
 -- cleanup ownership to the running server; failure diagnostics never expose or
 -- preserve that private directory or its logs.
--- FQ8 passes the existing runtime's shared transport dependency record to the
+-- The review finding passes the existing runtime's shared transport dependency record to the
 -- acquired TLS listener, so ACME cannot accidentally start with a different
 -- request-limit policy or WAI application than its sibling listeners.
 module HarchWeb.Acme.Certbot.Runtime

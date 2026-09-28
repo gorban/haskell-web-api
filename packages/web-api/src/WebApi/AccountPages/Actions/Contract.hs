@@ -141,8 +141,8 @@ accountActionEndpoints =
     declaredAccountAction LogoutAccountTarget (postAt "/logout" (`accountActionPath` LogoutRoute)) (pure LogoutAccount)
   ]
 
--- | AHI-4A stages the existing reference actions as explicitly public while
--- preserving their separate CSRF/session checks. AHI-4C replaces these
+-- | The typed endpoint-security design stages the existing reference actions as explicitly public while
+-- preserving their separate CSRF/session checks. The secure-login and admission design replaces these
 -- declarations with the account-backed authentication/authorization policy;
 -- none rely on an implicit public default.
 declaredAccountAction :: AccountActionTarget -> ActionPath AppRequestContext -> ActionDecoder action -> ActionEndpoint AccountActionTarget AppRequestContext AppAuthorization action

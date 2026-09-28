@@ -37,7 +37,7 @@ data ConfigParseError
     -- credentials. Unlike 'InvalidConfigValue', this keeps only the owning key
     -- and one-based entry position so startup diagnostics cannot disclose a
     -- valid earlier OTLP authorization header while explaining a later malformed
-    -- entry (PR-SEC5, 2026-08-28).
+    -- entry (review finding, 2026-08-28).
     InvalidConfigEntry Text Int
   | UnsupportedConfigValue Text
   deriving (Eq, Show)

@@ -81,7 +81,7 @@ runEarlyRequestStages webApplication request requestPath policyResponseHeaders =
 -- | Render a framework-owned pre-routing failure with the opaque identifier
 -- already fixed at HTTP ingress. Only these Harch-owned plain-text bodies get
 -- a support-copyable value; arbitrary application protocol, streaming, and WAI
--- response bodies remain application-owned. The remaining AHI-5-RID work covers
+-- response bodies remain application-owned. The remaining request-correlation work covers
 -- application error presentations and audit joins.
 routeLocationDecodeResponse :: RequestId -> Wai.Response
 routeLocationDecodeResponse requestId = Wai.responseLBS Http.status400 [(Http.hContentType, "text/plain; charset=utf-8")] (requestRejectionBody "Request target was rejected." requestId)

@@ -45,7 +45,7 @@ import WebApi.Components.PageFrame
 import WebApi.Localization (AppMessage (..), localizedMessage)
 import WebApi.Route (AppLocale (..), AppRequestContext)
 
--- | Decision record (AHI-9, 2026-08-31): authentication forms own their
+-- | Decision record (accessible authentication, 2026-08-31): authentication forms own their
 -- autocomplete purpose tokens as application policy. HarchWeb intentionally
 -- keeps the platform vocabulary open. These forms pair the tokens with
 -- explicit labels, hints, validation relationships, and separate TOTP and
@@ -242,7 +242,7 @@ loginRegion context locale form =
             ]
         ]
 
--- | AHI-4C keeps recovery presentation in the application while reusing the
+-- | The secure-login and admission design keeps recovery presentation in the application while reusing the
 -- same login region and action workflow as the standalone page. The capture
 -- kernel retains only the original action's opaque ID; this dialog contains no
 -- retained fields and its deferred application adapter owns opening, closing,
@@ -310,8 +310,8 @@ pendingProfileRegion context target form =
                 -- An in-progress or retained resend request would be lost by
                 -- navigation. In particular, retention keeps the request
                 -- available while the user reauthenticates, so warn before
-                -- they leave the page. See the AHI-4C decision record in
-                -- docs/design-guidance.md.
+                -- they leave the page. See the secure-login and admission
+                -- decision record in docs/design-guidance.md.
                 Controls.defaultActionFormAttributes
                   { Controls.actionFormCapabilities =
                       Controls.ConditionalLeaveConfirmation

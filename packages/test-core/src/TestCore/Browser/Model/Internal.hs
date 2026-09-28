@@ -8,6 +8,7 @@ module TestCore.Browser.Model.Internal
     CompiledObservation (..),
     Locator,
     attributeValue,
+    computedStyleValue,
     browserMetrics,
     byAltText,
     byLabel,
@@ -161,6 +162,7 @@ data ObservationLeaf a where
   TextContentObservation :: Locator -> ObservationLeaf Text
   InputValueObservation :: Locator -> ObservationLeaf Text
   AttributeValueObservation :: Locator -> Text -> ObservationLeaf (Maybe Text)
+  ComputedStyleObservation :: Text -> Text -> ObservationLeaf (Maybe Text)
   FocusedObservation :: Locator -> ObservationLeaf Bool
   VisibleObservation :: Locator -> ObservationLeaf Bool
   CurrentUrlObservation :: ObservationLeaf Text
@@ -198,6 +200,13 @@ inputValue = LeafObservation . InputValueObservation
 
 attributeValue :: Locator -> Text -> BrowserObservation (Maybe Text)
 attributeValue locator attributeName = LeafObservation (AttributeValueObservation locator attributeName)
+
+-- | Read one CSS property from the first matching element. A missing selector
+-- yields Nothing immediately; invalid selectors remain Playwright errors.
+-- Unlike the scenario command, this observation composes into the aggregate
+-- browser assertion boundary so style assertions can retry as one snapshot.
+computedStyleValue :: Text -> Text -> BrowserObservation (Maybe Text)
+computedStyleValue selector property = LeafObservation (ComputedStyleObservation selector property)
 
 isFocused :: Locator -> BrowserObservation Bool
 isFocused = LeafObservation . FocusedObservation
@@ -255,6 +264,12 @@ observationLeafJson leaf =
     TextContentObservation locator -> locatedObservation "textContent" locator []
     InputValueObservation locator -> locatedObservation "inputValue" locator []
     AttributeValueObservation locator attributeName -> locatedObservation "attributeValue" locator ["attribute" .= attributeName]
+    ComputedStyleObservation selector property ->
+      object
+        [ "kind" .= ("computedStyle" :: Text),
+          "selector" .= selector,
+          "property" .= property
+        ]
     FocusedObservation locator -> locatedObservation "focused" locator []
     VisibleObservation locator -> locatedObservation "visible" locator []
     CurrentUrlObservation -> object ["kind" .= ("currentUrl" :: Text)]

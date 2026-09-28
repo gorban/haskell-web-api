@@ -1,6 +1,6 @@
 -- | Typed application-module route composition.
 --
--- AHI-4B keeps a reusable module below the server-owning 'Application': this
+-- The composable application-modules design keeps a reusable module below the server-owning 'Application': this
 -- facade composes only route ownership and one-way request-context projection.
 -- It deliberately does not introduce a mounted WAI application or a second
 -- method/action dispatcher. A root combines the returned codec with its other
@@ -13,7 +13,7 @@
 -- implementation-only health refactor; this public surface and its capability
 -- boundaries remain unchanged.
 --
--- Decision record (AHI-4B): a root may resolve an 'Either' with
+-- Decision record (the composable application-modules design): a root may resolve an 'Either' with
 -- 'requiredModuleConfiguration' only when both its inputs and the declaration
 -- are fixed, construction-owned values.  That turns an impossible deployed
 -- configuration into an immediate startup defect; it must not be used to hide

@@ -1630,7 +1630,7 @@ spec = do
                   }
             }
 
-    -- Tabled per docs/design-guidance.md's CN decision record: one act
+    -- Tabled per the repository's one-act test-shape convention: one act
     -- (parseRuntimeAppConfig against three env-pair lists), one
     -- comparison against a Left ConfigParseError, differing only in the
     -- env pairs and the expected error. Extracted from what was one

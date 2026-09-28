@@ -75,9 +75,9 @@ serviceAccountFields value =
         _ -> Left "Google Workspace credentials must contain client_email and private_key"
     _ -> Left "Google Workspace credentials must contain client_email and private_key"
 
--- | Decision (BX, 2026-08-21, per @docs/design-guidance.md@'s
--- explicit-props rule): see @docs/design-guidance.md@'s
--- \"Follow-up decision — BX\" for why this is an explicit prop rather than
+-- | Decision (review finding, 2026-08-21, per @docs/design-guidance.md@'s
+-- explicit-props rule): see the explicit-props follow-up decision in
+-- @docs/design-guidance.md@ for why this is an explicit prop rather than
 -- a global CAF matching 'HarchWeb.Observability.Otlp'\'s existing manager.
 --
 -- An opaque, explicitly-owned holder for the most recently minted access

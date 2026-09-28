@@ -8,7 +8,7 @@
 -- request context. 'WebApi.AccountJwt.Runtime' owns the explicit startup
 -- configuration, key proof, and token-issuance lifecycle.
 --
--- Decision (AHI-4D-MH1, 2026-09-19): keep the established public API at this
+-- Decision (AccountJwt module split, 2026-09-19): keep the established public API at this
 -- module and Harch's generic JWT verification boundary. Moving the cohesive
 -- configuration-to-runtime concern behind explicit inputs and outputs keeps
 -- source-to-context admission together and does not introduce another
@@ -111,7 +111,7 @@ accountAuthenticationChallenge endpointRequest _ =
 -- authentication infrastructure failures support-correlatable on the Harch
 -- request rail. Pure pipeline tests may deliberately provide no correlation
 -- value; WAI ingress always supplies one. Other application error surfaces and
--- audit joins remain AHI-5-RID follow-up work.
+-- audit joins remain request-correlation follow-up work.
 authenticationErrorResponse :: AppRequestContext -> Http.Status -> Text -> HarchWeb.NonPageResponse AppRoute AppRequestContext
 authenticationErrorResponse requestContext status message =
   HarchWeb.NonPageBodyResponse

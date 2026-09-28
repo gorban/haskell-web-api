@@ -2,14 +2,14 @@
 
 -- | Validated authentication-proof transport and browser cookie policy.
 --
--- Decision record (PR-F6, 2026-09-05): this internal owner keeps the existing
+-- Decision record (review finding, 2026-09-05): this internal owner keeps the existing
 -- cookie policy and bounded proof extraction together because both interpret
 -- untrusted request transport. It supplies the one typed extractor consumed by
 -- 'HarchWeb.Authentication.Pipeline'; it neither verifies a proof nor
 -- establishes a principal. Keeping it below the pipeline avoids a cycle and
 -- prevents an application from obtaining a second extraction path.
 --
--- Decision record (AHI-4D slice 2, 2026-09-13): cookie-or-bearer JWT
+-- Decision record (API authentication and OAuth client credentials, slice 2, 2026-09-13): cookie-or-bearer JWT
 -- extraction extends this owner rather than composing two generic extractors.
 -- Cookie and Authorization are two encodings of one credential, so equal
 -- bounded values are accepted with a source fact, conflicting values fail,
@@ -77,7 +77,7 @@ mkAuthenticationCookieName value
 -- @Path=/@, @Secure@, @HttpOnly@, and @SameSite=Strict@ attributes make a
 -- deployment-specific domain or broad path impossible to author here.
 --
--- Decision (AHI-4C, 2026-09-03): JWT proof extraction already belonged to
+-- Decision (secure login and admission, 2026-09-03): JWT proof extraction already belonged to
 -- this module, but issuing one required every application to reconstruct the
 -- security-sensitive cookie string.  Extend that existing capability with a
 -- validated policy and opaque-token renderer rather than adding a web-api

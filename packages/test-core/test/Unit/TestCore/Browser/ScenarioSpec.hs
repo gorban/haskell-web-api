@@ -135,6 +135,12 @@ spec =
             $([|Just <$> textContent (byRole Heading)|] `matchesPattern` [p|Just heading@"Home"|])
             $([|browserMetrics|] `matchesPattern` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
 
+    it "observes computed styles through the retryable assertion block" $
+      withFakeRunner "normal" $ \config ->
+        runBrowserSpec config $
+          assertAllObserved $
+            shouldEqual (computedStyleValue ".harch-showcase-card" "background-color") (Just "rgb(238, 242, 250)")
+
     it "matches absent snapshots immediately in one observation attempt" $
       withFakeRunner "snapshot-missing-once" $ \config ->
         runBrowserSpec config $ assertAllObserved $ $([|observeElement (css "#missing")|] `matchesPattern` [p|Nothing|])
@@ -589,6 +595,7 @@ spec =
           "          case 'elementSnapshot': return snapshotMissing ? null : { elementText: mode === 'snapshot-null-text' ? null : 'Home', elementValue: 'person@example.com', elementVisible: true, elementFocused: true };",
           "          case 'inputValue': return 'person@example.com';",
           "          case 'attributeValue': return 'false';",
+          "          case 'computedStyle': return 'rgb(238, 242, 250)';",
           "          case 'focused': case 'visible': return true;",
           "          case 'currentUrl': return 'http://localhost/';",
           "          case 'browserMetrics': return { enhancedNavigationFetchCount: 1, hardNavigationCount: 0, mutationRequestCount: 1 };",

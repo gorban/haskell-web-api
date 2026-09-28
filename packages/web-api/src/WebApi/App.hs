@@ -3,25 +3,25 @@
 
 -- | Web-api application composition.
 --
--- FQ9 groups the three reporters runtime setup always supplies together in
+-- The injected setup and composition environments work groups the three reporters runtime setup always supplies together in
 -- 'RuntimeApplicationReporters'; page, account, policy, and route values
 -- remain explicit because they vary per application composition.
--- FQ12 moves account-workflow construction into its own private collaborator:
+-- The account-workflow composition extraction moves account-workflow construction into its own private collaborator:
 -- runtime and unavailable workflows must share one process-wide password-work
 -- gate, while this module remains the explicit application/site composition
 -- boundary.
 --
--- AHI-5 extends that boundary through 'Site.siteAttachRouteObservation': the
+-- The activity-audit design extends that boundary through 'Site.siteAttachRouteObservation': the
 -- root attaches declared endpoint facts only after typed route selection,
 -- rather than deriving audit attribution from a URL or action input.  This is
 -- the trusted-context handoff consumed by the application-owned atomic
 -- account-session/audit operation.  The generic session port remains
 -- available for ordinary session lifecycle operations; login uses the
 -- narrower operation so it cannot commit the session without its required
--- audit activity. Other selected audit-producing mutations remain AHI-5
+-- audit activity. Other selected audit-producing mutations remain activity-audit
 -- follow-up work.
 --
--- Decision record (AHI-4D slice 2, 2026-09-13): production composition uses
+-- Decision record (scoped API authentication, 2026-09-13): production composition uses
 -- the root-owned public/account profile registry. Only protected account page
 -- and action declarations select the cookie-or-bearer JWT guard. The action
 -- CSRF selector receives that resolved declaration and its established source
@@ -29,7 +29,7 @@
 -- requests retain it. This extends the existing post-match/action lifecycle
 -- rather than adding a token-specific middleware or route matcher.
 --
--- Decision record (AHI-4D slice 5, 2026-09-17): every 'HarchWeb.Application'
+-- Decision record (scoped API authentication, 2026-09-17): every 'HarchWeb.Application'
 -- and 'HarchWeb.ApplicationSecurity' signature here now carries
 -- 'WebApi.Route.AppAuthorization' instead of @()@, ahead of the combined
 -- account-or-API-client-bearer profile that will first construct
@@ -39,7 +39,7 @@
 -- (501 lines, 27 imports); no split is done here, see that record for the
 -- named follow-up.
 --
--- Decision record (AHI-4D slice 5, 2026-09-17): 'runtimeAuthenticationProfiles'
+-- Decision record (scoped API authentication, 2026-09-17): 'runtimeAuthenticationProfiles'
 -- registers a third profile, 'WebApi.Route.resourceAuthenticationProfileName',
 -- built from 'WebApi.ResourceAuthentication.resourceAuthenticationPipeline'
 -- and reusing this module's already-wired account session store/clock plus
@@ -239,7 +239,7 @@ buildAppWithDatabaseAndOptionalReportersAndSecurity config pageRepository !accou
             )
               { Site.siteRequestContextFromRequest =
                   requestContextFromWaiRequest (requestPolicy config),
-                -- Decision (AHI-5, 2026-09-08): reuse Site's existing
+                -- Decision (durable activity audit, 2026-09-08): reuse Site's existing
                 -- post-match attribution boundary.  The root derives audit
                 -- route facts from declared metadata and locale, never a URL
                 -- or client-submitted value.
@@ -275,7 +275,7 @@ buildAppWithDatabaseAndOptionalReportersAndSecurity config pageRepository !accou
   where
     appRequestLocale = HarchWeb.locale . renderLocale
 
-    -- AHI-4E: resolve the startup-cached OpenAPI provider exactly once, with
+    -- OpenAPI documentation and Swagger UI: resolve the startup-cached OpenAPI provider exactly once, with
     -- the same eager-binding discipline 'buildRuntimeAppWithAccountJwt'
     -- already applies to @!accountWorkflow@. A typed document-construction
     -- failure (an invalid title, a duplicate operation, an unresolvable
@@ -346,7 +346,7 @@ buildAppRouteDefinition config pageRepository accountWorkflow docsOpenApiDocumen
     -- body all arrive from the page module.
     GeneratedPages generatedPage ->
       PagesGenerated.pageRouteDefinition config generatedPage
-    -- AHI-4E slice 6: the docs page is an ordinary typed page route; its
+    -- OpenAPI documentation and Swagger UI: the docs page is an ordinary typed page route; its
     -- SSR, stylesheet, and enhancement descriptor all arrive from the
     -- typed Swagger surface in 'WebApi.DocsSwagger'.
     DocsSwaggerRoute ->

@@ -2,13 +2,13 @@
 
 -- | Opaque page/action CSRF state.
 --
--- AHI-4C moves page security construction before a page handler builds its
+-- The secure-login and admission design moves page security construction before a page handler builds its
 -- markup.  The framework owns the CSP nonce and the application-selected
 -- protection backend owns token issuance and binding.  Neither raw value
 -- belongs in a 'HarchWeb.Document.Page', request context, bootstrap hook, or
 -- diagnostic rendering.
 --
--- Decision (AHI-4C, 2026-09-03): extend the existing page/action response
+-- Decision (secure login and admission, 2026-09-03): extend the existing page/action response
 -- lifecycle with one 'CsrfProtection' capability rather than add a CSRF
 -- middleware or application-local action dispatcher.  The existing action
 -- executor already owns body intake, exact-one form/cookie parsing, and the
@@ -21,7 +21,7 @@
 -- the opaque token from its page's 'PageSecurity' and uses the same
 -- framework-owned host cookie/transport check as an enhanced action.
 --
--- Decision (PR-F7, 2026-09-05): this private lifecycle owner retains opaque
+-- Decision (review finding, 2026-09-05): this private lifecycle owner retains opaque
 -- page/token state and the single 'CsrfProtection' rail. The private signed
 -- sibling owns HMAC token mechanics and receives its key ring, policy, clock,
 -- and binding resolver as one stable dependency record; context and submitted

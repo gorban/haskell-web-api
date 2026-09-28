@@ -3,8 +3,8 @@
 -- | Which peers a deployment trusts to supply proxy-forwarded request
 -- context (@X-Forwarded-For@\/@-Proto@\/@-Prefix@, RFC 7239 @Forwarded@).
 -- Split out of "HarchWeb.Security" as a genuinely disjoint concern (CIDR
--- parsing\/matching, not response headers or CORS) — see the DE decision
--- record in @docs/design-guidance.md@.
+-- parsing\/matching, not response headers or CORS) — see the
+-- forwarded-header-trust decision record in @docs/design-guidance.md@.
 module HarchWeb.Security.ForwardedTrust
   ( ForwardedHeaderTrust (..),
     CidrBlock,

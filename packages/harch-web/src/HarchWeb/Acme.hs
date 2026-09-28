@@ -3,7 +3,7 @@
 -- The implementation is deliberately split into private modules so callers can
 -- depend on this stable boundary rather than certbot or challenge-store
 -- internals. Certificate acquisition is always certbot-backed
--- ('AcmeConfig' requires a 'CertbotConfig'); see the DG decision record in
+-- ('AcmeConfig' requires a 'CertbotConfig'); see the native-ACME-client decision record in
 -- @docs/design-guidance.md@ for why an in-process ACME protocol client is
 -- deliberately not part of this surface.
 module HarchWeb.Acme

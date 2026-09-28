@@ -3,7 +3,7 @@
 -- | OAuth 2.0 protocol declarations that use Harch's ordinary typed API
 -- request boundary.
 --
--- Decision record (AHI-4D slice 3, 2026-09-14): decode the fixed
+-- Decision record (API authentication and OAuth client credentials, slice 3, 2026-09-14): decode the fixed
 -- client-credentials form fields through the existing bounded API form codec
 -- before adding client storage or token issuance.  This retains duplicate and
 -- malformed field rejection at the one request-decoding boundary and gives a
@@ -107,7 +107,7 @@ oauth2ClientCredentialsSecret (OAuth2ClientCredentials _ secret) = secret
 -- codec, so missing and duplicate @Authorization@ fields retain the same
 -- accumulated typed rejection as every other endpoint input.
 --
--- Decision record (AHI-4D slice 3, 2026-09-16): extend the existing bounded
+-- Decision record (API authentication and OAuth client credentials, slice 3, 2026-09-16): extend the existing bounded
 -- API request codec with a strict OAuth Basic value decoder rather than add a
 -- second header parser at the token endpoint. The codec already owns
 -- case-insensitive header selection and duplicate rejection. This decoder

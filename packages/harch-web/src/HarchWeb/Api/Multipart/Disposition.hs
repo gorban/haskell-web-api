@@ -50,7 +50,7 @@ data MultipartDispositionParse
 -- part. Missing @name@ remains represented explicitly for the consumer to
 -- report as its existing 'MultipartMissingDisposition' failure.
 --
--- Decision record (GR-2): 'MultipartDispositionRepeated' is consumed at the
+-- Decision record (review finding): 'MultipartDispositionRepeated' is consumed at the
 -- request boundary as 'MultipartMalformedBody' rather than a new error
 -- constructor: a header block carrying the same untrusted field twice is a
 -- malformed part-header block, which is exactly what that constructor

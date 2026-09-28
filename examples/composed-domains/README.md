@@ -35,14 +35,17 @@ Run the Unit and real-browser proof with:
 cabal test composed-domains-tests --test-show-details=direct
 ```
 
-## Admission database setup
+## Durable database setup
 
 The development executable above remains a public composition example. It
-does not configure an account authentication runtime and therefore cannot be
-turned into an admission deployment by setting an environment variable.
+does not configure an account authentication runtime or OAuth token runtime,
+so setting an environment variable alone does not enable admission or OAuth
+routes. A deployment composition supplies its validated JWT runtime, durable
+API-client store, password-work gate, and clock through
+`ComposedSiteDependencies`.
 
-The separate operator-only setup executable owns the composed admission schema
-and credentials. Supply `COMPOSED_DATABASE_CONNECTION_STRING` and
+The separate operator-only setup executable owns the composed schema and
+credentials. Supply `COMPOSED_DATABASE_CONNECTION_STRING` and
 `COMPOSED_ADMISSION_TOTP_ENCRYPTION_KEY` through `.env`, `.env.local`, or the
 environment, with each later source overriding the earlier one. The encryption
 key is an AES-256 key encoded as unpadded Base64URL. Keep both values out of
@@ -53,6 +56,27 @@ Apply immutable database changes first:
 ```sh
 cabal run composed-domains-admission-setup -- migrate
 ```
+
+The migration also creates the OAuth client and scope tables. The setup command
+does not enable the OAuth route in the development executable. When a
+deployment composition enables it, the token endpoint rejects requests unless
+the WAI request is marked secure, before reading the form or looking up the
+client. Serve that listener over HTTPS; the token guard does not trust an
+unverified `X-Forwarded-Proto` value.
+
+Seed the
+reference client separately with a secret you choose at an interactive
+terminal:
+
+```sh
+cabal run composed-domains-admission-setup -- seed-example-api-client
+```
+
+The secret is read with terminal echo disabled, hashed using the same 64 MiB
+Argon2id policy as unknown-client verification, and sent to PostgreSQL only as
+a parameterized hash. The setup command never prints the secret or hash. It
+creates client `composed-example` with `catalog:read` and `orders:write` as its
+default scopes, and refuses to replace an existing client row.
 
 Then provision one credential using identifiers that are safe for the
 application's typed constructors:

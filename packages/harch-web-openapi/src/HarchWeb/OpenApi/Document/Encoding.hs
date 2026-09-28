@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The narrow raw-JSON adapters for 'HarchWeb.OpenApi.Document'
--- (AHI-4E-MH): @openapi3@'s typed model can neither retain validated @x-*@
+-- (the OpenAPI document split): @openapi3@'s typed model can neither retain validated @x-*@
 -- operation members nor emit an explicit empty @security@ array, so encoding
 -- applies both to the encoded value after the typed model is final. Each
 -- adapter updates only its named path/method pairs and leaves a missing path,

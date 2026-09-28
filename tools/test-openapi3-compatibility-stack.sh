@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
-# Rebuild the public OpenAPI data-model releases selected by AHI-4E in an
-# isolated store. openapi3-3.2.5 and insert-ordered-containers-0.3.0 have
+# Rebuild the public OpenAPI data-model releases selected for the OpenAPI
+# documentation and Swagger UI work in an isolated store. openapi3-3.2.5 and
+# insert-ordered-containers-0.3.0 have
 # stale Aeson upper bounds, so the frozen plan permits only their two exact
 # Aeson edges. openapi3 additionally emits one GHC-9.14 -Wx-partial header;
 # keep it visible and admit only that exact source location through the shared

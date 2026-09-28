@@ -664,7 +664,8 @@ browserDependencies csrfProtection =
     { composedStaticAssets = defaultComposedStaticAssets,
       composedLocalePolicy = defaultLocalePolicy,
       composedCsrfProtection = csrfProtection,
-      composedDomainCapabilities = ComposedDomainCapabilities catalogQueries catalogCommands ordersQueries ordersCommands
+      composedDomainCapabilities = ComposedDomainCapabilities catalogQueries catalogCommands ordersQueries ordersCommands,
+      composedOAuthDependencies = Nothing
     }
 
 browserCsrfProtection :: Csrf.CsrfProtection ComposedContext

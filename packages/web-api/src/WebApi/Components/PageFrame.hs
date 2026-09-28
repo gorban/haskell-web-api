@@ -2,7 +2,7 @@
 
 -- | App-owned page composition primitives.
 --
--- AHI-1 deliberately keeps this layer as ordinary, pure typed functions over
+-- The component and styling architecture design deliberately keeps this layer as ordinary, pure typed functions over
 -- 'HarchWeb.Html'.  Harch already supplies the escaping, markup, and scoped
 -- class boundaries, so a framework design-system or CSS EDSL would duplicate
 -- an existing capability without evidence of a framework gap.

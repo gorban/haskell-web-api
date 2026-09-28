@@ -150,16 +150,16 @@ className = attribute (AttributeName "class") . cssClassText
 -- "v"@). Restricted to the same character set HTML custom-data-attribute
 -- names actually need: lowercase ASCII letters, digits, and hyphens.
 --
--- Decision (BR, 2026-08-21, per @docs/design-guidance.md@'s
+-- Decision (review finding, 2026-08-21, per @docs/design-guidance.md@'s
 -- extend-vs-new-abstraction rule): this and 'SafeUrl' extend
 -- 'HarchWeb.Markup.Internal.AttributeName''s existing (but previously
 -- unvalidated) newtype boundary rather than adding a parallel checking
 -- mechanism, and each carries an 'IsString' instance so every existing
 -- @OverloadedStrings@ call site keeps compiling unchanged while a runtime
--- @Text@ value must go through the explicit smart constructor. See
--- @docs/design-guidance.md@'s \"Follow-up decision — BR\" for the full
--- record, including the allowlist-vs-blocklist call for 'SafeUrl' and the
--- quasiquoter capability gap this design surfaced.
+-- @Text@ value must go through the explicit smart constructor. See the
+-- extend-vs-new-abstraction follow-up decision in @docs/design-guidance.md@
+-- for the full record, including the allowlist-vs-blocklist call for 'SafeUrl'
+-- and the quasiquoter capability gap this design surfaced.
 newtype DataAttributeSuffix = DataAttributeSuffix Text
   deriving (Eq, Show)
 
@@ -357,7 +357,7 @@ name = attribute (AttributeName "name")
 required :: Attribute
 required = booleanAttribute (AttributeName "required")
 
--- | Mark the selected option in a native @select@. Decision (AHI-9,
+-- | Mark the selected option in a native @select@. Decision (accessible authentication,
 -- 2026-08-31): preserving a non-secret, closed authentication-method choice
 -- after a validation patch is standard HTML state owned by the existing
 -- markup AST. Extend that closed vocabulary instead of reordering options or
@@ -397,7 +397,7 @@ mkRegionId = Internal.RegionId
 divTag :: NormalTag
 divTag = NormalTag "div"
 
--- | Native top-layer dialog markup. Decision (AHI-6, 2026-08-31): dialog
+-- | Native top-layer dialog markup. Decision (dialog and application controls, 2026-08-31): dialog
 -- semantics belong to the existing closed HTML AST; extend that vocabulary
 -- instead of adding an application raw-HTML escape hatch or a portal AST.
 dialogTag :: NormalTag

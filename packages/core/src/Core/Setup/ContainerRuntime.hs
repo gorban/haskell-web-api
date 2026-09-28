@@ -2,7 +2,8 @@
 
 -- | Shared container-runtime fallback for setup prerequisites.
 --
--- FQ9 groups the three stable outcome constructors for a single caller's
+-- The review finding groups the three stable outcome constructors for a
+-- single caller's
 -- domain result. The plan, command arguments, and disabled explanation remain
 -- explicit because they vary for each autostart attempt.
 module Core.Setup.ContainerRuntime

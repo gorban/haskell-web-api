@@ -1,6 +1,6 @@
 -- | Stable authoring facade for declarative client actions.
 --
--- Decision record (PR-F5, 2026-09-05): retain one public action surface while
+-- Decision record (review finding, 2026-09-05): retain one public action surface while
 -- private owners separate field decoding, validated endpoint declarations,
 -- and trusted mount adaptation. The named mount adapter replaces a positional
 -- mapping bundle without adding a second action router or weakening the

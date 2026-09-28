@@ -1,7 +1,7 @@
 # ADR-DQ: Attribute peer addresses before TLS setup
 
 - Status: **Implemented — local CI-equivalent validation and GitHub Actions passed**
-- Task: [DQ — connection-address attribution](../../TASKS/pr-3-request-pipeline-transport-and-static-assets.md)
+- Task: DQ — connection-address attribution (PR #3 review finding)
 - Date: 2026-08-26
 
 ## Executive problem statement
@@ -122,6 +122,6 @@ than retained as a fallback: false peer identity is worse than no peer identity.
 3. Complete DT's TLS/cipher configuration and real transport proof as specified in
    [ADR-DT](dt-configurable-modern-tls-server-policy.md).
 4. Run the complete CI-equivalent and module-health gates before committing and pushing, then close
-   the affected task groups.
+   the affected work.
 
 No additional architectural approval is required.

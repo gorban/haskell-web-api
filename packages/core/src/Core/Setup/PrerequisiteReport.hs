@@ -2,7 +2,8 @@
 
 -- | Setup prerequisite reporting.
 --
--- FQ9 makes the loader, reachability checks, autostart operations, and output
+-- The review finding makes the loader, reachability checks, autostart
+-- operations, and output
 -- handle one explicit execution environment. A loaded configuration, plan,
 -- and report remain per-operation values rather than ambient state.
 module Core.Setup.PrerequisiteReport

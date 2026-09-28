@@ -50,7 +50,7 @@ twoPartBody =
 
 -- | A file part first, then a field part -- the reverse of 'twoPartBody' --
 -- so a rejection on the second (field) part exercises the current
--- completed-upload lifecycle before AD adds final cleanup semantics.
+-- completed-upload lifecycle before the follow-up cleanup work adds final cleanup semantics.
 fileTheRejectsSecondFieldBody :: ByteString
 fileTheRejectsSecondFieldBody =
   "--"

@@ -409,7 +409,7 @@ spec = do
       WebApi.Route.matchRoute WebApi.Route.defaultRequestContext (requiredRouteLocation "/second")
         `shouldBe` HarchWeb.matchRoute WebApi.Route.routeCodec WebApi.Route.defaultRequestContext (requiredRouteLocation "/second")
 
-    -- Tabled per docs/design-guidance.md's CN decision record: one act
+    -- Tabled per the repository's one-act test-shape convention: one act
     -- ('pureRouteMatcher'), one comparison, differing only in the path and
     -- expected route request. The API-path cases were previously bundled
     -- three-per-'it'; each now reports individually.

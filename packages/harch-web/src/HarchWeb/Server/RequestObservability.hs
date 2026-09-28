@@ -9,7 +9,7 @@
 -- response diagnostics, and trace context without regrowing the execution
 -- facade around observability plumbing.
 --
--- FQ8 keeps the per-response route, timing, and response values explicit,
+-- The review finding keeps the per-response route, timing, and response values explicit,
 -- while 'RequestObservabilityContext' owns the stable application, WAI
 -- request, and resolved policy that every reporter needs.  The force at this
 -- observability boundary remains deliberate: it makes exceptions from pure

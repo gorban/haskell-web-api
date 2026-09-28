@@ -56,7 +56,8 @@ localizeApplicationModule localePolicy localizedModule = do
             requiredModuleNameOrDie "root" NonEmpty.:| NonEmpty.toList (moduleRouteMountChain localizedModule localRoute)
           UnlocalizedCatalogApi _ -> requiredModuleNameOrDie "root" NonEmpty.:| []
           UnlocalizedOrdersApi _ -> requiredModuleNameOrDie "root" NonEmpty.:| []
-          UnlocalizedDocs _ -> requiredModuleNameOrDie "root" NonEmpty.:| [],
+          UnlocalizedDocs _ -> requiredModuleNameOrDie "root" NonEmpty.:| []
+          UnlocalizedOAuth _ -> requiredModuleNameOrDie "root" NonEmpty.:| [],
         moduleRouteCodec = localeRootCodec localePolicy localizedModule,
         moduleDeclaredRoutes = map (Localized (defaultLocale localePolicy)) (moduleDeclaredRoutes localizedModule),
         moduleEndpoints = localizedRootDefinition localePolicy localizedModule,
@@ -77,6 +78,7 @@ localizeApplicationModule localePolicy localizedModule = do
               UnlocalizedCatalogApi _ -> pure Nothing
               UnlocalizedOrdersApi _ -> pure Nothing
               UnlocalizedDocs _ -> pure Nothing
+              UnlocalizedOAuth _ -> pure Nothing
           ),
         moduleGuards = map (localizedRootGuard localePolicy localizedModule) (moduleGuards localizedModule)
       }
@@ -99,6 +101,7 @@ localeRootCodec localePolicy localizedModule =
           UnlocalizedCatalogApi _ -> Routing.routeMethodPolicy []
           UnlocalizedOrdersApi _ -> Routing.routeMethodPolicy []
           UnlocalizedDocs _ -> Routing.routeMethodPolicy []
+          UnlocalizedOAuth _ -> Routing.routeMethodPolicy []
     }
   where
     parseRootRoute rootContext location =
@@ -117,6 +120,7 @@ localeRootCodec localePolicy localizedModule =
         UnlocalizedCatalogApi _ -> RouteLocation [] []
         UnlocalizedOrdersApi _ -> RouteLocation [] []
         UnlocalizedDocs _ -> RouteLocation [] []
+        UnlocalizedOAuth _ -> RouteLocation [] []
 
 localizedRootDefinition :: LocalePolicy -> ApplicationModule LocalizedRoute RootActionTarget RootAction ComposedContext RootAuthorization -> RootRoute -> RouteDefinition RootRoute ComposedContext RootAuthorization
 localizedRootDefinition localePolicy localizedModule rootRoute =
@@ -124,6 +128,7 @@ localizedRootDefinition localePolicy localizedModule rootRoute =
     UnlocalizedCatalogApi _ -> error "composed-domains: catalog API definitions come from their root mount"
     UnlocalizedOrdersApi _ -> error "composed-domains: orders API definitions come from their root mount"
     UnlocalizedDocs _ -> error "composed-domains: docs definitions come from their root mount"
+    UnlocalizedOAuth _ -> error "composed-domains: OAuth definitions come from their root protocol module"
     Localized selectedLocale localRoute ->
       let localDefinition = moduleEndpoints localizedModule localRoute
        in localDefinition
@@ -152,6 +157,7 @@ localizedRootGuard localePolicy localizedModule (EndpointGuard guard) =
       UnlocalizedCatalogApi _ -> pure (ContinueEndpoint (requestContext (endpointRouteRequest rootRequest)))
       UnlocalizedOrdersApi _ -> pure (ContinueEndpoint (requestContext (endpointRouteRequest rootRequest)))
       UnlocalizedDocs _ -> pure (ContinueEndpoint (requestContext (endpointRouteRequest rootRequest)))
+      UnlocalizedOAuth _ -> pure (ContinueEndpoint (requestContext (endpointRouteRequest rootRequest)))
       Localized selectedLocale localRoute -> do
         let parentContext = requestContext (endpointRouteRequest rootRequest)
             localEndpoint = moduleEndpoints localizedModule localRoute
@@ -175,6 +181,7 @@ isLocalizedRouteOwned localizedModule rootRoute =
     UnlocalizedCatalogApi _ -> False
     UnlocalizedOrdersApi _ -> False
     UnlocalizedDocs _ -> False
+    UnlocalizedOAuth _ -> False
 
 mapLocalizedNonPageResponse :: Locale -> ComposedContext -> NonPageResponse LocalizedRoute ComposedContext -> NonPageResponse RootRoute ComposedContext
 mapLocalizedNonPageResponse selectedLocale parentContext =

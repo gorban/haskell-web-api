@@ -1,19 +1,19 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 
--- | The typed Swagger UI surface (AHI-4E): the ordinary SSR page at
+-- | The typed Swagger UI surface (the OpenAPI documentation and Swagger UI work): the ordinary SSR page at
 -- @GET \/docs@ and its page-scoped stylesheet and behavior module, served
 -- from the package's pinned, reviewed Swagger UI distribution
 -- (@assets\/swagger-ui@, see its README for the pin, license, and CSP
 -- rationale).
 --
--- Decision record (AHI-4E, 2026-09-24): this surface stays an ordinary
+-- Decision record (OpenAPI documentation and Swagger UI, 2026-09-24): this surface stays an ordinary
 -- application page, not a second dispatcher. The page is a plain 'Page'
 -- value; its behavior module is a plain 'PageEnhancementModule' descriptor
 -- consumed by the existing navigation runtime, which gives the
 -- initialize/dispose lifecycle for free: the kernel imports the module once
 -- per document and invokes its returned disposer before the next enhanced
--- navigation replaces the page (PR-C1). Assets ride the existing
+-- navigation replaces the page (the navigation-lifecycle review finding). Assets ride the existing
 -- 'HarchWeb.StaticAssets.StaticAssetRoot' boundary at @\/docs\/assets@, and
 -- the document specification itself is the typed route from
 -- "HarchWeb.OpenApi.Route".
@@ -87,7 +87,7 @@ data SwaggerUiProps route context = SwaggerUiProps
     swaggerUiFallbackBody :: Html
   }
 
--- | The reference-default property set at the task file's default endpoints
+-- | The reference-default property set at the documented default endpoints
 -- (@\/docs@ page over @\/docs\/openapi.json@, assets under
 -- @\/docs\/assets@). Applications relocating the asset provider override the
 -- URLs alongside their own 'swaggerUiAssetsRoot' prefix.

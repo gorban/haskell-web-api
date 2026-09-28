@@ -1,4 +1,4 @@
-# Vendored Swagger UI assets (AHI-4E)
+# Vendored Swagger UI assets (the OpenAPI documentation and Swagger UI work)
 
 Pinned, reviewed third-party assets for the optional Swagger UI surface:
 
@@ -7,8 +7,9 @@ Pinned, reviewed third-party assets for the optional Swagger UI surface:
   (Apache-2.0; `LICENSE.apache-2.0` and `NOTICE` kept beside them, `package.json`
   retained as the provenance record of the exact upstream version).
 - The minor version is pinned deliberately: Swagger's plugin API is not a
-  stable public protocol across arbitrary versions (per the AHI-4E task
-  file), so upgrades are explicit reviews, not floating `latest` fetches.
+  stable public protocol across arbitrary versions (established during the
+  OpenAPI documentation and Swagger UI work), so upgrades are explicit
+  reviews, not floating `latest` fetches.
 
 Deliberately **not** vendored from the same distribution:
 

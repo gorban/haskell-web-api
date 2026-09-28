@@ -2,7 +2,7 @@
 
 -- | App-owned shell configuration.
 --
--- AHI-1 composes the existing Harch shell, stylesheet, and validated path
+-- The component and styling architecture design composes the existing Harch shell, stylesheet, and validated path
 -- prefix types here.  The request context has already established trust for
 -- the prefix; this component only applies that typed value and never reparses
 -- proxy input.
@@ -46,7 +46,8 @@ appPageShell AppShellProps {appShellTitlePrefix, appShellDocumentLanguage, appSh
         ],
       HarchWeb.shellNavigationLifecycle = appShellNavigationLifecycle,
       HarchWeb.shellStylesheets = [stylesheetWithPrefix appShellPathPrefix appShellStylesheet],
-      HarchWeb.shellRuntimeDescriptors = map (runtimeAssetDescriptor appShellPathPrefix) appShellRuntimeAssets
+      HarchWeb.shellRuntimeDescriptors = map (runtimeAssetDescriptor appShellPathPrefix) appShellRuntimeAssets,
+      HarchWeb.shellFooter = Nothing
     }
 
 runtimeAssetDescriptor :: HarchWeb.PathPrefix -> HarchWeb.RuntimeAsset -> HarchWeb.RuntimeDescriptor

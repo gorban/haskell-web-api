@@ -137,7 +137,7 @@ spec = do
         )
 
   describe "parseBoolean" $
-    -- Shape B per docs/design-guidance.md's CN decision record: these rows
+    -- Shape B per the repository's one-act test-shape convention: these rows
     -- are interchangeable instances of one property ("parseBoolean handles
     -- this literal correctly"), not individually-named cases, so they stay
     -- one 'it' and map over a value list through the existing 'expectAll'

@@ -2,7 +2,7 @@
 
 -- | PostgreSQL adapter for the durable OAuth API-client store.
 --
--- Decision record (AHI-4D slice 4, 2026-09-16): each lookup reads its active
+-- Decision record (scoped API authentication, 2026-09-16): each lookup reads its active
 -- client marker, secret hashes, and scope policy in one SQL statement.  The
 -- one PostgreSQL snapshot means a disabled client or removed scope is never
 -- hidden by values stitched together from independent reads.  The runtime

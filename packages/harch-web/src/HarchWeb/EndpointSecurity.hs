@@ -1,6 +1,6 @@
 -- | Typed endpoint security declarations.
 --
--- Decision record (AHI-4A, 2026-09-01): endpoint access extends Harch's one
+-- Decision record (typed endpoint security, 2026-09-01): endpoint access extends Harch's one
 -- matched-route dispatcher.  'RequestMiddleware' stays pre-route because it
 -- owns request-context enrichment before a route exists; this module owns
 -- post-match endpoint metadata and may halt with the existing full
@@ -8,7 +8,7 @@
 -- dispatcher.  The explicit 'ApplicationSecurity' choice also prevents an
 -- empty middleware list from silently becoming an authentication policy.
 --
--- Decision record (AHI-4D slice 1, 2026-09-12): scoped profile selection
+-- Decision record (API authentication and OAuth client credentials, slice 1, 2026-09-12): scoped profile selection
 -- extends this post-match rail. Endpoint metadata supplies the most-specific
 -- validated profile name, a typed mount supplies a family default, and the
 -- root owns the registry and guard implementations. An anonymous profile is
@@ -130,7 +130,7 @@ newtype AuthenticationGuard route context authorization = AuthenticationGuard
   }
 
 -- | Every root application chooses one security configuration explicitly.
--- Mounted modules will inherit a parent selection in AHI-4B; they never gain
+-- Mounted modules will inherit a parent selection per the composable application-modules design; they never gain
 -- a way to replace it with 'AuthenticationDisabled'.
 data ApplicationSecurity route context authorization
   = AuthenticationDisabled

@@ -13,13 +13,13 @@
 -- undeclared control from claiming capture readiness while preserving its
 -- authored content for an accessible configuration diagnostic.
 --
--- Decision record (FQ1, 2026-08-29): a static action path is now represented
+-- Decision record (review finding, 2026-08-29): a static action path is now represented
 -- explicitly in 'ActionPath', rather than as a dynamic renderer applied to
 -- @()@. 'staticActionPath' can therefore render only an action declaration
 -- that proves it is context-free. Dynamic paths retain 'actionPath' and their
 -- explicit context; a static renderer never invents one.
 --
--- Decision record (AHI-4B, 2026-09-02): retain authored action declarations
+-- Decision record (composable application modules, 2026-09-02): retain authored action declarations
 -- only until codec construction validates default metadata.  The opaque
 -- 'ActionCodec' thereafter stores a private validated endpoint form, so
 -- module mounting and context prefixing cannot observe or recreate an

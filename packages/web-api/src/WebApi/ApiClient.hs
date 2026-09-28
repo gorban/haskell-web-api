@@ -1,6 +1,6 @@
 -- | Application-owned durable OAuth API-client declarations.
 --
--- Decision record (AHI-4D slice 4, 2026-09-16): keep client identity,
+-- Decision record (scoped API authentication, 2026-09-16): keep client identity,
 -- configured secret hashes, and scope policy in @web-api@ while Harch keeps
 -- only the storage-neutral 'HarchWeb.ApiClientStore' capability. API clients
 -- are not account principals: they have separate identifiers, secret rotation

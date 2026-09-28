@@ -7,14 +7,14 @@
 -- A failure page can safely decode their stable tag and display its opaque
 -- 'FailureReference', while detailed causes remain private diagnostics.
 --
--- Decision record (AHI-4C, 2026-09-10): this extends the existing
+-- Decision record (secure login and admission, 2026-09-10): this extends the existing
 -- 'RequestId' boundary with an opaque display/correlation reference rather
 -- than introducing another UUID parser or an application-defined query-string
 -- convention. The closed failure sum is deliberately separate from the
 -- server-detected application terminal failure: browser-discovered failures
 -- cannot safely carry application values back to the server. The terminal
 -- result keeps an application value only inside its server-side renderer
--- closure. The AHI-4C transport maps this value to an application-declared
+-- closure. The secure-login and admission design's transport maps this value to an application-declared
 -- route and the navigation runtime either visits that route or clears the
 -- document with this safe fallback's message.
 module HarchWeb.ClientActionFailure

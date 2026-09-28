@@ -1,6 +1,6 @@
 -- | The shared ASCII token grammar for cookie names.
 --
--- Decision record (AHI-4C, 2026-09-05): session-cookie configuration,
+-- Decision record (secure login and admission, 2026-09-05): session-cookie configuration,
 -- authentication-cookie configuration, and the pre-routing request-budget
 -- scanner are three views of one HTTP cookie-name contract. Keeping their
 -- character predicates separately had already allowed the authentication

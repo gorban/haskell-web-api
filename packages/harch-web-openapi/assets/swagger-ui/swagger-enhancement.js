@@ -1,5 +1,6 @@
-// Package-owned page enhancement for the typed Swagger UI surface
-// (AHI-4E). Loaded by the framework's navigation runtime as
+// Package-owned page enhancement for the typed Swagger UI surface (the
+// OpenAPI documentation and Swagger UI work). Loaded by the framework's
+// navigation runtime as
 // script[data-harch-page-enhancement="harch-swagger-ui"]; the kernel imports
 // this module and calls setupPageEnhancement exactly once per document,
 // then invokes the returned disposer before the next enhanced navigation
@@ -11,7 +12,8 @@
 // insertion is 'self'-allowed), Swagger's inline styling goes through CSSOM,
 // and no runtime <style> element or inline script is created.
 //
-// Authentication assistance (AHI-4E): the UI exposes only "None" or one
+// Authentication assistance (part of the OpenAPI documentation and
+// Swagger UI work): the UI exposes only "None" or one
 // editable complete Authorization header value, and an optional automatic
 // OAuth client-credentials panel. Bearer state is memory-only (a closure
 // variable plus Swagger's memory-only request state): this module reads no

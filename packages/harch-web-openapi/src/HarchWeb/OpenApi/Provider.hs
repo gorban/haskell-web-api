@@ -2,7 +2,7 @@
 
 -- | Cached, application-selected OpenAPI document providers.
 --
--- Decision record (AHI-4E, 2026-09-22): document generation is an optional
+-- Decision record (OpenAPI documentation and Swagger UI, 2026-09-22): document generation is an optional
 -- application-composition concern, separate from Harch's route dispatcher.
 -- 'mkCachedOpenApiDocumentProvider' consumes one deliberate availability
 -- snapshot during startup, validates and encodes the document once, then
@@ -68,7 +68,7 @@ prepareOpenApiDocumentFromSnapshot details securitySchemes availabilitySnapshot 
 -- provider exists, so the default application composition treats malformed
 -- documentation as startup failure instead of serving a stale or partially
 -- generated document at runtime. The availability snapshot parameter is
--- demanded when this constructor is applied: the task contract makes the
+-- demanded when this constructor is applied: the required contract makes the
 -- snapshot one value consumed during startup, so realizing it here — at the
 -- boundary that owns that contract — is what keeps it from being silently
 -- discarded per endpoint (every default availability decision is

@@ -1,6 +1,6 @@
 -- | Typed application configuration and request middleware execution.
 --
--- Decision record (CZ, 2026-08-23): CSRF issuance and authorization extend
+-- Decision record (review finding, 2026-08-23): CSRF issuance and authorization extend
 -- this existing typed application/action boundary rather than adding a second
 -- action dispatcher.  Response rendering already owns page cookies and the
 -- capture kernel, while request execution already owns typed action decoding
@@ -12,13 +12,13 @@
 -- actions to their existing application-owned session store, and preserves
 -- one route/action interpreter.
 --
--- Decision record (AHI-5-RID, 2026-09-09): extend this existing typed route
+-- Decision record (request correlation, 2026-09-09): extend this existing typed route
 -- rendering boundary with the opaque framework-minted 'RequestId'. A renderer
 -- can deliberately join a support-facing error presentation to the finalized
 -- response header without a process-global request value or a response-body
 -- rewriter. Protocol, stream, and raw WAI bodies remain application-owned.
 --
--- Decision record (AHI-4D slice 2, 2026-09-13): expose client-action CSRF
+-- Decision record (API authentication and OAuth client credentials, slice 2, 2026-09-13): expose client-action CSRF
 -- selection at this existing application boundary using the metadata already
 -- selected by post-match guards and the authenticated context they produced.
 -- Request execution carries that declaration forward without matching again

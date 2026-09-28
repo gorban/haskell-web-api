@@ -1,6 +1,6 @@
 -- | Closed, extensible vocabulary for authentication flows.
 --
--- Decision record (AHI-4D slice 3, 2026-09-13): model interactive flow,
+-- Decision record (API authentication and OAuth client credentials, slice 3, 2026-09-13): model interactive flow,
 -- OAuth grant, and client-authentication method as separate axes before the
 -- OAuth protocol adapter exists.  A route or storage adapter can therefore
 -- select client credentials without treating it as a browser session, and a
@@ -62,7 +62,7 @@ data ClientAuthenticationMethod = ClientSecretBasic
 -- accepting a space or control character as part of a scope.  Derives 'Eq'
 -- because 'HarchWeb.Authentication.Pipeline.ScopeRequirement' derives
 -- @(Eq, Show)@ over this type and therefore needs it; see haskell-web-api's
--- AHI-4D authorization-widening decision record in @docs\/design-guidance.md@.
+-- scoped API-authentication authorization-widening decision record in @docs\/design-guidance.md@.
 newtype OAuth2Scope = OAuth2Scope
   { oauth2ScopeText :: Text
   }

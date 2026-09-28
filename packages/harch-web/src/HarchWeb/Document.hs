@@ -58,13 +58,14 @@ import HarchWeb.StaticAssets (AssetPath (..), CssClass, Stylesheet (..), cssClas
 -- ('pageStylesheets'), colocated with its module the way a Svelte component
 -- carries its scoped @<style>@ block. Styles remain application-owned static
 -- CSS files in the 'HarchWeb.StaticAssets' 'CssScope'\/'CssClass' convention
--- (AHI-1's decision stands: no CSS-in-Haskell), authored with
+-- (the component and styling architecture design's decision stands: no
+-- CSS-in-Haskell), authored with
 -- @harch-<scope>-<local>@ selectors and verified by
 -- @tools/check-scoped-css.sh@; 'buildPageShell' renders them after the
 -- shell's base styles so page rules win the cascade. This is a narrow
 -- slice: per-component style attachment stays application-owned, and the
--- remaining authoring-quality gaps are tracked in
--- @TASKS\/web-api-template-authoring-quality.md@.
+-- remaining authoring-quality gaps stay open in the web-API template
+-- authoring-quality work.
 data Page route context = Page
   { pageTitle :: Text,
     pageRoute :: route,
@@ -168,7 +169,7 @@ data NavigationAnnouncement
 
 -- | Declarative DOM bindings for the existing navigation runtime.
 --
--- Decision (AHI-8, 2026-08-31): Harch extends the existing 'PageShell' and
+-- Decision (accessible navigation lifecycle, 2026-08-31): Harch extends the existing 'PageShell' and
 -- 'NavigationRuntime' boundaries instead of adding a second SPA dispatcher.
 -- This ordinary value is the pluggable server-rendered adapter: applications
 -- can select a typed focus target and announcement source, localize or omit
@@ -341,7 +342,7 @@ defaultDialogRuntimeScript =
       "})();"
     ]
 
--- | A compact client-action interpreter. AHI-4C extends this existing
+-- | A compact client-action interpreter. The secure-login and admission design extends this existing
 -- runtime rather than a login/logout-specific script: storage cleanup runs
 -- before all visible action effects, and its closed failure path either uses
 -- a server-rendered typed route or replaces the complete document safely.
@@ -1354,7 +1355,7 @@ buildPageShell codec shell page =
 renderDocumentForTests :: Document route -> Text
 renderDocumentForTests = renderDocumentWithNonce testRuntimeNonce
 
--- | Decision record (AS/AT/CR): this function, 'renderStylesheets',
+-- | Decision record (review findings): this function, 'renderStylesheets',
 -- 'renderNavigationItem', and 'renderRuntimeDescriptor'\'s 'DeferredModule'
 -- case previously hand-concatenated several sinks (@main id@, a
 -- navigation @href@/label, a stylesheet @href@, a deferred module @src@)

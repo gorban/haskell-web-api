@@ -6,13 +6,11 @@
 {-# E2E_SPEC #-}
 
 import Control.Monad (when)
-import Control.Monad.IO.Class (liftIO)
 import Crypto.Error qualified as Crypto
 import Data.Aeson qualified as Aeson
 import Data.ByteString qualified as ByteString
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Data.List (find)
-import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -72,24 +70,15 @@ spec =
                   alternateUrl = HarchWeb.localServerBaseUrl server <> "/showcase-alternate"
               runBrowserSpec browser do
                 visit showcaseUrl
-                showcaseCard <- computedStyle ".harch-showcase-card" "background-color"
-                showcaseHeading <- computedStyle ".harch-showcase-heading" "font-size"
-                crossBleedIntoShowcase <- computedStyle ".harch-showcase-alternate-card" "background-color"
+                assertAllObserved do
+                  shouldEqual (computedStyleValue ".harch-showcase-card" "background-color") (Just "rgb(238, 242, 250)")
+                  shouldEqual (computedStyleValue ".harch-showcase-heading" "font-size") (Just "18px")
+                  shouldEqual (computedStyleValue ".harch-showcase-alternate-card" "background-color") Nothing
                 visit alternateUrl
-                alternateCard <- computedStyle ".harch-showcase-alternate-card" "background-color"
-                alternateHeading <- computedStyle ".harch-showcase-alternate-heading" "font-size"
-                crossBleedIntoAlternate <- computedStyle ".harch-showcase-card" "background-color"
-                liftIO
-                  ( expectAll
-                      ( (showcaseCard `shouldBe` Just "rgb(238, 242, 250)")
-                          :| [ showcaseHeading `shouldBe` Just "18px",
-                               alternateCard `shouldBe` Just "rgb(250, 238, 238)",
-                               alternateHeading `shouldBe` Just "28px",
-                               crossBleedIntoShowcase `shouldBe` Nothing,
-                               crossBleedIntoAlternate `shouldBe` Nothing
-                             ]
-                      )
-                  )
+                assertAllObserved do
+                  shouldEqual (computedStyleValue ".harch-showcase-alternate-card" "background-color") (Just "rgb(250, 238, 238)")
+                  shouldEqual (computedStyleValue ".harch-showcase-alternate-heading" "font-size") (Just "28px")
+                  shouldEqual (computedStyleValue ".harch-showcase-card" "background-color") Nothing
 
             it "keeps direct second-page loads and script-disabled root redirects usable" $ \(browser, server) -> do
               let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
@@ -239,7 +228,7 @@ spec =
                 assertAllObserved $ routeStatus `shouldHaveText` ""
                 _ <-
                   runPageScript
-                    "window.__ahi8HistoryLength = history.length; const status = document.querySelector('[data-navigation-route-status]'); let count = 0; status.dataset.testMutationCount = '0'; new MutationObserver((records) => { count += records.filter((record) => record.type === 'childList' || record.type === 'characterData').length; status.dataset.testMutationCount = String(count); }).observe(status, { childList: true, characterData: true, subtree: true }); document.documentElement.style.zoom = '2'; true"
+                    "window.__testHistoryLength = history.length; const status = document.querySelector('[data-navigation-route-status]'); let count = 0; status.dataset.testMutationCount = '0'; new MutationObserver((records) => { count += records.filter((record) => record.type === 'childList' || record.type === 'characterData').length; status.dataset.testMutationCount = String(count); }).observe(status, { childList: true, characterData: true, subtree: true }); document.documentElement.style.zoom = '2'; true"
                 press (byRole Link `named` "TODO") "Enter"
                 assertAllObserved do
                   currentUrl `shouldEqual` todoUrl
@@ -268,7 +257,7 @@ spec =
                   routeStatus `shouldHaveText` "web-api: TODO"
                   attributeValue routeStatus "data-test-mutation-count" `shouldEqual` Just "3"
                   attributeValue (byRole Link `named` "TODO") "aria-current" `shouldEqual` Just "page"
-                _ <- runPageScript "document.querySelector('#app-main').dataset.testHistoryStable = String(history.length === window.__ahi8HistoryLength + 1); true"
+                _ <- runPageScript "document.querySelector('#app-main').dataset.testHistoryStable = String(history.length === window.__testHistoryLength + 1); true"
                 assertAllObserved $ attributeValue mainContent "data-test-history-stable" `shouldEqual` Just "true"
                 visit secondUrl
                 press (byRole Link `named` "Home") "Enter"

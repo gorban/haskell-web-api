@@ -45,7 +45,7 @@ allow-newer:
   serialise:time,
   cborg:base,
   cborg:containers,
-  -- OpenAPI compatibility exception (AHI-4E, 2026-09-20): the public
+  -- OpenAPI compatibility exception (OpenAPI documentation and Swagger UI work, 2026-09-20): the public
   -- openapi3-3.2.5 and insert-ordered-containers-0.3.0 releases both cap
   -- Aeson below 2.3, though their released suites pass against frozen
   -- aeson-2.3.1.0. tools/test-openapi3-compatibility-stack.sh rebuilds both

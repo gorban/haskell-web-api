@@ -8,7 +8,7 @@
 -- makes those concerns independently testable without coupling them to the
 -- application/WAI request pipeline.
 --
--- FQ8 groups the request limits and rendered application shared by every
+-- The review finding groups the request limits and rendered application shared by every
 -- listener in one runtime.  Per-listener endpoint, TLS plan, socket, startup
 -- signal, and reporter values stay explicit, so distinct listeners cannot be
 -- mistaken for one another while repeated runtime dependencies no longer

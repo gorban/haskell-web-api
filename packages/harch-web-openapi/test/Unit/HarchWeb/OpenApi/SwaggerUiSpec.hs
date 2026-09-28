@@ -12,7 +12,7 @@ import System.Directory (doesDirectoryExist, doesFileExist)
 import System.FilePath ((</>))
 
 spec = describe "HarchWeb.OpenApi.Swagger" $ do
-  it "defaults to the task file's documented endpoints and asset locations" $ do
+  it "defaults to the documented endpoints and asset locations" $ do
     let props = defaultSwaggerUiProps ("route-value" :: String) ("context-value" :: String)
     swaggerUiTitle props `shouldBe` "Documentation"
     safeUrlText (swaggerUiSpecUrl props) `shouldBe` "/docs/openapi.json"

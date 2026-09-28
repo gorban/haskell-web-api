@@ -406,7 +406,8 @@ spec = do
             (ExitSuccess, resultText, "") -> resultText `shouldContain` "|0\n"
             _ -> expectationFailure "expected a second controlled append with the same request ID"
 
-          -- AHI-5's first AuditRequired mutation is deliberately a separate
+          -- The activity-audit design's first AuditRequired mutation is
+          -- deliberately a separate
           -- controlled operation, not a best-effort append after the old
           -- session insert.  The runtime role sees one function result only;
           -- the security-definer function owns the session insert and appends

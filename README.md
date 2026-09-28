@@ -382,8 +382,9 @@ To upgrade dependencies in a dedicated change:
 1. Start from a clean checkout. Review the intended packages' release notes and any
    required `.cabal` bound changes, especially TLS, protocol, or public-type changes.
    Respect the complete dependency graph's published bounds. The reviewed
-   exceptions are the five-pair TLS compatibility list and the AHI-4E
-   `openapi3:aeson`/`insert-ordered-containers:aeson` pair in `cabal.project`.
+   exceptions are the five-pair TLS compatibility list and the
+   `openapi3:aeson`/`insert-ordered-containers:aeson` pair from the OpenAPI
+   documentation and Swagger UI work in `cabal.project`.
    The latter keeps official OpenAPI releases on frozen Aeson 2.3.1.0 and is
    proved by `tools/test-openapi3-compatibility-stack.sh`; its sole visible
    GHC 9.14 partial-function warning has an exact-header allowance documented
@@ -466,7 +467,7 @@ the surrounding product policy.
 | Page-scoped browser behavior | Harch runtime assets and declared enhancements; `two-pages` source/test. | [custom JavaScript guide](examples/custom-js/README.md) | Application code owns its behavior module and must retain complete SSR fallback. |
 | Accessibility, language selection, and localization | Semantic markup/localization APIs; localized reference pages and browser proof. | [accessibility](docs/accessibility.md), [localization guide](examples/multilanguage-routing/README.md) | The language picker and Help FAB are reference-app controls, not a general Harch widget library. |
 | Sessions, CSRF, authentication adapters, and protected routes | Harch transport/guard primitives; `web-api` and admission examples wire application stores. | [authentication guide](examples/middleware-auth-jwt/README.md) | Credential persistence, MFA policy, authorization, and screen locking are application-owned; screen locking is documented, not implemented. |
-| Request correlation and telemetry | Harch `RequestId`, trusted route observation, and configured OTLP trace export through `runServer`; `web-api` integration coverage. | [request-id source](packages/harch-web/src/HarchWeb/RequestId.hs), [telemetry guide](examples/logging-and-telemetry/README.md) | Trace export is best-effort and diagnostics are redacted; OTLP metrics are rejected at startup until their encoder and exporter exist. The remaining response/log/span/audit join sweep is tracked in AHI-5-RID. |
+| Request correlation and telemetry | Harch `RequestId`, trusted route observation, and configured OTLP trace export through `runServer`; `web-api` integration coverage. | [request-id source](packages/harch-web/src/HarchWeb/RequestId.hs), [telemetry guide](examples/logging-and-telemetry/README.md) | Trace export is best-effort and diagnostics are redacted; OTLP metrics are rejected at startup until their encoder and exporter exist. The remaining response/log/span/audit join sweep is part of the request-correlation work. |
 | Database effects and migrations | Harch database effect contract; `web-api` PostgreSQL adapter and a non-PostgreSQL test adapter. | [PostgreSQL effects guide][postgres-guide], [custom adapter guide](examples/custom-db-adapter/README.md) | Schema, roles, retention, transaction policy, and connection credentials belong to the application/deployment. |
 | Account-activity audit operations | `web-api` reference schema, atomic session/audit operation, RLS, partition maintenance, and scheduler bootstrap. | [PostgreSQL effects guide][postgres-guide], [audit migration source](packages/web-api/src/WebApi/Postgres/ActivityAuditMigration.hs) | Operator/reporting only; no customer-facing audit API, no automatic SOC compliance, and no superuser-tamper resistance. |
 | TLS, proxy, and deployment hardening | Harch listener/security configuration; executable setup and integration tests. | [setup](SETUP.md), [HTTPS security guide](examples/https-security/README.md), [proxy guide](examples/reverse-proxy-awareness/README.md) | Certificates, DNS, external reachability, secrets, and production policy remain deployment responsibilities. |

@@ -81,7 +81,7 @@ spec =
         evaluate (requireApiMediaType "not-a-media-type") `shouldThrow` \case
           ErrorCall message -> "invalid declared media type: not-a-media-type" `isInfixOf` message
 
-      -- Tabled per docs/design-guidance.md's CN decision record: one act
+      -- Tabled per docs/design-guidance.md's one-act/one-comparison decision record: one act
       -- (selectApiBodyDecoder against [jsonDecoder]), one comparison,
       -- differing only in the policy, Content-Type, body, and expected
       -- outcome. The text/plain and bytes decoder it blocks below use a

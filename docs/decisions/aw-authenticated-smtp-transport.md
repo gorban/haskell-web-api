@@ -1,7 +1,7 @@
 # ADR-AW: Ship authenticated SMTP without weakening TLS validation
 
 - Status: **Implemented and verified**
-- Task: [AW — authenticated SMTP transport](../../TASKS/pr-3-correctness-and-security-defects.md)
+- Task: AW — authenticated SMTP transport (PR #3 review finding)
 - Date: 2026-08-26
 
 ## Executive problem statement

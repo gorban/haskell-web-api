@@ -38,8 +38,9 @@ import WebApi.ResourceAuthentication (resourceAuthenticationPipeline)
 import WebApi.Route (AppAuthorization, AppRequestContext (..), AppRoute (LoginRoute, SecondApiRoute), defaultRequestContext, endpointMetadata, resourceReadScope)
 import WebApi.Session (AccountSessionStore (..))
 
--- | Direct pipeline-level coverage for the AHI-4D combined
--- account-or-API-client-bearer profile, mirroring how
+-- | Direct pipeline-level coverage for the combined
+-- account-or-API-client-bearer profile of the scoped API-authentication
+-- design, mirroring how
 -- 'Unit.WebApi.AccountJwtSpec' tests 'accountJwtAuthenticationPipeline'
 -- directly via 'HarchWeb.runAuthenticationPipeline'. This builds its own
 -- throwaway RSA key/runtime (like 'Unit.WebApi.ApiClientTokenSpec'), so

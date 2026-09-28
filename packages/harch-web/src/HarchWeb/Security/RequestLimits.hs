@@ -5,7 +5,7 @@
 -- boundary; response security headers, request-context extraction, and
 -- path/redirect handling stay in "HarchWeb.Security", which re-exports this
 -- module's public interface as part of its own. Split out 2026-08-13 to
--- close the AL module-health export-count signal on "HarchWeb.Security" —
+-- close the module-health export-count signal on "HarchWeb.Security" —
 -- this cluster was already fully self-contained (only 'Data.ByteString'/
 -- 'Network.Wai' dependencies, never touching 'HarchWeb.Security.RequestPolicyConfig'
 -- or any other cluster there), so the split needed no re-export shim beyond

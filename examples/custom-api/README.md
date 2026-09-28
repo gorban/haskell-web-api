@@ -52,8 +52,8 @@ migrated onto the route-family registry above):
 - the app's total route dispatcher maps each constructor to a `RouteDefinition`,
 - `packages/web-api` exposes `/api/status` through the same codec and response pipeline as pages, and
 - API handlers return `BodyResponse` with their own content type, status, diagnostics, and private
-  log entries — a capability the typed endpoint boundary above does not yet expose (see the AC
-  entry in `TASKS.md`).
+  log entries — a capability the typed endpoint boundary above does not yet expose (a remaining
+  gap in the typed declarative API endpoint work).
 
 Suggested snippet:
 

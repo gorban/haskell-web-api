@@ -70,7 +70,7 @@ newtype SafeReturnPath = SafeReturnPath Text
   deriving (Eq, Show)
 
 -- | Server-side session state. The cookie contains only 'sessionId'; the
--- principal and any CSRF material never appear in it. AHI-4C keeps CSRF
+-- principal and any CSRF material never appear in it. The secure-login and admission design keeps CSRF
 -- binding in 'HarchWeb.Csrf', so a durable session records only grant facts.
 data OpaqueSession principal = OpaqueSession
   { sessionId :: SessionId,

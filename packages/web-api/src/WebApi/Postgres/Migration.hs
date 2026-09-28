@@ -7,7 +7,7 @@
 -- rollback.  Recorded structural migrations run once; configured ownership
 -- and runtime-role privileges reconcile on every run in that same transaction,
 -- so a changed runtime identity is not hidden by a schema version.  See the
--- AX decision record in @docs/design-guidance.md@.
+-- transactional, versioned-migration decision record in @docs/design-guidance.md@.
 module WebApi.Postgres.Migration
   ( migrationStatementsFor,
     runPostgresMigrations,
@@ -38,6 +38,7 @@ import WebApi.Postgres.ActivityAuditMigration
     accountAuditMigrationStatements,
     accountAuditRegistrationDeliveryStatements,
     accountAuditRuntimeReconciliationStatements,
+    accountAuditSchedulerTargetFixStatements,
     accountAuditSessionIssueConflictFixStatements,
     accountAuditSessionIssueInsertPrivilegeFixStatements,
     accountAuditSessionIssueStatements,
@@ -113,7 +114,8 @@ webApiDatabaseChanges =
     change "account-audit-registration-delivery-v1" accountAuditRegistrationDeliveryStatements,
     change "account-audit-verification-resend-delivery-v1" accountAuditVerificationResendDeliveryStatements,
     change "api-clients-v1" apiClientMigrationStatements,
-    change "api-client-secret-hash-format-v1" apiClientSecretHashFormatMigrationStatements
+    change "api-client-secret-hash-format-v1" apiClientSecretHashFormatMigrationStatements,
+    change "account-audit-scheduler-target-v1" accountAuditSchedulerTargetFixStatements
   ]
   where
     change changeId statements =
@@ -163,7 +165,7 @@ migrationStatementsFor =
 -- drops stale throttle history, and assigns the one transaction's epoch time
 -- to non-authorizing historical markers whose state must remain meaningful
 -- (verified, confirmed, or used).  It never pretends that the old numbers
--- themselves were epoch timestamps; see the PR-S1 decision in
+-- themselves were epoch timestamps; see the durable security time decision in
 -- @docs/design-guidance.md@.
 epochSecurityTimeMigrationStatements :: [Text]
 epochSecurityTimeMigrationStatements =
@@ -197,7 +199,7 @@ loginAttemptStorageBoundMigrationStatements =
     "CREATE FUNCTION web_api.reserve_login_attempt(p_key TEXT, p_since BIGINT, p_retention_since BIGINT, p_now BIGINT, p_max BIGINT, p_lockout BIGINT, p_storage_max BIGINT) RETURNS TABLE(outcome TEXT, value TEXT) LANGUAGE plpgsql VOLATILE AS $$ DECLARE latest_failure BIGINT; failure_count BIGINT; stored_count BIGINT; BEGIN IF char_length(p_key) > 260 THEN RETURN QUERY SELECT 'key-too-long'::TEXT, ''::TEXT; RETURN; END IF; PERFORM pg_advisory_xact_lock(hashtextextended('web_api.login_attempts.capacity', 0)); DELETE FROM web_api.login_attempts WHERE attempted_at_nanoseconds < p_retention_since; PERFORM pg_advisory_xact_lock(hashtextextended(p_key, 0)); SELECT max(attempted_at_nanoseconds), count(*) INTO latest_failure, failure_count FROM web_api.login_attempts WHERE attempt_key = p_key AND succeeded = 'false' AND attempted_at_nanoseconds >= p_since AND attempted_at_nanoseconds <= p_now; IF failure_count >= p_max AND latest_failure + p_lockout > p_now THEN RETURN QUERY SELECT 'throttled'::TEXT, (latest_failure + p_lockout)::TEXT; RETURN; END IF; SELECT count(*) INTO stored_count FROM web_api.login_attempts; IF stored_count >= p_storage_max THEN RETURN QUERY SELECT 'storage-exhausted'::TEXT, ''::TEXT; RETURN; END IF; RETURN QUERY INSERT INTO web_api.login_attempts (attempt_key, attempted_at_nanoseconds, succeeded, settled) VALUES (p_key, p_now, 'false', false) RETURNING 'reserved'::TEXT, attempt_id::TEXT; END $$;"
   ]
 
--- | PR-S6 (2026-08-24): pending registration is one bounded, retryable
+-- | Review finding (2026-08-24): pending registration is one bounded, retryable
 -- database lifecycle.  The function serializes capacity, email, and username
 -- decisions; it deletes expired unverified accounts before enforcing the
 -- application-supplied cap, leases one delivery attempt, and lets a later
@@ -214,7 +216,7 @@ pendingRegistrationLifecycleMigrationStatements =
     "CREATE OR REPLACE FUNCTION web_api.stage_pending_registration(p_account_id TEXT, p_email TEXT, p_password_hash TEXT, p_token_digest TEXT, p_expires_at BIGINT, p_now BIGINT, p_username TEXT, p_display_name TEXT, p_maximum_accounts BIGINT, p_claim_recover_before BIGINT) RETURNS TABLE(outcome TEXT, value TEXT) LANGUAGE plpgsql VOLATILE AS $$ DECLARE existing_account_id TEXT; existing_verified_at BIGINT; existing_delivery_state TEXT; existing_delivery_claimed_at BIGINT; pending_count BIGINT; BEGIN PERFORM pg_advisory_xact_lock(hashtextextended('web_api.pending_registration.capacity', 0)); DELETE FROM web_api.accounts pending_account WHERE pending_account.email_verified_at_nanoseconds IS NULL AND NOT EXISTS (SELECT 1 FROM web_api.email_verifications verification WHERE verification.account_id = pending_account.account_id AND verification.expires_at_nanoseconds > p_now); IF p_username <> '' THEN PERFORM pg_advisory_xact_lock(hashtextextended('web_api.pending_registration.username.' || lower(p_username), 0)); IF EXISTS (SELECT 1 FROM web_api.accounts WHERE username IS NOT NULL AND lower(username) = lower(p_username)) THEN RETURN QUERY SELECT 'username-taken'::TEXT, ''::TEXT; RETURN; END IF; END IF; PERFORM pg_advisory_xact_lock(hashtextextended('web_api.pending_registration.email.' || p_email, 0)); SELECT account_id, email_verified_at_nanoseconds INTO existing_account_id, existing_verified_at FROM web_api.accounts WHERE email_normalized = p_email; IF FOUND THEN IF existing_verified_at IS NOT NULL THEN RETURN QUERY SELECT 'email-taken'::TEXT, ''::TEXT; RETURN; END IF; SELECT delivery_state, delivery_claimed_at_nanoseconds INTO existing_delivery_state, existing_delivery_claimed_at FROM web_api.email_verifications WHERE account_id = existing_account_id; IF existing_delivery_state = 'delivered' OR (existing_delivery_state = 'claimed' AND existing_delivery_claimed_at > p_claim_recover_before) THEN RETURN QUERY SELECT 'email-taken'::TEXT, ''::TEXT; RETURN; END IF; DELETE FROM web_api.email_verifications WHERE account_id = existing_account_id; INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds, delivery_state, delivery_claimed_at_nanoseconds) VALUES (p_token_digest, existing_account_id, p_email, p_expires_at, 'claimed', p_now); RETURN QUERY SELECT 'retried'::TEXT, existing_account_id; RETURN; END IF; SELECT count(*) INTO pending_count FROM web_api.accounts WHERE email_verified_at_nanoseconds IS NULL; IF pending_count >= p_maximum_accounts THEN RETURN QUERY SELECT 'storage-exhausted'::TEXT, ''::TEXT; RETURN; END IF; INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds, username, display_name) VALUES (p_account_id, p_email, p_password_hash, p_now, NULLIF(p_username, ''), NULLIF(p_display_name, '')); INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds, delivery_state, delivery_claimed_at_nanoseconds) VALUES (p_token_digest, p_account_id, p_email, p_expires_at, 'claimed', p_now); RETURN QUERY SELECT 'created'::TEXT, p_account_id; END $$;"
   ]
 
--- | AHI-2 keeps the delivered token in @email_verifications@ until a staged
+-- | The verification-resend design keeps the delivered token in @email_verifications@ until a staged
 -- resend has actually been handed to SMTP.  The functions own their short
 -- claim and bounded history transactionally, so callers never address raw
 -- rows and a failed or cancelled send cannot invalidate the old token.
@@ -229,7 +231,7 @@ verificationResendLifecycleMigrationStatements =
     "CREATE FUNCTION web_api.release_verification_resend(p_account_id TEXT, p_token_digest TEXT) RETURNS TABLE(outcome TEXT, value TEXT) LANGUAGE plpgsql VOLATILE AS $$ BEGIN DELETE FROM web_api.verification_resend_claims WHERE account_id = p_account_id AND token_digest = p_token_digest; IF FOUND THEN RETURN QUERY SELECT 'settled'::TEXT, p_account_id; ELSE RETURN QUERY SELECT 'lost'::TEXT, ''::TEXT; END IF; END $$;"
   ]
 
--- | AHI-3 makes one logical authentication attempt own every principal and
+-- | The keyed authentication-budget design makes one logical authentication attempt own every principal and
 -- trusted-peer scope together.  Groups, rather than child rows, remain the
 -- globally bounded unit because each normal attempt now has two children.
 -- The database revalidates the closed JSON transport before locking scopes in
@@ -258,7 +260,7 @@ migrationEpochNanoseconds = "floor(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 10000
 
 -- | Ownership and runtime-role grants depend on the currently configured
 -- identities, unlike the durable schema history above.  Reconcile them on
--- every run, still inside AX's one locked transaction, so a runtime-password
+-- every run, still inside the migration's one locked transaction, so a runtime-password
 -- rotation or changed runtime role takes effect after the initial version is
 -- recorded rather than being hidden by it.
 migrationReconciliationStatementsFor :: DatabaseConfig -> DatabaseConfig -> [Text]

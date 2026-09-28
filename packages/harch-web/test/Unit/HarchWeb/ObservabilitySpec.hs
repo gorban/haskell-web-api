@@ -9,7 +9,7 @@ spec =
     it "constructs a usable HTTP manager, as an explicit prop rather than a global" $ do
       -- 'HttpClient.Manager' has no 'Eq'/'Show' to compare against, so the
       -- meaningful assertion available here is that construction succeeds;
-      -- see the BZ decision record for why this is a caller-owned prop now,
+      -- see the explicit-props decision record for why this is a caller-owned prop now,
       -- not a process-global CAF.
       manager <- Observability.newOtlpHttpManager
       manager `seq` pure ()

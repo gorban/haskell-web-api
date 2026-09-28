@@ -34,7 +34,8 @@ main = do
                     { composedStaticAssets = defaultComposedStaticAssets,
                       composedLocalePolicy = defaultLocalePolicy,
                       composedCsrfProtection = Signed.signedCsrfProtection Signed.SignedCsrfDependencies {Signed.signedCsrfDependenciesKeyring = keyring, Signed.signedCsrfDependenciesPolicy = Signed.defaultSignedCsrfPolicy, Signed.signedCsrfDependenciesCurrentTime = currentUnixTimeNanoseconds, Signed.signedCsrfDependenciesResolveBinding = const (pure HarchWeb.AnonymousCsrfBinding)},
-                      composedDomainCapabilities = ComposedDomainCapabilities catalogQueries catalogCommands ordersQueries ordersCommands
+                      composedDomainCapabilities = ComposedDomainCapabilities catalogQueries catalogCommands ordersQueries ordersCommands,
+                      composedOAuthDependencies = Nothing
                     }
               catalogQueries = CatalogQueries (const (pure "Catalog"))
               catalogCommands = CatalogCommands (const (pure "refreshed"))

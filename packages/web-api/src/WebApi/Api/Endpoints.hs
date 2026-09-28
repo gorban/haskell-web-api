@@ -8,7 +8,7 @@
 -- from any query\/header\/cookie field a typed endpoint's own
 -- 'HarchWeb.Api.RequestCodec' can decode), which is exactly the gap
 -- 'HarchWeb.Api.apiRouteDefinitionWithContext' was added to close; see the
--- AC decision record in @docs\/design-guidance.md@.
+-- typed declarative endpoint boundary decision record in @docs\/design-guidance.md@.
 --
 -- @\/api\/status@ has no failure case, so it uses
 -- 'HarchWeb.Api.apiRouteDefinitionWithContextNeverFailing' rather than
@@ -17,7 +17,8 @@
 -- traps this repository's 100%-coverage gate, since @either@ never forces a
 -- failure-response argument on a @Right@, and no test can force a @Void@
 -- one any other way — see 'HarchWeb.Api.Endpoint.apiRouteDefinitionWithContextNeverFailing's
--- own Haddock and the AC decision record for how this was found and why the
+-- own Haddock and the typed declarative endpoint boundary decision record
+-- for how this was found and why the
 -- never-failing sibling primitive is the fix. @\/api\/second@ genuinely can
 -- fail (its database call can), so its own domain failure carries the
 -- database operations alongside the error so the failure-response mapping
@@ -30,24 +31,24 @@
 -- by @WebApi.App@'s per-route dispatch. @\/api\/me@ reuses the existing
 -- account profile's 'HarchWeb.RequireAuthenticated' guard rather than a new
 -- authorization payload; see 'meApiRouteDefinition's own Haddock and the
--- AHI-4D decision record. @\/api\/oauth\/token@ additionally owns its request
+-- scoped API-authentication design's decision record. @\/api\/oauth\/token@ additionally owns its request
 -- decoding: an RFC 6749 client-credentials grant combines HTTP Basic client
 -- authentication with a bounded URL-encoded form body, both already decoded
 -- by 'HarchWeb.Authentication.oauth2ClientSecretBasicCodec' and
 -- 'HarchWeb.Authentication.oauth2ClientCredentialsRequestCodec'
--- (AHI-4D slice 3). This endpoint only adapts those existing decoders and
--- 'WebApi.ApiClientToken.issueApiClientToken' (AHI-4D slice 4) to the typed
--- API boundary; see the AHI-4D decision record in @docs\/design-guidance.md@
+-- (that work's earlier request-decoding step). This endpoint only adapts those existing decoders and
+-- 'WebApi.ApiClientToken.issueApiClientToken' (its later issuance step) to the typed
+-- API boundary; see the scoped API-authentication design's decision record in @docs\/design-guidance.md@
 -- for why its access requirement, error-body shape, and unavailable-outcome
 -- collapsing were chosen this way.
 --
--- AHI-4E (2026-09-23): the four API endpoints above are each built ONCE as a
+-- OpenAPI documentation and Swagger UI (2026-09-23): the four API endpoints above are each built ONCE as a
 -- 'SomeApiRouteEndpoint' carrying a real 'OpenApiExtension', so the same
 -- value feeds both its runtime 'RouteDefinition' and the documented
 -- 'webApiOpenApiMountedFamily' — no second, documentation-only declaration
 -- exists. The family is interpreted into one cached document served through
 -- 'docsOpenApiSpecRouteDefinition' at @GET \/docs\/openapi.json@; see the
--- AHI-4E decision records in @docs\/design-guidance.md@.
+-- OpenAPI documentation and Swagger UI decision records in @docs\/design-guidance.md@.
 module WebApi.Api.Endpoints
   ( noApiRequestFields,
     meApiRouteDefinition,
@@ -199,8 +200,8 @@ import WebApi.RouteData (SecondRouteData (..))
 -- to read), so routing a request through the full endpoint only pattern
 -- matches the 'ApiRequestDecoded' constructor, never forcing the @()@
 -- payload itself. A Unit test therefore decodes this declaration directly
--- and demands that value. See the AC decision record in
--- @docs/design-guidance.md@.
+-- and demands that value. See the typed declarative endpoint boundary
+-- decision record in @docs/design-guidance.md@.
 noApiRequestFields :: RequestCodec ()
 noApiRequestFields = pure ()
 
@@ -210,7 +211,7 @@ noApiRequestFields = pure ()
 -- family's paths and every local declaration below are derived from this
 -- value and each endpoint's own real @endpointRouteTemplate@, so a
 -- documented path can never disagree with where the endpoint actually
--- lives. See the AHI-4E decision record in @docs\/design-guidance.md@.
+-- lives. See the OpenAPI documentation and Swagger UI decision record in @docs\/design-guidance.md@.
 webApiApiMountPrefix :: NonEmpty.NonEmpty PathSegment
 webApiApiMountPrefix = requiredPathSegment "api" NonEmpty.:| []
 
@@ -229,7 +230,7 @@ webApiApiMountPrefixText = "/" <> pathSegmentText (NonEmpty.head webApiApiMountP
 -- failure at provider startup — never a silently wrong documented path.
 -- The declaration path is documentation-only: 'HarchWeb.Api.apiRouteDefinition'
 -- reads the method and availability, while route selection itself remains
--- @WebApi.Route@'s codec. See the AHI-4E decision record in
+-- @WebApi.Route@'s codec. See the OpenAPI documentation and Swagger UI decision record in
 -- @docs\/design-guidance.md@.
 apiDocumentedDeclaration :: EndpointMetadata authorization -> ApiEndpointContract extension fields body response -> ApiRouteEndpointDeclaration extension fields body response
 apiDocumentedDeclaration metadata =
@@ -279,7 +280,7 @@ statusApiRouteDefinition =
 -- 'requestAccountPrincipal' is already established by the time this handler
 -- runs; @loadProfileForPrincipal@ still takes the 'Maybe' honestly rather
 -- than partially unwrapping it, since nothing here can re-prove the guard
--- ran. See the AHI-4D decision record in @docs\/design-guidance.md@ for why
+-- ran. See the scoped API-authentication design's decision record in @docs\/design-guidance.md@ for why
 -- this reuses the account profile instead of a new authorization payload.
 meApiContract :: ApiEndpointContract OpenApiExtension () () ByteString.ByteString
 meApiContract =
@@ -292,8 +293,8 @@ meApiContract =
     meApiExtension
 
 -- | Real synthetic username/email values in the example response are the
--- endpoint's requested resource (see the task file's "web-api documentation"
--- section); the real response stays @private, no-store@ regardless.
+-- endpoint's requested resource (the web-api documentation requires real
+-- synthetic values there); the real response stays @private, no-store@ regardless.
 meApiExtension :: OpenApiExtension () () ByteString.ByteString
 meApiExtension = requireOpenApiExtension (mkOpenApiExtension (Just "The authenticated account's own profile.") Nothing [] False [])
 
@@ -395,7 +396,7 @@ secondApiRouteDefinition pageRepository =
 
 -- | The RFC 6749 client-credentials grant decoded as one endpoint request:
 -- HTTP Basic client authentication (a header field) alongside the grant-type
--- and scope form fields. Both codecs are AHI-4D slice 3's existing decoders;
+-- and scope form fields. Both codecs are the scoped API-authentication design's existing request decoders;
 -- combining them with 'Control.Applicative.liftA2' here — rather than either
 -- decoder growing a second concern — keeps each one focused on the RFC
 -- component it already owns.
@@ -438,10 +439,10 @@ tokenApiMissingContentTypePolicy = RejectMissingContentType
 -- because the OAuth client authenticates itself inside this handler (HTTP
 -- Basic verified by 'issueApiClientToken' against the durable API-client
 -- store), not through the account session/bearer-JWT rail every other
--- protected route uses; see the AHI-4D decision record in
+-- protected route uses; see the scoped API-authentication design's decision record in
 -- @docs\/design-guidance.md@.
 -- | RFC 6749 @\/api\/oauth\/token@: documented alongside the surface it
--- serves, as the task's @web-api@ documentation section requires. The
+-- serves, as the @web-api@ documentation requires. The
 -- operation itself stays anonymous ('AllowUnauthenticated' in
 -- 'WebApi.Route.endpointMetadata'): the OAuth *client* authenticates inside
 -- the grant, so the document's @security@ array truthfully stays empty
@@ -547,8 +548,10 @@ tokenApiFailureResponse failure =
         }
 
 -- | RFC 6749 section 5.2 requires the @WWW-Authenticate@ challenge on a
--- rejected client that attempted HTTP Basic authentication; this endpoint
--- accepts no other client authentication method, so it always names Basic.
+-- rejected client that attempted HTTP Basic authentication. RFC 7617 requires
+-- the challenge to include a realm, and this endpoint accepts UTF-8 client
+-- credentials, so the fixed challenge names its token endpoint realm and
+-- credential encoding.
 -- Built once from literals known valid at compile time, the same
 -- \"required-or-die\" shape this codebase already uses for other
 -- always-valid declared literals (see e.g.
@@ -562,7 +565,7 @@ wwwAuthenticateHeaderName :: ApiHeaderName
 wwwAuthenticateHeaderName = requiredApiHeaderNameOrDie "WWW-Authenticate"
 
 basicChallengeHeaderValue :: ApiHeaderValue
-basicChallengeHeaderValue = requiredApiHeaderValueOrDie "Basic"
+basicChallengeHeaderValue = requiredApiHeaderValueOrDie "Basic realm=\"oauth-token\", charset=\"UTF-8\""
 
 requiredApiHeaderNameOrDie :: Text.Text -> ApiHeaderName
 requiredApiHeaderNameOrDie value = fromMaybe (error ("invalid API header name literal: " <> Text.unpack value)) (apiHeaderName value)
@@ -593,7 +596,7 @@ jsonBytes :: JsonEncoding.Encoding -> ByteString.ByteString
 jsonBytes = LazyByteString.toStrict . JsonEncoding.encodingToLazyByteString
 
 -- ---------------------------------------------------------------------------
--- AHI-4E: web-api's documented API surface
+-- OpenAPI documentation and Swagger UI: web-api's documented API surface
 --
 -- One 'OpenApiMountedFamily' aggregates the four documented endpoint values
 -- above under the real @\/api@ mount, and every operation's OpenAPI
@@ -603,7 +606,7 @@ jsonBytes = LazyByteString.toStrict . JsonEncoding.encodingToLazyByteString
 -- The resulting immutable document is served through the ordinary typed
 -- route adapter at @\/docs\/openapi.json@ ('docsOpenApiSpecRouteDefinition').
 -- The complete SSR Swagger page, self-hosted assets, and OAuth panel remain
--- the later AHI-4E slices. See the AHI-4E decision records in
+-- the later slices of the OpenAPI documentation and Swagger UI work. See that work's decision records in
 -- @docs\/design-guidance.md@.
 -- ---------------------------------------------------------------------------
 
@@ -738,7 +741,7 @@ requireWebApiOpenApiDocumentProvider =
 -- | @GET \/docs\/openapi.json@: the ordinary typed route adapter from
 -- 'HarchWeb.OpenApi.Route' over the application-selected provider, declared
 -- with this route's own 'endpointMetadata' like every other route here.
--- Access stays this route's own 'AllowUnauthenticated' choice (the task's
+-- Access stays this route's own 'AllowUnauthenticated' choice (the
 -- reference-example default); HEAD and OPTIONS come from the shared
 -- dispatcher, and a provider construction failure was already raised at
 -- startup before any request could reach this handler.

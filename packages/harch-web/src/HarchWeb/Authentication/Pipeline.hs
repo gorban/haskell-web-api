@@ -2,7 +2,7 @@
 
 -- | Authentication proof-to-principal and authorization orchestration.
 --
--- Decision record (PR-F6, 2026-09-05): this internal owner consumes the one
+-- Decision record (review finding, 2026-09-05): this internal owner consumes the one
 -- typed extractor from 'HarchWeb.Authentication.Transport' and retains the
 -- existing 'ExceptT' railway for expected extraction, verification, and
 -- principal-establishment outcomes. Transport policy deliberately stays out
@@ -158,7 +158,7 @@ authenticationChallengeForAction request ordinary = case endpointDispatchKind re
 -- browser follows the supplied root-codec-rendered destination, while native
 -- submission receives its paired typed 303 redirect.
 --
--- Decision (AHI-4C, 2026-09-15): keep ordinary 4xx action results on their
+-- Decision (secure login and admission, 2026-09-15): keep ordinary 4xx action results on their
 -- recoverable patch rail, but give an endpoint guard's authentication
 -- challenge this explicit framework marker.  Reusing generic 4xx navigation
 -- would turn validation failure into history mutation; a raw URL or a second

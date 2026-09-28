@@ -29,7 +29,8 @@ import Text.Read (readMaybe)
 import WebApi.Config (AppEnvironmentConfig (..), DatabaseConfig (..), DatabaseSslMode (DatabaseSslVerifyFull), DatabaseTransportSecurity (DatabaseTransportSsl), defaultAppEnvironmentConfig)
 import WebApi.Postgres.Testing (runRuntimeScalarQuery)
 
--- | The AHI-5 test image has PostgreSQL 17 and the reviewed pg_cron package.
+-- | The activity-audit design's test image has PostgreSQL 17 and the reviewed
+-- pg_cron package.
 --
 -- The audit implementation owns its PostgreSQL schema and maintenance routine;
 -- this fixture proves only the deployment configuration the repository relies

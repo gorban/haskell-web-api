@@ -29,7 +29,7 @@ that coexists with the first only when at least one of the following holds, and 
   change to a stable public contract;
 - the new abstraction covers a genuinely disjoint concern the existing type deliberately does not
   model (a byte-stream body consumer is not a route dispatcher); or
-- the task's own text explicitly authorizes a new, separate surface instead of extension.
+- the original requirements explicitly authorize a new, separate surface instead of extension.
 
 A task description that merely *offers* extension as one possible shape ("replace or extend the
 surrounding `X`") defaults to extension unless one of the three conditions above is met and
@@ -61,7 +61,7 @@ per-source option for the standalone matcher spec; ordinary `SPEC` and `E2E_SPEC
 unchanged.  This makes the convention available across the package graph without weakening either
 the default test prelude or the matcher package's dependency boundary.
 
-**Module-graph boundary (FQ3, 2026-08-29): Cabal manifests, not the test preprocessor, own each
+**Module-graph boundary (review finding, 2026-08-29): Cabal manifests, not the test preprocessor, own each
 test suite's complete home-module graph.** Cabal configures a component before `hspec-discover` and
 the `SPEC` processor compile generated inputs, so a preprocessor cannot provide truthful
 `other-modules` metadata at the point Cabal needs it. Each affected test suite lists every
@@ -94,7 +94,7 @@ message and this document before continuing:
 Never make this choice invisibly inside an unrelated commit. A reviewer must be able to find the
 decision without reconstructing it from an implementation diff.
 
-### Decision record — native main element and language attribute (MX, 2026-08-27)
+### Decision record — native main element and language attribute (review finding, 2026-08-27)
 
 **Decision: extend the existing closed `Html` AST and `harch` quasiquoter with `mainTag` and
 `lang`.** The localization example needs a semantic document-main landmark and a dynamic language
@@ -104,7 +104,7 @@ general arbitrary-attribute escape hatch would create a parallel, less-safe auth
 new primitive continues to use the central renderer, so dynamic text and language values are
 escaped exactly as for every existing typed attribute.
 
-### Decision record — pre-render page-security response capability (AHI-4C, 2026-09-03)
+### Decision record — pre-render page-security response capability (secure login and admission, 2026-09-03)
 
 **Decision: extend the existing response interpreter with a closed
 `NonPageResponse` subset for protocol route handlers and endpoint guards;
@@ -125,7 +125,7 @@ existing protocol behavior, but prevents APIs, assets, SSE handlers, and
 guards from manufacturing a page outside the page-security lifecycle. It is
 an extension of `Response`'s existing renderer, not a parallel dispatcher.
 
-### Decision record — typed redirect with grant headers (AHI-4C, 2026-09-04)
+### Decision record — typed redirect with grant headers (secure login and admission, 2026-09-04)
 
 **Decision: extend the existing typed internal-redirect response with an
 optional header-bearing form, while retaining exclusive renderer ownership of
@@ -144,7 +144,7 @@ This is a small extension of the established response algebra rather than a
 new native-form dispatcher or a raw-URL escape hatch. Unit coverage proves a
 supplied attacker-controlled location cannot replace the typed destination.
 
-### Decision record — pluggable signed CSRF authority (AHI-4C, 2026-09-03)
+### Decision record — pluggable signed CSRF authority (secure login and admission, 2026-09-03)
 
 **Decision: add one `CsrfProtection` capability at the existing page/action
 lifecycle; provide an immutable-key-ring signed implementation, while leaving
@@ -187,7 +187,7 @@ validation, then asks the same selected `CsrfProtection` to verify current
 binding state. It therefore cannot introduce an app-specific cookie, an
 accepting equality check, or a backend-verification bypass.
 
-### Decision record — bounded anonymous synchronizer issuance (SEC-3, 2026-09-06)
+### Decision record — bounded anonymous synchronizer issuance (review finding, 2026-09-06)
 
 **Decision: keep the composed PostgreSQL synchronizer behind the existing
 `CsrfProtection` capability, but make its anonymous binding a bounded rolling
@@ -211,7 +211,7 @@ form. Account/admission bindings never use reclamation: exhaustion is still an
 explicit unavailable outcome rather than a capacity-dependent grant change.
 This is an application PostgreSQL policy, not a second Harch CSRF mode.
 
-### Decision record — typed account-JWT cookie policy (AHI-4C, 2026-09-03)
+### Decision record — typed account-JWT cookie policy (secure login and admission, 2026-09-03)
 
 **Decision: extend `HarchWeb.Authentication` with a validated host-only JWT
 cookie policy and opaque renderer.** Harch already owns bounded extraction of
@@ -230,7 +230,7 @@ opaque bytes are UTF-8 cookie octets rather than treating its constructor as an
 issuance proof. Harch still neither loads keys nor makes claims: `web-api`
 selects its JWK material at startup and supplies the issued compact JWT.
 
-### Decision record — application-owned JWT claims and durable principal (AHI-4C, 2026-09-04)
+### Decision record — application-owned JWT claims and durable principal (secure login and admission, 2026-09-04)
 
 **Decision: keep compact-JWT verification generic in `HarchWeb.Authentication`,
 but establish the `web-api` account principal only after an application-owned
@@ -255,11 +255,11 @@ workflows consume the established principal and do not reread a raw cookie or
 session as an alternate authority.
 
 This deliberately stops short of bearer-token/API conflict policy and
-multi-profile OAuth semantics. AHI-4D owns those authentication profiles and
+multi-profile OAuth semantics. The scoped API-authentication design owns those authentication profiles and
 must extend this one guard boundary rather than introduce a `web-api`-local
 extractor.
 
-### Decision record — application-owned JWT key-pair startup proof (AHI-4C follow-up, 2026-09-04)
+### Decision record — application-owned JWT key-pair startup proof (secure login and admission follow-up, 2026-09-04)
 
 **Decision: retain generic signing and verification in Harch, but require
 `web-api` startup to prove its configured active RS256 signing key verifies
@@ -279,7 +279,7 @@ its own protocol and cryptographic test suite. This catches structurally valid
 but operationally broken deployment keys before any login listener accepts
 traffic, without adding a second JWT implementation.
 
-### Decision record — pluggable application JWT signer (AHI-4C follow-up, 2026-09-04)
+### Decision record — pluggable application JWT signer (secure login and admission follow-up, 2026-09-04)
 
 **Decision: make compact-JWT signing a small Harch capability, and inject its
 application adapter while constructing the account-JWT runtime.** A signer is
@@ -300,7 +300,7 @@ The focused test proves both properties directly. We reject a test-only key
 injection point or a startup-proof bypass: either would make a production
 alternate signer unverified and create a second authentication path.
 
-### Decision record — declared action-owner route for pre-decode guards (AHI-4C, 2026-09-04)
+### Decision record — declared action-owner route for pre-decode guards (secure login and admission, 2026-09-04)
 
 **Decision: extend the existing `ActionCodec` and `ApplicationModule`
 composition boundary with a typed action-target-to-owning-route mapping, rather
@@ -322,20 +322,20 @@ CSRF transport, and response rendering remain the established shared
 interpreters. A declared action whose path has no ordinary page route therefore
 still receives the correct authentication/admission policy, while an unknown
 action receives no invented owner. This is a framework capability completed by
-the current AHI-4C slice, not completion of AHI-4C itself. The application
+the current secure-login-and-admission slice, not completion of the secure login and admission work itself. The application
 now supplies the durable admission credential/TOTP workflow, keyed PostgreSQL
 budgets, synchronizer CSRF adapter, cleanup, and enhanced/native action paths
 through this capability. Runnable deployment provisioning and the remaining
-browser matrix still require task-level completion evidence.
+browser matrix still require completion evidence before that work is complete.
 
-### Decision record — generic authentication-attempt reservation lifecycle (AHI-4C, 2026-09-04)
+### Decision record — generic authentication-attempt reservation lifecycle (secure login and admission, 2026-09-04)
 
 **Decision: extend `HarchWeb.Authentication` with the storage-neutral,
 cancellation-safe reservation hand-off, while retaining typed budgets and
 durable stores in each application.** `web-api` already had the correct
 protocol for a grouped login attempt: reserve before interruptible proof work,
 settle a known result, cancel an indeterminate result, and cancel again when
-settlement fails. AHI-4C needs the same protocol for admission credentials and
+settlement fails. The secure login and admission work needs the same protocol for admission credentials and
 TOTP. Copying it would make exceptional-path semantics diverge; moving the
 account store, account-specific scopes, or PostgreSQL behavior into Harch
 would instead make a framework authentication policy out of application data.
@@ -350,9 +350,9 @@ application store's retention policy. `web-api` delegates its established
 login lifecycle through this boundary, and the composed admission adapter uses
 the same lifecycle with its own namespace and PostgreSQL store. This only
 completes shared lifecycle ownership: application-specific provisioning,
-deployment wiring, and complete browser proof remain AHI-4C work.
+deployment wiring, and complete browser proof remain part of the secure login and admission work.
 
-### Decision record — composed synchronizer CSRF adapter (AHI-4C, 2026-09-04)
+### Decision record — composed synchronizer CSRF adapter (secure login and admission, 2026-09-04)
 
 **Decision: implement the durable synchronizer form as a composed-application
 adapter to `CsrfProtection`, not as a second framework CSRF mode.** The shared
@@ -377,7 +377,7 @@ current-state verification queries. The remaining task-level evidence is
 runnable deployment pool configuration and the complete browser coverage, not
 a framework-owned PostgreSQL mode.
 
-### Decision record — opaque-session cookie extraction (AHI-4C, 2026-09-04)
+### Decision record — opaque-session cookie extraction (secure login and admission, 2026-09-04)
 
 **Decision: extend `HarchWeb.Session` with an exact-one parser for a configured
 opaque-session cookie, rather than duplicate Cookie-header handling in the
@@ -396,7 +396,7 @@ precedence, or decides access. `composed-domains` uses it for its distinct
 host-only admission cookie, while retaining its own session lifetime,
 PostgreSQL store, revocation, and public challenge policy.
 
-### Decision record — separate composed admission policy axis (AHI-4C, 2026-09-04)
+### Decision record — separate composed admission policy axis (secure login and admission, 2026-09-04)
 
 **Decision: model admission as a closed application policy installed in
 `beforeAuthenticationGuards`, with its principal held in the root context's
@@ -414,10 +414,10 @@ principal from an exact-one host-only cookie and returns typed internal
 challenges (or 503 for an unavailable store). Its encrypted credential
 provisioning, TOTP action/native fallback, keyed attempt budgeting, durable
 PostgreSQL store/migrations, synchronizer CSRF backend, and cleanup remain
-application-owned. AHI-4C is nevertheless not complete until runnable
+application-owned. The secure login and admission work is nevertheless not complete until runnable
 deployment provisioning and the full browser proof matrix are green.
 
-### Decision record — closed admission return targets (AHI-4C, 2026-09-14)
+### Decision record — closed admission return targets (secure login and admission, 2026-09-14)
 
 **Decision: extend the existing `PublicRoute` and `RouteCodec` with a closed
 `AdmissionReturnTarget`, rather than carry a raw return URL or create a second
@@ -429,7 +429,7 @@ without admitting an open redirect. Declaring each query value as a separate
 route would duplicate the canonical admission endpoint metadata, so the module
 declares one default route while its codec owns all typed query variants.
 
-### Decision record — typed action navigation at the existing response boundary (AHI-4C, 2026-09-03)
+### Decision record — typed action navigation at the existing response boundary (secure login and admission, 2026-09-03)
 
 **Decision: extend `ClientActionResponse` with `ActionNavigation route context`
 and render it only through the root `RouteCodec`.** A raw URL field or
@@ -453,12 +453,12 @@ bounded form and CSRF transport, then returns a `303` whose `Location` is
 rendered by that same root codec. The two-pages subscription example proves
 the enhanced `PushHistory` and native `303` variants converge on one typed
 destination. Retained-action reauthentication and the remaining full browser
-evidence are AHI-4C work. `web-api` already applies
+evidence are part of the secure login and admission work. `web-api` already applies
 `ReplaceHistory` after it has durably created the account session and returned
 the session-cookie plus CSRF-clear transition; its destination is the typed
 profile route, so browser Back does not reopen the credential-bearing form.
 
-### Decision record — bounded retained action reauthentication (AHI-4C, 2026-09-03)
+### Decision record — bounded retained action reauthentication (secure login and admission, 2026-09-03)
 
 **Decision: extend the existing capture kernel and typed client-action
 response path, while leaving the reauthentication modal and login workflow
@@ -481,7 +481,7 @@ store its fields in `localStorage`, `sessionStorage`, telemetry, or a server
 retry table. This extends the existing action/capture ownership boundary rather
 than adding a modal dispatcher or an application-specific mutation retry API.
 
-**Continuation refinement (AHI-4C, 2026-09-07): make replay eligibility and
+**Continuation refinement (secure login and admission, 2026-09-07): make replay eligibility and
 login-navigation interception explicit in the existing action declaration.**
 The initial retained-action primitive correctly kept the envelope in the
 capture kernel, but an application could not submit its ordinary login action
@@ -505,9 +505,9 @@ its normal navigation. The event carries no captured fields and neither
 extends the lifetime nor grants a second replay. This extends the existing
 validated action codec and its runtime interpreter rather than adding a
 JavaScript callback registry, second fetch path, or framework-owned dialog.
-The remaining application modal and real-browser proof are still AHI-4C work.
+The remaining application modal and real-browser proof are still part of the secure login and admission work.
 
-**Recovery-lifecycle refinement (AHI-4C, 2026-09-07): expose the existing
+**Recovery-lifecycle refinement (secure login and admission, 2026-09-07): expose the existing
 navigation-owned page-security refresh through the capture-kernel capability,
 and report opaque retained-envelope expiry.** The application completion
 handler needs to refresh the current page's CSRF capability before it asks for
@@ -525,7 +525,7 @@ retention, performs a replay, nor selects a presentation. The application
 remains responsible for its modal, focus, user confirmation, and calling the
 existing replay operation.
 
-**CSRF-rebinding refinement (AHI-4C, 2026-09-07): use that same refresh
+**CSRF-rebinding refinement (secure login and admission, 2026-09-07): use that same refresh
 capability both before modal login and after it.** A page token bound to an
 expired durable session must fail; accepting it for a public login merely to
 make recovery convenient would weaken the binding contract. Before opening its
@@ -551,9 +551,9 @@ whose matching durable session expires after SSR, confirms the zero-effect
 challenge, authenticates through the ordinary MFA action, refreshes both CSRF
 authorities, and proves exactly one explicit replay. This is still only the
 account reference's supported recovery path; admission-grant, upload, and
-the remaining AHI-4C scenario matrix stay open.
+the remaining secure-login-and-admission scenario matrix stay open.
 
-**Action-response failure refinement (AHI-4C, 2026-09-08): preserve typed
+**Action-response failure refinement (secure login and admission, 2026-09-08): preserve typed
 patches but settle every non-success action response on the capture kernel's
 recoverable rail.** The navigation runtime already owns the fetch result,
 typed action-response interpretation, patches, focus, and navigation. Letting
@@ -567,7 +567,7 @@ continuation or history mutation. The composed admission browser proof alters
 the submitted page token while retaining the genuine host cookie and verifies
 that the action neither establishes admission nor navigates.
 
-**Independent-grant challenge refinement (AHI-4C, 2026-09-15): extend the
+**Independent-grant challenge refinement (secure login and admission, 2026-09-15): extend the
 existing authentication-challenge response marker with one distinct typed
 navigation case.** A normal 4xx action response remains recoverable and never
 changes history: validation, CSRF, authorization, and capacity rejections may
@@ -584,7 +584,7 @@ fixture proves that a newly issued account session cannot bypass an expired
 independent durable grant; the composed admission guard uses this primitive
 with its own public admission destination.
 
-**Cross-tab session-rotation coverage gap closed (AHI-4C, 2026-09-18):** the
+**Cross-tab session-rotation coverage gap closed (secure login and admission, 2026-09-18):** the
 recovery-matrix acceptance criteria call for proving "another tab's security
 rotation" against the signed account-session flow specifically (the composed
 admission/synchronizer backends already had this coverage). Added
@@ -606,7 +606,7 @@ The authentication guard challenges before client-action body intake or CSRF
 replay. The full close/reopen/complete-recovery round trip was already covered
 by that test's failed-login, close, fresh-submit, and one-replay sequence.
 
-**Conditional-leave-confirmation refinement (AHI-4C, 2026-09-19):** treat a
+**Conditional-leave-confirmation refinement (secure login and admission, 2026-09-19):** treat a
 retained action as unresolved for the existing declarative
 `ConditionalLeaveConfirmation` capability. The capture kernel already warns
 for pending, claimed, and recoverable eligible actions; excluding `Retained`
@@ -624,7 +624,7 @@ whether the handler prevents it. Other actions remain opt-in through the same
 capability; their product-specific loss semantics still require a separate
 declaration and browser proof.
 
-**File-bearing action refinement (AHI-4C, 2026-09-20): keep binary bodies out
+**File-bearing action refinement (secure login and admission, 2026-09-20): keep binary bodies out
 of the capture envelope and use the existing native-fallback boundary.** The
 capture kernel can safely retain only the ordered string fields that its typed
 action transport owns. Treating a `File` as an omitted field while still
@@ -647,7 +647,7 @@ explicit reselection. This extends the existing capture/native protocol split
 and adds neither a binary replay channel nor an application-specific action
 router.
 
-### Decision record — bounded application-declared browser-storage cleanup (AHI-4C, 2026-09-09)
+### Decision record — bounded application-declared browser-storage cleanup (secure login and admission, 2026-09-09)
 
 **Decision: begin the client-state cleanup path with an opaque, validated
 declaration value at Harch's existing client-action response boundary.** An
@@ -668,7 +668,7 @@ proves the terminal browser path. Its remaining scope is application-defined
 extended failure values and server-detected Accept-negotiated terminal
 failures, not a second cleanup protocol.
 
-**Follow-on value-layer decision (AHI-4C, 2026-09-10): keep browser failure
+**Follow-on value-layer decision (secure login and admission, 2026-09-10): keep browser failure
 classification and the original-action reference inside Harch's existing
 request-ID boundary.** `HarchClientFailure` is a closed, low-cardinality sum
 with stable route tags, and `FailureReference` wraps only an already validated
@@ -678,7 +678,7 @@ from becoming page input. The execution decision below connects the value to
 the typed public route, action-response document, and browser replacement
 interpreter; applications can opt in at assembly through that route alone.
 
-**Follow-on transport decision (AHI-4C, 2026-09-10): extend the existing
+**Follow-on transport decision (secure login and admission, 2026-09-10): extend the existing
 `ClientActionResponse` algebra with the validated cleanup declaration and
 encode it through its established JSON response interpreter.** The action
 response already owns typed patches, focus, and navigation, so a sibling
@@ -689,7 +689,7 @@ or session entries as `storageCleanup` JSON. The execution decision below
 implements the browser mutation and fatal replacement/navigation behavior;
 the transport remains the sole JSON contract for those effects.
 
-**Follow-on execution decision (AHI-4C, 2026-09-10): extend the one typed
+**Follow-on execution decision (secure login and admission, 2026-09-10): extend the one typed
 action-response lifecycle with concrete failure destinations, rather than add
 a logout-specific browser protocol or permit browser-built error URLs.** At
 application assembly, an optional constructor receives only the closed
@@ -718,9 +718,9 @@ headers. The two-pages reference app proves its strict parser, headers,
 non-reflection of malformed input, action JSON destinations, and a real
 browser storage-removal failure that lands on the new document with no stale
 home content. Server-detected Accept-negotiated terminal failures and
-application-defined extended failure values remain AHI-4C follow-up work.
+application-defined extended failure values remain follow-up items in the secure login and admission work.
 
-**Terminal action-result decision (AHI-4C, 2026-09-10): extend the existing
+**Terminal action-result decision (secure login and admission, 2026-09-10): extend the existing
 typed action-handler result and its one response interpreter with a closed
 success-or-terminal result; do not add an error route, a second fetch protocol,
 or an application-wide error type parameter.** A server-side action workflow
@@ -745,7 +745,7 @@ trusted presentation context. This is an extension of `ActionCodec` execution
 and `Response` rendering, not a parallel exception, callback, or routing
 authority.
 
-### Decision record — PostgreSQL database-change ledger (AHI-4C, 2026-09-03)
+### Decision record — PostgreSQL database-change ledger (secure login and admission, 2026-09-03)
 
 **Decision: extract the existing connection-scoped migration transaction into
 the PostgreSQL-specific `postgres-database-changes` package, with each
@@ -769,7 +769,7 @@ Deployment role/password reconciliation remains an explicit application-owned
 final SQL sequence in that transaction, not mutable desired-state application
 data and not an invented database change.
 
-### Decision record — configuration diagnostics and Certbot credential policy (PR-SEC5, 2026-08-28)
+### Decision record — configuration diagnostics and Certbot credential policy (review finding, 2026-08-28)
 
 **Decision: preserve the existing configuration and startup-plan boundaries, but make their
 diagnostic rendering non-disclosing and retire the arbitrary runtime Certbot-argument setting.**
@@ -789,7 +789,7 @@ that wrapper owns protected credential files or its managed environment and its 
 policy. This removes the framework from credential transport rather than inventing a partial
 secret-argv filter.
 
-### Decision record — bounded SMTP response accumulation (PR-SEC6, 2026-08-28)
+### Decision record — bounded SMTP response accumulation (review finding, 2026-08-28)
 
 **Decision: extend `HarchWeb.Email`'s existing SMTP response reader with fixed whole-response
 limits, rather than expose a new SMTP configuration surface or add a second parser.** The response
@@ -802,7 +802,7 @@ over-limit allocation. Stable errors carry no provider payload. The existing 16 
 remains defence in depth. Real loopback coverage exercises count overflow in a greeting and after
 STARTTLS, plus byte overflow in the pre-TLS EHLO path.
 
-### Decision record — typed forwarded path prefixes (PR-SEC7, 2026-08-28)
+### Decision record — typed forwarded path prefixes (review finding, 2026-08-28)
 
 **Decision: extend the existing opaque `HarchWeb.PathPrefix` role into the sole validated
 forwarded-prefix representation, and construct it once at `HarchWeb.Security`'s trusted-header
@@ -855,7 +855,7 @@ code, in the test suite, or in how a metric is being satisfied. Silencing the si
 same as answering it. Do not reach for `{-# ANN foo ("HLint: ignore ..." :: String) #-}`,
 `-Wno-...`, a `$!`/`seq`/`deepseq` added only to change what HPC attributes a tick to, or any other
 suppression as the *standard* fix for a gate finding, including the CSE-sharing HPC artifact this
-project's own memory has documented and reused as a fix many times. That reuse was a mistake to
+project has documented and reused as a fix many times. That reuse was a mistake to
 generalize into standard practice: each occurrence is a case where the actual fix — deduplicating a
 shared literal into one named binding, restructuring the code so the metric no longer misattributes
 it, or extending the test to exercise the branch a different way — was available and not taken. An
@@ -872,11 +872,11 @@ not* suppress that finding — it deduplicated the literal into one named, expor
 should take: find the shared literal or constructor reference and give it one name, rather than
 forcing each call site and telling the linter to stop complaining about it.
 
-**Historical note — the rest of task CB's coverage workaround is superseded (2026-08-21).**
+**Historical note — the rest of the earlier coverage workaround is superseded (2026-08-21).**
 `noApiRequestFields`'s own type (`RequestCodec ()`, a `newtype`-wrapped function) has enough shape
 that GHC keeps it as a real reference. A *trivial* nullary value — a bare data constructor, a `Text`
 literal, `Just True` — can be inlined back to a literal at each call site under `-O2`, silently
-reproducing a CSE-sharing coverage gap. CB's historical inventory records
+reproducing a CSE-sharing coverage gap. That historical inventory records
 `emptyFieldDefault`, `databaseConnectTimeoutSecondsKey`, `derEncoding`, and
 `throttleCountsAsSuccess`/`noThrottleRecordingNeeded`, including places where `$!` was added to
 influence the resulting HPC ticks.
@@ -889,13 +889,12 @@ be relevant to an actual suppression only after those alternatives fail; it neve
 strictness added to influence HPC attribution. Re-run the full coverage gate to inspect the outcome,
 but do not use a green percentage to justify fake strictness.
 
-**Follow-up: complete.** Task CB in `TASKS.md` audited and fixed every existing ignore pragma in this
-codebase against this rule (2026-08-21) — see its own completion note for the full list and the two
+**Follow-up: complete.** An earlier ignore-pragma audit fixed every existing ignore pragma in this
+codebase against this rule (2026-08-21). Verifying that fix, not just applying it, surfaced the two
 lessons (this one, and a companion one about deleting tautological `x == x` test assertions
-regressing a *derived* instance's own coverage) discovered while verifying the fix, not just applying
-it.
+regressing a *derived* instance's own coverage) named here.
 
-### Decision record — package-local runtime coverage ownership (RV-B3, 2026-09-06)
+### Decision record — package-local runtime coverage ownership (review finding, 2026-09-06)
 
 An extracted runtime package may not rely on a downstream compatibility facade's tests for coverage:
 instrumentation follows the package being tested, so the implementation can otherwise disappear
@@ -935,7 +934,7 @@ matcher test suite now declares its existing `hspec-discover` tool dependency, s
 the frozen plan owns that tool instead of an independent global installation.
 It does not freeze OS packages or claim bit-for-bit binary reproducibility.
 
-### Decision record — optional released OpenAPI compatibility boundary (AHI-4E, 2026-09-20)
+### Decision record — optional released OpenAPI compatibility boundary (OpenAPI documentation and Swagger UI, 2026-09-20)
 
 **Decision: add a separate `harch-web-openapi` package that re-exports the
 selected public `OpenApi` data model, while retaining the existing API dispatcher
@@ -949,7 +948,7 @@ contains the selected model facade and its encoding proof. The generic
 extension subsequently landed in the existing endpoint contract; no OpenAPI
 package introduces a route dispatcher or crawls a completed `Site`.
 
-**Follow-up decision — typed endpoint metadata extension (AHI-4E,
+**Follow-up decision — typed endpoint metadata extension (OpenAPI documentation and Swagger UI,
 2026-09-20): add an explicit extension parameter to
 `ApiEndpointContract`, and make every existing endpoint choose
 `NoApiExtension`.** This keeps documentation metadata with the exact method,
@@ -960,7 +959,7 @@ dispatcher and all current route behavior. The next slice may define a
 documentation-specific extension in `harch-web-openapi`; availability policy,
 OpenAPI interpretation, and a Swagger renderer remain separate follow-ups.
 
-**Follow-up decision — typed OpenAPI metadata boundary (AHI-4E,
+**Follow-up decision — typed OpenAPI metadata boundary (OpenAPI documentation and Swagger UI,
 2026-09-22): define `OpenApiExtension` only in the optional
 `harch-web-openapi` package and attach it with the existing
 `withApiEndpointExtension` boundary.** Its smart constructors validate custom
@@ -972,7 +971,7 @@ explicit mounted-family interpretation, aggregation, and the cached document
 provider remain the concrete next gap; this metadata slice does not yet emit
 or serve an OpenAPI document.
 
-**Follow-up decision — resolve method policy from the parsed request (AHI-4E,
+**Follow-up decision — resolve method policy from the parsed request (OpenAPI documentation and Swagger UI,
 2026-09-21): change `RouteCodec.routeMethods` to receive its resolved
 `RouteRequest`, not only a route value.** Availability can depend on a bounded
 context snapshot selected during parsing. Checking it in a handler would occur
@@ -982,11 +981,11 @@ owner of that protocol decision, so it is the small general framework
 primitive to extend. Mounts and composed codecs preserve the same request while
 projecting the child context before delegation. The routing regression proves a
 hidden parsed route is 404 for GET, HEAD, OPTIONS, and a wrong method. The next
-AHI-4E slice attaches API availability to endpoint declarations and applies
+OpenAPI-documentation slice attaches API availability to endpoint declarations and applies
 this capability to the documented hidden Catalog endpoint; it does not add a
 pre-router or WAI middleware.
 
-**Follow-up decision — endpoint-owned static availability (AHI-4E,
+**Follow-up decision — endpoint-owned static availability (OpenAPI documentation and Swagger UI,
 2026-09-21): add the closed `ApiAvailability` value to the existing typed
 endpoint, default every existing constructor to `ApiAvailable`, and provide
 `withApiEndpointAvailability` for the explicit `ApiHidden` choice.** The
@@ -998,7 +997,7 @@ endpoint declaration and its one dispatcher rather than creating a visibility
 middleware or a documentation-only filter.
 
 **Follow-up decision — endpoint availability from a bounded route context
-(AHI-4E, 2026-09-21): make `ApiRouteEndpoint` and `ApiEndpointFamily`
+(OpenAPI documentation and Swagger UI, 2026-09-21): make `ApiRouteEndpoint` and `ApiEndpointFamily`
 context-parameterized, and store a pure `context -> ApiAvailability` resolver
 on the endpoint.** `withApiEndpointAvailability` remains the static helper;
 `withApiEndpointAvailabilityFromContext` installs the dynamic resolver. The
@@ -1018,12 +1017,12 @@ codec. This preserves one owner for 404, 405, synthesized HEAD/OPTIONS, and
 The regression proves an endpoint selected by a `Bool` context snapshot is
 available when true and is a route-not-found for GET, HEAD, OPTIONS, and POST
 when false. Its direct definition also returns a bare 404 and never calls the
-handler. The next AHI-4E OpenAPI-provider slice must evaluate this same
+handler. The next OpenAPI-provider slice must evaluate this same
 resolver from its deliberate documentation snapshot and prune hidden
 endpoints; until then it must not claim that generated documentation supports
 dynamic availability.
 
-**Follow-up decision — read-only explicit family interpretation (AHI-4E,
+**Follow-up decision — read-only explicit family interpretation (OpenAPI documentation and Swagger UI,
 2026-09-22): expose `mapApiEndpointFamily`,
 `withApiRouteEndpointDeclaration`, and `apiPathText` at the existing typed
 endpoint boundary.** An optional interpreter must read the precise validated
@@ -1038,7 +1037,7 @@ existing availability resolver from a deliberate snapshot, and still will not
 crawl a completed `Site`.
 
 **Follow-up decision — explicit mounted OpenAPI document construction
-(AHI-4E, 2026-09-22): consume application-supplied `ApiEndpointFamily`
+(OpenAPI documentation and Swagger UI, 2026-09-22): consume application-supplied `ApiEndpointFamily`
 values together with their existing structural `RouteMount`, and retain the
 public `openapi3` value beside a validated wire-encoding overlay.** The family
 projection is the only source of operations and its existing pure
@@ -1060,7 +1059,7 @@ status/schema/media-type responses, resolved root-owned security, component
 validation, cached providers, and Swagger routes remain concrete follow-up
 work; this slice must not be described as completing those guarantees.
 
-**Follow-up decision — authored OpenAPI operation identities (AHI-4E,
+**Follow-up decision — authored OpenAPI operation identities (OpenAPI documentation and Swagger UI,
 2026-09-22): let optional endpoint metadata carry a nonblank authored
 operation ID, while retaining the method/path form only as a fallback.** The
 family projection does not expose the runtime `EndpointMetadata` name, so
@@ -1068,7 +1067,7 @@ deriving a name-based ID needs a later framework capability. The typed
 extension keeps this authored value explicit and cannot alter runtime routing;
 document construction rejects duplicate selected IDs across mounted families.
 
-**Follow-up decision — authored OpenAPI response status (AHI-4E,
+**Follow-up decision — authored OpenAPI response status (OpenAPI documentation and Swagger UI,
 2026-09-22): let optional endpoint metadata select one validated HTTP status,
 while leaving response schemas absent until their typed slice.**
 The existing OpenAPI document interpreter already owns the operation response
@@ -1079,7 +1078,7 @@ description, and every other valid status receives the neutral "Response"
 description.  This makes no claim about runtime handler outcomes, media types,
 or schemas; those remain the next OpenAPI response-metadata work.
 
-**Follow-up decision — declared OpenAPI response media types (AHI-4E,
+**Follow-up decision — declared OpenAPI response media types (OpenAPI documentation and Swagger UI,
 2026-09-22): derive only `content` keys from the endpoint's nonempty runtime
 `ApiResponseEncoder` list.** The encoder list already decides which media
 representations the runtime can select, so the document interpreter extends
@@ -1095,7 +1094,7 @@ framework value into a partial third-party constructor.
 The selected optional response status remains documentation metadata only; it
 does not claim that every runtime outcome has that status.
 
-**Follow-up decision — explicit OpenAPI response schemas (AHI-4E,
+**Follow-up decision — explicit OpenAPI response schemas (OpenAPI documentation and Swagger UI,
 2026-09-23): extend the existing endpoint documentation extension with one
 optional inline response schema, applying it to every declared response media
 type.** The extension already owns documentation metadata beside the encoder
@@ -1106,7 +1105,7 @@ the current builder owns neither component allocation nor reference validation;
 accepting them would permit dangling references. The schema has no runtime
 effect and examples remain a later explicit metadata slice.
 
-**Follow-up decision — explicit OpenAPI request schemas (AHI-4E,
+**Follow-up decision — explicit OpenAPI request schemas (OpenAPI documentation and Swagger UI,
 2026-09-23): use the same endpoint extension for one optional inline request
 schema, but derive its content keys only from the typed runtime body
 declaration.** Buffered decoders, URL-encoded forms, and multipart bodies
@@ -1120,7 +1119,7 @@ schema from an arbitrary decoder function. As for responses, components and
 examples need their later owners before references or generated values can be
 accepted.
 
-**Follow-up decision — explicit OpenAPI media examples (AHI-4E,
+**Follow-up decision — explicit OpenAPI media examples (OpenAPI documentation and Swagger UI,
 2026-09-23): let endpoint metadata carry one optional authored JSON example
 for request and response media, and apply it to each concrete runtime media
 representation.** An arbitrary decoder or encoder cannot safely yield a
@@ -1133,7 +1132,7 @@ references remain deferred: the present builder has no component allocator or
 reference validation, and must not emit a dangling reference.
 
 **Follow-up decision — validated OpenAPI external documentation links
-(AHI-4E, 2026-09-23): keep an optional external-documentation value beside
+(OpenAPI documentation and Swagger UI, 2026-09-23): keep an optional external-documentation value beside
 the endpoint operation metadata, but accept only absolute HTTP(S) URLs with an
 authority.** The operation already owns the standard OpenAPI `externalDocs`
 field, so a global documentation table would split related values and drift
@@ -1146,7 +1145,7 @@ only copies the validated value into the typed `ExternalDocs` model, and has no
 runtime routing or authorization effect.
 
 **Follow-up decision — typed route adapter for the prepared document, and the
-discovered next gap (AHI-4E, 2026-09-23): serve the cached provider's bytes
+discovered next gap (OpenAPI documentation and Swagger UI, 2026-09-23): serve the cached provider's bytes
 through the existing `RouteDefinition`/`ProtocolRouteHandler` boundary
 (`HarchWeb.OpenApi.Route`), and confirm no operation `security`/
 `securitySchemes` channel exists yet before an application can honestly
@@ -1158,7 +1157,7 @@ document. Access choice for the mounted `/docs/openapi.json` path itself
 remains the application's, exactly as every other route.
 
 Attempting to attach this extension to `web-api`'s real `/api/status`,
-`/api/second`, `/api/me`, and OAuth-token endpoints (the task file's next
+`/api/second`, `/api/me`, and OAuth-token endpoints (the planned next
 slice) surfaced that the framework genuinely has no channel yet:
 `ApiEndpointContract`/`ApiRouteEndpointDeclaration`/`ApiEndpointFamily` carry
 no `authorization`/`EndpointMetadata`/`AccessRequirement` at all — an
@@ -1167,13 +1166,13 @@ route-mounting boundary, as the `ApiPath -> EndpointMetadata authorization`
 argument to `HarchWeb.Api.Endpoint.Family.apiRouteEndpointFamilyDefinition`,
 entirely outside `harch-web-openapi`'s view. `openApiMountedFamily` therefore
 cannot yet derive a documented operation's security from anything but an
-author's un-cross-checked say-so, which would violate the task's "never a
+author's un-cross-checked say-so, which would violate the stated "never a
 docs-only override" requirement by construction if implemented naively.
 
 Per this document's "When implementation hits a missing framework capability"
 protocol: this is option 1 (add the primitive), not a workaround — every
-documented API family will need it, and the task file's own design already
-anticipates it ("Later AHI-4E slices add components, resolved security...").
+documented API family will need it, and the design recorded here already
+anticipates it (later slices add components, resolved security…).
 The concrete shape: `openApiMountedFamily` (or a new sibling constructor) must
 additionally accept the same `ApiPath -> EndpointMetadata authorization`
 function the application already writes for real mounting, plus one small
@@ -1184,18 +1183,18 @@ value that governs real enforcement rather than a second, independently
 authored vocabulary. This is deliberately deferred as its own task-sized
 slice rather than guessed at here: it touches a security-relevant public
 construction boundary and needs its own construction-error/validation test
-suite (undefined profile, contradictory scheme, etc.) per the task file's
+suite (undefined profile, contradictory scheme, etc.) per the stated
 acceptance criteria. `web-api` documentation, `composed-domains`
 documentation, and the Swagger UI page all remain blocked on this landing
 first.
 
-**Follow-up decision — security-scheme derivation shipped (AHI-4E,
+**Follow-up decision — security-scheme derivation shipped (OpenAPI documentation and Swagger UI,
 2026-09-23): implement the shape decided above exactly — `openApiMountedFamily`
 now takes the application's `ApiPath -> EndpointMetadata authorization`
 function plus an `authorization -> [Text]` scope projection, and
 `buildOpenApiDocument` takes a document-level `Map AuthenticationProfileName
 OpenApiSecurityScheme`.** A new closed `HarchWeb.OpenApi.Security` module
-supplies the two AHI-4D scheme kinds (`OpenApiCookieSessionSecurityScheme`,
+supplies the two scoped API-authentication scheme kinds (`OpenApiCookieSessionSecurityScheme`,
 naming the session cookie for display only; `OpenApiOAuth2ClientCredentialsSecurityScheme`,
 requiring an absolute `https` token URL — `client_secret_basic` sends a
 confidential secret, so `http`, including for local development, is rejected
@@ -1226,15 +1225,15 @@ Haskell shape could still have encoded to the wrong bytes.
 
 This grew `HarchWeb.OpenApi.Document` past this document's own 500-line/
 20-import/10-local-dependency module-health threshold and gave
-`operationForExtension` a sixth positional argument; recorded as a follow-up
-task (`TASKS/ahi-4e-openapi-document-module-health.md`, local/git-ignored)
+`operationForExtension` a sixth positional argument; recorded as a deferred
+module-health follow-up (the OpenAPI document split)
 rather than done inline, to keep this slice reviewable. `web-api`
 documentation, `composed-domains` documentation, and the Swagger UI page
 remain the next slices, now unblocked.
 
 **Follow-up decision — the discovered next gap is deeper than security alone:
 `ApiEndpointFamily`/`ApiRouteEndpoint` cannot represent a context-aware
-endpoint at all (AHI-4E, 2026-09-23).** Attempting the `web-api` documentation
+endpoint at all (OpenAPI documentation and Swagger UI, 2026-09-23).** Attempting the `web-api` documentation
 slice above surfaced a second, structural boundary gap, not just the security
 one: `web-api`'s real `/api/second` and `/api/me` are built through
 `HarchWeb.Api.Endpoint.Family.apiRouteDefinitionWithContext`/
@@ -1298,7 +1297,7 @@ here because it is pointless without a way to mount the endpoints that would
 use it.
 
 **Follow-up decision — context-aware endpoints shipped into the same
-constructor family (AHI-4E, 2026-09-23): implement the shape decided above
+constructor family (OpenAPI documentation and Swagger UI, 2026-09-23): implement the shape decided above
 exactly.** `HarchWeb.Api.Endpoint.Internal`'s `ApiRouteEndpoint` GADT gains
 `ApiRouteEndpointWithContext`/`ApiRouteEndpointWithContextNeverFailing`
 alongside the existing context-free pair, each carrying a handler of type
@@ -1352,10 +1351,10 @@ three exceptions when public releases widen the bounds and repair the source.
 The optional package now also supplies validated typed endpoint metadata, but
 no API-family interpretation, schema generation, document provider, Swagger
 renderer, asset route, or documentation security mapping ships yet. The next
-AHI-4E slices close those concrete gaps.
+OpenAPI-documentation slices close those concrete gaps.
 
 **Follow-up decision — web-api's documented API surface and typed
-specification route (AHI-4E, 2026-09-24): aggregate the four real endpoints
+specification route (OpenAPI documentation and Swagger UI, 2026-09-24): aggregate the four real endpoints
 as one documented family whose paths and security are both derived from the
 existing route metadata, and serve the cached bytes through one ordinary
 typed GET route.** The slice builds on the two landed prerequisites (the
@@ -1395,7 +1394,7 @@ closed security-scheme vocabulary and the context-aware endpoint family):
   *additional* cookie acceptance is a cookie-or-bearer union that lives at
   this application's transport boundary and cannot be expressed by any single
   OpenAPI scheme (the `HarchWeb.OpenApi.Security` follow-up record says the
-  same). The task file's OAuth2 client-credentials scheme for the token flow
+  same). The specified OAuth2 client-credentials scheme for the token flow
   remains deliberately unimplemented here: `mkOpenApiOAuth2ClientCredentialsSecurityScheme`
   requires an absolute `https` token URL, and this example configures no
   public origin to build one from. Closing that obligation belongs to the
@@ -1422,7 +1421,7 @@ closed security-scheme vocabulary and the context-aware endpoint family):
   explicit `parseRouteSegments` case with no docs-specific 404 family — and
   gets its metadata, method policy (shared GET/HEAD/OPTIONS synthesis), and
   `ProtocolRouteHandler` adapter from the same boundaries as every other route.
-  It is declared `AllowUnauthenticated` as the task's reference-example
+  It is declared `AllowUnauthenticated` as the reference example's
   default, and it is deliberately *not* a member of the documented family: the
   document describes the API, not the support surface that serves it.
 
@@ -1451,13 +1450,13 @@ closed security-scheme vocabulary and the context-aware endpoint family):
   the value's consumer already existed.
 
 - **The Swagger UI surface is an ordinary page over the existing lifecycle
-  (AHI-4E, 2026-09-24).** `HarchWeb.OpenApi.Swagger` supplies the typed
+  (OpenAPI documentation and Swagger UI, 2026-09-24).** `HarchWeb.OpenApi.Swagger` supplies the typed
   `GET /docs` SSR page, its page-scoped stylesheet, and its behavior module
   as one replaceable unit: the page is a plain `Page` value whose
   server-rendered fallback is complete and script-free (the scripts-disabled
   acceptance case), the behavior module is a plain `PageEnhancementModule`
-  descriptor whose `setupPageEnhancement`/disposer contract gives the
-  PR-C1 initialize/dispose lifecycle through the existing navigation
+  descriptor whose `setupPageEnhancement`/disposer contract gives the required
+  initialize/dispose lifecycle through the existing navigation
   kernel (one call per document, disposer invoked before the next enhanced
   entry), and the pinned Swagger UI 5.33.0 distribution rides the existing
   `StaticAssetRoot` boundary at `/docs/assets`. No CSP relaxation is
@@ -1469,6 +1468,81 @@ closed security-scheme vocabulary and the context-aware endpoint family):
   not vendored). The `swaggerUiFallbackBody`, asset-URL, and whole-page
   renderer are each replaceable in place; untrusted display text renders
   only inside Swagger's runtime DOM under that strict policy.
+
+- **Composed API-client issuance remains application-owned (OpenAPI documentation and Swagger UI,
+  2026-09-27).** The example reuses `HarchWeb.ApiClientStore` and the bounded
+  password-work gate, while its client IDs, single active Argon2id hash,
+  allowed/default scopes, and token lifetime stay in `App.Composed`. The
+  example rotates that hash atomically, so unknown and known rejected
+  credentials each verify one hash. One startup-validated
+  RS256 key set signs both audiences; a client token carries only the API
+  audience, client ID subject, nonempty selected scopes, and a short expiry.
+  Unknown and malformed IDs share the invalid-client outcome, with malformed
+  IDs skipping storage and both paths doing bounded dummy/real verification.
+  This issuance-only slice added no generic framework capability. AHI-4E-OAUTH
+  now adds the public `/oauth/token` route, PostgreSQL client store and seeded
+  client, RFC 8414/RFC 9728 metadata, public JWKS route, and route/store privacy
+  proofs. Its framework capability decisions are recorded below. This
+  app-level OAuth work does not complete the separate OpenAPI documentation and
+  Swagger UI work.
+
+**Follow-up decision — OAuth body-failure interpretation (AHI-4E-OAUTH,
+2026-09-27): extend the existing typed URL-form body declaration with a
+closed failure callback.** Harch already owned the byte cap, form field cap,
+and decoder, but its 400/413/415 outcomes were written before the OAuth
+application handler could attach the protocol's no-store headers or render
+the safe `invalid_request` body. Interpreting a finished `ProtocolResponse`
+after dispatch would be too late to restore the application-owned headers.
+Taking the body as a stream would keep the byte cap but duplicate Harch's
+URL-form parser and move the input failure rail into the application. The
+selected extension passes only `ApiRequestBodyTooLarge`,
+`ApiRequestBodyUnsupportedMediaType`, or `ApiRequestBodyMalformed` to the
+same endpoint declaration, which returns a typed `ApiResponseBody`; raw bytes,
+content-type values, and parser details remain private. This keeps one route
+dispatcher, one bounded body owner, and the standard OAuth error mapping.
+The route/store integration exercises all three closed body failures and
+checks the OAuth error shape plus `private, no-store` on each response.
+
+**Follow-up decision — OAuth field-failure status (AHI-4E-OAUTH,
+2026-09-27): preserve an application-selected status only through an explicit
+typed policy.** The existing `ApiRenderFieldFailures` deliberately normalizes
+field errors to 400, which remains correct for ordinary API input. OAuth's
+Basic decoder runs on that same field rail before the handler, but RFC 6749
+requires a 401 `invalid_client` response with a matching Basic challenge when
+Authorization-header authentication fails. A second endpoint dispatcher or a
+manual WAI parser would split ownership. `ApiRenderFieldFailuresWithStatus`
+therefore opts this one typed endpoint into its callback's `Http.Status`; all
+existing callers retain the 400 policy. The callback sees
+only closed parse constructors and field names, never credential values.
+
+The token module also rejects a request before its body reader or store runs
+unless WAI marks the transport secure. This uses the actual secure-transport
+bit rather than an untrusted `X-Forwarded-Proto`; deployment TLS must be
+configured to set that bit. The server publishes RFC 8414's required empty
+`response_types_supported` list for its client-credentials-only grant, and
+keeps protected-resource discovery in the RFC 9728 document rather than an
+unregistered authorization-server metadata property.
+
+The OAuth WAI integration proves success and same-response unknown/wrong
+client failures; invalid scope and grant mappings; malformed, oversized,
+unsupported-media, and over-field-limit bodies; duplicate authentication
+methods; cleartext rejection; private/no-store headers; and store-outage
+mapping. Direct protocol checks confirm that successful issuance and a store
+outage add no logs, telemetry attributes, or database-operation spans. It compares served JWKS to the
+runtime's sanitized public set and verifies a served access token with that
+same runtime. A real PostgreSQL integration proves owner-created client rows
+are readable by the runtime role while client and scope writes remain denied.
+AHI-4E-OAUTH remains open until the complete repository gates and exact-SHA PR
+CI have passed.
+
+**Named module-health follow-up (AHI-4E-OAUTH, 2026-09-27):** the quality
+report measured `App.Composed.OAuth` at 530 lines with 24 imports, exceeding
+the repository's line/import review threshold. The OAuth routes, metadata,
+JWKS, and durable-store proofs are present; the concrete remaining gap is that
+token handling and discovery/JWKS still share one large module. The local
+follow-up `TASKS/ahi-4e-oauth-module-health.md` reviews and extracts cohesive
+ownership while retaining the typed dispatcher, bounded body owner, and route
+coverage. This structural follow-up does not defer any AHI-4E protocol surface.
 
 Verified by the new `Unit.WebApi.Api.EndpointsSpec` cases (extension failure
 rail, all four family-path resolutions plus the unknown-path rail, both scope
@@ -1483,11 +1557,12 @@ default operationIds, the explicit empty `security` arrays on anonymous
 operations, the account and resource requirements on `/api/me` and
 `/api/second`, and both `http`/`bearer`/`JWT` scheme components.
 
-**Follow-up decision — startup-cached explicit OpenAPI provider (AHI-4E,
+**Follow-up decision — startup-cached explicit OpenAPI provider (OpenAPI documentation and Swagger UI,
 2026-09-22): add `OpenApiDocumentProvider` only in the optional OpenAPI
 package, and make its supplied constructor prepare strict encoded bytes from
 one application-selected availability snapshot before the provider exists.**
-This is an additive composition capability, explicitly authorized by AHI-4E,
+This is an additive composition capability, explicitly authorized by the OpenAPI documentation and
+Swagger UI work,
 for immutable document data; it is disjoint from `RouteCodec`'s existing
 path/method/security ownership. A new route adapter or provider-local
 dispatcher would duplicate those responsibilities, so neither ships in this
@@ -1572,7 +1647,7 @@ Every complete HTML response receives one fresh opaque CSP nonce from the framew
 entropy source. The server passes that nonce only to document rendering and CSP construction.  Client
 action CSRF state is a separate opaque token: the framework renders it in a `__Host-harch-csrf` secure,
 same-site cookie and validates its typed double-submit transport, while the application supplies the
-per-page token and authorizes session-bound actions through its existing session store (CZ,
+per-page token and authorizes session-bound actions through its existing session store (review finding,
 2026-08-23). Non-page responses carry neither value. `renderDocumentForTests` is intentionally deterministic
 and must only support golden markup tests—production callers use `renderDocumentWithNonce` with a
 freshly generated nonce, so no stable nonce can become a valid script capability.
@@ -1653,7 +1728,8 @@ genuine incremental construction rather than disguising an ordinary record.
 Scoped class names are available through `cssScope` and `ScopedCssClass`. App styles remain ordinary
 static assets today; a typed CSS or JavaScript asset EDSL has not landed.
 
-The web-api reference application records the AHI-1 ownership decision: repeated page and profile
+The web-api reference application records the ownership decision from the component and styling
+architecture design: repeated page and profile
 markup lives in private `WebApi.Components.*` modules as pure typed functions with explicit prop
 records, while its theme and responsive layout remain in `public/styles/app.css`. Its app shell
 declares that stylesheet through `Stylesheet` and applies the request context's already-validated
@@ -1818,9 +1894,9 @@ compatibility layers: a legacy `ApiEndpoint`/`apiEndpointMiddleware` target-plus
 intermediate `apiRouteEndpointMiddleware` that derived `404`/`405`/`Allow`/`HEAD`/`OPTIONS` from a typed
 `SomeApiRouteEndpoint` table composed as a standalone `Wai.Middleware` rather than through the route-family
 registry. Both were deleted once every application in this repository had migrated onto the family
-registry; see the AK decision record below for why that made deletion, not relocation, the right call.
+registry; see the legacy-surface deletion decision record below for why that made deletion, not relocation, the right call.
 
-### Decision record — FQ1: context-free static action rendering (2026-08-29)
+### Decision record — context-free static action rendering (2026-08-29)
 
 **Decision: extend the established `ActionPath` representation, not add an application-local
 wrapper or a second action declaration surface.** Static action declarations now retain their fixed
@@ -1828,7 +1904,7 @@ path alongside the dynamic renderer, allowing `staticActionPath` and `staticActi
 that proof instead of passing an artificial unit context. Dynamic declarations still require the
 existing explicit context APIs, so a static renderer cannot silently use an arbitrary request value.
 
-### Decision record — AC typed declarative endpoint boundary (2026-08-12)
+### Decision record — typed declarative endpoint boundary (2026-08-12)
 
 **Decision: extend the shared `RouteCodec`/`RouteDefinition` and server-response boundary (option 1),
 not a second WAI dispatcher.** The existing route codec owns application path dispatch, while its
@@ -1865,7 +1941,7 @@ mid-handler the way it can reject before ever calling a buffered-body handler. T
 multipart parser failure already stays typed for the handler instead of becoming an automatic
 response. See below for the closed route-family registry. `ApiMultipartRequestBody` now lets an API
 route select the existing scoped multipart consumer exactly once; its storage adapter and staged
-ownership follow AD's completed application-selected adapter policy, so the endpoint does not create
+ownership follow the completed application-selected adapter policy, so the endpoint does not create
 a new upload lifecycle or default to local files.
 
 `runServerWithWaiMiddleware`/`withLocalTestServerForApplication` are the raw-WAI composition points
@@ -1933,7 +2009,8 @@ does not have this exposure even before any migration: its own `ApiNotFound`/`Pa
 constructors are real, declared members of its route table with their own `RouteDefinition`, not a
 codec-synthesized sentinel outside the table. Fixed by having `apiRouteEndpointFamilyDefinition`
 check for a declared endpoint at its given path first and render an ordinary API `404` directly when
-none exists, before ever reaching the matcher. The former matcher was subsequently deleted by BP; a
+none exists, before ever reaching the matcher. The former matcher was subsequently deleted by the
+total action-target and API-family matching work; a
 new Unit test
 drives `apiRouteEndpointFamilyDefinition`'s `routeResponse` on the codec's own `notFoundRequest`
 route end to end (not just the pure `RouteCodec` value) to keep this path covered.
@@ -1958,7 +2035,7 @@ example's old hand-written `Maybe`-based lookup did.
 At the time of this decision, `web-api` still hand-wrote its `/api/status`/`/api/second` dispatch and
 the typed endpoint boundary had no way to preserve `/api/second`'s response observability attributes
 or private log entry. The following decision added that general `ApiResponse` capability, and the
-subsequent AC implementation migrated both endpoints through `apiRouteDefinitionWithContext`; the
+subsequent implementation migrated both endpoints through `apiRouteDefinitionWithContext`; the
 current status table records the resulting single-dispatcher composition.
 
 ### Follow-up decision — typed endpoint observability attributes and log entries (2026-08-13)
@@ -2006,7 +2083,7 @@ its `404`, because it now renders through the same `Site`/`toWaiApplication` pip
 response instead of a bespoke fallback `Wai.Application` that never applied them — a genuine
 correctness improvement the migration exposed, not a regression to work around.
 
-This closes the prerequisite the AK entry in `TASKS.md` named: with both example applications off
+This closes the stated prerequisite: with both example applications off
 `apiEndpointMiddleware`, and neither ever having used the intermediate `apiRouteEndpointMiddleware`
 either, `HarchWeb.Api.Endpoint`'s legacy `ApiEndpoint`/`apiEndpointMiddleware` surface and its
 `apiRouteEndpointMiddleware` typed-WAI-middleware composition function are both now unreferenced by any
@@ -2016,11 +2093,11 @@ posture, that makes deleting both a legitimate breaking change rather than somet
 migration path — but actually doing so (auditing exactly what can be deleted versus what
 the then-public endpoint matcher still shares, updating both export lists, deleting the now-pointless
 dedicated tests, and updating every doc that still describes the compatibility helpers as current) is
-real follow-up work of its own, tracked under AK, not completed as part of this migration.
+real follow-up work of its own, not completed as part of this migration.
 
-### Follow-up decision — AK: deleted the legacy compatibility surface (2026-08-13)
+### Follow-up decision — deleted the legacy compatibility surface (2026-08-13)
 
-**Decision: delete, not relocate — completing AK's investigated deletion candidate.** With both
+**Decision: delete, not relocate — completing the investigated deletion candidate.** With both
 example applications migrated, a repository-wide audit confirmed no application code anywhere still
 called `ApiEndpoint`/`apiEndpoint`/`apiEndpointTarget`/`ApiMatchResult`/`matchApiEndpoints`/
 `matchLegacyMethod`/`legacyEndpointAtPath`/`legacyEndpointHasMethod`/`legacyDeclaredMethods`/
@@ -2037,7 +2114,7 @@ and "apiEndpointMiddleware" `describe` blocks in `ApiSpec.hs`, and the standalon
 test, since that function had no other caller once both middlewares were gone). `apiHttpResponseToWaiResponse`
 and `apiAllowHeaderValue` were deleted too, once auditing confirmed their only remaining callers were the
 two removed middlewares. `ApiHttpResponse` and `apiHttpResponseToProtocolResponse` were kept: unlike the
-deleted functions, `apiRouteEndpointFamilyDefinition`'s own not-found rendering (the AC standalone-not-found
+deleted functions, `apiRouteEndpointFamilyDefinition`'s own not-found rendering (the standalone-not-found
 fix above) depends on both.
 
 **Follow-up (same day): the deletion's own coverage run surfaced dead code the deletion itself created,
@@ -2083,14 +2160,14 @@ not a testing gap.** Running the full CI-equivalent coverage gate against the de
 
 `HarchWeb.Api.Endpoint` shrank from 658 to 499 lines (41 declarations, 22 imports, 23 exports, fan-out 9,
 per `tools/haskell-quality-report.sh`) by the combined legacy-surface deletion and this coverage-driven
-dead-code removal. **This closes the AK module-health signal**: this document's module-health rule is a
+dead-code removal. **This closes the module-health signal**: this document's module-health rule is a
 conjunction — a module must exceed 500 lines *and* (20 imports or 10 local dependencies/fan-out) to be
 flagged — and at 499 lines the module no longer exceeds the line threshold regardless of its 22 imports or
 fan-out of 9, both otherwise-unremarkable numbers for a module gating an entire typed API surface. Naming
 the margin honestly: 499 is one line under the threshold, not a wide margin, so a future addition to this
 module should re-run `tools/haskell-quality-report.sh` rather than assume the signal stays closed.
 Re-examining a `.Family` module split now that only one dispatch path remains (the earlier "shared by
-legacy and typed-middleware" obstacle is gone): the blocker AK's original investigation named independently
+legacy and typed-middleware" obstacle is gone): the blocker the original deletion investigation named independently
 of that sharing — `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`/
 the former endpoint matcher and its supporting matchers (`endpointAtPath`, `endpointHasMethod`,
 `declaredMethods`) all need to pattern-match the `ApiPath` newtype's constructor, which
@@ -2114,7 +2191,7 @@ family interpreter can inspect the abstract public path without widening the pub
 relocation of a compatibility surface and does not create a second WAI dispatcher. Focused endpoint tests,
 the full 100% coverage gate, and the module-health report are the required proof of this structural change.
 
-### Follow-up decision — AC's web-api gap is a single-dispatcher extension, not a family (2026-08-13)
+### Follow-up decision — the web-api gap is a single-dispatcher extension, not a family (2026-08-13)
 
 **Decision: extend `web-api`'s existing single `AppRoute`/`routeCodec` dispatcher via
 `HarchWeb.Api.Endpoint`'s per-route `apiRouteDefinition`, not `combineRouteCodecs`/`RouteFamily`.**
@@ -2202,14 +2279,14 @@ not `WebApi.Route`'s own declaration — no amount of restructuring the declarat
 fixed that. The fix was testing `WebApi.Route.routeCodec` directly, bypassing the application-level
 override, so the assertion exercises the declaration it actually names.
 
-See the AC entry in `TASKS.md` for the full investigation and final numbers.
+The full investigation behind these fixes covered every implementation pass and apparent gap named above.
 
-### Follow-up decision — AF: concurrent-in-flight-request admission gate (2026-08-13)
+### Follow-up decision — concurrent-in-flight-request admission gate (2026-08-13)
 
 **Decision: an opt-in, non-blocking WAI-level admission gate shared by every real listener,
 including the local test harness — not a Warp setting, since none exists.** Investigated first:
 Warp 3.4.12 (the pinned version) has no concurrent-request or connection-count setting of its own,
-matching the same kind of documented limitation this document's AF header-count precedent already
+matching the same kind of documented limitation this document's header-count precedent already
 established for Warp's header handling — so this could not be "add the missing Warp option" and had
 to be a framework-level admission gate instead. Built as `HarchWeb.Server.RequestExecution.concurrencyLimitedMiddleware ::
 Maybe RequestConcurrencyLimit -> Wai.Middleware -> IO Wai.Middleware`, composed around the same
@@ -2218,7 +2295,7 @@ application's own middleware rather than displacing it. Admission is immediate a
 non-blocking counting `IORef`, not a `QSem` queue): a caller beyond the limit gets a stable `503`
 before route parsing, middleware, observability, or body reads, matching the existing request-head
 gate's contract rather than making the caller wait for a slot — a queueing gate would change the
-task's own resource-protection intent into a hidden latency amplifier under load. A held slot is
+the stated resource-protection intent into a hidden latency amplifier under load. A held slot is
 released via `finally`, covering the request's whole lifetime including a streamed response, on
 ordinary completion or any exception.
 
@@ -2246,12 +2323,12 @@ it once the test also called `==`/`/=` as a direct boolean expression rather tha
 comparison through `shouldBe`/`shouldNotBe`'s polymorphic `Eq a =>` dictionary — restructuring the
 code to match a working precedent, not forcing a tick.
 
-### Follow-up decision — EM: bound valid cookie pairs at the existing request-head boundary (2026-08-25)
+### Follow-up decision — bound valid cookie pairs at the existing request-head boundary (2026-08-25)
 
 **Decision: extend `RequestHeadLimits` with opt-in cookie count, name-byte, and value-byte budgets;
 do not add another cookie parser or make this an endpoint option.** A raw `Cookie` header can carry
 many application-visible pairs, so the existing generic per-header-value limit cannot express the
-separate resource ownership AF required. The framework already owns the pre-routing raw-header
+separate resource ownership the admission gate required. The framework already owns the pre-routing raw-header
 gate, while `HarchWeb.Api.Request` owns the later typed cookie projection. Extending the earlier
 boundary preserves that ownership sequence: configured cookie limits reject with the established
 non-reflective `431` before routing, middleware, observability, or a decoder can create a list of
@@ -2264,9 +2341,10 @@ still detects duplicate names as it did before; malformed or empty segments rema
 than turning a resource budget into an accidental cookie-grammar policy change. The scanner walks
 raw `ByteString` segments without `split` or a retained pair list. Generic total-header and
 per-header-value limits run first and remain independent safeguards. This adds no new default and
-does not claim to solve the listener-time limits or per-route policy question retained by EN.
+does not claim to solve the listener-time limits or per-route policy question that earlier work
+left open.
 
-### Follow-up decision — EN: route-local execution admission, not impossible per-route transport policy (2026-08-25)
+### Follow-up decision — route-local execution admission, not impossible per-route transport policy (2026-08-25)
 
 **Decision: extend `RouteDefinition` and the one shared `toWaiApplication` dispatcher with an
 opt-in `RouteExecutionPolicy` whose sole capability is a per-route concurrency gate.** Listener
@@ -2292,7 +2370,7 @@ while deployment configuration continues to own listener and application-wide bu
 may be redundant when wider than a configured global cap, but can never raise that cap because both
 gates must admit the request.
 
-**Amendment (SEC-1/SEC-2, 2026-09-06): the route gate is keyed by the declaration's stable
+**Amendment (review findings, 2026-09-06): the route gate is keyed by the declaration's stable
 `EndpointName`, after site/module composition has applied mounted metadata, rather than by the
 request-selected route ADT value.** The original “one gate per bounded route” wording was unsafe for
 parameterized route constructors: a path or query capture could become a permanent cache key and give
@@ -2309,11 +2387,11 @@ and prevents a client-action URL that collides with a page route from borrowing 
 Tests hold one parameterized capture while a distinct capture is rejected, and prove the same result
 for declared action URLs both absent from and colliding with the page codec.
 
-### Follow-up decision — AL: split `HarchWeb.Security.RequestLimits` out, not the rest (2026-08-13)
+### Follow-up decision — split `HarchWeb.Security.RequestLimits` out, not the rest (2026-08-13)
 
 **Decision: extract only the genuinely self-contained cluster; leave the coupled remainder unsplit.**
 `HarchWeb.Security` (763 lines, 48 exports) was over this document's 40-export module-health
-threshold, worsened marginally by AF's new `RequestConcurrencyLimit` exports. Unlike AK's earlier
+threshold, worsened marginally by the admission gate's new `RequestConcurrencyLimit` exports. Unlike the earlier
 blocked "naive split" attempt (two dispatch paths shared private matching primitives with no clean
 boundary), this module's exports fall into four natural concern clusters: request limits, response
 security headers/CORS/CSP, request-context/observability, and path/redirect. Investigated with real
@@ -2326,7 +2404,7 @@ other three clusters are not: response-header construction calls `requestScheme`
 and path/redirect handling calls the private forwarded-header trust chain that also backs
 request-context extraction, so splitting those three apart would mean either widening an
 internal-only export surface or duplicating logic across the split — the same "relocation, not a
-genuine shrink" trap AK's investigation already named. Per this document's "extend an existing
+genuine shrink" trap the earlier deletion investigation already named. Per this document's "extend an existing
 boundary" and missing-capability discipline, the correct move was extracting only the closed
 subgraph, not forcing a three-way split to hit a metric.
 
@@ -2339,30 +2417,30 @@ internal reorganization, not a public API change, and needed no `CHANGELOG.md` e
 exports. Full CI-equivalent pipeline passed with zero test changes, since the moved code's behavior
 and existing coverage carried over unchanged.
 
-Correction (DJ, 2026-08-21): the "30 exports … under the 40-export threshold" framing above conflated
-own-name count with consumer-facing surface. `tools/haskell-quality-report.sh`'s counter, before DJ's
+Correction (review finding, 2026-08-21): the "30 exports … under the 40-export threshold" framing above conflated
+own-name count with consumer-facing surface. `tools/haskell-quality-report.sh`'s counter, before that
 fix, scored a `module X` re-export entry as 1 no matter how many names `X` carries — so
 `HarchWeb.Security`'s real surface was 48 both before and after this split (30 − 1 + 19), and is 60
-now that DE (2026-08-20) added a second re-export. The split's real justification was never "gets
+now that the forwarded-trust split (2026-08-20) added a second re-export. The split's real justification was never "gets
 under 40" — it was the call-graph-verified genuine decoupling above, which stands unchanged. See the
-DJ decision record below for the general rule this falls under: a facade wholesale-re-exporting an
+decision record below for the general rule this falls under: a facade wholesale-re-exporting an
 already-split, self-contained sibling module is exempt from the export-count threshold regardless of
 the resulting raw number, per this document's own "non-facade public API" qualifier — narrowing such
 a facade further would mean either re-merging the split (undoing real decoupling) or splitting the
 re-exported cluster itself, neither of which this correction is asking for.
 
-### Follow-up decision — DJ: fix the quality-report tool's export/arity counters instead of re-splitting facades that were never actually violations (2026-08-21)
+### Follow-up decision — fix the quality-report tool's export/arity counters instead of re-splitting facades that were never actually violations (2026-08-21)
 
 **Decision: fix `tools/haskell-quality-report.sh`'s two counting bugs, then correct the three
 decision-record numbers that depended on them, rather than re-splitting `HarchWeb.Security`,
-`HarchWeb.Markup`, or `WebApi.Config` further.** DJ's finding was concrete: `module_export_count_for`
+`HarchWeb.Markup`, or `WebApi.Config` further.** The finding was concrete: `module_export_count_for`
 split each export-list line on commas and counted every resulting piece as one name, so a
 `module HarchWeb.Security.RequestLimits` re-export line — which actually carries 19 names — scored
 exactly the same as a single ordinary export. Every facade in this codebase (`HarchWeb.Security`,
 `HarchWeb.Markup`, `WebApi.Config`, and `TestCore.Browser`) is built from exactly this pattern
 (`module X, module Y, …` plus a handful of names of its own), so this bug understated every
-facade's true consumer-facing surface, and three separate decision records (AL, Y, and this
-document's own AL entry above) had cited the undercounted number as proof a module-health threshold
+facade's true consumer-facing surface, and three separate decision records (two earlier module-split
+records and this document's own split entry above) had cited the undercounted number as proof a module-health threshold
 was satisfied.
 
 Fixed the counter in two parts: `module_export_entries_for` now classifies each export-list entry as
@@ -2380,17 +2458,17 @@ is a thin `module X, module Y, …` shell with zero or near-zero names of its ow
 actually carrying the bulk of the surface (`HarchWeb.Security.RequestLimits`/`.ForwardedTrust`,
 `HarchWeb.Markup.Attributes`/`.Elements`/`.Regions`/`.Syntax`, `WebApi.Config.Defaults`/`.Loading`/
 `.Types`) are each individually well under the threshold on their own. `HarchWeb.Markup.Implementation`
-(65 exports) and `WebApi.Config.Internal` (42 exports) are the two modules DZ separately worried might
-themselves be non-facade violations, but both are Cabal `other-modules` — not part of the package's
+(65 exports) and `WebApi.Config.Internal` (42 exports) were the two modules separately suspected of being
+non-facade violations, but both are Cabal `other-modules` — not part of the package's
 public API at all, only reachable through the facade that re-exports them — so the non-facade rule
 does not apply to them either. Re-splitting any of these three facades further would mean either
-undoing genuine, call-graph-verified decoupling (AL, Y) to shrink the re-export count, or splitting an
+undoing genuine, call-graph-verified decoupling (the two earlier module splits) to shrink the re-export count, or splitting an
 already-cohesive sibling module apart purely to move its name count somewhere else — exactly the
-"relocation, not a genuine shrink" pattern this document's AK and AL entries already warn against
-chasing. AL's and Y's closure notes (and this document's own AL entry above) were corrected in place
+"relocation, not a genuine shrink" pattern this document's deletion and split entries already warn against
+chasing. The closure notes for those splits (and this document's own split entry above) were corrected in place
 to state the true numbers and the correct (facade-exemption) justification, not reopened.
 
-CS's arity-metric finding was fixed alongside the export counter, in the same script.
+The arity-metric finding was fixed alongside the export counter, in the same script.
 `module_max_arity_for` matched any line shaped like `identifier … =` and counted whitespace-separated
 tokens on the left of that `=`, excluding only lines containing `::`. Two failure modes followed
 directly: an `import` line can itself contain a bare `=` (`(.=)`, aeson's `Value` combinator), so
@@ -2400,22 +2478,23 @@ character and colon, reporting arity 17 for a genuinely one-argument function. F
 `import` lines outright and, wherever a top-level `::` signature is present, deriving arity by
 counting depth-0 `->` occurrences in the signature instead of tokenizing the equation head at all —
 the equation-head heuristic now runs only for the rarer case of a top-level binding with no preceding
-signature. Re-running against the two files DJ's report cited confirms the fix: `TestCore.Browser.Protocol`
+signature. Re-running against the two files the earlier report cited confirms the fix: `TestCore.Browser.Protocol`
 now reports arity 3 (was 10) and `TestCore.SpecPreprocessor` reports arity 3 (was 17), both matching
 their real signatures.
 
-Correction (FQ5, 2026-08-29): a signature that begins with `name ::` and places its arrows on
+Correction (review finding, 2026-08-29): a signature that begins with `name ::` and places its arrows on
 indented continuation lines was still silently undercounted, so the "can never fabricate a
 violation" rationale did not justify leaving a mandatory follow-up trigger incomplete. The report
 now carries lexical state across the complete top-level signature: line/block comments and strings
 are ignored; parentheses, brackets, and braces suppress nested arrows; and ordinary plus
 parenthesized-operator names are recognized. A complex untyped equation pattern remains
 conservatively uncounted rather than whitespace-tokenized. The fixture covers these boundaries,
-and the real-tree comparison exposes the FQ6--FQ9 records instead of treating their prior low
+and the real-tree comparison exposes the login-environment, execution-record, context-record, and
+composition-environment records instead of treating their prior low
 numbers as closure evidence. This keeps the metric an advisory review signal, but makes it a
 reliable trigger for the design review AGENTS.md requires.
 
-### Follow-up decision — BP: total action-target and API-family matching (2026-08-18)
+### Follow-up decision — total action-target and API-family matching (2026-08-18)
 
 **Decision: extend the existing `ActionCodec` and route-family interpreter (option 1), rather
 than adding a second action registry or treating configuration defects as server exceptions.** An
@@ -2448,7 +2527,7 @@ newtype would duplicate it without improving composition or preventing an additi
 Observability remains explicitly numeric: `responseStatusCode` extracts `Http.statusCode` only when
 constructing the low-cardinality HTTP server attribute.
 
-### Follow-up decision — BW: typed database operations reach OTLP at the response boundary (2026-08-19)
+### Follow-up decision — typed database operations reach OTLP at the response boundary (2026-08-19)
 
 **Decision: extend the existing response and request-observability boundaries (option 1), rather
 than reconstructing a second database-operation protocol from generic attributes.** `ResponseBody`,
@@ -2476,7 +2555,7 @@ the package can be configured reproducibly as a whole. The vendored
 project API decision. Future dependency upgrades must deliberately update the relevant lower bound
 and pass the complete release gate, rather than silently widening an old release's solver range.
 
-### Follow-up decision — CM: remove Custom setup hooks (2026-08-18)
+### Follow-up decision — remove Custom setup hooks (2026-08-18)
 
 **Decision: use Cabal's existing build-tool dependency graph for `core`, `harch-web`, and
 `test-core`, and use `Hooks` only for `web-api`'s genuinely separate database lifecycle.** The
@@ -2496,13 +2575,13 @@ second build order. The manifest gate asserts the three Simple packages and the 
 implementation, while the complete test/coverage gate proves Cabal resolves and runs every declared
 test tool.
 
-### Follow-up decision — DF: HTTPS-redirect authority stops trusting the request's own Host header (2026-08-20)
+### Follow-up decision — HTTPS-redirect authority stops trusting the request's own Host header (2026-08-20)
 
 **Decision: extend `RequestPolicyConfig` with a canonical `httpsRedirectAuthority` field (option 1,
 small and general); do not have the framework introspect `AcmeConfig`/TLS bind-plan config to guess
 a domain.** `requestRedirectAuthority` echoed the request's own `Host` header into the 308 upgrade's
 `Location`, an open redirect an attacker (or a caching intermediary) fully controls by setting that
-header on a plaintext request. The task's own text suggested the framework already had a usable
+header on a plaintext request. The original requirements suggested the framework already had a usable
 domain list on `AcmeConfig`/`ManualTlsBindPlan`; checking found `ManualTlsBindPlan` carries no domain
 field at all, so that path does not generalize. `HarchWeb.Security.requestRedirectLocation` now never
 reads the request's `Host` header — it renders `httpsRedirectAuthority` (with the existing
@@ -2520,10 +2599,10 @@ links) to also supply the redirect authority, overriding the listener-derived gu
 No new abstraction and no new required setting were added; both existing boundaries — the framework's
 request-policy record and web-api's own composition-root override point — were extended in place.
 
-### Follow-up decision — DE: forwarded-header trust becomes a property of the peer, not a global flag (2026-08-20)
+### Follow-up decision — forwarded-header trust becomes a property of the peer, not a global flag (2026-08-20)
 
 **Decision: add `HarchWeb.Security.ForwardedTrust` as a new sibling module (option 1, small and
-general, genuinely disjoint concern) implementing exactly the task's own sketched
+general, genuinely disjoint concern) implementing exactly the originally sketched
 `ForwardedHeaderTrust`/`CidrBlock` shape; do not have the framework track hop counts or IPv6.**
 `trustForwardedHeaders :: Bool` let any client spoof `X-Forwarded-For`/`-Proto`/`-Prefix`/`Forwarded`
 regardless of who actually connected, poisoning `client.address` observability and letting a client
@@ -2543,8 +2622,8 @@ assumed here.
 **Also recorded — a genuine GHC 9.14.1 `-O2` HPC instrumentation quirk, not a missing test.**
 `ForwardedHeaderTrust`/`CidrBlock` initially used `deriving (Eq, Show)`. Their derived instances'
 never-overridden `/=`, `show`, and `showList` default methods showed permanently unticked regardless
-of test coverage, and — unlike the project's established CSE-sharing artifact (see the coverage-gate
-memory) — adding more covering tests moved *which* sub-expression showed unticked rather than closing
+of test coverage, and — unlike the project's established CSE-sharing artifact (documented under
+**Never mask a gate finding with an ignore pragma**) — adding more covering tests moved *which* sub-expression showed unticked rather than closing
 the gap, across several full rebuilds. The `.mix` file (not guesswork) showed why: GHC attributes each
 unoverridden class default method to its own coverage box at the bare `instance ... where` line, and
 the optimizer specializes/inlines a call to that method away before it registers as its own tick —
@@ -2552,14 +2631,14 @@ while a real `/=` comparison, a bare `show`, and a `show` of a list (to reach `s
 fixed it once *every* default method had its own genuine call site. Both instances are now
 hand-written; ordinary user-defined functions do not have this problem and are covered normally. This
 is a third, distinct technique from the already-documented `$!`-forcing and extract-and-test ones —
-recorded in the `coverage_gate_haskell_web_api.md` memory so a future session facing an
+recorded in this decision record so a future session facing an
 instance-method coverage gap does not misdiagnose it as a missing test either.
 
-### Follow-up decision — DG: delete the never-wired native ACME protocol client rather than hardening it (2026-08-20)
+### Follow-up decision — delete the never-wired native ACME protocol client rather than hardening it (2026-08-20)
 
 **Decision: delete `Acme/Protocol/{Client,Workflow,Types,Decode}.hs`, `Acme/KeyMaterial.hs`,
 `Acme/OpenSsl.hs`, and `Acme/Crypto.hs` outright, rather than replacing their `openssl`-subprocess
-calls with in-process crypto.** DG's finding — RSA-4096 keygen, RS256 signing, and SHA-256 hashing
+calls with in-process crypto.** The finding — RSA-4096 keygen, RS256 signing, and SHA-256 hashing
 done by shelling out to `openssl` resolved through `$PATH`, with the raw command runner exported
 publicly — was accurate as a description of the code, but investigating where that code is actually
 used (prompted by a direct question: is any of this necessary, since ACME already works without it)
@@ -2579,7 +2658,7 @@ in this project's dependency closure builds from scratch (`x509`/`crypton-x509`,
 transitively via `tls`, only model and parse certificates); doing it correctly means hand-writing
 ASN.1 DER encoding, a genuinely error-prone, security-sensitive investment in a backend nothing
 calls. Deleting closes the actual attack surface ($PATH-resolved `openssl`, publicly exported) more
-completely and far more cheaply, and the task's two smaller findings (raw stdout/stderr spliced into
+completely and far more cheaply, and the two smaller findings this work carried (raw stdout/stderr spliced into
 a `userError`; unescaped domain interpolation into an openssl.cnf) disappear with the code they lived
 in rather than needing separate fixes. `HarchWeb.Acme`'s module doc now states plainly that ACME is
 always certbot-backed by design, closing the door on a reader assuming a native alternative is
@@ -2588,47 +2667,47 @@ built fresh against current requirements — at which point the CSR-encoding que
 answer regardless, so nothing already written here would have been reusable as-is.
 
 `HarchWeb/Acme/Json.hs` was investigated and kept: although built for the now-deleted protocol
-client, it also backs `HarchWeb.Observability.Otlp.Wire`'s live OTLP JSON encoding. DH (a separate,
-still-open task) targets this exact file's hand-rolled `ReadP` parser; its own findings remain real
-and its task text was updated to stop pointing at the now-deleted ACME-response decoder types.
+client, it also backs `HarchWeb.Observability.Otlp.Wire`'s live OTLP JSON encoding. A separate,
+still-open review targets this exact file's hand-rolled `ReadP` parser; its own findings remain real
+and its write-up was updated to stop pointing at the now-deleted ACME-response decoder types.
 
-### Follow-up decision — DH: delete `Acme/Json.hs`'s parser rather than fixing it, once DG proved it dead too (2026-08-20)
+### Follow-up decision — delete `Acme/Json.hs`'s parser rather than fixing it, once the ACME-client deletion proved it dead too (2026-08-20)
 
 **Decision: delete the whole `ReadP`-based JSON parser, `JsonValue`, and every field accessor from
-`Acme/Json.hs`, rather than fixing the four concrete defects DH found in them; keep only the three
+`Acme/Json.hs`, rather than fixing the four concrete defects an earlier review found in them; keep only the three
 byte-builder encoders (`jsonArrayBytes`, `jsonObjectBytes`, `jsonStringBytes`), and make the module
 directly importable (`exposed-modules`, not re-exported through `HarchWeb.Acme`) so the package's
-own tests can still reach them.** DG's note above assumed `Otlp/Wire.hs` used `Json.hs`'s
+own tests can still reach them.** The ACME-deletion note above assumed `Otlp/Wire.hs` used `Json.hs`'s
 `JsonValue`/field-helper reading side; tracing its actual import list
 (`import HarchWeb.Acme.Json (jsonArrayBytes, jsonObjectBytes, jsonStringBytes)`) showed that
-assumption was wrong — OTLP export only ever used the encoder half. With DG having already deleted
-every parser caller, `parseJsonValue` and everything under it were exactly as dead as the code DG
+assumption was wrong — OTLP export only ever used the encoder half. With that cleanup having already deleted
+every parser caller, `parseJsonValue` and everything under it were exactly as dead as the code it
 removed, for the same reason: fixing partial `decodeUtf8`, unbounded materialization, ambiguous-parse
 enumeration, and missing surrogate-pair handling in a parser nothing calls would have hardened
-unreachable code, not closed a real gap. Deleting it removes DH's findings outright, the same
-resolution DG reached, and also closes DH's "exported as public API through the `Acme` facade"
+unreachable code, not closed a real gap. Deleting it removes those findings outright, the same
+resolution the ACME-client deletion reached, and also closes the "exported as public API through the `Acme` facade"
 finding, since the facade no longer mentions `Json.hs` at all.
 
 The one wrinkle deleting the parser exposed: a Cabal test-suite component cannot see a library's
-`other-modules`, so once the facade re-export (the very thing DH flagged) was gone, nothing let
+`other-modules`, so once the facade re-export (the very thing that review flagged) was gone, nothing let
 `AcmeSpec.hs` reach the three encoders — and no other test in the repository drives the real OTLP
 HTTP-export path, so simply deleting the test would have silently regressed coverage to 0% on code
 `Otlp/Wire.hs` genuinely depends on. This is the missing-framework-capability fork in miniature:
 rather than mocking OTLP export or reaching into a hidden module some other way, `HarchWeb.Acme.Json`
 moved to `exposed-modules` on its own — not through the `Acme` facade, so nothing implies it is ACME
 functionality — trading a small, honest, directly-named public surface for keeping a real coverage
-source for live code. This is a smaller and more legible exposure than what DH originally flagged:
+source for live code. This is a smaller and more legible exposure than what that review originally flagged:
 previously the *entire* parser, `JsonValue`, and every accessor were re-exported through a facade
 that implied they were curated ACME functionality; now three leaf functions are importable by their
 own name, from a module whose Haddock says plainly it exists only for the test suite and for
 `Otlp/Wire.hs`.
 
-### Follow-up decision — DK: make `toWaiApplication` self-gating instead of adding a gated variant (2026-08-21)
+### Follow-up decision — make `toWaiApplication` self-gating instead of adding a gated variant (2026-08-21)
 
-**Decision: bake AF's concurrency admission gate directly into `toWaiApplication` — "the public WAI
+**Decision: bake the concurrency admission gate directly into `toWaiApplication` — "the public WAI
 adapter" itself — rather than adding a second, gated entry point alongside the existing ungated
-one.** DK's finding traced cleanly: `HarchWeb.Server.Runtime` and `HarchWeb.Server.LocalTest` both
-already composed `concurrencyLimitedMiddleware` around `toWaiApplication` correctly (AF's own fix
+one.** The finding traced cleanly: `HarchWeb.Server.Runtime` and `HarchWeb.Server.LocalTest` both
+already composed `concurrencyLimitedMiddleware` around `toWaiApplication` correctly (the admission gate's own fix
 covered both), but `toWaiApplication` is also the *only* function the public `HarchWeb`/
 `HarchWeb.Server` facade exposes for turning a typed `Application` into a `Wai.Application` at all —
 `concurrencyLimitedMiddleware` itself lives in `other-modules`, unreachable by application code. Both
@@ -2646,7 +2725,7 @@ abstraction: the tempting alternative — leave `toWaiApplication` as-is and add
 under discussion, just with a different name to forget. None of the rule's three conditions for a
 parallel surface held (no existing caller's meaning would change — the gate is a no-op for every
 current test and example, none of which configures a `RequestConcurrencyLimit` today; it is not a
-disjoint concern, it is the same request lifecycle `toWaiApplication` already owns; and DK's text
+disjoint concern, it is the same request lifecycle `toWaiApplication` already owns; and the originating write-up
 does not authorize a new surface), so the default applied: extend `toWaiApplication` itself.
 
 Implementation consequence: `toWaiApplication`'s type changed from
@@ -2667,15 +2746,15 @@ internally, leaving the call sites themselves untouched. A handful of call sites
 `toWaiApplication X` to something other than `performWaiRequest` (`startManualTlsRuntimeServerWithStarter`,
 `startHttpRuntimeServerWithStarter`, a raw `Wai.Application`-shaped lambda for
 `withLocalTestServerForApplication`) needed an explicit `<-` bind instead. No new tests were needed:
-the existing suite's extensive `toWaiApplication` coverage and AF's own dedicated gate tests already
+the existing suite's extensive `toWaiApplication` coverage and the admission gate's own dedicated tests already
 exercise every changed branch, confirmed by a genuine 100% coverage re-run rather than assumed.
 
-### Follow-up decision — AX: transactional, versioned migrations own one short-lived libpq connection (2026-08-23)
+### Follow-up decision — transactional, versioned migrations own one short-lived libpq connection (2026-08-23)
 
 **Decision: extend `WebApi.Postgres.Migration` with a private, owner-credential libpq
 interpreter held for one migration batch; do not run migrations through the runtime query pool or
 add a second general database abstraction.** The existing migration module already owns schema
-evolution, its distinct owner credentials, and the `haskell-web-api-db` lifecycle. AX's original
+evolution, its distinct owner credentials, and the `haskell-web-api-db` lifecycle. The original
 `psql` command-by-command runner cannot hold a transaction or advisory lock across statements, so
 the smallest complete extension is one connection for that module's whole batch. AY's
 `PostgresPool` is deliberately a lazy, long-lived, shared runtime-query resource using the
@@ -2696,12 +2775,12 @@ tests can prove ordering, version skipping, reconciliation, rollback, and error 
 preserving the obsolete one-`psql`-process-per-statement fixture contract. This is a precise
 extension of the existing migration boundary, not a parallel runtime query API.
 
-### Follow-up decision — FQ4: migrations use one typed post-BEGIN failure rail (2026-08-29)
+### Follow-up decision — migrations use one typed post-BEGIN failure rail (2026-08-29)
 
 **Decision: express the existing migration transaction as `ExceptT PostgresRunnerError IO`, rather
 than manually forwarding `Either` through each migration phase or adding a second transaction
 runner.** `WebApi.Postgres.Migration` already owns the sole short-lived privileged connection and
-the transaction boundary named by AX. `BEGIN` remains outside the post-BEGIN rail so a failed begin
+the transaction boundary named by that migration work. `BEGIN` remains outside the post-BEGIN rail so a failed begin
 does not attempt rollback; every later operation, including `COMMIT`, uses the one rail and its
 boundary performs best-effort `ROLLBACK` before returning the original typed failure. The executor
 adapter lifts into that rail once, so an adapter-level decode failure cannot bypass cleanup.
@@ -2713,7 +2792,7 @@ decoding. This is deliberate defence against an old or manually altered table sh
 tests cover both malformed wire values and preserve the existing proofs for every post-BEGIN
 failure, including `COMMIT`.
 
-### Decision record — FQ6: one explicit login environment across password and MFA stages (2026-08-29)
+### Decision record — one explicit login environment across password and MFA stages (2026-08-29)
 
 **Decision: split the existing `WebApi.Login` implementation by stable lifecycle responsibility,
 while retaining its public facade and one authentication protocol.** Password credential lookup,
@@ -2734,7 +2813,7 @@ transposable copies. The changes are a deliberate API cleanup, not a metric-only
 workflow regressions and the full coverage gate must preserve the present authentication, throttling,
 rehash, and session-enrollment behavior.
 
-### Decision record — FQ7: execution records inside the existing endpoint and multipart boundaries (2026-08-29)
+### Decision record — execution records inside the existing endpoint and multipart boundaries (2026-08-29)
 
 **Decision: retain `ApiEndpointContract` and the single route dispatcher as the API boundary, while
 giving their private interpreters cohesive execution state.** `ApiEndpointExecution` combines one
@@ -2752,7 +2831,7 @@ promotion/discard ownership, bounded streaming, or typed parse/callback failures
 and multipart regressions plus the full coverage gate are the proof that this structural cleanup
 preserves their short-circuiting and resource contracts.
 
-### Decision record — FQ8: context records at server ownership boundaries (2026-08-30)
+### Decision record — context records at server ownership boundaries (2026-08-30)
 
 **Decision: group values that remain fixed through one server ownership boundary, but leave each
 changing request, route, response, and timing phase explicit.** `RequestObservabilityContext` owns
@@ -2769,11 +2848,11 @@ starts with. Listener-specific endpoint, TLS settings, socket, peer tracker, rea
 reporter stay explicit or live in a private per-listener record. `SimpleSiteConfiguration` groups a
 site's declarative route-table and shell inputs; middleware, policy, actions, and observers remain
 ordinary `Site` overrides. The disabled default observers are intentional policy values and were
-already reduced by FQ1 to unforced ordinary no-ops, so this task does not disguise them with new
+already reduced by the context-free static action rendering record to unforced ordinary no-ops, so this task does not disguise them with new
 ignore callbacks. Existing request/transport/ACME behavior tests and the coverage gate are the
 evidence required for this structural change.
 
-### Decision record — FQ9: injected setup and composition environments (2026-08-30)
+### Decision record — injected setup and composition environments (2026-08-30)
 
 **Decision: represent capabilities that are fixed for one execution as cohesive records, while
 keeping each command, plan, report, and user-visible result explicit.** Container autostart groups
@@ -2787,7 +2866,7 @@ workflow, output handle, and response-facing values stay explicit at the operati
 them. Focused dependency-injection tests plus the full coverage gate remain the proof that failure
 ordering and reporting behavior have not changed.
 
-### Decision record — FQ10: length-delimited ICU UTF-8 boundary (2026-08-30)
+### Decision record — length-delimited ICU UTF-8 boundary (2026-08-30)
 
 **Decision: extend the existing `HarchWeb.Localization` ICU renderer with a length-delimited UTF-8
 ABI, rather than reject NUL values or introduce a second formatter.** Locale identifiers, message
@@ -2798,7 +2877,7 @@ own length too, so Haskell decodes precisely the returned bytes with `decodeUtf8
 becomes `MessageFormatRejected`, never replacement text or an exception. This keeps the established
 pure, deterministic `Localizer` API and its error rail intact while making the FFI contract truthful.
 
-### Decision record — FQ11: client-action protocol interpreter extraction (2026-08-30)
+### Decision record — client-action protocol interpreter extraction (2026-08-30)
 
 **Decision: extract the internal client-action protocol interpreter from request execution, while
 retaining the one shared route/timing/finalization lifecycle.** The interpreter's bounded body read,
@@ -2810,7 +2889,7 @@ middleware, route method selection, concurrency admission, monotonic timing, WAI
 and observability. The public WAI adapter therefore has the same execution order while its module
 health falls below the review threshold.
 
-### Decision record — FQ12: account-workflow composition extraction (2026-08-30)
+### Decision record — account-workflow composition extraction (2026-08-30)
 
 **Decision: extract the private account-workflow construction capability from `WebApi.App`, while
 retaining `WebApi.App` as the explicit application/site composition root.** Runtime workflow creation
@@ -2840,13 +2919,13 @@ unilaterally — matching AW's precedent of naming a real blocker instead of shi
 with unstated consequences.
 
 `connect_timeout` has no such dependency (a client-side setting, identical behavior regardless of
-server TLS) and directly closes the concurrency-starvation half of AY's finding ("a wedged server
-pins a request thread indefinitely, and the AF concurrency gate then 503s everyone"), so it shipped
+server TLS) and directly closes the concurrency-starvation half of AY's finding — a wedged server
+pins a request thread indefinitely, and the concurrency gate then 503s everyone — so it shipped
 now: a new `databaseConnectTimeoutSeconds :: Int` field on `DatabaseConfig`, sourced from
 `DATABASE_CONNECT_TIMEOUT_SECONDS` (default `10`, following the existing committed-default pattern
 every other `DATABASE_*` field uses) and applied to every libpq conninfo string
 `runtimeConnectionString` builds. The migration-side `WEB_API_MIGRATION_DATABASE_*` parser also
-needs the field populated (one shared `DatabaseConfig` record), and AX's later one-shot libpq
+needs the field populated (one shared `DatabaseConfig` record), and the later one-shot libpq
 migration connection reads it through that same conninfo encoder. It remains a hardcoded committed
 default rather than a second migration-only environment variable: a one-shot batch has no
 concurrent request thread to starve, and a second knob would add configuration surface without a
@@ -2862,9 +2941,9 @@ call site after a coverage rerun. That record explains the existing code, but do
 repeating the technique. Current work must resolve such a signal through real behavioral demand or
 representation/test restructuring under the never-mask-a-gate-finding rule.
 
-Follow-up: AX already identified that genuine migration atomicity needs a persistent-connection
+Follow-up: the migration work already identified that genuine migration atomicity needs a persistent-connection
 Postgres runtime replacing the current per-statement `psql` subprocess model; AY's own deferred
-connection pool is the natural companion piece to design alongside it, per AX's note. `sslmode`
+connection pool is the natural companion piece to design alongside it, per that note. `sslmode`
 becomes safely defaultable to `require` only once that follow-up (or a separate deployment change)
 actually provisions TLS on the Postgres server(s) this project deploys against — until then,
 defaulting it on would be optimizing for a security property this project cannot yet exercise in
@@ -2885,18 +2964,18 @@ server lifecycle are appropriate. The real PostgreSQL 17 fixture now exercises t
 contract through libpq: verified success, a valid untrusted CA, hostname mismatch, and a
 TLS-disabled listener all have distinct outcomes.
 
-### Follow-up decision — AY: the connection pool, kept separate from AX's migration runtime (2026-08-21)
+### Follow-up decision — AY: the connection pool, kept separate from the migration-connection work (2026-08-21)
 
 **Decision: ship the runtime-query connection pool now, as its own change, rather than waiting to
-design it together with AX's migration runtime as the note above suggested.** Revisiting that note
-before building: the two are not actually coupled at the implementation level. AX's blocker is that
+design it together with that migration runtime as the note above suggested.** Revisiting that note
+before building: the two are not actually coupled at the implementation level. The blocker there is that
 migrations run through one `psql` subprocess per statement, so there is no single persistent
 connection to hold a transaction or an advisory lock across statements — fixing that means replacing
 the subprocess model outright, independent of anything the runtime query path does. The runtime
 query path already used `Database.PostgreSQL.LibPQ` directly (`runRuntimeParameterizedRowsQuery`
 and siblings), just via `bracket (LibPQ.connectdb …) LibPQ.finish` per call; pooling that is a
 refinement of an existing boundary (`WebApi.Postgres.Runtime`), not a new one, and needed no
-decision that also constrains AX's separate psql-to-libpq migration. Waiting would have blocked a
+decision that also constrains the separate psql-to-libpq migration. Waiting would have blocked a
 real, closeable half of AY on an unrelated, larger, still-unscoped task.
 
 **Shape: a new `WebApi.Postgres.Pool` (bounded, lazy, explicit-prop) alongside the existing
@@ -2913,7 +2992,7 @@ shelling out to psql" test already asserted; making pool construction eager and 
 would have been a legitimate but different design with its own tradeoffs, changing today's "database
 down at startup still serves non-DB routes" behavior — not made unilaterally here. The pool is
 threaded as an explicit prop from `WebApi.App`'s `runWithConfig` through `buildRuntimeApp` and
-`buildRuntimeAccountWorkflow`, one pool shared by every repository builder, per BX's precedent above
+`buildRuntimeAccountWorkflow`, one pool shared by every repository builder, per the explicit-prop caching precedent above
 (explicit-prop caching over a second `unsafePerformIO`/`NOINLINE` global) rather than joining
 `otlpExportQueue`/`otlpHttpManager`'s existing shape. Every `buildRuntimePostgresX`/
 `buildRuntimePostgresXWithRunner` pair's `WithRunner` half was generalized from a `DatabaseConfig`-
@@ -2939,11 +3018,11 @@ last-resort suppression exception does not make metric-oriented strictness accep
 comments and historical verification remain evidence of the 2026-08-21 investigation, not a
 precedent for current implementation work.
 
-### Follow-up decision — CK: nested per-constructor detail records close `-Wpartial-fields`, following each type's own sibling convention (2026-08-21)
+### Follow-up decision — nested per-constructor detail records close `-Wpartial-fields`, following each type's own sibling convention (2026-08-21)
 
 **Decision: wrap the fields specific to each flagged constructor in its own single-constructor
 nested record, rather than a blocklist, a `DuplicateRecordFields` merge, or leaving the flag
-unset.** CK's own deferred-scope note already named the two remaining flagged types
+unset.** The earlier deferred-scope note already named the two remaining flagged types
 (`HarchWeb.Server.Config`'s `TlsCertificateSource`/`TlsStartupMode` and `WebApi.Page.Model`'s
 `ProfilePageModel`) and the mechanical cost (restructuring plus ~100 pinned derived-`Show` string
 assertions across two multi-thousand-line files); this closes both.
@@ -2970,12 +3049,12 @@ are already disjoint.
 Its one field, `certificateWaitTimeoutSeconds`, has zero external accessor use (confirmed by grep,
 not assumed) — every caller either constructs or pattern-matches it, never calls it as a bare
 function. A single-field record with no reader beyond its own declaration would exist solely to
-satisfy the linter, so it became a plain positional `Maybe Int` instead — the same choice CK's own
-first `-Wpartial-fields` fix already made for `HarchWeb.Api.Endpoint.Internal`'s `ApiRequestBody`
+satisfy the linter, so it became a plain positional `Maybe Int` instead — the same choice a previous
+`-Wpartial-fields` fix already made for `HarchWeb.Api.Endpoint.Internal`'s `ApiRequestBody`
 GADT, whose one record-syntax constructor also had zero external accessor use.
 
 **Nesting reopened two derived-instance coverage gaps this session had already named as a general
-pattern, in a new shape.** BZ's and CB's own lessons (a deleted tautological `x == x` losing a
+pattern, in a new shape.** Earlier recorded lessons (a deleted tautological `x == x` losing a
 derived `Eq`'s default `/=` credit) covered the *within-one-type* case. Nesting surfaced a second
 variant: a nested type's own `deriving (Eq, Show)` is credited only when something calls `==`,
 `/=`, `show`, `showsPrec`, or `showList` **directly at that nested type**, not merely reached
@@ -2988,15 +3067,15 @@ enough to require parenthesization, and (e) a direct `show` of a one-element lis
 five distinct HPC-tracked boxes per type, discovered one at a time by re-running the coverage gate
 after each partial fix rather than guessed in one pass.
 
-### Follow-up decision — BA: give a taken username its own outcome, and target the conflict the insert is actually protecting (2026-08-21)
+### Follow-up decision — give a taken username its own outcome, and target the conflict the insert is actually protecting (2026-08-21)
 
 **Decision: replace `AccountStore.createPendingAccount`'s `Bool` result with a three-way
 `CreatePendingAccountOutcome`, target the insert's `ON CONFLICT` at the email constraint
 specifically, and check username availability up front with a second query rather than one atomic
-statement.** BA's own 2026-08-15 note already scoped this precisely and correctly, including
+statement.** The earlier 2026-08-15 note already scoped this precisely and correctly, including
 naming the exact three-way type, the targeted conflict clause, and the ~20 test call sites it would
 touch; this follow-up implemented that scope as written rather than re-deriving it. The one design
-choice BA's note left open — one atomic CTE-union query vs. two round trips with a documented race
+choice that note left open — one atomic CTE-union query vs. two round trips with a documented race
 — was resolved in favor of two round trips, matching the note's own "upfront username-availability
 check" phrasing: a single query returning a distinguishable outcome for three cases (created /
 email taken / username taken) is expressible in Postgres, but only via a more complex CTE-and-UNION
@@ -3012,21 +3091,21 @@ but they are not — a username is what a user picks and is commonly checked for
 directly during signup on far more security-conscious services than this one; an email address is
 what identifies a specific person's account, and confirming one is registered is a privacy/
 enumeration concern in a way confirming a *username* string is taken is not. Treating them the same
-(hiding both) would have left BA's own stated goal — restoring a legitimate user's ability to
+(hiding both) would have left the stated goal — restoring a legitimate user's ability to
 recover from a taken-username collision — permanently unmet for no security benefit; treating them
 differently, as implemented, closes both findings correctly rather than trading one for the other.
 
 `CreatePendingAccountOutcome` deliberately has no `deriving` clause, matching `RegistrationResult`'s
 own existing style in the same module: tests use pattern-match predicates
 (`\case PendingAccountCreated -> True; _ -> False`) instead of `==`, sidestepping the derived-
-`Eq`/`Show`-under-HPC coverage gap this session already root-caused and documented twice (DE, and
-the memory it lives in) rather than needing a third encounter with it. The historical
+`Eq`/`Show`-under-HPC coverage gap already root-caused and documented twice (in the forwarded-trust
+work, and in this file's GHC 9.14.1 HPC instrumentation note) rather than needing a third encounter with it. The historical
 implementation also recorded a CSE-shared `AccountStoreUnavailable` atom that lost an HPC tick and
 used `$!` after a coverage rerun. This explains an existing historical workaround; it is not a
 reusable technique. Future coverage work follows the current rule's behavioral-test or
 restructuring response instead.
 
-### Follow-up decision — BR: validated newtypes plus `IsString`, not a blocklist or a bare `Text` parameter (2026-08-21)
+### Follow-up decision — validated newtypes plus `IsString`, not a blocklist or a bare `Text` parameter (2026-08-21)
 
 **Decision: introduce `DataAttributeSuffix` and `SafeUrl` as validated newtypes with `IsString`
 instances, rather than either a runtime blocklist check inside `dataAttribute`/`href` or leaving
@@ -3038,7 +3117,7 @@ at all, so the fix extends that existing boundary — giving the two *public* co
 a second, parallel checking mechanism next to it. A runtime blocklist (reject `javascript:`,
 `data:`, `vbscript:`, …) was rejected for `SafeUrl` specifically: a blocklist can miss an obscure
 dangerous scheme a browser will still execute, while an allowlist (relative reference, or
-`http`/`https`) cannot silently regress the same way — BR's own task text already named this
+`http`/`https`) cannot silently regress the same way — the original write-up already named this
 tradeoff correctly.
 
 The `IsString` instance is the piece that made this tractable at the ~30-call-site scale this
@@ -3095,7 +3174,7 @@ own direct test forcing it via a deliberately malformed `OverloadedStrings` lite
 matching the `requiredXOrDie` extract-and-directly-test pattern rather than trying to make production
 code take that branch.
 
-### Follow-up decision — BS: quoted `Name`s for framework identifiers, and breaking the module cycle that stood in the way (2026-08-21)
+### Follow-up decision — quoted `Name`s for framework identifiers, and breaking the module cycle that stood in the way (2026-08-21)
 
 **Decision: resolve every framework identifier the quasiquoter splices through a quoted `Name`
 ('`Impl.foo`) against `HarchWeb.Markup.Implementation`'s own compile-time scope, not `mkName`
@@ -3106,7 +3185,7 @@ the module's *own* documented fix ("Lowering.hs:367 (hygienic, correct) … Lowe
 away; the fix is extending that same quoted-`Name` approach to every other framework identifier the
 module splices, not inventing a new resolution mechanism.
 
-Implementing it hit a missing-framework-capability gap the task's own text did not anticipate:
+Implementing it hit a missing-framework-capability gap the original requirements did not anticipate:
 `HarchWeb.Markup.Implementation qualified as Impl` cannot be imported from `Lowering.hs` as written,
 because `Implementation` already imports `HarchWeb.Markup.Quasi (harch)` (re-exporting it purely so
 `HarchWeb.Markup.Syntax` — the module `HarchWeb.Markup`'s facade actually re-exports the quasiquoter
@@ -3130,7 +3209,7 @@ through quoted `Name`s — they are the framework's intended open extension poin
 against whatever the splice site has in scope, and treating them as unhygienic would misread the
 bug: the finding is specifically about identifiers meant to be *fixed and framework-owned* being
 resolved as if they were as open as a component reference. Second, `nativeTagConstructor`'s
-`fromMaybe ""` sentinel (also named in the task's own "after" sketch) was closed by making
+`fromMaybe ""` sentinel (also named in the original "after" sketch) was closed by making
 `Parser.hs`'s `TagKind`'s native branch carry a `Maybe String` rather than by giving `Parser.hs` a
 new dependency on TH `Name`s: `Parser.hs` stays a plain, TH-free recognizer of a closed tag
 vocabulary, and *all* `String → Name` resolution stays centralized in `Lowering.hs`'s own tables —
@@ -3143,7 +3222,7 @@ itself needed — lost every one of those imports to `-Wunused-imports`, confirm
 existed *only* to satisfy the old unhygienic splice resolution, exactly the coupling this fix was
 meant to remove.
 
-### Follow-up decision — BV: catch the crash instead of chasing full TH-quote support (2026-08-21)
+### Follow-up decision — catch the crash instead of chasing full TH-quote support (2026-08-21)
 
 **Decision: convert `haskell-src-meta`'s uncaught crash on Template Haskell name-quote syntax into
 a clean parse failure, rather than implementing actual support for that syntax.** This is the
@@ -3151,7 +3230,7 @@ missing-framework-capability protocol's third fork in a form worth naming precis
 gap here is not in this codebase's own framework at all, but in a third-party dependency
 (`haskell-src-meta-0.8.16`'s `toExp` has no case for `VarQuote`/name-quote AST nodes and calls
 `error` instead). Confirmed directly (`cabal repl`, forcing `Meta.parseExp "'Just"`), not assumed
-from the task's own note, since that note's "distinct lowering-capability decision" framing
+from the original note, since that note's "distinct lowering-capability decision" framing
 undersold the actual severity: the failure is not a graceful `Left` the existing `case` already
 handles, it is an *uncaught* `ErrorCall` that would surface as a confusing library-internal panic at
 whichever application module happens to compile the offending markup literal — far from where the
@@ -3170,17 +3249,17 @@ claiming to implement TH-name-quote syntax. Direct `{'Just}` and nested `{f 'Jus
 prove the dependency error now becomes the positioned markup failure. Name quotes remain unsupported
 syntax, but they no longer leak an unhelpful compiler-time panic.
 
-### Follow-up decision — BX: explicit-prop caching, not a second global CAF (2026-08-21)
+### Follow-up decision — explicit-prop caching, not a second global CAF (2026-08-21)
 
 **Decision: cache the Gmail access token behind an explicitly-owned `GoogleWorkspaceTokenCache`
 prop, and pass the Gmail HTTP manager explicitly, rather than reaching for `unsafePerformIO`/
-`NOINLINE` globals the way `Otlp.hs`'s existing manager does.** BX's own text points at
+`NOINLINE` globals the way `Otlp.hs`'s existing manager does.** The original sketch points at
 `Otlp.hs:103` as the correct precedent to copy ("`Otlp.hs:103` in the same package does it
-correctly with a `NOINLINE` global"), but by the time this task was reached, BZ (later in the same
-file) had already named that exact pattern — `Otlp.hs`'s global manager and span counter,
+correctly with a `NOINLINE` global"), but by the time this work was reached, a later review
+had already named that exact pattern — `Otlp.hs`'s global manager and span counter,
 `Acme/Challenge.hs`'s global challenge-directory `MVar` — as a violation of this document's
 explicit-props rule ("the `NOINLINE` pragmas are all present and correct — the objection is the
-ambient ownership, not the CAF mechanics"). Copying BX's own suggested fix verbatim would have
+ambient ownership, not the CAF mechanics"). Copying that suggested fix verbatim would have
 added a *third* instance of a pattern this project already has an open task to remove, the turn
 right after finding it. Instead, both the new token cache and the HTTP manager are threaded as
 ordinary explicit parameters: `newGoogleWorkspaceTokenCache :: IO GoogleWorkspaceTokenCache`
@@ -3192,7 +3271,7 @@ allocates two — the same flexibility a global CAF forecloses.
 Investigating before implementing also surfaced that neither `HarchWeb.GoogleWorkspace` nor
 `HarchWeb.Gmail` has a real caller: `web-api`'s composition root wires email delivery through plain
 SMTP only (`WebApi/App.hs`'s `runtimeEmailDelivery`), and neither module is even re-exported through
-the `HarchWeb` facade — confirmed by grep, not assumed. Unlike DG's ACME native protocol client
+the `HarchWeb` facade — confirmed by grep, not assumed. Unlike the deleted native ACME protocol client
 (where commit history documented an explicit prior removal-and-replacement, making deletion the
 right call), there is no such evidence here that this subsystem was tried and abandoned; it reads
 as a partially-built alternate email-delivery path not yet wired to a configuration choice, not dead
@@ -3201,14 +3280,14 @@ as requested rather than unilaterally deleting a subsystem with real tests and n
 meant to go away — but the "no live caller" fact is recorded here so a future task touching this
 area doesn't have to rediscover it.
 
-### Follow-up decision — BY/PR-T4: maintained RSA decoding after the crypto migration (2026-08-24)
+### Follow-up decision — maintained RSA decoding after the crypto migration (2026-08-24)
 
 **Decision: retain `asn1-encoding` for strict DER tokenization and the small PKCS#8-envelope
 contract check, then use `crypton-x509`'s maintained `X509.PrivKey` `fromASN1` instance to build the
-RSA key rather than reconstructing PKCS#1 fields locally.** BY originally tried that maintained
+RSA key rather than reconstructing PKCS#1 fields locally.** The original attempt tried that maintained
 decoder and correctly stopped when its `crypton` `RSA.PrivateKey` could not satisfy this module's
-then-`cryptonite` signing API. ED subsequently replaced the project's direct `cryptonite`
-dependencies with `crypton`, making that recorded nominal-type mismatch false. PR-T4 re-ran the
+then-`cryptonite` signing API. A later dependency migration replaced the project's direct `cryptonite`
+dependencies with `crypton`, making that recorded nominal-type mismatch false. The follow-up re-ran the
 integration against the current build plan and confirmed `X509.PrivKeyRSA` now contains the exact
 `crypton` `RSA.PrivateKey` accepted by `RSA.sign`.
 
@@ -3217,11 +3296,11 @@ boundary promises exactly one PEM `PRIVATE KEY` block containing a DER PKCS#8 RS
 therefore retains only the outer PKCS#8/RSA OID envelope check and strict DER decoding of its embedded
 PKCS#1 bytes before calling `fromASN1`; it no longer hand-matches or constructs the RSA CRT fields.
 The outer check is contract preservation, not a parallel parser: a regression proves a bare PKCS#1
-payload under a `PRIVATE KEY` label remains rejected. This keeps BY's malformed-input boundary and
+payload under a `PRIVATE KEY` label remains rejected. This keeps the original malformed-input boundary and
 its rejection of indefinite/invalid DER while replacing the stale custom key-construction logic with
 the maintained implementation.
 
-### Follow-up decision — PR-F2: one checked HTTP field-name boundary (2026-08-24)
+### Follow-up decision — one checked HTTP field-name boundary (2026-08-24)
 
 **Decision: extract the existing abstract `ApiHeaderName` into the private
 `HarchWeb.Api.HeaderName` collaborator, re-export its checked constructor through the public request
@@ -3239,8 +3318,8 @@ The response record itself stores `ApiHeaderName`, so invalid names cannot reach
 construction. Regressions cover empty, whitespace, colon, CR/LF/NUL, and non-ASCII rejection, while
 valid mixed-case names retain canonical, case-insensitive request behavior.
 
-A second, unplanned finding surfaced while verifying the fix against every one of the original
-task's malformed-input test cases rather than assuming the replacement was correct by construction:
+A second, unplanned finding surfaced while verifying the fix against every one of the specified
+malformed-input test cases rather than assuming the replacement was correct by construction:
 `asn1-encoding` itself is not exception-safe against every malformed input. A zero-length DER `BIT
 STRING` — invalid per the DER spec, since its content must begin with an "unused bits" count byte —
 crashes the decoder with an uncaught `Data.ByteString.head: empty ByteString` partial-function error
@@ -3249,11 +3328,11 @@ failed with a raw exception message rather than a clean domain error. `eitherToI
 `Either Text value -> IO value` boundary every rejection in this module already passes through) now
 forces its argument inside `IO` and catches any exception this decoding chain might raise, converting
 it into the same "Google Workspace ..." domain error every other rejection already surfaces — closing
-the actual security property BY cared about (malformed key material must fail cleanly, not succeed
+the actual security property at stake (malformed key material must fail cleanly, not succeed
 silently or crash unexpectedly) more completely than reusing `crypton-x509` alone would have, since
 that library's own decoder shares the same underlying `asn1-encoding` crash risk.
 
-### Follow-up decision — PR-F3: one validated API endpoint family (2026-08-24)
+### Follow-up decision — one validated API endpoint family (2026-08-24)
 
 **Decision: add the opaque `ApiEndpointFamily` smart-construction boundary to the existing
 route-family adapter, rather than retaining two raw endpoint-list arguments or creating another
@@ -3273,7 +3352,7 @@ the codec's synthetic not-found route and for a caller that invokes a `RouteDefi
 normal shared dispatcher. Unit coverage proves empty rejection, precise duplicate rejection,
 same-path/different-method acceptance, and normal heterogeneous dispatch.
 
-### Follow-up decision — PR-F4: total typed API request decoding (2026-08-24)
+### Follow-up decision — total typed API request decoding (2026-08-24)
 
 **Decision: make `RequestCodec` an opaque newtype whose runner returns
 `ApiRequestDecodeResult`, rather than retaining its public nested `Compose` representation or adding
@@ -3295,7 +3374,7 @@ empty-list case becomes unrepresentable. Focused regressions exercise decoded va
 field rejection, ordered accumulation, form decoding, explicit invalid declarations, and
 field-failure rendering.
 
-### Follow-up decision — PR-F5: non-negative typed API body budgets (2026-08-25)
+### Follow-up decision — non-negative typed API body budgets (2026-08-25)
 
 **Decision: extend `ApiRequestBody` with one opaque `ApiRequestBodyByteLimit`, checked from a
 `Natural` against the private WAI reader's `Int` range.** Buffered, URL-encoded, and streaming
@@ -3307,7 +3386,7 @@ reader adapters convert a valid value to `Int`. Thus zero and ordinary values re
 bodies retain their existing typed 413 behavior, and neither negative nor overflowed public budgets
 can be authored.
 
-### Follow-up decision — PR-S1: durable security time is Unix epoch time, not process uptime (2026-08-23)
+### Follow-up decision — durable security time is Unix epoch time, not process uptime (2026-08-23)
 
 **Decision: extend the existing `AccountWorkflow` clock seam with
 `HarchWeb.Time.UnixTimeNanoseconds`, and derive RFC TOTP Unix seconds from
@@ -3339,10 +3418,10 @@ recovery-code-used). Focused coverage proves both a raw copied cookie is still
 rejected after a simulated clock-origin reset and the RFC 6238 SHA-1 vectors at
 known Unix instants.
 
-### Follow-up decision — PR-S5: bounded login-attempt reservations (2026-08-24)
+### Follow-up decision — bounded login-attempt reservations (2026-08-24)
 
 **Decision: extend the existing PostgreSQL login-attempt reservation lifecycle,
-not a parallel cleanup worker or a second aggregate table.** PR-S4 already made
+not a parallel cleanup worker or a second aggregate table.** The earlier reservation work already made
 the reservation function the one atomic admission boundary.  Its next
 reservation now takes a short-lived global capacity lock, deletes rows outside
 the application-selected retention window, applies the global row ceiling, and
@@ -3364,23 +3443,23 @@ The table also has a database check as defense in depth.  Capacity exhaustion
 is an ordinary typed store-unavailable outcome and fails authentication closed;
 it does not silently skip the throttle or discard a live reservation.
 
-### Follow-up decision — BZ: two explicit-props fixes, and a mid-task correction to how coverage gaps get closed (2026-08-21)
+### Follow-up decision — two explicit-props fixes, and a mid-task correction to how coverage gaps get closed (2026-08-21)
 
 **Decision: `HarchWeb.Acme.Challenge`'s certbot webroot list becomes a `CertbotWebrootStore` prop
 matching `AcmeChallengeStore`'s already-correct shape; `HarchWeb.Observability.Otlp`'s HTTP manager
 becomes a plain allocator with no framework-owned global at all, and moves to `web-api`'s own
-`App.hs` as the real, single caller — not a second framework CAF.** The two findings in BZ's own
-text needed different treatment once actually plumbed through. The webroot store had a direct
+`App.hs` as the real, single caller — not a second framework CAF.** The two findings in the original
+write-up needed different treatment once actually plumbed through. The webroot store had a direct
 sibling already doing this correctly one function up in the same module, so extending that exact
 shape was immediate. The OTLP manager did not: the missing-framework-capability protocol's
 "add the primitive to the framework" fork does not fit a resource with exactly one real caller in
-this tree — `web-api`'s `App.hs` already carries an identically-justified global (`otlpExportQueue`,
-recorded under AU) for the same reason, so the manager joined it there rather than becoming a
+this tree — `web-api`'s `App.hs` already carries an identically-justified global (`otlpExportQueue`)
+for the same reason, so the manager joined it there rather than becoming a
 second, framework-owned CAF nothing else uses. The stale "same idiom `HarchWeb.Observability.Otlp`
-already uses" line in AU's own comment was corrected in the same change, since it would otherwise
+already uses" line in that global's comment was corrected in the same change, since it would otherwise
 have been wrong the moment this landed.
 
-### Decision record — EJ: shared Argon2 work admission (2026-08-24)
+### Decision record — shared Argon2 work admission (2026-08-24)
 
 **Decision: add the small general `HarchWeb.Password` primitive
 `PasswordWorkBudget`/`PasswordWorkGate`, and retain one 512-MiB gate in the reference
@@ -3400,21 +3479,22 @@ was already committed and cannot reliably interrupt native work. Reservations co
 hashing, known and unknown password verification, and each recovery-code verification, and release
 through `finally` on ordinary or asynchronous exit. The reference application's process-wide gate
 preserves its pure runtime-builder API while making independently constructed runtime workflows
-share the same cap. This closes EJ's handler-side bounded-admission scope; the separate **P-S6**
-follow-up continues to own registration retry and cleanup lifecycle work.
+share the same cap. This closes the handler-side bounded-admission scope; the separate **bounded,
+retryable pending registration delivery** follow-up continues to own registration retry and cleanup
+lifecycle work.
 
 **A second, more consequential decision happened partway through this task, prompted directly by a
 question about it, not discovered independently:** two coverage gaps this refactor surfaced were
-initially closed the way this codebase's memory documents doing dozens of times this session —
-`$!`-forcing plus `{-# ANN ... "HLint: ignore Redundant $!" #-}` — which is exactly the pattern task
-CB already names as banned by AGENTS.md's own existing rule. That rule had been treated as
+initially closed the way this codebase's own past fixes had closed such gaps dozens of times —
+`$!`-forcing plus `{-# ANN ... "HLint: ignore Redundant $!" #-}` — which is exactly the pattern the
+earlier ignore-pragma audit already names as banned by AGENTS.md's own existing rule. That rule had been treated as
 narrower in practice than its text: applied when adding *new* strictness to fake a metric, not
 recognized as covering this project's own established CSE-workaround technique too. The correction
-was twofold: first, elevate the rule out of one AGENTS.md sentence and one task's prose into a
+was twofold: first, elevate the rule out of one AGENTS.md sentence and one work item's prose into a
 standalone, linked section here (**Never mask a gate finding with an ignore pragma**, in
 "Design decisions before you build") so it is load-bearing before the next task reaches for the
-same shortcut, not just documented after the fact. Second, apply it retroactively to BZ's own two
-new instances rather than leaving them as an exception: one was replaced outright with a genuine
+same shortcut, not just documented after the fact. Second, apply it retroactively to the two
+new instances that refactor introduced rather than leaving them as an exception: one was replaced outright with a genuine
 fix (a direct unit test for register/unregister, requiring `CertbotWebrootStore`'s constructor to
 be exported the way `AcmeChallengeStore`'s already is — the actual missing piece, not a metric
 workaround). The other was investigated by removing it and rerunning the full coverage gate, which
@@ -3427,11 +3507,11 @@ investigation. That comment and this record remain evidence of the incident; the
 exception or a precedent for new code. The current rule requires behavioral demand or restructuring
 instead of new strictness chosen to influence a coverage metric.
 
-### Decision record — PR-S6: bounded, retryable pending registration delivery (2026-08-24)
+### Decision record — bounded, retryable pending registration delivery (2026-08-24)
 
 **Decision: extend `WebApi.Account`'s existing pending-account and verification-store boundary
 with an atomically staged delivery claim, rather than add an application-local mail queue or a
-second account lifecycle.** Registration now reserves EJ's existing shared `PasswordWorkGate`
+second account lifecycle.** Registration now reserves the existing shared `PasswordWorkGate`
 before it runs Argon2id, then submits the hashed candidate to one PostgreSQL staging function. That
 function serializes capacity, email, and username decisions with transaction advisory locks; it
 removes expired unverified accounts, enforces the application-owned 100,000 pending-account cap,
@@ -3453,9 +3533,9 @@ has reached its authenticated MFA-enrollment workflow, and hashes server-generat
 it is not an unauthenticated caller-controlled KDF surface. No other production caller reaches
 `hashPassword`, `verifyPassword`, `hashRecoveryCode`, or `verifyRecoveryCode` outside those paths.
 
-### Decision record — DM: opportunistic password-hash migration (2026-08-25)
+### Decision record — opportunistic password-hash migration (2026-08-25)
 
-### Decision record — AHI-2: durable staged verification resend (2026-09-01)
+### Decision record — the verification-resend budget design: durable staged verification resend (2026-09-01)
 
 **Decision: extend `AccountStore` with an account-verification-specific
 reserve/complete/release claim lifecycle, instead of a generic keyed budget or
@@ -3476,10 +3556,10 @@ capacity/prune decision and the account lifecycle decision. The public action
 maps delivered, throttled, and no-longer-pending results to one generic 202
 body; the Haskell ADTs retain only closed lifecycle classifications, never an
 email, token, row id, or provider exception. This narrow extension remains
-separate from AHI-3: login attempts have a different principal, retention
+separate from the keyed authentication-budget design: login attempts have a different principal, retention
 policy, and settlement meaning.
 
-### Decision record — AHI-3: keyed authentication reservation groups (2026-09-01)
+### Decision record — the keyed authentication-budget design: keyed authentication reservation groups (2026-09-01)
 
 **Decision: extend `HarchWeb.Security`'s existing trusted-forwarding resolver
 with an opaque `ClientAddress`, then extend the existing `LoginAttemptStore`
@@ -3519,7 +3599,7 @@ than the target and at least one is lower; a mixed stronger/weaker policy is ret
 so migration never lowers an existing cost. This is a narrow application credential
 lifecycle extension, not a new framework credential protocol.
 
-### Decision record — DM: ACME temporary-state ownership and runtime challenge authority (2026-08-25)
+### Decision record — ACME temporary-state ownership and runtime challenge authority (2026-08-25)
 
 **Decision: keep both protections at the existing ACME runtime/challenge boundaries, rather than
 adding a diagnostic retention path or a fallback challenge matcher.** Certbot's temporary state
@@ -3558,7 +3638,7 @@ pass. Keep the behavioral regressions permanently; adapt hook-specific ownership
 and cleanup checks to the replacement boundary. This does not retire HTTP2
 lifecycle coverage or the independent dependency compatibility workarounds.
 
-### Decision record — PR-SEC1: cancellation-safe multipart ownership handoffs (2026-08-28)
+### Decision record — cancellation-safe multipart ownership handoffs (2026-08-28)
 
 **Decision: extend `HarchWeb.Api.Multipart`'s existing scoped-upload lifecycle with masked
 handoffs and continuation-based promotion; do not add another storage adapter or expose a raw
@@ -3580,7 +3660,7 @@ while making both transfer boundaries cancellation-safe. Focused asynchronous re
 completed-unadopted and claimed-but-cancelled uploads each invoke their adapter discard exactly
 once.
 
-### Decision record — PR-SEC2: principal-wide password-attempt throttling (2026-08-28)
+### Decision record — principal-wide password-attempt throttling (2026-08-28)
 
 **Decision: extend the existing password admission path with an opaque resolved-account key; do
 not add an alias map or a parallel throttle.** The single credential lookup already returns the
@@ -3594,10 +3674,10 @@ Credential lookup must precede admission because there is no principal key until
 lookup failure consequently returns the existing typed credential-store failure without creating a
 reservation; after resolution, the unchanged admission/settlement lifecycle owns all password work.
 Concurrent email/username regressions prove the configured account-wide maximum is shared and the
-next alias attempt is throttled. PR-SEC3 remains responsible for making the post-reservation
+next alias attempt is throttled. The login-attempt handoff work remains responsible for making the post-reservation
 cancellation handoffs themselves safe.
 
-### Decision record — PR-SEC3: cancellation-safe login-attempt ownership handoffs (2026-08-28)
+### Decision record — cancellation-safe login-attempt ownership handoffs (2026-08-28)
 
 **Decision: extend `WebApi.Login`'s existing `LoginAttemptStore` lifecycle with a masked handoff;
 do not create a second reservation type, wrapper, or uninterruptible database layer.** The existing
@@ -3611,11 +3691,11 @@ failure through the existing result path.
 
 This deliberately does not make a blocked database operation uninterruptible and does not claim a
 process crash or cancellation while compensating cancellation itself is blocked can be recovered in
-process. Those cases retain an unsettled row for the existing retention cleanup (PR-S5). Deterministic
+process. Those cases retain an unsettled row for the existing retention cleanup. Deterministic
 regressions cover cancellation directly after an admitted reservation is observed and during the
 post-work settlement entry, ensuring neither normal in-process boundary can leave a stale reservation.
 
-### Decision record — PR-SEC4: redact provider and persistence payload diagnostics (2026-08-28)
+### Decision record — redact provider and persistence payload diagnostics (2026-08-28)
 
 **Decision: redact at the existing typed adapter error boundaries; do not introduce a second logging
 abstraction or let action handlers attempt to scrub arbitrary text.** PostgreSQL decoders retain a
@@ -3635,7 +3715,7 @@ unchanged. Sentinel regressions exercise a password hash, encrypted MFA/recovery
 email/profile data, SMTP response lines, and a Gmail provider body through their error/diagnostic
 boundaries, proving neither a public response nor its attached private log entry retains the value.
 
-### Decision record — PR-SEC8: typed OTLP transport diagnostics (2026-08-30)
+### Decision record — typed OTLP transport diagnostics (2026-08-30)
 
 **Decision: extend `HarchWeb.Observability.Otlp` with a closed export-failure type at its existing
 HTTP adapter boundary; do not redact `http-client` exception text in the application worker.** An
@@ -3697,7 +3777,7 @@ approved exception is the documented @ByteString.empty@ strictness at the TLS li
 it evaluates the library-required service-identity argument without creating a cache or changing
 certificate validation, after the supported construction and real-listener tests had been tried.
 
-### Decision record — DS: static representation metadata and file-backed delivery (2026-08-25)
+### Decision record — static representation metadata and file-backed delivery (2026-08-25)
 
 **Decision: keep static-file ownership at the configured root boundary, and extend that one
 dispatcher with standard representation semantics rather than introduce an asset-serving runtime or
@@ -3719,7 +3799,7 @@ extensionless paths static. Static misses retain their plain 404 but deliberatel
 `Cache-Control`, preventing a shared cache from pinning a missing deployment artifact for the
 successful asset TTL.
 
-### Follow-up decision — CO: no global 108-column source limit (2026-08-25)
+### Follow-up decision — no global 108-column source limit (2026-08-25)
 
 **Decision: remove the unenforced 108-column target rather than turn it into a formatting gate.**
 The target had no project policy or tooling behind it, while 3,298 existing source lines exceeded
@@ -3731,7 +3811,7 @@ direct total ADT folds, and do not split declarative tests merely to satisfy a m
 line-length policy needs a concrete readability failure and a formatter-compatible enforcement
 plan; it must not be reintroduced solely as a count-based gate.
 
-### Follow-up decision — EI: additive ICU-backed localization, not locale routing (2026-08-25)
+### Follow-up decision — additive ICU-backed localization, not locale routing (2026-08-25)
 
 **Decision: add `HarchWeb.Localization` as a separate framework primitive with an
 application-supplied message-key lookup, backed by ICU4C `MessageFormat`.** Existing routing owns
@@ -3750,7 +3830,7 @@ and a localized in-memory-adapter API failure. ICU remains the runtime authority
 MessageFormat semantics, while the quasiquoter deliberately catches structural authoring errors
 early rather than claiming type-level validation of every application-specific interpolation record.
 
-### Follow-up decision — AHI-7: structural accessible fields and typed focus (2026-08-31)
+### Follow-up decision — the accessible field-validation design: structural accessible fields and typed focus (2026-08-31)
 
 **Decision: extend the existing markup, control, and client-action response boundaries; do not add a
 form-builder DSL.** The registration experiment and the separate login form reproduced the same
@@ -3777,7 +3857,7 @@ the current shell and ignores a `popstate` whose origin, path, and query still i
 Otherwise activating a plain `#field-id` link can fetch and replace the page, discard the patched
 invalid values, and defeat the focus target the accessible control deliberately supplied.
 
-### Follow-up decision — AHI-9: application-owned authentication semantics (2026-08-31)
+### Follow-up decision — the accessible authentication design: application-owned authentication semantics (2026-08-31)
 
 **Decision: keep autocomplete vocabulary and authentication form models in the
 application, while adding only the missing general native `selected` attribute
@@ -3805,7 +3885,7 @@ order, focus at narrow/zoomed layout, secret clearing, and the explicit
 scripts-disabled `method=dialog` policy. The complete inventory and limits of
 that proof are recorded in `docs/accessibility.md`.
 
-### Follow-up decision — AHI-8: pluggable accessible navigation lifecycle (2026-08-31)
+### Follow-up decision — the accessible navigation-lifecycle design: pluggable accessible navigation lifecycle (2026-08-31)
 
 **Decision: extend `PageShell` and the existing replaceable
 `NavigationRuntime` with a declarative lifecycle adapter; do not add a second
@@ -3840,7 +3920,7 @@ app-owned focus/visually-hidden CSS; real-browser tests cover redirect,
 history, overlap, narrow 200% zoom, delayed runtime, scripts-disabled skip
 navigation, and every fallback class.
 
-### Follow-up decision — AHI-6: replaceable dialog runtime; app-owned floating Help link (2026-08-31)
+### Follow-up decision — the dialog-overlay and application-controls design: replaceable dialog runtime; app-owned floating Help link (2026-08-31)
 
 **Decision: extend the existing shell/early-response seam with ordered generic
 `RuntimeAsset` values and add only a typed native-dialog control; do not add a
@@ -3892,9 +3972,9 @@ the full designed scope shipped; a partial slice must say so and name its follow
 | Configured static assets | Implemented | Successful assets are canonical-root-checked file responses with weak ETags, `Last-Modified`, conditional 304s, single-range 206/416 semantics, and `HEAD` metadata; static 404s are never cacheable. |
 | Declarative client actions and region patches | Implemented | Declare `ActionCodec` endpoints once; render forms and dispatch from it, then mutate with typed action responses and `RegionPatch`, not page POST/reload workflows. |
 | SSE live updates | Implemented | Start from meaningful SSR content; treat streaming as an enhancement. |
-| PostgreSQL and custom adapters | Implemented | Keep operations typed and interpreters app-selectable. Runtime queries share a bounded `WebApi.Postgres.Pool` instead of one connection per query. `DatabaseTransportSecurity` exposes the closed libpq TLS modes; an omitted setting deliberately preserves libpq's own resolution/default (currently `prefer`), while an explicit `verify-full`/CA policy flows to runtime, migration, and `psql`. A real PostgreSQL 17 fixture proves verified success and the untrusted-CA, hostname-mismatch, and TLS-disabled failures. Migrations no longer run per-statement `psql` subprocesses (AX). |
-| Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Auth, sessions, MFA, telemetry, TLS, and proxy support are complete. `HarchWeb.Localization` provides ICU-backed application lookup, CLDR rendering, a structural compile-time template quasiquoter, and an extendable empty framework-default layer; `web-api` uses its closed catalog and `examples/localization` proves Icelandic SSR pluralization plus a localized in-memory-adapter API error (EI, 2026-08-26). Login-attempt reservations retain only the application-owned 15-minute window, delete successful/cancelled rows, cap storage at 100,000 rows, and reject oversized keys before persistence (PR-S5, 2026-08-24). Argon2 admission is a shared, non-queueing 512-MiB KiB-weighted gate with an eight-operation CPU-concurrency ceiling across registration, password login, and recovery-code verification (EJ, 2026-08-24). |
-| `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints (buffered, URL-encoded form, multipart, and streaming request bodies) and closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`) | Implemented | `examples/custom-api` and `examples/multipart-upload` use the route-family registry; `web-api` uses its existing single dispatcher with `apiRouteDefinitionWithContext` for `/api/status` and `/api/second`. `ApiEndpointContract` groups method, fields/body, representations, and field-failure policy; a path-owning `ApiRouteEndpointDeclaration` is used only for context-free routes, while context-aware definitions reuse the contract (PR-F6, 2026-08-25). `ApiResponse` carries observability attributes/log entries. The unused compatibility middleware/table was deleted, and `HarchWeb.Api.Endpoint` is now a public facade over private declaration, family, and runtime modules. |
+| PostgreSQL and custom adapters | Implemented | Keep operations typed and interpreters app-selectable. Runtime queries share a bounded `WebApi.Postgres.Pool` instead of one connection per query. `DatabaseTransportSecurity` exposes the closed libpq TLS modes; an omitted setting deliberately preserves libpq's own resolution/default (currently `prefer`), while an explicit `verify-full`/CA policy flows to runtime, migration, and `psql`. A real PostgreSQL 17 fixture proves verified success and the untrusted-CA, hostname-mismatch, and TLS-disabled failures. Migrations no longer run per-statement `psql` subprocesses (the transactional migration-connection work). |
+| Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Auth, sessions, MFA, telemetry, TLS, and proxy support are complete. `HarchWeb.Localization` provides ICU-backed application lookup, CLDR rendering, a structural compile-time template quasiquoter, and an extendable empty framework-default layer; `web-api` uses its closed catalog and `examples/localization` proves Icelandic SSR pluralization plus a localized in-memory-adapter API error (review finding, 2026-08-26). Login-attempt reservations retain only the application-owned 15-minute window, delete successful/cancelled rows, cap storage at 100,000 rows, and reject oversized keys before persistence (review finding, 2026-08-24). Argon2 admission is a shared, non-queueing 512-MiB KiB-weighted gate with an eight-operation CPU-concurrency ceiling across registration, password login, and recovery-code verification (review finding, 2026-08-24). |
+| `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints (buffered, URL-encoded form, multipart, and streaming request bodies) and closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`) | Implemented | `examples/custom-api` and `examples/multipart-upload` use the route-family registry; `web-api` uses its existing single dispatcher with `apiRouteDefinitionWithContext` for `/api/status` and `/api/second`. `ApiEndpointContract` groups method, fields/body, representations, and field-failure policy; a path-owning `ApiRouteEndpointDeclaration` is used only for context-free routes, while context-aware definitions reuse the contract (review finding, 2026-08-25). `ApiResponse` carries observability attributes/log entries. The unused compatibility middleware/table was deleted, and `HarchWeb.Api.Endpoint` is now a public facade over private declaration, family, and runtime modules. |
 | `HarchWeb.Api.Multipart` bounded streaming consumer, in-memory default, and native upload form | Implemented | Storage ownership/cleanup, bounded in-memory default, media-type/boundary validation, preamble/header/body/declared-length bounds, bounded scanner state, untrusted filenames, and scripts-enabled/disabled native-upload cleanup are implemented. The consumer deliberately stops reading after cleanup rather than draining; that is the documented WAI transport policy, to be revisited only if a concrete backpressure problem is observed—not an unowned partial implementation. |
 | Declarative dynamic path/query templates | Design direction | Use explicit typed codecs until the route-template DSL is executable. |
 | Typed page-local CSS/JavaScript EDSLs | Design direction | Keep current assets narrow, deferred, and route-aware by convention. |
@@ -3904,7 +3984,7 @@ The design-only route syntax is isolated in the
 [route-templates guide](../examples/route-templates/README.md). It must remain labeled as design
 direction until its path/query DSL is executable and tested.
 
-### Decision record — AHI-4A: typed endpoint admission rail (2026-09-01)
+### Decision record — the typed endpoint-security design: typed endpoint admission rail (2026-09-01)
 
 **Decision: extend the existing post-match route dispatcher with one typed
 endpoint-admission rail; keep request middleware, route concurrency, action
@@ -3937,8 +4017,8 @@ adapter uses `jose-0.12`, selected after the compatibility experiment because
 it supports the repository's current `crypton ^>=1.0.6` and GHC 9.14; it
 requires an explicit subset of HS256, HS512, RS256, and RS512 rather than the
 library default, and excludes `None`. This is the framework capability
-implemented by AHI-4A; the reference application's durable account/JWT
-configuration and typed login return navigation remain AHI-4C work.
+implemented by the typed endpoint-security design; the reference application's durable account/JWT
+configuration and typed login return navigation remain part of the secure login and admission work.
 
 `HarchWeb.SecurityEvent` now owns validated root route observations, closed
 authentication/authorization/session event bodies, delivery requirements, and
@@ -3946,7 +4026,8 @@ a deliberately narrow telemetry projection. It cannot carry a raw path,
 query, proof, JWT, claim, header, cookie, account/session ID, locale, or
 application audit payload into telemetry. Applications retain the only
 durable-audit conversion and transaction policy, so an undelivered
-`AuditRequired` event is explicit rather than reported as successful. AHI-4B
+`AuditRequired` event is explicit rather than reported as successful. The composable
+application-modules design
 extends the already-shipped root observation to a trusted module mount chain;
 it does not create a parallel event vocabulary or let a child forge route
 attribution.
@@ -3961,10 +4042,10 @@ can replace the matched endpoint, declared template, root module, or locale
 with request text. Best-effort authentication and authorization facts still
 receive truthful delivery results and report failed delivery through that hook;
 an application choosing an audit-required operation owns its transactional
-interpretation. This keeps the AHI-4A framework boundary pluggable without
-pre-choosing the AHI-5 PostgreSQL audit schema or schedule.
+interpretation. This keeps the typed endpoint-security framework boundary pluggable without
+pre-choosing the activity-audit design's PostgreSQL audit schema or schedule.
 
-### Decision record — AHI-4B: structured route locations and modules (2026-09-02)
+### Decision record — the composable application-modules design: structured route locations and modules (2026-09-02)
 
 **Decision: extend the existing `RouteCodec` and its one request executor with
 a structured `RouteLocation`; do not add a raw-text compatibility codec, a
@@ -4052,7 +4133,7 @@ page-route callback. `staticAssetRouteDefinition` is layered on the same
 operation, keeping the ordinary route-table path and the composed adapter
 semantically identical.
 
-### Decision record — AHI-4D slice 1: scoped profile selection (2026-09-12)
+### Decision record — the scoped API-authentication design slice 1: scoped profile selection (2026-09-12)
 
 **Decision: extend endpoint metadata, typed module mounts, and the existing
 post-match authentication rail with root-owned named profiles.** An endpoint
@@ -4071,12 +4152,12 @@ as protection against an improperly assembled low-level application value.
 
 This extends the one selected-owner/post-match guard pipeline: route matching,
 HEAD/OPTIONS/405 behavior, action admission, body reading, and response
-rendering keep their existing owners. The follow-up AHI-4D slices add concrete
+rendering keep their existing owners. The follow-up scoped API-authentication slices add concrete
 cookie/bearer extraction, CSRF transport selection, OAuth, and durable
 API-client establishment to the selected guard; this slice supplies only
 profile precedence and capability injection.
 
-### Decision record — AHI-4D slice 2: source-aware JWT and CSRF selection (2026-09-13)
+### Decision record — the scoped API-authentication design slice 2: source-aware JWT and CSRF selection (2026-09-13)
 
 **Decision: extend the existing authentication transport extractor and the
 single post-match client-action lifecycle with source-aware proof facts.** A
@@ -4096,13 +4177,13 @@ ambient and require the normal CSRF transport; unknown actions and absent
 metadata retain that secure default. This preserves one route matcher,
 authentication rail, action decoder, and response interpreter.
 
-The next AHI-4D work was durable API-client authentication and the
+The next scoped API-authentication work was durable API-client authentication and the
 client-credentials flow; authorization-code/PKCE validation remains outside
 this task's approved scope. This slice intentionally provides only the account
 JWT source and client-action CSRF selection needed by the reference
 application.
 
-### Decision record — AHI-4D slice 3: authentication-flow vocabulary (2026-09-13)
+### Decision record — the scoped API-authentication design slice 3: authentication-flow vocabulary (2026-09-13)
 
 **Decision: add one closed, extensible flow vocabulary at Harch's existing
 authentication boundary before introducing OAuth endpoint or storage adapters.**
@@ -4134,7 +4215,7 @@ durable scope allowance, token issuance, and response encoding remain later
 workflow adapters; this slice neither adds a second body parser nor claims a
 token endpoint.
 
-### Decision record — AHI-4D slice 3: durable API-client capability (2026-09-13)
+### Decision record — the scoped API-authentication design slice 3: durable API-client capability (2026-09-13)
 
 **Decision: add `ApiClientStore` as an application-supplied capability at the
 existing proof-to-principal boundary.** A verified bearer token is not itself a
@@ -4158,7 +4239,7 @@ This extends the current principal-establisher seam rather than adding a
 second authentication dispatcher; the next slice supplies the concrete OAuth
 workflow and PostgreSQL adapter.
 
-### Decision record — AHI-4D slice 4: durable PostgreSQL API-client adapter (2026-09-16)
+### Decision record — the scoped API-authentication design slice 4: durable PostgreSQL API-client adapter (2026-09-16)
 
 **Decision: make each PostgreSQL API-client lookup one read-only statement
 over the active client, secret, and scope rows.** The adapter returns a client
@@ -4177,10 +4258,10 @@ form to start with the Argon2id encoding prefix, and the adapter independently
 parses each hash using Harch's complete bounded Argon2 validator. A malformed
 row and an unavailable database both map to the existing safe dependency
 failure, so neither raw stored data nor client existence reaches a public OAuth
-response. This establishes persistence only; the following AHI-4D task still
+response. This establishes persistence only; the following scoped API-authentication work still
 connects the adapter to client-credentials verification and token issuance.
 
-### Decision record — AHI-4D slice 3: OAuth Basic credential decoding (2026-09-16)
+### Decision record — the scoped API-authentication design slice 3: OAuth Basic credential decoding (2026-09-16)
 
 **Decision: extend the existing typed API request codec with the strict HTTP
 Basic decoder required by the client-credentials workflow.** `RequestCodec`
@@ -4200,7 +4281,7 @@ errors, or add a route: those concerns remain with the later application
 workflow and PostgreSQL adapter. It extends the one API decoding and
 authentication boundary rather than creating a second protocol dispatcher.
 
-### Decision record — AHI-4D slice 4/5: client-credentials token-issuance workflow (2026-09-16)
+### Decision record — the scoped API-authentication design slice 4/5: client-credentials token-issuance workflow (2026-09-16)
 
 **Decision: connect the durable `ApiClientStore` issuance view to Argon2
 secret verification and token issuance at one workflow module
@@ -4234,7 +4315,7 @@ using `jose`'s exact per-claim types (`StringOrURI`, `NumericDate`,
 own hand-written `ToJSON` instance — extend `AccountJwtRuntime` with one
 read-only accessor bundle instead of duplicating the startup key-loading and
 cryptographic self-proof it already owns. This is one more field for the
-already-tracked `WebApi.AccountJwt` module-health follow-up (AHI-4D-MH1) to
+already-tracked `WebApi.AccountJwt` module-health follow-up (the AccountJwt module split) to
 carry across when that extraction happens, not a reason to defer it further.
 
 **Decision (build-diagnostic finding, not a design one): a durable-store test
@@ -4259,7 +4340,7 @@ HPC gap as a tooling limitation needing a documented exception, check whether
 a test double is quietly discarding the exact argument the gap is centered
 on.
 
-### Decision record — AHI-4D slice 5: `POST /api/oauth/token` HTTP route (2026-09-17)
+### Decision record — the scoped API-authentication design slice 5: `POST /api/oauth/token` HTTP route (2026-09-17)
 
 **Decision: declare the token route `AllowUnauthenticated`, the same access
 requirement as every other API route, rather than inventing a second
@@ -4287,12 +4368,12 @@ the (practically unreachable, but still real per the type) case where a
 freshly signed compact JWT's own bytes fail UTF-8 decoding therefore all
 render the identical `{"error":"token-issuance-unavailable"}` 503 — nothing
 about which one occurred is observable from outside. `TokenApiInvalidClient`
-(401 + `WWW-Authenticate: Basic`, per RFC 6749 section 5.2) and
+(401 + a Basic `WWW-Authenticate` challenge with a realm, per RFC 6749 section 5.2 and RFC 7617) and
 `TokenApiInvalidScope` (400) are named separately because RFC 6749 gives them
 distinct wire shapes a well-behaved client is expected to branch on; nothing
 else in `ApiClientTokenOutcome` gets that treatment.
 
-**Completion (AHI-4D, 2026-09-20): field-decode rejections now use the
+**Completion (scoped API authentication, 2026-09-20): field-decode rejections now use the
 endpoint's existing `ApiRenderFieldFailures` policy to produce the RFC 6749
 `{"error":"invalid_request"}` 400 body.** The renderer receives the private
 `[ApiRequestParseError]` value but deliberately discards it: missing,
@@ -4300,11 +4381,11 @@ malformed, and duplicate Basic/header/form inputs remain indistinguishable to
 the client and never enter a public diagnostic. A real PostgreSQL-backed WAI
 test proves an absent Basic credential returns that exact opaque body.
 
-### Decision record — AHI-4D slice 5 (partial): `GET /api/me` (2026-09-17)
+### Decision record — the scoped API-authentication design slice 5 (partial): `GET /api/me` (2026-09-17)
 
 **Decision: `GET /api/me` reuses the existing account profile's
 `RequireAuthenticated` guard as-is; it adds no new `authorization` payload
-type and no account-or-API-client principal sum type.** The task doc requires
+type and no account-or-API-client principal sum type.** The stated requirements demand
 that an API-client identity "cannot satisfy this merely by carrying the same
 text scope" as `profile:read:self`. That property already holds structurally,
 not just behaviorally: `WebApi.AccountJwt.parseAccountJwtClaims` requires a
@@ -4345,7 +4426,7 @@ site currently pinned to `()` across `WebApi.Route`, `WebApi.App`,
 `WebApi.Api.Endpoints`, and `WebApi.AccountJwt`. This is deliberately a
 separate, larger follow-up commit, not folded into this one.
 
-### Follow-up decision — AHI-4D slice 5: `authorization` type-parameter widening (2026-09-17)
+### Follow-up decision — the scoped API-authentication design slice 5: `authorization` type-parameter widening (2026-09-17)
 
 **Decision: land the mechanical `authorization` type-parameter widening (from
 `()` to the `AppAuthorization = HarchWeb.ScopeRequirement HarchWeb.OAuth2Scope`
@@ -4378,7 +4459,7 @@ directly (not only through `Either`'s derived `Eq`, whose default `/=` ticks
 only `==`).
 
 **Named module-health consequence: `WebApi.App` now marginally exceeds this
-document's conjunctive line/import threshold (501 lines, 27 imports; the AK
+document's conjunctive line/import threshold (501 lines, 27 imports; the
 precedent above established the line threshold as strict `>500`, so 500
 lines did not previously trigger it).** The one added line is the new
 `AppAuthorization` import symbol in the existing `WebApi.Route` import list;
@@ -4391,7 +4472,7 @@ boundary: the `buildAppWithDatabase*`/
 versus route dispatch) if the margin grows further. No split is done here —
 this commit is scoped to the mechanical widening alone.
 
-### Decision record — AHI-4D slice 5: securing `GET /api/second` (2026-09-17)
+### Decision record — the scoped API-authentication design slice 5: securing `GET /api/second` (2026-09-17)
 
 **Decision: a new `WebApi.ResourceAuthentication` module owns the combined
 account-or-API-client-bearer profile, as its own authentication profile
@@ -4400,7 +4481,7 @@ genuinely new capability — a principal sum type spanning two distinct
 principal kinds sharing one JWT proof type — not an extension of the
 single-principal-kind account pipeline, so the extend-vs-new-abstraction rule
 favors a new module over growing the already-tracked-oversized
-`WebApi.AccountJwt` (AHI-4D-MH1) further. `WebApi.AccountJwt` gained two new
+`WebApi.AccountJwt` (the AccountJwt module split) further. `WebApi.AccountJwt` gained two new
 exported reuse points instead — `accountJwtRuntimeProofExtractor` (the
 cookie-or-bearer extractor built from this runtime's own cookie policy) and
 `accountJwtRuntimeProofVerifier` (JWT signature/standard-claims verification
@@ -4463,7 +4544,7 @@ effective scopes, rather than re-deriving that match.**
 `resourceAuthorizationInterpreter` branches on principal kind first, then
 delegates the API-client branch to the existing scope interpreter with a
 `const effectiveScopes` projection — this is the one new `AuthorizationInterpreter`
-the AHI-4D task doc asked for, built by composition rather than duplication.
+the scoped API-authentication work asked for, built by composition rather than duplication.
 
 **Decision: `GET /api/second`'s access requirement changes from
 `AllowUnauthenticated` to `RequireAuthorized (RequireAnyScope (resourceReadScope :| []))`
@@ -4540,7 +4621,7 @@ via `toWaiApplication` specifically; once `/api/second` requires
 authorization, the real WAI-level post-match pipeline (`HarchWeb.Server.PostMatch`)
 finds no configured guard for a `RequireAuthorized` endpoint and fails closed
 with Harch's own `disabledSecurityResponse` (503, "Authentication is
-unavailable"), independent of anything this task's own pipeline code
+unavailable"), independent of anything this work's own pipeline code
 controls. Every other `apiSecondRequest`-using test in that file dispatches
 through `HarchWeb.renderResponse` instead, which never consults
 `resolveAuthenticationProfile` at all regardless of `AuthenticationDisabled`/
@@ -4568,8 +4649,8 @@ declarations) is a real future readability improvement but is not done
 here — this task is scoped to securing one route, not restructuring the
 module. A follow-up task should re-run `tools/haskell-quality-report.sh` the
 next time `WebApi.Route` grows
-and reconsider that split if the margin widens further, matching how the AK
-module-health entry above already handled `HarchWeb.Api.Endpoint`'s own
+and reconsider that split if the margin widens further, matching how the legacy-surface deletion
+entry above already handled `HarchWeb.Api.Endpoint`'s own
 crossing.
 
 **Coverage-gap finding, closed by exercising the real composition rather than
@@ -4595,7 +4676,7 @@ same lesson this document's never-mask-a-gate rule already generalizes: the
 gap was a real, unexercised production wiring path, not a coverage-tool
 artifact, and the fix is a test that exercises it, not an ignore pragma.
 
-**Build-diagnostic finding, unrelated to this task's own code but costly
+**Build-diagnostic finding, unrelated to this work's own code but costly
 enough to record: `cabal run <test-suite>` does not change the process's
 working directory to the owning package's directory the way `cabal test
 <test-suite>` does, so any test relying on a package-relative static
@@ -4656,14 +4737,14 @@ rail. This allows a durable application to audit distinct malformed account or
 session claims while neither raw claims nor the JWT itself reach telemetry,
 logs, or public responses. JOSE failures remain Harch's fixed rejection code.
 This is an extension of the existing adapter, not a second application JWT
-verification path. AHI-4C-AMH subsequently completed the admission ownership
-split: `App.Composed.Admission` is the 235-line route-aware coordinator, while
+verification path. The admission workflow was subsequently split by ownership:
+`App.Composed.Admission` is the 235-line route-aware coordinator, while
 private `Admission.Proof` (208 lines) and `Admission.Session` (180 lines) own
 proof/attempt and durable-session concerns respectively. The 2026-09-06
 quality report found no import cycle or module-health finding in that cluster;
 the exact-SHA CI run `34016973612` provides the current full-suite evidence.
-The remaining AHI-4C implementation and gate evidence is still required before
-the parent task is marked complete.
+The remaining secure-login-and-admission implementation and gate evidence is still required before
+that work is complete.
 
 The application configuration retains the parsed JWT issuer and audience with
 their redacted configuration text at startup, rather than reparsing them on
@@ -4682,7 +4763,7 @@ explicit application/workflow builder instead. This closes a capability gap at
 the constructor boundary rather than relying on callers to remember which
 otherwise-similar runtime constructor is safe to expose.
 
-### Decision record — explicit optional authorization policy (AHI-4C follow-up, 2026-09-04)
+### Decision record — explicit optional authorization policy (secure login and admission follow-up, 2026-09-04)
 
 **Decision: represent authorization-after-authentication as a sum selected by
 the application, rather than requiring authentication-only applications to
@@ -4710,7 +4791,7 @@ Public/Catalog/Orders navigation in both default and Spanish locale paths; its
 browser-only authenticated fixture exercises the protected modules without
 claiming that it is an application sign-in flow. Catalog and Orders remain
 intentionally protected and their runnable authentication flow is supplied by
-AHI-4C.
+the secure login and admission work.
 
 The composition root's catalog/order mounts, local combination, and localized
 action declarations are all fixed literals it owns. It resolves those
@@ -4723,7 +4804,7 @@ The helper is deliberately narrow; general-purpose module constructors retain
 their `Either` results so runtime and caller-provided declarations keep their
 typed failure paths.
 
-### Decision record — fixed validated authentication declarations (AHI-4C coverage follow-up, 2026-09-04)
+### Decision record — fixed validated authentication declarations (secure-login-and-admission coverage follow-up, 2026-09-04)
 
 **Decision: distinguish authored authentication declarations from runtime
 configuration with named `required...OrDie` boundaries.** A fixed host-only
@@ -4742,7 +4823,7 @@ framework without a tested declaration boundary. The helpers extend Harch's
 existing `requiredSafeUrlOrDie`/`requiredAccessibleNameOrDie` convention; they
 do not authorize applications to convert untrusted data into a crash.
 
-### Decision record — AHI-5 preparation: PostgreSQL-owned audit retention (2026-09-05)
+### Decision record — the activity-audit design preparation: PostgreSQL-owned audit retention (2026-09-05)
 
 **Decision: keep durable account activity in the existing web-api PostgreSQL
 database, under an isolated `account_audit` schema, rather than adding an
@@ -4752,7 +4833,7 @@ will own the durable event vocabulary, its transaction policy, PostgreSQL RLS
 roles, retention routine, and reader scope. This extends the existing native
 PostgreSQL migration/test boundary, so the implementation can compose it with
 account state transitions without inventing a second service or a fake generic
-storage abstraction. The still-unimplemented follow-up is the AHI-5 schema,
+storage abstraction. The still-unimplemented follow-up is the activity-audit schema,
 repository, transactional workflows, and example audit reader; this record
 does not claim they have landed.
 
@@ -4809,7 +4890,7 @@ repository or make account mutations atomic with audit append. Those workflow
 follow-ups remain necessary, so this is not described as a completed audit
 capability.
 
-### Decision record — AHI-5-RID: opaque UUIDv4 request-correlation kernel (2026-09-05)
+### Decision record — the request-correlation work: opaque UUIDv4 request-correlation kernel (2026-09-05)
 
 **Decision: make `RequestId` a small Harch-owned opaque UUIDv4 type before
 wiring it through the existing request ingress and response-finalization
@@ -4853,11 +4934,11 @@ creates the ID before every HTTP response path and `Application` already owns
 the typed ingress configuration. A parallel middleware or a general HTTP
 client layer would duplicate the former or invent a framework-owned transport
 that Harch does not have. The shipped scope deliberately does not authenticate
-production services; AHI-5's example audit workflow still needs that
+production services; the activity-audit design's example audit workflow still needs that
 deployment adapter and the pending audit schema/repository slices.
 
 **Follow-up slice: correlate Harch-owned pre-routing rejection text with its
-header (AHI-5-RID, 2026-09-07).** The existing request-execution owner already
+header (request correlation, 2026-09-07).** The existing request-execution owner already
 mints the opaque ID before head validation and route decoding, so extend its
 private `EarlyStages` response interpreter rather than add a general response
 rewriter or an application error renderer. The two framework-owned plain-text
@@ -4865,20 +4946,20 @@ rejections now accept that ID and render the same canonical value as the final
 `X-Request-ID` header for support copying. Application protocol, stream, and
 raw WAI bodies retain their representation ownership; authenticated/domain
 error presentations, exported observability/audit joins, and the runnable audit
-workflow remain AHI-5-RID follow-up work.
+workflow remain request-correlation follow-up work.
 
 **Follow-up slice: correlate the framework-owned disabled-security response
-(AHI-5-RID, 2026-09-09).** The private post-match guard collaborator already
+(request correlation, 2026-09-09).** The private post-match guard collaborator already
 receives every selected protected endpoint after request execution has minted
 the ID. Pass that opaque value into only its disabled-security text renderer,
 so the 503 body and finalized header have one copyable identifier. This extends
 the existing post-match response boundary rather than adding a second context or
 rewriting arbitrary application, protocol, streaming, or raw WAI bodies. Other
 framework and application error presentations, plus exported observability and
-audit joins, remain explicit AHI-5-RID follow-up work.
+audit joins, remain explicit request-correlation follow-up work.
 
 **Follow-up slice: make response presentation correlation explicit
-(AHI-5-RID, 2026-09-09).** Extend `Application`'s existing route-rendering
+(request correlation, 2026-09-09).** Extend `Application`'s existing route-rendering
 callback with the opaque `RequestId`, and pass the same value to the final WAI
 renderer. This gives an application renderer and framework-owned Site/JSON/HTML
 failure presenters a typed way to put the support ID in their own documented
@@ -4888,10 +4969,10 @@ raw WAI responses, so those still receive only the header unless their owner
 uses this explicit input. The current slice covers Site CSRF, client-action,
 post-match, pre-routing, and page-rendering framework failures; durable audit
 joins, application-specific fallback bodies, and the delivery-failure matrix
-remain AHI-5-RID work.
+remain request-correlation work.
 
 **Follow-up slice: attach web-api audit attribution at the existing post-match
-boundary (AHI-5, 2026-09-08).** `Site.siteAttachRouteObservation` already runs
+boundary (durable activity audit, 2026-09-08).** `Site.siteAttachRouteObservation` already runs
 only after the root has selected the typed route and endpoint metadata and
 before its guards/handler.  `web-api` extends its existing request context at
 that point with the root-owned module name, resolved allowlisted locale,
@@ -4902,7 +4983,7 @@ input to a future atomic account-session/audit operation; this slice does not
 claim that operation has shipped.
 
 **Follow-up slice: atomically issue the web-api account session and its
-required audit activity (AHI-5, 2026-09-08).** The generic
+required audit activity (durable activity audit, 2026-09-08).** The generic
 `AccountSessionStore` remains the generic session-lifecycle port, but login
 does not use its independent save operation. It instead prepares the opaque
 session, signs and renders its JWT without exposing it, then gives both the
@@ -4916,12 +4997,12 @@ response. The function's owner has only the narrowly needed session-insert
 privilege, and the runtime role has execute-only access to this audit
 operation; its pre-existing generic session-table privileges are not enlarged
 or redefined here. This avoids both a generic post-commit logger and ambient
-transaction state. The remaining AHI-5 work is the other selected
+transaction state. The remaining activity-audit work is the other selected
 audit-producing mutations; this slice alone does not claim the whole audit
 catalog is atomic.
 
 **Follow-up slice: atomically settle a pending registration delivery and its
-required audit activity (AHI-5, 2026-09-10).** The generic `AccountStore`
+required audit activity (durable activity audit, 2026-09-10).** The generic `AccountStore`
 continues to own pending-registration lifecycle semantics, including released
 claims after a failed SMTP send. At the web-api registration action boundary,
 only its post-SMTP successful-delivery settlement is replaced with the narrow
@@ -4941,10 +5022,10 @@ registration callback instead of putting durable policy in Harch, adding a
 generic post-commit logger, or making all account storage depend on PostgreSQL.
 The covered event is only pending-registration delivery. Verification resend,
 email verification, known-account rejection, and MFA enrollment remain
-explicit AHI-5 atomic-workflow follow-ups; this slice does not claim them.
+explicit activity-audit atomic-workflow follow-ups; this slice does not claim them.
 
 **Follow-up slice: explicit logout revokes first and accepts a bounded audit
-gap (AHI-5, 2026-09-09).** `AccountSessionAuditStore` remains deliberately
+gap (durable activity audit, 2026-09-09).** `AccountSessionAuditStore` remains deliberately
 specific to login issuance's atomic contract. Explicit logout instead uses the
 existing `AccountSessionStore` followed synchronously by `ActivityAuditStore`:
 a durable-revocation error returns the existing retryable 503 without clearing
@@ -4965,9 +5046,9 @@ the framework-owned request ID remains in private request logs and spans, not
 the signal payload. Focused workflow tests exercise the independent revocation
 and append rails; the existing PostgreSQL repository tests remain responsible
 for the controlled function invocation and its failure mapping. Other selected
-audit-producing mutations remain AHI-5 work.
+audit-producing mutations remain activity-audit work.
 
-### Decision record — AHI-4C: one ASCII cookie-token grammar (2026-09-05)
+### Decision record — the secure-login and admission design: one ASCII cookie-token grammar (2026-09-05)
 
 **Decision: extract the existing cookie-name token predicate into a small
 Harch-owned leaf module and use it for session configuration, authentication
@@ -4987,7 +5068,7 @@ accounting path now have one exact grammar while retaining their distinct
 responsibilities: exact-one credential extraction, response-cookie rendering,
 and untrusted request budgeting.
 
-### Decision record — authentication transport and pipeline ownership (PR-F6, 2026-09-05)
+### Decision record — authentication transport and pipeline ownership (review finding, 2026-09-05)
 
 **Decision: retain `HarchWeb.Authentication` as the sole public authoring
 facade, while separating its internal transport/policy and proof-to-principal
@@ -5011,7 +5092,7 @@ functions remain unchanged. The extraction closes the module-health/public
 surface review finding without changing the route dispatcher, introducing a
 second proof parser, or weakening the shared cookie grammar.
 
-### Decision record — action field, codec, and mount ownership (PR-F5, 2026-09-05)
+### Decision record — action field, codec, and mount ownership (review finding, 2026-09-05)
 
 **Decision: retain `HarchWeb.Action` as the single public authoring facade,
 while separating private field decoding, validated codec declarations, and
@@ -5034,7 +5115,7 @@ facade remains comprehensible for ordinary declarations, and private modules
 avoid exposing the validated endpoint representation as a new construction
 path.
 
-### Decision record — composed application assembly dependencies (PR-F4, 2026-09-05)
+### Decision record — composed application assembly dependencies (review finding, 2026-09-05)
 
 **Decision: name the composed root's stable deployment and domain capabilities
 as narrow assembly records, while retaining request-specific inputs at their
@@ -5050,10 +5131,10 @@ session, proof, and action-codec collaborators. The WAI request and typed
 route request remain explicit invocation inputs, so untrusted data cannot be
 mistaken for deployment configuration. This extends the existing composed-root
 assembly boundary rather than adding a second submission path, preserving the
-single route/action/guard interpreter and AHI-4C-AMH's separate proof/session
+single route/action/guard interpreter and the admission-workflow split's separate proof/session
 ownership.
 
-### Decision record — direct protocol invocation is protocol-only (PR-F8, 2026-09-05)
+### Decision record — direct protocol invocation is protocol-only (review finding, 2026-09-05)
 
 **Decision: remove the mixed `routeResponse` helper rather than make a valid
 page declaration enter an exception or optional-result domain.** A
@@ -5068,7 +5149,7 @@ configuration continues to use the existing unavailable CSRF authority; an
 accidental page route therefore receives the renderer's safe 503 outcome, not
 invented page security or an SSR document outside the page-security rail.
 
-### Decision record — responsive viewport belongs to the complete document (PR-C4, 2026-09-05)
+### Decision record — responsive viewport belongs to the complete document (review finding, 2026-09-05)
 
 **Decision: extend `Document` with a closed `ViewportPolicy` whose current
 `ResponsiveViewport` case is selected by `buildPageShell`; do not introduce a
@@ -5090,7 +5171,7 @@ and adds a mobile-context load that verifies the SSR declaration, device-width
 layout, FAB target geometry, no horizontal overflow, enhanced navigation, and
 history.
 
-### Decision record — declared page-enhancement lifecycle (PR-C1, 2026-09-05)
+### Decision record — declared page-enhancement lifecycle (review finding, 2026-09-05)
 
 **Decision: extend `Document`'s existing runtime descriptors and the one
 replaceable navigation runtime with `PageEnhancementModule`; do not add a
@@ -5125,9 +5206,9 @@ styles/content remain application-owned, and applications that replace the
 navigation runtime must implement this explicit descriptor contract or retain
 native navigation for pages that use it. The two-pages live SSE module and a
 second Home style/behavior module provide the reference proof; Swagger's
-future page asset remains AHI-4E work.
+future page asset remains part of the OpenAPI documentation and Swagger UI work.
 
-### Decision record — live action claims gate client presentation (PR-C2, 2026-09-06)
+### Decision record — live action claims gate client presentation (review finding, 2026-09-06)
 
 **Decision: extend the existing capture-kernel settlement and replaceable
 navigation lifecycle; do not add an application-local stale-response flag or a
@@ -5153,7 +5234,7 @@ document-wide single-action queue.
 This keeps one capture/action/navigation ownership boundary and makes stale
 client presentation impossible without inventing a second router.
 
-### Decision record — application-owned document language through the existing shell (PR-C3, 2026-09-06)
+### Decision record — application-owned document language through the existing shell (review finding, 2026-09-06)
 
 **Decision: add the already-resolved root language to `PageShell` and
 `Document`; do not infer it from a URL or create a second localization/routing
@@ -5173,7 +5254,7 @@ ordinary SSR, script-disabled loads, reloads, and browser history each use the
 server-rendered language. This extends the document/navigation lifecycle rather
 than making routing a framework-owned locale policy.
 
-### Decision record — separate signed CSRF backend ownership (PR-F7, 2026-09-05)
+### Decision record — separate signed CSRF backend ownership (review finding, 2026-09-05)
 
 **Decision: retain `HarchWeb.Csrf` as the stable façade and one
 `CsrfProtection` lifecycle, while moving signed-token mechanics to a private
@@ -5202,7 +5283,7 @@ new module therefore makes the canonical dependency boundary explicit; the
 legacy façade remains available and the private lifecycle and parser owners do
 not become application-importable.
 
-### Decision record — cohesive post-match endpoint execution (PR-F2, 2026-09-05)
+### Decision record — cohesive post-match endpoint execution (review finding, 2026-09-05)
 
 **Decision: extract the existing post-match endpoint selection and guard
 execution into a private dispatcher collaborator, rather than introduce a
@@ -5217,7 +5298,7 @@ policy remain in their established dispatcher owners.
 Routed observability now derives response diagnostics once at its response
 owner instead of accepting a caller-provided diagnostic value that could be
 inconsistent with the response. Its force-at-report-boundary behavior remains
-unchanged. This leaves SEC-1/SEC-2's declaration-level concurrency and action
+unchanged. This leaves the amended declaration-level concurrency and action
 owner contract available to the same post-match collaborator rather than
 freezing an alternate admission path into this structural extraction.
 
@@ -5349,16 +5430,28 @@ style mappings on the shell (the `examples/two-pages` Layout pattern this
 replaces), because the page already owns its markup, title, and hooks and should
 own its scoped styles the same way a Svelte component carries its scoped
 `<style>` block. Styles remain application-owned static CSS files in the
-`CssScope`/`CssClass` convention (AHI-1's no-CSS-in-Haskell decision stands),
+`CssScope`/`CssClass` convention (the component and styling architecture design's no-CSS-in-Haskell decision stands),
 authored as `harch-<scope>-<local>` selectors and verified by
-`tools/check-scoped-css.sh` (AHI-1S landed the gate). Narrow-slice record: this
+`tools/check-scoped-css.sh` (the scoped-style verification work landed the gate). Narrow-slice record: this
 covers per-page style ownership only; per-component style attachment stays
 application-owned, and the remaining authoring-quality work (the
 `Pages/<Name>.hs` file-implied routing + `pageModule` exemplar, the deliberate
-scoped-CSS collision proof, and the verbose manual-markup exemplar) is tracked
-in `TASKS/web-api-template-authoring-quality.md`. `examples/two-pages` now
+scoped-CSS collision proof, and the verbose manual-markup exemplar) remains part
+of the web-api template authoring quality work. `examples/two-pages` now
 demonstrates the page-owned form: its local `pageStylesheets` route mapping is
 deleted and `App.Pages.Home` declares its own stylesheet.
+
+### Retryable computed-style browser observations (2026-09-28)
+
+Decision: extend the existing BrowserObservation algebra and Playwright
+observeMany adapter with a computed-style leaf, keeping the current one-shot
+scenario command for dependent browser steps. The scoped CSS collision proof
+needs computed values to use assertAllObserved's single observation and retry
+boundary: navigation intentionally returns at commit so deferred scripts can
+be blocked without deadlocking, which means a style query can run before the
+SSR body has entered the DOM. The observation preserves Nothing for a missing
+selector and lets ordinary mismatch diagnostics and retries report readiness;
+it does not add a second browser assertion path or change visit semantics.
 
 ### Browser element snapshots (2026-09-10)
 

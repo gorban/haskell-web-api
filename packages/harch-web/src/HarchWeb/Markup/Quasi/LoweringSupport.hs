@@ -25,10 +25,10 @@ import Language.Haskell.TH
   )
 import Language.Haskell.TH.Ppr (pprint)
 
--- | Decision (BV, 2026-08-21, per @docs/design-guidance.md@'s
--- missing-framework-capability protocol): see @docs/design-guidance.md@'s
--- "Follow-up decision — BV" for the full record of why this catches the
--- crash rather than implementing TH-quote support.
+-- | Decision (review finding, 2026-08-21, per @docs/design-guidance.md@'s
+-- missing-framework-capability protocol): see the missing-framework-capability
+-- follow-up decision in @docs/design-guidance.md@ for the full record of why
+-- this catches the crash rather than implementing TH-quote support.
 --
 -- 'Meta.parseExp' does not return a 'Left' for every unsupported expression:
 -- a bare Template Haskell name quote (@'Just@) parses, then throws an

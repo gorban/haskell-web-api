@@ -3,7 +3,7 @@
 
 -- | Explicit OpenAPI document construction over documented endpoint families.
 --
--- Decision record (AHI-4E, 2026-09-22): the public @openapi3@ model is the
+-- Decision record (OpenAPI documentation and Swagger UI, 2026-09-22): the public @openapi3@ model is the
 -- mutable document value applications transform, while this module owns the
 -- two model gaps required by the selected OpenAPI 3.0.3 wire contract: its
 -- upstream encoder emits @3.0.0@ and it has no representation for @x-*@
@@ -16,7 +16,7 @@
 -- schemas, while the runtime declarations remain representation truth rather
 -- than a body-shape inference.
 --
--- Decision record (AHI-4E, 2026-09-23): 'OpenApiMountedFamily' also carries
+-- Decision record (OpenAPI documentation and Swagger UI, 2026-09-23): 'OpenApiMountedFamily' also carries
 -- the exact @ApiPath -> EndpointMetadata authorization@ function the
 -- application already writes for real route mounting, plus an
 -- @authorization -> [Text]@ scope projection; 'buildOpenApiDocument' takes a
@@ -27,7 +27,7 @@
 -- ('UndefinedOpenApiSecurityProfile', 'UnresolvedOpenApiSecurityProfile')
 -- rather than guessing when a profile is undefined or unresolvable. Swagger
 -- routes, and wiring this into a real application (@web-api@,
--- @composed-domains@), remain later AHI-4E slices.
+-- @composed-domains@), remain later slices of the OpenAPI documentation and Swagger UI work.
 -- An extension can carry a nonblank authored operation ID; otherwise the
 -- existing family abstraction has no runtime 'EndpointMetadata' name per
 -- method, so this slice falls back to a stable method/path identifier and
@@ -35,7 +35,7 @@
 -- name when the API-family metadata boundary carries that identity; it must not
 -- be presented as that later name-based guarantee.
 --
--- Decision record (AHI-4E-MH, 2026-09-26): this facade keeps the public
+-- Decision record (OpenAPI document split, 2026-09-26): this facade keeps the public
 -- document types and the assembly rail; typed path/operation construction
 -- lives in 'HarchWeb.OpenApi.Document.Operation' (which also owns the
 -- construction failures its builders raise) and the raw-JSON wire adapters
@@ -114,14 +114,14 @@ data OpenApiDocumentDetails = OpenApiDocumentDetails
 -- Keeping the whole 'RouteMount' value prevents a second, stringly
 -- documentation-prefix input.
 --
--- Decision record (AHI-4E, 2026-09-23): security is derived from the exact
+-- Decision record (OpenAPI documentation and Swagger UI, 2026-09-23): security is derived from the exact
 -- @ApiPath -> EndpointMetadata authorization@ function the application
 -- already writes for
 -- 'HarchWeb.Api.Endpoint.Family.apiRouteEndpointFamilyDefinition', not a
 -- second, independently authored copy. This is the only way a documented
 -- operation's declared security can be structurally guaranteed to match the
 -- profile/access requirement that actually governs the endpoint, rather than
--- a docs-only override the task's own design forbids. The scope function
+-- a docs-only override the design recorded here forbids. The scope function
 -- turns one endpoint's opaque @authorization@ requirement into the OpenAPI
 -- scope names an application-owned 'RequireAuthorized' value demands;
 -- 'RequireAuthenticated' always requires zero scopes and
@@ -168,7 +168,7 @@ data OpenApiDocument = OpenApiDocument
 -- a later typed metadata slice.
 buildOpenApiDocument ::
   OpenApiDocumentDetails ->
-  -- | Every resolved AHI-4D authentication profile this document's mounted
+  -- | Every resolved scoped API-authentication profile this document's mounted
   -- families may reference, keyed by the exact profile name real routing
   -- uses. A profile a documented endpoint names but this map omits fails
   -- construction ('UndefinedOpenApiSecurityProfile') rather than being

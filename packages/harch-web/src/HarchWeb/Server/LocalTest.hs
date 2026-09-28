@@ -4,7 +4,7 @@
 --
 -- The public facade exposes 'LocalTestServer', 'withLocalTestServer', and
 -- 'withLocalTestServerForApplication'; raw sockets and server threads stay
--- behind this module boundary. FQ8 constructs the same
+-- behind this module boundary. The review finding constructs the same
 -- 'RuntimeTransportDependencies' record as production startup, so loopback
 -- tests retain transport-policy parity without rebuilding the listener
 -- dependency list positionally.

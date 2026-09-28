@@ -1,6 +1,6 @@
 -- | Unix-epoch instants used for durable security state.
 --
--- Decision (PR-S1, 2026-08-23): this is a distinct boundary from the
+-- Decision (review finding, 2026-08-23): this is a distinct boundary from the
 -- reboot-relative monotonic clock used for request and operation durations.
 -- Account verification, sessions, login-attempt throttling, and TOTP all
 -- survive a process restart and can be compared across hosts, so their

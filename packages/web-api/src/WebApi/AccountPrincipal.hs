@@ -1,7 +1,7 @@
 -- | The application-owned principal established only after a JWT has been
 -- verified and its referenced durable account session is still active.
 --
--- AHI-4C deliberately carries the session identifier only inside this
+-- The secure-login and admission design deliberately carries the session identifier only inside this
 -- post-guard value.  Parsing a browser cookie into request context would make
 -- an unverified bearer credential look like an application grant before the
 -- authentication rail had run.

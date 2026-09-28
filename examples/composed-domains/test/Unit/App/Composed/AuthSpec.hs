@@ -8,10 +8,14 @@ import Crypto.JOSE.JWA.JWK qualified as JwaJwk
 import Crypto.JOSE.JWK qualified as JoseJwk
 import Crypto.JOSE.Types (Base64Integer (..))
 import Crypto.JWT qualified as Jwt
+import Data.Aeson qualified as Aeson
 import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.List.NonEmpty qualified as NonEmpty
 import Data.Text (Text)
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
   ( AuthenticationProofVerifier (AuthenticationProofVerifier),
+    EncodedJwt,
     ProofRejection,
     ProofVerificationFailure (ProofRejected),
     jwtProofFromCookie,
@@ -19,6 +23,8 @@ import HarchWeb
     mkProofRejection,
     requiredSecurityFailureCodeOrDie,
   )
+import HarchWeb.Authentication qualified as OAuth2
+import HarchWeb.Time (addUnixTimeNanoseconds, currentUnixTimeNanoseconds)
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
 
@@ -31,7 +37,7 @@ spec = describe "Unit.App.Composed.Auth" $ do
     configuration <- orFail "composed JWT configuration" (mkComposedJwtConfiguration "https://composed.test" "account-web" "composed-api" "composed-key-v1")
     runtime <- orFail "composed JWT runtime" (loadComposedJwtRuntime configuration namedSigningKey verificationKeys)
     webToken <- orMint =<< issueComposedWebToken runtime "account-1"
-    apiToken <- orMint =<< issueComposedApiToken runtime "client-1" ["catalog:read", "orders:write"]
+    apiToken <- orMint =<< issueTestApiToken runtime "client-1" ["catalog:read", "orders:write"]
     let AuthenticationProofVerifier verifyWeb = composedWebProofVerifier runtime
         AuthenticationProofVerifier verifyApi = composedApiProofVerifier runtime
         audienceRejection :: Either ProofVerificationFailure value
@@ -44,7 +50,9 @@ spec = describe "Unit.App.Composed.Auth" $ do
       ( (webVerified `shouldBe` Right (ComposedWebClaims "account-1"))
           :| [ apiVerified `shouldBe` Right (ComposedApiClaims "client-1" ["catalog:read", "orders:write"]),
                webTokenAtApi `shouldBe` audienceRejection,
-               apiTokenAtWeb `shouldBe` audienceRejection
+               apiTokenAtWeb `shouldBe` audienceRejection,
+               show runtime `shouldBe` "ComposedJwtRuntime <redacted>",
+               showList [runtime] "" `shouldBe` "[ComposedJwtRuntime <redacted>]"
              ]
       )
 
@@ -56,7 +64,7 @@ spec = describe "Unit.App.Composed.Auth" $ do
     configuration <- orFail "composed JWT configuration" (mkComposedJwtConfiguration "https://composed.test" "account-web" "composed-api" "composed-key-v1")
     honestRuntime <- orFail "honest runtime" (loadComposedJwtRuntime configuration namedHonestKey (JoseJwk.JWKSet [namedHonestKey]))
     foreignRuntime <- orFail "foreign runtime" (loadComposedJwtRuntime configuration namedForeignKey (JoseJwk.JWKSet [namedForeignKey]))
-    foreignSigned <- orMint =<< issueComposedApiToken foreignRuntime "client-1" ["catalog:read"]
+    foreignSigned <- orMint =<< issueTestApiToken foreignRuntime "client-1" ["catalog:read"]
     let AuthenticationProofVerifier verifyApi = composedApiProofVerifier honestRuntime
         audienceRejectionCode = mkProofRejection (requiredSecurityFailureCodeOrDie "composed.audience-mismatch")
     foreignResult <- verifyApi (jwtProofFromCookie foreignSigned)
@@ -78,23 +86,36 @@ spec = describe "Unit.App.Composed.Auth" $ do
         expectedApiRejection = Left (HarchWeb.mkJwtClaimsError (HarchWeb.requiredSecurityFailureCodeOrDie "composed.api.claims-rejected"))
         audienceRejection = Left composedAudienceMismatch
     publicOnlyRuntime <- orFail "public-only runtime" (loadComposedJwtRuntime configuration publicOnlyKey (JoseJwk.JWKSet [publicOnlyKey]))
-    failedMint <- issueComposedApiToken publicOnlyRuntime "client-1" ["catalog:read"]
+    failedMint <- issueTestApiToken publicOnlyRuntime "client-1" ["catalog:read"]
     expectAll
       ( (parseComposedWebJwtClaims configuration Jwt.emptyClaimsSet `shouldBe` audienceRejection)
           :| [ parseComposedApiJwtClaims configuration Jwt.emptyClaimsSet `shouldBe` audienceRejection,
                parseComposedWebJwtClaims configuration webAudienceClaims `shouldBe` expectedWebRejection,
                parseComposedApiJwtClaims configuration apiAudienceClaims `shouldBe` expectedApiRejection,
-               parseComposedApiJwtClaims configuration (withSubject apiAudienceClaims)
-                 `shouldBe` Right (ComposedApiClaims "client-1" []),
+               parseComposedApiJwtClaims configuration (withSubject apiAudienceClaims) `shouldBe` expectedApiRejection,
+               parseComposedApiJwtClaims configuration (jwtClaimsFromJson "{\"aud\":[\"composed-api\"],\"sub\":\"client-1\",\"scope\":\"catalog:read  orders:write\"}") `shouldBe` expectedApiRejection,
+               parseComposedApiJwtClaims configuration (jwtClaimsFromJson "{\"aud\":[\"composed-api\"],\"sub\":\"client-1\",\"scope\":\"catalog:read catalog:read\"}") `shouldBe` expectedApiRejection,
+               parseComposedApiJwtClaims configuration (jwtClaimsFromJson "{\"aud\":[\"composed-api\"],\"sub\":\"client-1\",\"scope\":\"catalog:bad\\n\"}") `shouldBe` expectedApiRejection,
+               parseComposedApiJwtClaims configuration (jwtClaimsFromJson "{\"aud\":[\"composed-api\"],\"sub\":\"client-1\",\"scope\":7}") `shouldBe` expectedApiRejection,
                parseComposedWebJwtClaims configuration (withSubject webAudienceClaims)
                  `shouldBe` Right (ComposedWebClaims "client-1"),
                fmap composedWebSubject (parseComposedWebJwtClaims configuration (withSubject webAudienceClaims)) `shouldBe` Right "client-1",
-               fmap composedApiSubject (parseComposedApiJwtClaims configuration (withSubject apiAudienceClaims)) `shouldBe` Right "client-1",
-               fmap composedApiScopes (parseComposedApiJwtClaims configuration (withSubject apiAudienceClaims)) `shouldBe` Right [],
                mintedWithUnusableKey failedMint,
                show configuration `shouldContain` "account-web",
                show ComposedJwtIssueFailed `shouldBe` "ComposedJwtIssueFailed"
              ]
+      )
+
+  it "rejects an API token whose lifetime is empty or reversed" $ do
+    signingKey <- JoseJwk.genJWK (JwaJwk.RSAGenParam 1024)
+    let namedSigningKey = signingKey & JoseJwk.jwkKid ?~ "composed-key-v1"
+    configuration <- orFail "composed JWT configuration" (mkComposedJwtConfiguration "https://composed.test" "account-web" "composed-api" "composed-key-v1")
+    runtime <- orFail "composed JWT runtime" (loadComposedJwtRuntime configuration namedSigningKey (JoseJwk.JWKSet [namedSigningKey]))
+    emptyLifetime <- issueComposedApiToken runtime "client-1" (requiredTestScopes ["catalog:read"]) 100 100
+    reversedLifetime <- issueComposedApiToken runtime "client-1" (requiredTestScopes ["catalog:read"]) 101 100
+    expectAll
+      ( (isIssueFailed emptyLifetime `shouldBe` True)
+          :| [isIssueFailed reversedLifetime `shouldBe` True]
       )
 
   it "rejects values jose cannot normalize and pins every derived representation" $ do
@@ -128,6 +149,30 @@ spec = describe "Unit.App.Composed.Auth" $ do
                  `shouldBe` True
              ]
       )
+
+  it "rejects malformed or ambiguous verification keys and redacts runtime display" $ do
+    signingKey <- JoseJwk.genJWK (JwaJwk.RSAGenParam 1024)
+    differentSigningKey <- JoseJwk.genJWK (JwaJwk.RSAGenParam 1024)
+    nonRsaKey <- JoseJwk.genJWK (JwaJwk.OctGenParam 64)
+    let activeKeyId = "composed-key-v1"
+        namedSigningKey = signingKey & JoseJwk.jwkKid ?~ activeKeyId
+        namedDifferentKey = differentSigningKey & JoseJwk.jwkKid ?~ activeKeyId
+        namedNonRsaKey = nonRsaKey & JoseJwk.jwkKid ?~ activeKeyId
+        emptyKeyId = signingKey & JoseJwk.jwkKid ?~ ""
+    configuration <- orFail "composed JWT configuration" (mkComposedJwtConfiguration "https://composed.test" "account-web" "composed-api" activeKeyId)
+    let rejectsKeySet signingMaterial candidates =
+          isConfigurationError
+            ComposedJwtVerificationKeyMismatch
+            (loadComposedJwtRuntime configuration signingMaterial (JoseJwk.JWKSet candidates))
+    expectAll
+      ( (rejectsKeySet namedSigningKey [signingKey] `shouldBe` True)
+          :| [ rejectsKeySet namedSigningKey [emptyKeyId] `shouldBe` True,
+               rejectsKeySet namedSigningKey [namedNonRsaKey] `shouldBe` True,
+               rejectsKeySet namedSigningKey [namedSigningKey, namedSigningKey] `shouldBe` True,
+               rejectsKeySet namedSigningKey [namedDifferentKey] `shouldBe` True,
+               rejectsKeySet namedNonRsaKey [namedSigningKey] `shouldBe` True
+             ]
+      )
   where
     configurationOrDie keyId =
       case mkComposedJwtConfiguration "https://composed.test" "account-web" "composed-api" keyId of
@@ -155,6 +200,12 @@ mintedWithUnusableKey result =
     Left issueError -> issueError `shouldBe` ComposedJwtIssueFailed
     Right _ -> expectationFailure "minting with an unusable signing key must fail"
 
+isIssueFailed :: Either ComposedJwtIssueError value -> Bool
+isIssueFailed result =
+  case result of
+    Left ComposedJwtIssueFailed -> True
+    Right _ -> False
+
 checkDerived :: (Eq value, Show value) => value -> Expectation
 checkDerived value = do
   value == value `shouldBe` True
@@ -168,3 +219,28 @@ isRejectedNotAudience result audienceRejection =
   case result of
     Left (ProofRejected rejection) -> rejection /= audienceRejection
     _ -> False
+
+issueTestApiToken :: ComposedJwtRuntime -> Text -> [Text] -> IO (Either ComposedJwtIssueError EncodedJwt)
+issueTestApiToken runtime subject scopes = do
+  now <- currentUnixTimeNanoseconds
+  case addUnixTimeNanoseconds now (3600 * 1000000000) of
+    Nothing -> issueComposedApiToken runtime subject (requiredTestScopes scopes) now now
+    Just expiresAt -> issueComposedApiToken runtime subject (requiredTestScopes scopes) now expiresAt
+
+jwtClaimsFromJson :: Text -> Jwt.ClaimsSet
+jwtClaimsFromJson jsonText =
+  case Aeson.eitherDecodeStrict' (TextEncoding.encodeUtf8 jsonText) of
+    Right claims -> claims
+    Left message -> error ("expected valid test JWT claims JSON: " <> message)
+
+requiredTestScopes :: [Text] -> NonEmpty OAuth2.OAuth2Scope
+requiredTestScopes scopeTexts =
+  case NonEmpty.nonEmpty (fmap requiredTestScope scopeTexts) of
+    Just scopes -> scopes
+    Nothing -> error "test API token scopes must be nonempty"
+
+requiredTestScope :: Text -> OAuth2.OAuth2Scope
+requiredTestScope scopeText =
+  case OAuth2.mkOAuth2Scope scopeText of
+    Right scope -> scope
+    Left failure -> error ("expected a valid OAuth scope: " <> show failure)

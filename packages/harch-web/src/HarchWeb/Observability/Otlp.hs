@@ -33,7 +33,7 @@ import Network.HTTP.Types qualified as Http
 
 -- | A stable, payload-free OTLP export failure.
 --
--- Decision (PR-SEC8, 2026-08-30): this is constructed at the existing OTLP
+-- Decision (review finding, 2026-08-30): this is constructed at the existing OTLP
 -- transport boundary, rather than asking each application log reporter to
 -- redact @http-client@ exceptions. Those exceptions can render configured
 -- request headers and endpoint queries, so neither the raw request nor its

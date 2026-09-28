@@ -1,7 +1,7 @@
 # ADR-AY: Configurable PostgreSQL transport security
 
 - Status: **Implemented and verified — configurable policy; unset preserves libpq defaults**
-- Task: [AY — PostgreSQL connection lifecycle and transport](../../TASKS/pr-3-correctness-and-security-defects.md)
+- Task: AY — PostgreSQL connection lifecycle and transport (PR #3 review finding)
 - Date: 2026-08-26
 
 ## Executive problem statement

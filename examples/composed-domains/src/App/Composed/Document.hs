@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | The composed root's one merged OpenAPI document (AHI-4E): both domain
+-- | The composed root's one merged OpenAPI document (part of the OpenAPI
+-- documentation and Swagger UI work): both domain
 -- API families aggregated through the exact mounts that install them for
 -- runtime routing, with each operation's security derived from the root's
 -- real authorization projection and scope mapping. The packages own only
@@ -116,7 +117,8 @@ composedEndpointMetadataForPath apiPath =
       error ("composed-domains documentation asked for an undocumented path: " <> show (apiPathText apiPath))
 
 -- | The composed root's authored documentation extensions for the two
--- documented operations (AHI-4E): one combined document with separate
+-- documented operations (part of the OpenAPI documentation and Swagger
+-- UI work): one combined document with separate
 -- Catalog/Orders tags. The domain packages see only the generic extension
 -- parameter.
 composedCatalogItemsExtension :: OpenApiExtension () () ByteString.ByteString

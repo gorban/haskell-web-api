@@ -1,7 +1,8 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | The composed root's documentation surface (AHI-4E): the typed
+-- | The composed root's documentation surface (from the OpenAPI
+-- documentation and Swagger UI work): the typed
 -- specification route at @/docs/openapi.json@ serving the one merged
 -- document, and the Swagger page at @/docs@ - both ordinary typed routes
 -- mounted at the root outside the locale wrapper, exactly like the API

@@ -146,7 +146,7 @@ mainSpec application = describe "Unit.App.Api.Declarative" $ do
       body <- readResponseBody response
       (Aeson.decodeStrict body :: Maybe Aeson.Value) `shouldBe` Just (Aeson.object ["greetingText" Aeson..= ("Hello, Ada!" :: Text)])
 
-    -- Tabled per docs/design-guidance.md's CN decision record: one act
+    -- Tabled per the repository's one-act test-shape convention: one act
     -- (build a request, perform it, check only its status code),
     -- differing only in how the request is built and the expected
     -- status. The body-decoding it above stays separate: it asserts on

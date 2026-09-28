@@ -99,7 +99,7 @@ data DialogLinkTrigger route = DialogLinkTrigger
 
 -- | Cohesive inputs for one always-dismissible native dialog.
 --
--- Decision (AHI-6, 2026-08-31): extend the existing typed control and capture
+-- Decision (dialog and application controls, 2026-08-31): extend the existing typed control and capture
 -- boundaries with a link-fallback dialog adapter. Harch owns naming,
 -- modality hooks, early-activation capture, dismissal, and focus restoration;
 -- applications own the heading/body and optional typed styling classes. The
@@ -199,7 +199,7 @@ data FieldValidity
 
 -- | Structural inputs shared by native input, select, and future controls.
 --
--- Decision (AHI-7, 2026-08-31): the registration experiment and the distinct
+-- Decision (accessible field validation, 2026-08-31): the registration experiment and the distinct
 -- login form both reproduced the same inseparable label/ID/description
 -- relationship.  Extend the existing control boundary with this higher-order
 -- component; do not add a form-builder DSL or leave applications to transpose

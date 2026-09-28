@@ -16,7 +16,7 @@
 -- layer now, so future framework keys can be added without applications
 -- replacing their own catalogs.
 --
--- FQ10 extends this existing localization boundary instead of adding a second
+-- The review finding extends this existing localization boundary instead of adding a second
 -- renderer: every UTF-8 input crosses the ICU ABI with its byte length, and
 -- ICU's returned bytes are decoded explicitly. Embedded NUL values therefore
 -- retain their complete value, while malformed native output remains the

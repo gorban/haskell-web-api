@@ -16,7 +16,7 @@ spec =
     describe "Content negotiation" $ do
       let jsonAndText = testMediaType "application/json" :| [testMediaType "text/plain"]
 
-      -- Tabled per docs/design-guidance.md's CN decision record: one act
+      -- Tabled per docs/design-guidance.md's one-act/one-comparison decision record: one act
       -- (selectRepresentation jsonAndText), one comparison, differing only
       -- in the Accept header and expected negotiation result. The
       -- selectContentTypeRepresentation and parseAcceptHeader clusters below
@@ -38,7 +38,7 @@ spec =
         `forM_` \(label, acceptHeader, expected) ->
           it label $ selectRepresentation jsonAndText acceptHeader `shouldBe` expected
 
-      -- Tabled per docs/design-guidance.md's CN decision record: one act
+      -- Tabled per docs/design-guidance.md's one-act/one-comparison decision record: one act
       -- (selectContentTypeRepresentation textContentTypes), one comparison,
       -- differing only in the Accept header and expected negotiation
       -- result. The parseAcceptHeader cluster below is a separate act and
@@ -91,7 +91,7 @@ spec =
                  ]
           )
 
-      -- Tabled per docs/design-guidance.md's CN decision record: one act
+      -- Tabled per docs/design-guidance.md's one-act/one-comparison decision record: one act
       -- (parseAcceptHeader), one comparison against the full parsed
       -- [AcceptedRange] result, differing only in the header text. The
       -- "parses quality, whitespace..." it above and the boundary-quality

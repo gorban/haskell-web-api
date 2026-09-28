@@ -975,8 +975,8 @@ one manual-TLS HTTPS listener.
 
 ### Other low-port binding options
 
-If you do not want the rootful host-network path above, the remaining low-port options from
-`TASKS.md` are still viable:
+If you do not want the rootful host-network path above, the remaining low-port options are
+still viable:
 
 1. **Host-level nftables / iptables redirect**: keep the app itself on `5001`, then redirect host
    port `80` to that unprivileged listener.

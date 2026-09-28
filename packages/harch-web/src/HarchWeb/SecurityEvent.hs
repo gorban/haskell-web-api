@@ -3,13 +3,13 @@
 -- | Trusted security-event contracts shared by endpoint admission and future
 -- application-module composition.
 --
--- Decision record (AHI-4A, 2026-09-01): route observation and event meaning
+-- Decision record (typed endpoint security, 2026-09-01): route observation and event meaning
 -- belong to the framework security boundary, while application audit storage
 -- remains application-owned. 'RouteObservation' is constructed from declared
 -- route/module data, never a request path or a child-supplied string. The
 -- deliberately small 'TelemetryEvent' projection contains only validated
 -- declaration identifiers and closed outcome constructors; there is no
--- generic conversion to an application's durable audit event. AHI-4B extends
+-- generic conversion to an application's durable audit event. The composable application-modules design extends
 -- construction from 'rootRouteObservation' to mounted route chains without
 -- changing these event meanings.
 module HarchWeb.SecurityEvent

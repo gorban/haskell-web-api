@@ -379,6 +379,7 @@ async function observe(observation) {
     case 'textContent': return resolveLocator(observation.locator).textContent({ timeout: timeout() });
     case 'inputValue': return resolveLocator(observation.locator).inputValue({ timeout: timeout() });
     case 'attributeValue': return resolveLocator(observation.locator).getAttribute(requireString(observation.attribute, 'attribute name'), { timeout: timeout() });
+    case 'computedStyle': return computedStyleValue(observation.selector, observation.property);
     case 'focused': return resolveLocator(observation.locator).evaluate((element) => document.activeElement === element);
     case 'visible': return resolveLocator(observation.locator).isVisible({ timeout: timeout() });
     case 'currentUrl': return requirePage().url();
@@ -551,6 +552,12 @@ main().catch(async (error) => {
 // Read one computed CSS property of the first element matching a selector.
 // Missing elements resolve to null so callers can assert absence directly.
 async function computedStyle({ selector, property }) {
+  return computedStyleValue(selector, property);
+}
+
+async function computedStyleValue(selector, property) {
+  requireString(selector, 'CSS selector');
+  requireString(property, 'CSS property');
   return requirePage().evaluate(
     ([targetSelector, targetProperty]) => {
       const element = document.querySelector(targetSelector);

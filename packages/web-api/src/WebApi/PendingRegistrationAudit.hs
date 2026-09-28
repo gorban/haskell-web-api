@@ -1,7 +1,7 @@
 -- | The application-owned atomic persistence boundary for a registration
 -- email that has already been accepted by SMTP.
 --
--- Decision record (AHI-5, 2026-09-10): the existing 'AccountStore' continues
+-- Decision record (durable activity audit, 2026-09-10): the existing 'AccountStore' continues
 -- to own generic pending-registration lifecycle semantics.  The reference
 -- application replaces only its successful-delivery settlement operation at
 -- the action boundary with this narrow port, so PostgreSQL can commit the

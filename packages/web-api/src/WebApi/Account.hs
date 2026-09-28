@@ -8,7 +8,7 @@
 -- therefore share one explicit delivery capability without conflating it
 -- with credential hashing or account storage.
 --
--- Decision (AHI-2, 2026-09-01): resend is a staged claim owned by
+-- Decision (verification resend budget, 2026-09-01): resend is a staged claim owned by
 -- 'AccountStore'.  The existing delivered verification remains usable until
 -- SMTP succeeds and the store atomically promotes the candidate token.  This
 -- is deliberately a narrow lifecycle capability, rather than a generic

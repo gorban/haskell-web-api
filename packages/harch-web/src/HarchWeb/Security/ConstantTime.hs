@@ -1,6 +1,6 @@
 -- | Private constant-work comparison for secret-derived byte strings.
 --
--- Decision record (DM): this extends the existing security implementation
+-- Decision record (review finding): this extends the existing security implementation
 -- boundary rather than adding a public comparison API. Password verification,
 -- email-verification digests, synchronizer tokens, and the client-action CSRF
 -- check keep their domain-specific types and outcomes, but delegate the one

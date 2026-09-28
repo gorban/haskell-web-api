@@ -8,6 +8,7 @@ module App.Composed.Model
   ( DocsAction,
     DocsActionTarget,
     DocsRoute (..),
+    OAuthRoute (..),
     AdmissionPrincipal,
     AdmissionReturnTarget (..),
     ComposedContext,
@@ -116,6 +117,16 @@ data DocsRoute
   | DocsUi
   deriving (Eq, Show)
 
+-- | The composed API's anonymous OAuth token and discovery routes. Their
+-- protocol module is composed beside the docs and API modules, outside the
+-- locale adapter.
+data OAuthRoute
+  = OAuthToken
+  | OAuthJwks
+  | OAuthAuthorizationServerMetadata
+  | OAuthProtectedResourceMetadata
+  deriving (Eq, Show)
+
 -- | Uninhabited: the docs surface ships 'emptyActionCodec', so no client
 -- action can ever be produced.
 data DocsActionTarget
@@ -127,6 +138,7 @@ data RootRoute
   | UnlocalizedCatalogApi CatalogApiRoute
   | UnlocalizedOrdersApi OrdersApiRoute
   | UnlocalizedDocs DocsRoute
+  | UnlocalizedOAuth OAuthRoute
   deriving (Eq, Show)
 
 data RootActionTarget

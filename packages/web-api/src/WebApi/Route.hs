@@ -98,7 +98,7 @@ data ApiRoute
   | SecondApi
   | MeApi
   | TokenApi
-  | -- | AHI-4E: the prepared OpenAPI document itself, served as an ordinary
+  | -- | OpenAPI documentation and Swagger UI: the prepared OpenAPI document itself, served as an ordinary
     -- unauthenticated typed GET endpoint at @\/docs\/openapi.json@. It is a
     -- protocol route like every other 'ApiRoute' (a complete SSR page and
     -- asset routes remain the later Swagger-UI slice), but its path lives
@@ -303,8 +303,8 @@ apiRouteSegments apiRoute =
     SecondApi -> pathSegment "api" NonEmpty.:| [pathSegment "second"]
     MeApi -> pathSegment "api" NonEmpty.:| [pathSegment "me"]
     TokenApi -> pathSegment "api" NonEmpty.:| [pathSegment "oauth", pathSegment "token"]
-    -- The documentation specification deliberately lives at the task file's
-    -- default @\/docs@ path rather than under @\/api@: it is a support
+    -- The documentation specification deliberately lives at the default
+    -- @\/docs@ path rather than under @\/api@: it is a support
     -- surface, not part of the documented API it describes.
     DocsOpenApiSpec -> pathSegment "docs" NonEmpty.:| [pathSegment "openapi.json"]
     ApiNotFound -> pathSegment "api" NonEmpty.:| [pathSegment "404"]
@@ -349,7 +349,7 @@ parseRouteSegments path segments =
     [segment] -> parseSingleSegmentPath path segment
     [prefix, segment]
       | prefix == "api" -> parseApiPath segment
-    -- The AHI-4E specification endpoint is locale-independent and exact:
+    -- The OpenAPI specification endpoint is locale-independent and exact:
     -- only @\/docs\/openapi.json@ matches, while any other @\/docs@ path
     -- keeps falling through to the ordinary unsupported-path rejection
     -- below rather than growing a second docs-specific 404 family.
@@ -434,7 +434,7 @@ routeMetadata route =
       RouteMetadata (Just "showcase-alternate") "" "Showcase alternate" ["web-api-showcase-alternate"]
 
 -- | Stable, application-authored endpoint identities for the existing route
--- table. AHI-4C's configured root guard establishes a principal before the
+-- table. The secure-login and admission design's configured root guard establishes a principal before the
 -- protected profile/logout handlers run; public routes remain explicit.
 endpointMetadata :: AppRoute -> EndpointMetadata AppAuthorization
 endpointMetadata route =
@@ -453,10 +453,11 @@ endpointMetadata route =
     DocsSwaggerRoute -> html "web.docs" "/{locale}/docs"
     NotFoundRoute -> html "web.not-found" "/{locale}/404"
     StatusApiRoute -> api "api.status" "/api/status"
-    -- AHI-4D slice 5: an account cookie/bearer session is authorized
+    -- Scoped API authentication: an account cookie/bearer session is authorized
     -- unconditionally; an API-client bearer token must carry the
     -- 'resourceReadScope' scope (directly, or via its current durable
-    -- allowance). See 'WebApi.ResourceAuthentication' and the AHI-4D
+    -- allowance). See 'WebApi.ResourceAuthentication' and the scoped
+    -- API-authentication design's
     -- decision record in @docs/design-guidance.md@.
     SecondApiRoute ->
       HarchWeb.withAuthenticationProfile
@@ -466,17 +467,17 @@ endpointMetadata route =
     -- rather than a new authorization payload: an API-client bearer JWT has
     -- no session ID ('jti') claim, so it already fails this profile's claims
     -- parse and can never reach this handler merely by presenting a
-    -- similarly named scope. See the AHI-4D decision record in
+    -- similarly named scope. See the scoped API-authentication design's decision record in
     -- @docs/design-guidance.md@.
     MeApiRoute -> protectedApi "api.me" "/api/me"
     -- The token endpoint authenticates its OAuth client itself (HTTP Basic
     -- client-credentials, verified against the durable API-client store), so
     -- it declares 'AllowUnauthenticated' like every other API route here: no
     -- account session or bearer JWT establishes the caller before this
-    -- handler runs. See the AHI-4D decision record in
+    -- handler runs. See the scoped API-authentication design's decision record in
     -- @docs/design-guidance.md@.
     TokenApiRoute -> api "api.oauth-token" "/api/oauth/token"
-    -- AHI-4E: the specification is an ordinary unauthenticated typed API
+    -- OpenAPI documentation and Swagger UI: the specification is an ordinary unauthenticated typed API
     -- endpoint; its security choice stays this application's, exactly like
     -- every other route's metadata here.
     DocsOpenApiSpecRoute -> api "api.openapi-spec" "/docs/openapi.json"

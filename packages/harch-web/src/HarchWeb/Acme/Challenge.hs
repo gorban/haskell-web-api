@@ -5,7 +5,7 @@
 -- ACME protocol and certificate-management code use this module through the
 -- framework facade. It deliberately owns both in-process challenges and the
 -- temporary certbot webroots so request dispatch has one safe HTTP-01 path.
--- Decision (DM, 2026-08-25): a runtime challenge is selected only when the
+-- Decision (review finding, 2026-08-25): a runtime challenge is selected only when the
 -- request supplies the exact configured Host domain. A hostless HTTP/1.0
 -- request cannot prove which configured challenge it is entitled to read, so
 -- it fails closed rather than treating host absence as a wildcard.

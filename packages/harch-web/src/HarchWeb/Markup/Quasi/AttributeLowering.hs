@@ -2,7 +2,7 @@
 
 -- | Private lowering for the closed native-attribute vocabulary.
 --
--- Decision (AHI-6Q, 2026-08-31): keep the exhaustive literal and expression
+-- Decision (quasiquoter attribute lowering, 2026-08-31): keep the exhaustive literal and expression
 -- folds here rather than a stringly data table.  Their per-attribute
 -- validation and quoted 'Name' references preserve typed constructors and
 -- splice-site hygiene; 'Lowering' remains only the node/component

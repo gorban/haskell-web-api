@@ -188,6 +188,7 @@ expectGenericFieldFailure fieldFailurePolicy =
   case fieldFailurePolicy of
     Api.ApiUseGenericFieldFailure -> pure ()
     Api.ApiRenderFieldFailures _ -> expectationFailure "expected the original generic field-failure policy"
+    Api.ApiRenderFieldFailuresWithStatus _ -> expectationFailure "expected the original generic field-failure policy"
 
 expectNoRequestFields :: Api.ApiRequestDecodeResult () -> Expectation
 expectNoRequestFields result =

@@ -10,7 +10,7 @@
 -- untyped side channel.  Later interpretation consumes these values from an
 -- explicitly supplied family; it does not inspect a completed site.
 --
--- Decision record (AHI-4E, 2026-09-23): external documentation is an
+-- Decision record (OpenAPI documentation and Swagger UI, 2026-09-23): external documentation is an
 -- operation-owned optional link and accepts only absolute HTTP(S) URLs with
 -- an authority.  This keeps documentation metadata beside its operation while
 -- preventing a later Swagger renderer from being handed an executable,

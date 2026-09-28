@@ -91,8 +91,9 @@ spec =
         )
         [ProfileAuthenticated testAccountProfile, ProfilePending testAccountProfile]
 
-    -- AHI-4E: the documentation boundary below is where authored OpenAPI
-    -- metadata, real endpoint security, and the served specification meet.
+    -- The documentation boundary below (from the OpenAPI documentation and
+    -- Swagger UI work) is where authored OpenAPI metadata, real endpoint
+    -- security, and the served specification meet.
 
     it "keeps an authored documentation extension total, with its failure rail directly testable" $ do
       let validExtension = requireOpenApiExtension (mkOpenApiExtension (Just "summary") Nothing [] False [])

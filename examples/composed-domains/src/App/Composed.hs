@@ -22,6 +22,7 @@
 module App.Composed
   ( composedDocumentationProviderOrDie,
     DocsRoute (..),
+    OAuthRoute (..),
     ComposedContext,
     AdmissionPrincipal,
     AdmissionReturnTarget (..),
@@ -51,6 +52,9 @@ module App.Composed
     AdmissionRequirement (..),
     AdmissionSessionStore (..),
     AdmissionSessionStoreError (..),
+    ComposedOAuthConfigurationError (..),
+    ComposedOAuthDependencies,
+    ComposedOAuthTokenFailure (..),
     AdmissionSessionClockError (..),
     AdmissionSessionIssueError (..),
     EncryptedAdmissionTotpSecret,
@@ -82,6 +86,8 @@ module App.Composed
     buildPostgresAdmissionSessionStoreWithRunner,
     buildPostgresAdmissionCredentialStoreWithRunner,
     provisionPostgresAdmissionCredentialWithRunner,
+    buildPostgresComposedApiClientStoreWithRunner,
+    provisionComposedExampleApiClientWithRunner,
     buildPostgresAdmissionAttemptStoreWithRunner,
     closeComposedDatabaseRuntime,
     defaultAdmissionAttemptStoragePolicy,
@@ -97,6 +103,8 @@ module App.Composed
     admissionAttemptScopeStorageKey,
     admissionAttemptBudgetsToList,
     encryptAdmissionTotpSecret,
+    hashComposedExampleApiClientSecret,
+    mkComposedOAuthDependencies,
     admissionReturnTargetRoute,
     admissionLoginNameText,
     admissionPrincipalId,
@@ -189,6 +197,7 @@ import App.Composed.AdmissionSetup
   ( AdmissionSetupCommand (..),
     AdmissionSetupError (..),
     encryptAdmissionTotpSecret,
+    hashComposedExampleApiClientSecret,
     parseAdmissionSetupCommand,
     renderAdmissionSetupError,
   )
@@ -210,6 +219,7 @@ import App.Composed.Document (composedCatalogItemsExtension, composedOpenApiDocu
 import App.Composed.Localized (localizeApplicationModule, requestContextFromWai)
 import App.Composed.Model
 import App.Composed.Mounts (catalogApiRootMount, catalogModuleMount, docsRootMount, ordersApiRootMount, ordersModuleMount)
+import App.Composed.OAuth (ComposedOAuthConfigurationError (..), ComposedOAuthDependencies, ComposedOAuthTokenFailure (..), buildComposedOAuthModule, mkComposedOAuthDependencies)
 import App.Composed.Postgres
   ( ComposedDatabaseConnectionString (..),
     composedDatabaseChanges,
@@ -227,6 +237,10 @@ import App.Composed.Postgres.AdmissionCredentialStore
     provisionPostgresAdmissionCredentialWithRunner,
   )
 import App.Composed.Postgres.AdmissionSessionStore (buildPostgresAdmissionSessionStoreWithRunner)
+import App.Composed.Postgres.ApiClientStore
+  ( buildPostgresComposedApiClientStoreWithRunner,
+    provisionComposedExampleApiClientWithRunner,
+  )
 import App.Composed.Postgres.Runtime
   ( ComposedDatabaseRuntime,
     closeComposedDatabaseRuntime,
@@ -287,7 +301,11 @@ data ComposedSiteDependencies = ComposedSiteDependencies
   { composedStaticAssets :: StaticAssetsConfig,
     composedLocalePolicy :: LocalePolicy,
     composedCsrfProtection :: CsrfProtection ComposedContext,
-    composedDomainCapabilities :: ComposedDomainCapabilities
+    composedDomainCapabilities :: ComposedDomainCapabilities,
+    -- | OAuth is installed only after deployment has supplied a validated JWT
+    -- runtime, store, bounded password-work gate and clock. The default
+    -- example remains usable without these durable credential capabilities.
+    composedOAuthDependencies :: Maybe ComposedOAuthDependencies
   }
 
 buildComposedSiteWithDependencies :: ComposedSiteDependencies -> Site RootRoute RootAction ComposedContext RootAuthorization
@@ -409,11 +427,12 @@ buildComposedModuleWithPublicModule dependencies publicModule =
     -- /api/catalog/items and /api/orders (AHI-4E).
     docsProvider = composedDocumentationProviderOrDie ((composedOpenApiDocumentProvider defaultComposedContext $! composedCatalogQueries domainCapabilities) $! composedOrdersCommands domainCapabilities)
     docsModule = requiredModuleConfiguration (mountApplicationModule docsRootMount (buildDocsModule docsProvider))
+    oauthModules = maybe [] (pure . buildComposedOAuthModule) (composedOAuthDependencies dependencies)
     rootModule =
       requiredModuleConfiguration
         ( combineApplicationModules
             ( requiredModuleConfiguration (localizeApplicationModule (composedLocalePolicy dependencies) localizedModule)
-                :| [catalogApiModule, ordersApiModule, docsModule]
+                :| ([catalogApiModule, ordersApiModule, docsModule] <> oauthModules)
             )
         )
 

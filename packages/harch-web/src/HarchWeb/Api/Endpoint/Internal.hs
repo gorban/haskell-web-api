@@ -4,7 +4,7 @@
 -- | Private representation shared by the endpoint declaration, family, and
 -- runtime modules.  Keeping the constructors here lets the route-family
 -- interpreter inspect declarations without making 'ApiPath' or endpoint
--- constructors public API. Decision record (PR-F6, 2026-08-25): one
+-- constructors public API. Decision record (review finding, 2026-08-25): one
 -- 'ApiEndpointContract' groups method, request codec/body, representations,
 -- and field-failure policy; 'ApiRouteEndpointDeclaration' adds the path only
 -- when a context-free endpoint owns one. This extends the existing endpoint
@@ -35,6 +35,7 @@ module HarchWeb.Api.Endpoint.Internal
     ApiMultipartRequestError (..),
     withApiMultipartRequest,
     ApiStreamingRequest (..),
+    ApiRequestBodyFailure (..),
     RequestBodyReadFailure (..),
     ApiRequestBodyByteLimit,
     apiRequestBodyByteLimit,
@@ -122,13 +123,17 @@ at = ApiPath
 -- declarations, not in a separate constructor-name suffix.
 data ApiFieldFailurePolicy response
   = ApiUseGenericFieldFailure
-  | ApiRenderFieldFailures ([ApiRequestParseError] -> ApiResponse response)
+  | -- | Render a failure body with the framework's ordinary 400 status.
+    ApiRenderFieldFailures ([ApiRequestParseError] -> ApiResponse response)
+  | -- | Render a typed failure whose application-owned status is significant to
+    -- the protocol, such as an OAuth 401 client-authentication challenge.
+    ApiRenderFieldFailuresWithStatus ([ApiRequestParseError] -> ApiResponse response)
 
 -- | Whether one declared endpoint participates in routing. Documentation
 -- interpreters must use the same declaration when they are added.
 -- 'ApiHidden' is a protocol-level absence: its family removes it before
 -- method negotiation, so it cannot expose @Allow@ or reach its handler.
--- Decision record (AHI-4E, 2026-09-21): the endpoint stores a pure resolver
+-- Decision record (OpenAPI documentation and Swagger UI, 2026-09-21): the endpoint stores a pure resolver
 -- from the already bounded request context to this closed value. This extends
 -- the endpoint and shared route-policy boundaries so the family codec and its
 -- direct route definition agree; it does not create a feature-flag lookup,
@@ -140,7 +145,7 @@ data ApiAvailability
 
 -- | Deliberately empty metadata for APIs that opt out of an extension.
 --
--- Decision record (AHI-4E, 2026-09-20): endpoint documentation augments the
+-- Decision record (OpenAPI documentation and Swagger UI, 2026-09-20): endpoint documentation augments the
 -- existing typed declaration rather than creating a parallel route table.
 -- Every existing endpoint must therefore select this explicit no-extension
 -- value; the shared runtime retains one dispatcher and ignores the extension.
@@ -187,7 +192,7 @@ data ApiRouteEndpointDeclaration extension fields body response = ApiRouteEndpoi
 -- table. Its path-owning declaration retains the cohesive request contract;
 -- the constructor adds only the handler's distinct failure mode.
 --
--- Decision record (AHI-4E, 2026-09-23): the @WithContext@ constructors close
+-- Decision record (OpenAPI documentation and Swagger UI, 2026-09-23): the @WithContext@ constructors close
 -- a real gap, not a hypothetical one: an endpoint whose handler needs the
 -- request's already-resolved context (e.g. a locale derived outside any
 -- typed 'RequestCodec' field) previously could not be represented here at
@@ -290,6 +295,17 @@ data ApiRequestBody body where
     ApiRequestBodyByteLimit ->
     Natural ->
     ApiRequestBody ApiForm
+  -- | URL-form body whose bounded reader failures are interpreted by this
+  -- endpoint. The callback sees only one closed, request-detail-free failure
+  -- reason and returns an already-encoded response body, so the application
+  -- can attach protocol headers (for example OAuth's @no-store@) without
+  -- taking over body ownership or dispatch.
+  ApiUrlEncodedFormRequestBodyWithFailure ::
+    MissingContentTypePolicy ->
+    ApiRequestBodyByteLimit ->
+    Natural ->
+    (ApiRequestBodyFailure -> ApiResponseBody) ->
+    ApiRequestBody ApiForm
   ApiStreamingRequestBody ::
     ApiRequestBodyByteLimit ->
     ApiRequestBody ApiStreamingRequest
@@ -297,6 +313,14 @@ data ApiRequestBody body where
     MultipartStorage stored ->
     MultipartLimits ->
     ApiRequestBody (ApiMultipartRequest stored)
+
+-- | Opaque reasons emitted by the bounded API body reader. They intentionally
+-- contain no request bytes, content type, or parser detail.
+data ApiRequestBodyFailure
+  = ApiRequestBodyTooLarge
+  | ApiRequestBodyUnsupportedMediaType
+  | ApiRequestBodyMalformed
+  deriving (Eq, Show)
 
 -- | Construct an endpoint with an ordinary, typed domain-failure rail.
 -- 'ApiRouteEndpointDeclaration' keeps route and request protocol choices

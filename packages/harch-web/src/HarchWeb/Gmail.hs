@@ -52,7 +52,7 @@ type GmailHttpRunner = GmailHttpRequest -> IO GmailHttpResponse
 mkGmailApiConfig :: EmailAddress -> GmailAccessTokenProvider -> GmailApiConfig
 mkGmailApiConfig = GmailApiConfig
 
--- | PR-SEC4: a Gmail response body is provider-controlled and may contain
+-- | A Gmail response body is provider-controlled and may contain
 -- recipient or account data, so failure diagnostics retain only HTTP status.
 deliverGmailApiEmailWithRunner :: GmailHttpRunner -> GmailApiConfig -> EmailMessage -> IO ()
 deliverGmailApiEmailWithRunner runRequest config message = do

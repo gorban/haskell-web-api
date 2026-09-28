@@ -3,13 +3,13 @@
 
 -- | Typed request execution and the public WAI adapter.
 --
--- FQ8 keeps WAI request, response, and route-dispatch values explicit at
+-- The review finding keeps WAI request, response, and route-dispatch values explicit at
 -- their changing execution stages.  'RoutedRequestExecution' owns the
 -- stable accepted-request dependencies, while 'RequestExecutionTimingState'
 -- captures only timings that have already happened.  That preserves the
 -- deliberate @seq@ timing boundaries without allowing independently passed
 -- timestamps or reporting dependencies to be transposed.
--- FQ11 keeps the client-action protocol interpreter in its own internal
+-- The review finding keeps the client-action protocol interpreter in its own internal
 -- module: decoding, bounded body intake, CSRF/origin checks, authorization,
 -- and handler invocation form one protocol lifecycle, while route selection,
 -- timing, and final response reporting stay here.

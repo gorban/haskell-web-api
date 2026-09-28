@@ -2,7 +2,7 @@
 
 -- | The ordinary typed route adapter for a prepared OpenAPI document.
 --
--- Decision record (AHI-4E, 2026-09-23): adapt an application-selected
+-- Decision record (OpenAPI documentation and Swagger UI, 2026-09-23): adapt an application-selected
 -- 'OpenApiDocumentProvider' through the existing 'RouteDefinition' and
 -- 'ProtocolRouteHandler' boundary.  That boundary already owns route
 -- selection, method negotiation, endpoint security, response-security

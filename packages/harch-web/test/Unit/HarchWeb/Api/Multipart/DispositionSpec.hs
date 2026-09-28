@@ -16,7 +16,7 @@ filePartHeaders =
 
 spec =
   describe "parseMultipartFieldDisposition" $ do
-    -- Tabled per docs/design-guidance.md's CN decision record: one act,
+    -- Tabled per docs/design-guidance.md's one-act/one-comparison decision record: one act,
     -- one comparison, differing only in the input header text and the
     -- expected disposition. The three duplicate-parameter cases were
     -- previously bundled in one 'it' via 'expectAll'; each now reports

@@ -135,7 +135,7 @@ constraints: any.Cabal ==3.16.0.0,
              indexed-traversable +base-ge-4-18,
              any.indexed-traversable-instances ==0.1.2.1,
              -- Public insert-ordered-containers-0.3.0 caps Aeson below 2.3.
-             -- The AHI-4E compatibility verifier rebuilds its released suite
+             -- The OpenAPI compatibility verifier rebuilds its released suite
              -- against aeson-2.3.1.0; remove this pin and the matching
              -- allow-newer edge when an upstream release widens the bound.
              any.insert-ordered-containers ==0.3.0,

@@ -10,10 +10,9 @@
 -- a newly exposed internal API: all callers construct one
 -- 'ApiEndpointFamily' and compose its
 -- 'apiRouteEndpointFamilyCodec'/'apiRouteEndpointFamilyDefinition' pair.
--- The split repairs the module-health signal while keeping the family
+-- The split repairs the Endpoint module-health signal while keeping the family
 -- dispatcher's ownership and 'ApiPath' abstraction intact; see
--- @docs/design-guidance.md@ and the Endpoint module-health task in
--- @TASKS.md@.
+-- @docs/design-guidance.md@.
 module HarchWeb.Api.Endpoint
   ( ApiMethod (..),
     ApiPath,
@@ -29,6 +28,7 @@ module HarchWeb.Api.Endpoint
     ApiRequestBody (..),
     ApiRequestBodyByteLimit,
     ApiStreamingRequest (..),
+    ApiRequestBodyFailure (..),
     RequestBodyReadFailure (..),
     ApiMultipartRequest,
     ApiMultipartRequestError (..),
@@ -77,6 +77,7 @@ import HarchWeb.Api.Endpoint.Internal
     ApiPath,
     ApiRequestBody (..),
     ApiRequestBodyByteLimit,
+    ApiRequestBodyFailure (..),
     ApiRouteEndpoint,
     ApiRouteEndpointDeclaration (..),
     ApiStreamingRequest (..),

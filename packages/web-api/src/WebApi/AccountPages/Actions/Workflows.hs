@@ -2,7 +2,7 @@
 
 -- | Account-action workflows.
 --
--- Decision record (AHI-5, 2026-09-11): retain known-account rejection
+-- Decision record (durable activity audit, 2026-09-11): retain known-account rejection
 -- provenance in the existing application login-result algebra and append its
 -- closed audit event at this action interpreter. The password/MFA workflow
 -- remains the sole owner of whether the account is known; this interpreter
@@ -97,10 +97,10 @@ handleVerificationSubmission actionRequest submission =
         Registration.verificationWorkflowSubmission = submission
       }
 
--- | Decision record (AM, 2026-08-14): MFA enrollment previously trusted a
--- client-supplied @account@ form field with no session check at all — see
--- TASKS.md's AM entry for the full vulnerability. The fix binds enrollment
--- to a session principal, per that entry's own instruction, but no session
+-- | Decision record (MFA enrollment session binding, 2026-08-14): MFA enrollment previously trusted a
+-- client-supplied @account@ form field with no session check at all — a
+-- full vulnerability. The fix binds enrollment
+-- to a session principal, per the review finding's instruction, but no session
 -- existed at either legitimate handoff point (right after email
 -- verification, or after a correct password with enrollment still
 -- required) — 'WebApi.Profile.loadProfileForPrincipal'/'WebApi.Session.AccountSessionStore'
@@ -114,9 +114,10 @@ handleVerificationSubmission actionRequest submission =
 -- 'handleMfaEnrollmentSubmission' now trusts only that session's principal;
 -- the submitted @account@ field is gone entirely (deleted from
 -- 'MfaEnrollmentSubmission', 'MfaEnrollmentForm', and the hidden form
--- input), closing the "any 128-bit id" guessing surface named in AM's own
--- text. AN (a confirmed enrollment silently destroyed by simply restarting
--- it) was fixed separately and stays a needed guard even under this
+-- input), closing the "any 128-bit id" guessing surface named in the
+-- original review finding's own text. The sibling defect (a confirmed
+-- enrollment silently destroyed by simply restarting it) was fixed
+-- separately, and that fix stays a needed guard even under this
 -- session-bound caller: it is what stops the account's own legitimate
 -- enrollment session from clobbering an authenticator it already confirmed
 -- in an earlier session.
@@ -254,7 +255,7 @@ handleLogout actionRequest =
               else pure Nothing
           logoutSuccessResponse actionRequest auditFailure
 
--- | AHI-5 deliberately gives explicit logout a different durability contract
+-- | The activity-audit design deliberately gives explicit logout a different durability contract
 -- from login. Login's session and audit event commit together because no new
 -- credential may be issued without its required audit evidence. Logout first
 -- revokes the existing durable session; after that committed security change,

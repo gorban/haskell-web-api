@@ -6,7 +6,7 @@
 -- endpoint dispatcher: it does not introduce WAI middleware or a competing
 -- route policy.
 --
--- Decision record (PR-F3, 2026-08-24): 'ApiEndpointFamily' is the one
+-- Decision record (review finding, 2026-08-24): 'ApiEndpointFamily' is the one
 -- validated declaration value from which both interpreters derive. Its smart
 -- constructor rejects an empty family and an exact duplicate path/method
 -- declaration before either interpreter exists, rather than retaining two raw
@@ -75,7 +75,7 @@ apiRouteDefinition metadata endpoint =
 -- independently authored path: this is the same real path an application's
 -- own route table already dispatches on, reused rather than duplicated, so
 -- a documentation interpreter reading this declaration can never disagree
--- with where the endpoint actually lives. See the AHI-4E decision record in
+-- with where the endpoint actually lives. See the OpenAPI documentation and Swagger UI decision record in
 -- @docs/design-guidance.md@ for why 'ApiRouteEndpoint' needed a
 -- context-aware constructor family for this to be possible at all.
 apiRouteDefinitionWithContext ::

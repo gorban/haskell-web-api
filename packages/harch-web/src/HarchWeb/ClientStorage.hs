@@ -6,14 +6,14 @@
 -- arbitrary browser JavaScript.  In particular, it cannot express an
 -- origin-wide @clear()@, IndexedDB deletion, or service-worker mutation.
 --
--- Decision record (AHI-4C, 2026-09-09): this extends the typed client-action
+-- Decision record (secure login and admission, 2026-09-09): this extends the typed client-action
 -- response boundary with an opaque, bounded declaration rather than adding an
 -- application JavaScript callback or a login-specific storage convention.
 -- Applications own the keys they created and select a later action effect;
 -- Harch checks only universal safety properties (an explicit class, a
 -- non-empty key, and bounded declaration size).  The initial primitive is not
 -- response's existing action transport. Existing examples still make no claim
--- that browser storage is erased on logout: a following AHI-4C slice owns
+-- that browser storage is erased on logout: a follow-up slice of the secure login and admission work owns
 -- browser execution, failure navigation, and browser proof.
 module HarchWeb.ClientStorage
   ( BrowserStorageClass (..),

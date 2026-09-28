@@ -9,7 +9,7 @@
 -- pair before traffic is accepted, then issues account-session tokens from
 -- that already-proven runtime.
 --
--- Decision (AHI-4D-MH1, 2026-09-19): retain 'WebApi.AccountJwt' as the public
+-- Decision (AccountJwt module split, 2026-09-19): retain 'WebApi.AccountJwt' as the public
 -- admission facade and retain Harch's generic JWT verification boundary.
 -- Grouping configuration, key proof, and issuance here gives the explicit
 -- 'AccountJwtConfiguration' to 'AccountJwtRuntime' lifecycle one owner. The
@@ -82,7 +82,7 @@ data AccountJwtConfiguration = AccountJwtConfiguration
 -- from being transposed at a call site while retaining one pure validation
 -- rail into 'AccountJwtConfiguration'.
 --
--- Decision (AHI-4C/PR-F3, 2026-09-05): this is a cohesive application
+-- Decision (secure login and admission, 2026-09-05): this is a cohesive application
 -- configuration value, not ambient startup state.  The account-JWT adapter
 -- already owns all seven inputs and their validation; grouping them here
 -- extends that owner instead of putting a second parser in the config loader.
@@ -161,7 +161,7 @@ data AccountJwtRuntime = AccountJwtRuntime
   { runtimeAccountJwtConfiguration :: AccountJwtConfiguration,
     runtimeAccountJwtVerificationKeys :: HarchWeb.JWKSet,
     runtimeAccountJwtSigner :: HarchWeb.JwtSigner AccountJwtIssueError Jwt.ClaimsSet,
-    -- | Retained only because AHI-4D's reference profile deliberately issues
+    -- | Retained only because the scoped API-authentication design's reference profile deliberately issues
     -- account and API-client bearer tokens from one already-startup-proven
     -- RS256 key pair (see 'SharedJwtIssuance'). It is never rendered by this
     -- type's redacted 'Show' instance.
@@ -344,7 +344,7 @@ accountJwtIssuerFromRuntime runtime =
 -- another principal kind can issue its own claims subtype from the exact same
 -- already-validated key instead of loading and re-proving a second key pair.
 --
--- Decision record (AHI-4D slice 4/5, 2026-09-16): @web-api@ uses one issuer,
+-- Decision record (scoped API authentication, 2026-09-16): @web-api@ uses one issuer,
 -- one RS256 signing/JWKS key set, and one audience for both account and
 -- API-client bearer tokens, while keeping each principal's claims distinct.
 -- 'AccountJwtRuntime' already retains the one structurally- and
@@ -406,7 +406,8 @@ numericDate instant =
     )
 
 -- | The cookie-or-bearer JWT proof extractor built from this runtime's own
--- deployment-authored cookie policy. Exposed so the AHI-4D combined
+-- deployment-authored cookie policy. Exposed so the scoped API-authentication
+-- design's combined
 -- account-or-API-client-bearer profile (securing @\/api\/second@) accepts the
 -- exact same session cookie as every account-protected page/action, instead
 -- of a second cookie declaration.
@@ -422,7 +423,7 @@ accountJwtRuntimeProofExtractor runtime =
 -- a second principal kind reuses this runtime's verification material
 -- instead of loading and re-proving a second key set. The account pipeline
 -- above is this accessor's own first caller, with 'parseAccountJwtClaims';
--- the AHI-4D combined profile is its second, with a claims-shape-
+-- the scoped API-authentication combined profile is its second, with a claims-shape-
 -- discriminating projection of its own.
 accountJwtRuntimeProofVerifier :: AccountJwtRuntime -> (Jwt.ClaimsSet -> Either HarchWeb.JwtClaimsError claims) -> HarchWeb.AuthenticationProofVerifier HarchWeb.JwtProof claims
 accountJwtRuntimeProofVerifier runtime claimsProjection =

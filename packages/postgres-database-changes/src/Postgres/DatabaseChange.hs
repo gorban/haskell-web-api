@@ -10,7 +10,8 @@
 -- A ledger is a contiguous prefix of the supplied change plan.  The digest is
 -- over a length-delimited UTF-8 sequence, not normalized SQL text, so editing
 -- any historical statement is a startup failure rather than a silent rerun.
--- See the AHI-4C database-change decision in @docs/design-guidance.md@.
+-- See the database-change decision for the secure login and admission work
+-- in @docs/design-guidance.md@.
 module Postgres.DatabaseChange
   ( DatabaseChange (..),
     DatabaseChangeConnectionString (..),

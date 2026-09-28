@@ -4,6 +4,7 @@ module TestCore.Browser.Model
     Locator,
     attributeValue,
     browserMetrics,
+    computedStyleValue,
     byAltText,
     byLabel,
     byPlaceholder,

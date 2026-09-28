@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The @/docs@ Swagger UI page as an ordinary typed application surface
--- (AHI-4E slice 6). The page renders complete SSR with a script-free
+-- (a later slice of the OpenAPI documentation and Swagger UI work). The page renders complete SSR with a script-free
 -- fallback and an enhancement mount; the pinned self-hosted renderer,
 -- stylesheet, and behavior module are the harch-web-openapi package's
 -- assets, mounted under @/docs/assets@. Every URL is applied through the

@@ -3,7 +3,7 @@
 -- | Immutable PostgreSQL change statements for the application-owned account
 -- audit boundary.
 --
--- Decision record (AHI-5, 2026-09-07): extend the existing
+-- Decision record (durable activity audit, 2026-09-07): extend the existing
 -- 'Postgres.DatabaseChange' ownership boundary rather than introducing an
 -- audit-specific migration runner or putting PostgreSQL policy in Harch.  The
 -- controlled append and maintenance functions are the only database-side
@@ -20,6 +20,7 @@ module WebApi.Postgres.ActivityAuditMigration
     accountAuditSessionIssueStatements,
     accountAuditSessionIssueConflictFixStatements,
     accountAuditSessionIssueInsertPrivilegeFixStatements,
+    accountAuditSchedulerTargetFixStatements,
     accountAuditRegistrationDeliveryStatements,
     accountAuditVerificationResendDeliveryStatements,
     accountAuditRuntimeReconciliationStatements,
@@ -84,6 +85,16 @@ accountAuditMigrationStatements =
     "GRANT USAGE ON SCHEMA cron TO web_api_audit_scheduler;",
     "GRANT EXECUTE ON FUNCTION cron.schedule(TEXT, TEXT, TEXT) TO web_api_audit_scheduler;",
     "GRANT DELETE ON TABLE cron.job_run_details TO web_api_audit_scheduler;"
+  ]
+
+-- | Forward-only correction to the original scheduler grant. The recorded
+-- account-audit schema change remains immutable: new deployments apply it
+-- unchanged, then replace its default-database scheduling permission with
+-- the explicitly targeted pg_cron operation used by the current adapter.
+accountAuditSchedulerTargetFixStatements :: [Text]
+accountAuditSchedulerTargetFixStatements =
+  [ "REVOKE EXECUTE ON FUNCTION cron.schedule(TEXT, TEXT, TEXT) FROM web_api_audit_scheduler;",
+    "GRANT EXECUTE ON FUNCTION cron.schedule_in_database(TEXT, TEXT, TEXT, TEXT, TEXT, BOOLEAN) TO web_api_audit_scheduler;"
   ]
 
 -- | Deployment reconciliation for the selected application runtime role.  Its

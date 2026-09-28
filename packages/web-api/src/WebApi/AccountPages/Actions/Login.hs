@@ -2,7 +2,7 @@
 
 -- | The accepted-login durable-operation boundary.
 --
--- Decision (AHI-5-WF, 2026-09-09): keep parsing and interpretation of every
+-- Decision (activity-audit workflow, 2026-09-09): keep parsing and interpretation of every
 -- password/MFA outcome in the public 'Workflows' façade, but move the one
 -- cohesive accepted path here. It prepares the opaque session, produces the
 -- application JWT, derives the trusted audit activity, and invokes the

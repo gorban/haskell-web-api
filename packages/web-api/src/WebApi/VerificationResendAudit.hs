@@ -1,7 +1,7 @@
 -- | The application-owned atomic persistence boundary for a verification
 -- resend email that SMTP has already accepted.
 --
--- Decision record (AHI-5, 2026-09-10): 'AccountStore' remains the owner of
+-- Decision record (durable activity audit, 2026-09-10): 'AccountStore' remains the owner of
 -- generic verification-resend claims, promotion, and rolling delivery
 -- history.  The reference application replaces only its successful
 -- settlement callback at the action boundary, so the existing promotion and

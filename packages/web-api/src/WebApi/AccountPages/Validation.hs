@@ -3,7 +3,7 @@
 -- | Small, application-owned validation rail for independent account-form
 -- inputs.
 --
--- Decision (AHI-9, 2026-08-31): registration and login both need to report
+-- Decision (accessible authentication, 2026-08-31): registration and login both need to report
 -- every independent field error in declaration order.  This is an
 -- applicative validation, not a monad: a lawful fail-fast bind would discard
 -- the remaining checks.  Effects begin only after 'validationResult' returns

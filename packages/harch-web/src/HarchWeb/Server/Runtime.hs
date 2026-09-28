@@ -3,7 +3,7 @@
 
 -- | Private runtime listener orchestration behind the public 'runServer' facade.
 --
--- FQ8 groups listener- and ACME-request dependencies that are fixed for one
+-- The review finding groups listener- and ACME-request dependencies that are fixed for one
 -- runtime. WAI request, response, and timing values remain explicit at their
 -- delivery boundary, including the established strict timing point before a
 -- challenge response is reported.

@@ -670,7 +670,8 @@ spec =
                    _ :| _ -> pure (),
                  case apiEndpointContractFieldFailurePolicy contract of
                    ApiUseGenericFieldFailure -> pure ()
-                   ApiRenderFieldFailures _ -> expectationFailure "expected the contract's generic field-failure policy",
+                   ApiRenderFieldFailures _ -> expectationFailure "expected the contract's generic field-failure policy"
+                   ApiRenderFieldFailuresWithStatus _ -> expectationFailure "expected the contract's generic field-failure policy",
                  apiEndpointContractMethod (apiRouteEndpointDeclarationContract declaration) `shouldBe` ApiPost
                ]
         )
@@ -705,7 +706,8 @@ spec =
                    _ :| _ -> pure (),
                  case apiEndpointContractFieldFailurePolicy documented of
                    ApiUseGenericFieldFailure -> pure ()
-                   ApiRenderFieldFailures _ -> expectationFailure "replacing metadata changed the field-failure policy",
+                   ApiRenderFieldFailures _ -> expectationFailure "replacing metadata changed the field-failure policy"
+                   ApiRenderFieldFailuresWithStatus _ -> expectationFailure "replacing metadata changed the field-failure policy",
                  case apiEndpointContractExtension documented of
                    TestEndpointExtension "status endpoint" -> pure ()
                    TestEndpointExtension extensionName -> expectationFailure ("unexpected extension: " <> Text.unpack extensionName),
@@ -858,6 +860,29 @@ spec =
         expectAll
           ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status400)
               :| [apiRouteResponseBody response `shouldBe` "API request fields were rejected."]
+          )
+
+      it "preserves a rendered field-failure status when the endpoint protocol requires it" $ do
+        let contract =
+              ApiEndpointContract
+                ApiPost
+                (requiredField (headerField (testHeaderName "authorization") apiTextValue))
+                ApiNoRequestBody
+                (textResponseEncoder :| [])
+                ( ApiRenderFieldFailuresWithStatus $
+                    const ((apiResponse "invalid client") {apiEndpointResponseStatus = HttpTypes.status401})
+                )
+                NoApiExtension
+            endpoint =
+              Api.apiRouteDefinitionWithContext
+                contract
+                testApiMetadata
+                (\_ _ -> pure (Right (apiResponse "unreachable")))
+                (const (apiResponse "unreachable"))
+        response <- routeResponse endpoint Wai.defaultRequest (RouteRequest () ())
+        expectAll
+          ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status401)
+              :| [apiRouteResponseBody response `shouldBe` "invalid client"]
           )
 
       it "lets a total handler declaration render typed field failures" $ do

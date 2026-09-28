@@ -1,7 +1,7 @@
 # ADR-DT: Configurable modern TLS server policy
 
 - Status: **Implemented — CI-equivalent validation and GitHub Actions passed**
-- Task: [DT — configurable modern TLS policy](../../TASKS/pr-3-correctness-and-security-defects.md)
+- Task: DT — configurable modern TLS policy (PR #3 review finding)
 - Date: 2026-08-26
 
 ## Executive problem statement
@@ -58,9 +58,9 @@ The complete local CI-equivalent sequence and the GitHub Actions
 [0.1.2.0 CI run 33145703422](https://github.com/gorban/haskell-web-api/actions/runs/33145703422)
 passed for the implementation commit.
 
-## Required cross-task ordering
+## Required ordering with ADR-DQ
 
 All design and implementation work is approved. Follow [ADR-DQ](dq-pre-tls-peer-address-attribution.md)
 in this required order: DQ passes its full integration and regression gates, this TLS/cipher policy
-receives its real transport proof, then the normal gates run and the affected task groups close.
+receives its real transport proof, then the normal gates run and the affected work concludes.
 No architectural approval remains outstanding.

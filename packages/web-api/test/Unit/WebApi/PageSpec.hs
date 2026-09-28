@@ -112,7 +112,7 @@ assertProfilePageModelShow (profilePageModel, expectedPrefix) =
 
 spec = do
   existingSpec
-  describe "AHI-6 application control models" $ do
+  describe "application control models" $ do
     it "keeps language and Help models comparable and printable" $ do
       let languageModel = LanguagePageModel "Language" "Choose a language."
           otherLanguageModel = LanguagePageModel "Other" "Choose a language."

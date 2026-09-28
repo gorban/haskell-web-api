@@ -2,7 +2,7 @@
 
 -- | PostgreSQL implementation of the application-owned audit append port.
 --
--- Decision record (AHI-5, 2026-09-07): extend 'ActivityAuditStore' through
+-- Decision record (durable activity audit, 2026-09-07): extend 'ActivityAuditStore' through
 -- the existing pooled, parameterized PostgreSQL runtime boundary.  The audit
 -- function is already the one owner of scope selection, catalog validation,
 -- partition capacity, and the append, so adding an application SQL builder or
@@ -10,7 +10,7 @@
 -- payload and route facts use the runtime boundary's nullable parameter form,
 -- rather than collapsing absence into a sentinel text value.  This repository
 -- deliberately does /not/ make an audit append atomic with an account-state
--- mutation: AHI-5's account-workflow integration must introduce that one
+-- mutation: the activity-audit design's account-workflow integration must introduce that one
 -- transaction boundary before a caller can claim the two effects committed
 -- together.
 module WebApi.Postgres.ActivityAuditRepository

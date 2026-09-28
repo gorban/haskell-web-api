@@ -2,7 +2,7 @@
 
 -- | Typed request-field declarations and their WAI extraction boundary.
 --
--- Decision record (PR-F4, 2026-08-24): 'RequestCodec' owns the complete
+-- Decision record (review finding, 2026-08-24): 'RequestCodec' owns the complete
 -- result invariant, rather than exposing its former nested @Compose@ encoding
 -- for callers to construct directly.  The existing accumulating applicative
 -- remains the only way to combine field declarations, and its public runner

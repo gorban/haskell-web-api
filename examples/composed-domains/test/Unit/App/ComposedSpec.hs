@@ -5,27 +5,39 @@
 module Unit.App.ComposedSpec (spec) where
 
 import App.Composed
+import App.Composed.ApiClient
+import App.Composed.ApiClientToken
+import App.Composed.Auth
 import App.Composed.Document (composedAuthorizationScopes, composedEndpointMetadataForPath, requireOpenApiExtension)
 import Catalog.Api (CatalogApiRoute (CatalogApiNotFound, CatalogItems, CatalogUnlistedPreview))
 import Catalog.Domain
 import Control.Concurrent (forkIO, newEmptyMVar, putMVar, readMVar, takeMVar)
 import Control.Exception (ErrorCall, bracket, evaluate, finally, try)
-import Control.Monad (forM_, replicateM, when)
+import Control.Lens ((&), (?~))
+import Control.Monad (forM_, replicateM, when, (>=>))
 import Core.Config (ConfigParseError (..))
 import Crypto.Error (maybeCryptoError)
+import Crypto.JOSE.JWA.JWK qualified as JwaJwk
+import Crypto.JOSE.JWK qualified as JoseJwk
+import Data.Aeson qualified as Aeson
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as ByteString
+import Data.ByteString.Base64 qualified as Base64
+import Data.Foldable (toList)
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NonEmpty
-import Data.Maybe (fromMaybe, isJust, isNothing)
+import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
+import HarchWeb (AuthenticationProofVerifier (..), jwtProofFromCookie)
 import HarchWeb.Account qualified as Account
 import HarchWeb.Action qualified as Action
 import HarchWeb.Api (at)
 import HarchWeb.ApplicationModule (ApplicationModule (..), mountApplicationModule)
+import HarchWeb.Authentication (ApiClientStore (..), ApiClientStoreError (..), OAuth2Scope, encodedJwtFromBytes, mkAuthenticationDependency, mkOAuth2Scope, oauth2ScopeText, requiredSecurityFailureCodeOrDie)
 import HarchWeb.ClientStorage (noClientStorageCleanup)
 import HarchWeb.Csrf (PageSecurity, mkCsrfToken, mkPageCsrf, mkPageSecurity)
 import HarchWeb.Csrf qualified as Csrf
@@ -56,6 +68,7 @@ import HarchWeb.Localization (locale)
 import HarchWeb.LoginProtection (defaultLoginProtectionPolicy)
 import HarchWeb.Markup (literalElementId, renderHtml)
 import HarchWeb.OpenApi (OpenApiDocumentFailure (EmptyOpenApiDocumentTitle), OpenApiDocumentProvider, OpenApiExtension, OpenApiExtensionError (InvalidOpenApiSpecificationExtensionName))
+import HarchWeb.Password (PasswordHash, argon2Iterations, argon2MemoryKib, argon2Parallelism, hashPasswordWithSalt, mkPassword, mkPasswordHashingPolicy, mkPasswordWorkBudget, newPasswordWorkGate, passwordHashText)
 import HarchWeb.RequestContext
   ( CoreRequestContext (..),
     RequestContext (..),
@@ -104,7 +117,7 @@ import HarchWeb.StaticAssets
     staticCacheControlSeconds,
   )
 import HarchWeb.StaticAssets.Route (StaticAssetRoute (..))
-import HarchWeb.Time (unixTimeNanoseconds, unixTimeNanosecondsValue, unixTimeSeconds)
+import HarchWeb.Time (currentUnixTimeNanoseconds, unixTimeNanoseconds, unixTimeNanosecondsValue, unixTimeSeconds)
 import HarchWeb.Totp (mkTotpCode, mkTotpSecret, renderTotpSecret, totpCode, totpCodeText)
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
@@ -167,6 +180,53 @@ spec = describe "Unit.App.Composed" $ do
           runComposedDatabaseQuery runtime "SELECT 'unreachable'::TEXT;" []
             `shouldReturn` Left "database unavailable"
       )
+
+  it "serves a durable API-client issuance view to the read-only runtime role" $
+    withComposedOAuthEnvironment $ \_ passwordHash _ -> do
+      let ownerConnection = ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_owner password=web_api_owner connect_timeout=1"
+          runtimeConnection = ComposedDatabaseConnectionString "host=127.0.0.1 port=5432 dbname=web_api_dev user=web_api_runtime password=web_api connect_timeout=1"
+      bracket (newComposedDatabaseRuntime ownerConnection) closeComposedDatabaseRuntime $ \ownerRuntime -> do
+        runComposedDatabaseChanges ownerConnection `shouldReturn` Right ()
+        now <- currentUnixTimeNanoseconds
+        let clientIdText = "composed-oauth-pg-" <> Text.pack (show (unixTimeNanosecondsValue now))
+            clientId = requiredOAuthEither "PostgreSQL OAuth test client ID" (mkComposedApiClientId clientIdText)
+            cleanup = do
+              deletedScopes <- runComposedDatabaseQuery ownerRuntime "DELETE FROM composed.api_client_scopes WHERE client_id = $1 RETURNING scope_text;" [clientIdText]
+              deletedScopes `shouldSatisfy` \case Right _ -> True; Left _ -> False
+              deletedClient <- runComposedDatabaseQuery ownerRuntime "DELETE FROM composed.api_clients WHERE client_id = $1 RETURNING client_id;" [clientIdText]
+              deletedClient `shouldSatisfy` \case Right _ -> True; Left _ -> False
+        finally
+          ( do
+              runComposedDatabaseQuery ownerRuntime "INSERT INTO composed.api_clients (client_id, active_secret_hash) VALUES ($1, $2) RETURNING client_id;" [clientIdText, passwordHashText passwordHash]
+                `shouldReturn` Right [[clientIdText]]
+              insertedScopes <- runComposedDatabaseQuery ownerRuntime "INSERT INTO composed.api_client_scopes (client_id, scope_text, is_default, scope_position) VALUES ($1, 'catalog:read', true, 0), ($1, 'orders:write', false, 1) RETURNING scope_text;" [clientIdText]
+              insertedScopes `shouldSatisfy` \case Right rows -> length rows == 2; Left _ -> False
+              bracket
+                (newComposedDatabaseRuntime runtimeConnection)
+                closeComposedDatabaseRuntime
+                ( \runtime -> do
+                    runComposedDatabaseQuery
+                      runtime
+                      "SELECT has_table_privilege(current_user, 'composed.api_clients', 'SELECT')::TEXT, has_table_privilege(current_user, 'composed.api_clients', 'INSERT')::TEXT, has_table_privilege(current_user, 'composed.api_clients', 'UPDATE')::TEXT, has_table_privilege(current_user, 'composed.api_clients', 'DELETE')::TEXT, has_table_privilege(current_user, 'composed.api_client_scopes', 'SELECT')::TEXT, has_table_privilege(current_user, 'composed.api_client_scopes', 'INSERT')::TEXT, has_table_privilege(current_user, 'composed.api_client_scopes', 'UPDATE')::TEXT, has_table_privilege(current_user, 'composed.api_client_scopes', 'DELETE')::TEXT;"
+                      []
+                      `shouldReturn` Right [["true", "false", "false", "false", "true", "false", "false", "false"]]
+                    let store = buildPostgresComposedApiClientStoreWithRunner runComposedDatabaseQuery runtime
+                    found <- findApiClient store clientId
+                    established <- establishApiClient store clientId
+                    case found of
+                      Right (Just client) -> do
+                        passwordHashText (composedApiClientSecretHash client) `shouldBe` passwordHashText passwordHash
+                        fmap oauth2ScopeText (composedApiClientAllowedScopes client) `shouldBe` ["catalog:read", "orders:write"]
+                        fmap oauth2ScopeText (composedApiClientDefaultScopes client) `shouldBe` ["catalog:read"]
+                      _ -> expectationFailure "the PostgreSQL issuance query should decode the enabled client"
+                    case established of
+                      Right (Just client) -> do
+                        composedApiClientIdText (establishedComposedApiClientId client) `shouldBe` clientIdText
+                        fmap oauth2ScopeText (establishedComposedApiClientAllowedScopes client) `shouldBe` ["catalog:read", "orders:write"]
+                      _ -> expectationFailure "the PostgreSQL bearer principal query should return a secret-free client view"
+                )
+          )
+          cleanup
 
   it "keeps encrypted admission provisioning owner-only while the runtime role can use its durable adapters" $
     bracket
@@ -1858,6 +1918,231 @@ spec = describe "Unit.App.Composed" $ do
           unexpectedResult -> expectationFailure ("expected a localized guarded response, got " <> show unexpectedResult)
       _ -> expectationFailure "expected exactly one localized guard"
 
+  it "serves OAuth token, metadata, and public JWKS routes with bounded no-store failure responses" $
+    withComposedOAuthEnvironment $ \tokenEnvironment passwordHash signingKey -> do
+      oauthDependencies <-
+        case mkComposedOAuthDependencies tokenEnvironment of
+          Left failure -> expectationFailure (show failure) >> fail "invalid composed OAuth test configuration"
+          Right dependencies -> pure dependencies
+      let oauthSite =
+            buildComposedSiteWithDependencies
+              defaultComposedSiteDependencies {composedOAuthDependencies = Just oauthDependencies}
+          oauthRootModule =
+            buildComposedModuleWithDependencies
+              defaultComposedSiteDependencies {composedOAuthDependencies = Just oauthDependencies}
+      oauthApplication <- toWaiApplication (Site.buildSiteApplication oauthSite)
+      let postRequest request = do
+            response <- performWaiRequest (pure oauthApplication) request
+            body <- readResponseBody response
+            pure (response, body)
+          postToken clientId secret formValue mediaType = do
+            request <- composedOAuthPostRequest ["tenant", "oauth", "token"] clientId secret formValue mediaType
+            postRequest request
+          contentType = "application/x-www-form-urlencoded"
+          validForm = "grant_type=client_credentials"
+      insecureTokenRequest <- composedOAuthPostRequest ["tenant", "oauth", "token"] "composed-oauth-client" "oauth-secret-sentinel" validForm (Just contentType)
+      let cleartextTokenRequest = insecureTokenRequest {Wai.isSecure = False}
+      (cleartextTokenResponse, cleartextTokenBody) <- postRequest cleartextTokenRequest
+      expectAll
+        ( (Wai.responseStatus cleartextTokenResponse `shouldBe` Http.status400)
+            :| [ cleartextTokenBody `shouldBe` "{\"error\":\"invalid_request\"}",
+                 lookup "Cache-Control" (Wai.responseHeaders cleartextTokenResponse) `shouldBe` Just "private, no-store",
+                 Text.isInfixOf "oauth-secret-sentinel" cleartextTokenBody `shouldBe` False,
+                 lookup "Pragma" (Wai.responseHeaders cleartextTokenResponse) `shouldBe` Just "no-cache"
+               ]
+        )
+      (successResponse, successBody) <- postToken "composed-oauth-client" "oauth-secret-sentinel" validForm (Just contentType)
+      let successObject = decodeJsonObject successBody
+          accessToken = successObject >>= (KeyMap.lookup "access_token" >=> asJsonText)
+      expectAll
+        ( (Wai.responseStatus successResponse `shouldBe` Http.status200)
+            :| [ lookup "Cache-Control" (Wai.responseHeaders successResponse) `shouldBe` Just "private, no-store",
+                 lookup "Pragma" (Wai.responseHeaders successResponse) `shouldBe` Just "no-cache",
+                 Text.isInfixOf "oauth-secret-sentinel" successBody `shouldBe` False,
+                 Text.isInfixOf (passwordHashText passwordHash) successBody `shouldBe` False,
+                 accessToken `shouldSatisfy` maybe False (not . Text.null)
+               ]
+        )
+      case accessToken of
+        Nothing -> expectationFailure "successful client credentials response lacked its access token"
+        Just tokenText -> do
+          tokenText `shouldSatisfy` Text.isInfixOf "."
+          let AuthenticationProofVerifier verifyApi = composedApiProofVerifier (composedApiClientTokenJwtRuntime tokenEnvironment)
+          verifyApi (jwtProofFromCookie (encodedJwtFromBytes (TextEncoding.encodeUtf8 tokenText)))
+            `shouldReturn` Right (ComposedApiClaims "composed-oauth-client" ["catalog:read"])
+          directRequest <- composedOAuthPostRequest ["tenant", "oauth", "token"] "composed-oauth-client" "oauth-secret-sentinel" validForm (Just contentType)
+          directResponse <- runRouteDefinition (moduleEndpoints oauthRootModule (UnlocalizedOAuth OAuthToken)) directRequest (RouteRequest (UnlocalizedOAuth OAuthToken) defaultComposedContext)
+          case directResponse of
+            ProtocolResponseResult protocolResponse ->
+              expectAll
+                ( (protocolResponseLogEntries protocolResponse `shouldBe` [])
+                    :| [ protocolResponseObservabilityAttributes protocolResponse `shouldBe` [],
+                         protocolResponseDatabaseOperations protocolResponse `shouldBe` [],
+                         protocolResponseStatus protocolResponse `shouldBe` Http.status200
+                       ]
+                )
+            _ -> expectationFailure "expected the typed OAuth endpoint to return a protocol response"
+
+      (unknownResponse, unknownBody) <- postToken "unknown-oauth-client" "wrong-secret" validForm (Just contentType)
+      (wrongSecretResponse, wrongSecretBody) <- postToken "composed-oauth-client" "wrong-secret" validForm (Just contentType)
+      badAuthorizationRequest <- composedOAuthPostRequest ["tenant", "oauth", "token"] "composed-oauth-client" "oauth-secret-sentinel" validForm (Just contentType)
+      let rejectedAuthorizationRequest =
+            badAuthorizationRequest
+              { Wai.requestHeaders =
+                  [(Http.hAuthorization, "Bearer wrong-scheme"), (Http.hContentType, TextEncoding.encodeUtf8 contentType)]
+              }
+      (badAuthorizationResponse, badAuthorizationBody) <- postRequest rejectedAuthorizationRequest
+      expectAll
+        ( (Wai.responseStatus unknownResponse `shouldBe` Http.status401)
+            :| [ Wai.responseStatus wrongSecretResponse `shouldBe` Http.status401,
+                 Wai.responseStatus badAuthorizationResponse `shouldBe` Http.status401,
+                 unknownBody `shouldBe` "{\"error\":\"invalid_client\"}",
+                 wrongSecretBody `shouldBe` unknownBody,
+                 badAuthorizationBody `shouldBe` unknownBody,
+                 lookup "WWW-Authenticate" (Wai.responseHeaders unknownResponse) `shouldBe` Just "Basic realm=\"oauth-token\", charset=\"UTF-8\"",
+                 lookup "WWW-Authenticate" (Wai.responseHeaders badAuthorizationResponse) `shouldBe` Just "Basic realm=\"oauth-token\", charset=\"UTF-8\"",
+                 lookup "Cache-Control" (Wai.responseHeaders unknownResponse) `shouldBe` Just "private, no-store",
+                 lookup "Cache-Control" (Wai.responseHeaders wrongSecretResponse) `shouldBe` Just "private, no-store"
+               ]
+        )
+
+      let storeFailure = ApiClientStoreUnavailable (mkAuthenticationDependency (requiredSecurityFailureCodeOrDie "composed.oauth.test-store-unavailable"))
+          unavailableStore =
+            ApiClientStore
+              { findApiClient = \_ -> pure (Left storeFailure),
+                establishApiClient = \_ -> pure (Left storeFailure)
+              }
+          unavailableEnvironment = tokenEnvironment {composedApiClientTokenStore = unavailableStore}
+      unavailableDependencies <-
+        case mkComposedOAuthDependencies unavailableEnvironment of
+          Left _ -> expectationFailure "expected the existing HTTPS OAuth configuration to remain valid" >> fail "invalid OAuth dependencies"
+          Right dependencies -> pure dependencies
+      let unavailableSite =
+            buildComposedSiteWithDependencies
+              defaultComposedSiteDependencies {composedOAuthDependencies = Just unavailableDependencies}
+          unavailableRootModule =
+            buildComposedModuleWithDependencies
+              defaultComposedSiteDependencies {composedOAuthDependencies = Just unavailableDependencies}
+      unavailableApplication <- toWaiApplication (Site.buildSiteApplication unavailableSite)
+      unavailableRequest <- composedOAuthPostRequest ["tenant", "oauth", "token"] "composed-oauth-client" "oauth-secret-sentinel" validForm (Just contentType)
+      unavailableResponse <- performWaiRequest (pure unavailableApplication) unavailableRequest
+      unavailableBody <- readResponseBody unavailableResponse
+      expectAll
+        ( (Wai.responseStatus unavailableResponse `shouldBe` Http.status503)
+            :| [ unavailableBody `shouldBe` "{\"error\":\"temporarily_unavailable\"}",
+                 lookup "Cache-Control" (Wai.responseHeaders unavailableResponse) `shouldBe` Just "private, no-store",
+                 Text.isInfixOf "oauth-secret-sentinel" unavailableBody `shouldBe` False
+               ]
+        )
+      unavailableDirectRequest <- composedOAuthPostRequest ["tenant", "oauth", "token"] "composed-oauth-client" "oauth-secret-sentinel" validForm (Just contentType)
+      unavailableDirectResponse <- runRouteDefinition (moduleEndpoints unavailableRootModule (UnlocalizedOAuth OAuthToken)) unavailableDirectRequest (RouteRequest (UnlocalizedOAuth OAuthToken) defaultComposedContext)
+      case unavailableDirectResponse of
+        ProtocolResponseResult protocolResponse ->
+          expectAll
+            ( (protocolResponseStatus protocolResponse `shouldBe` Http.status503)
+                :| [ protocolResponseLogEntries protocolResponse `shouldBe` [],
+                     protocolResponseObservabilityAttributes protocolResponse `shouldBe` [],
+                     protocolResponseDatabaseOperations protocolResponse `shouldBe` []
+                   ]
+            )
+        _ -> expectationFailure "expected the unavailable OAuth endpoint to return a protocol response"
+
+      (invalidScopeResponse, invalidScopeBody) <- postToken "composed-oauth-client" "oauth-secret-sentinel" "grant_type=client_credentials&scope=orders%3Awrite" (Just contentType)
+      (invalidGrantResponse, invalidGrantBody) <- postToken "composed-oauth-client" "oauth-secret-sentinel" "grant_type=authorization_code" (Just contentType)
+      (malformedScopeResponse, malformedScopeBody) <- postToken "composed-oauth-client" "oauth-secret-sentinel" "grant_type=client_credentials&scope=bad%22scope" (Just contentType)
+      (unsupportedMediaResponse, unsupportedMediaBody) <- postToken "composed-oauth-client" "oauth-secret-sentinel" validForm (Just "text/plain")
+      (missingMediaResponse, missingMediaBody) <- postToken "composed-oauth-client" "oauth-secret-sentinel" validForm Nothing
+      (malformedFormResponse, malformedFormBody) <- postToken "composed-oauth-client" "oauth-secret-sentinel" "grant_type=client_credentials&scope=%" (Just contentType)
+      (tooManyFieldsResponse, tooManyFieldsBody) <- postToken "composed-oauth-client" "oauth-secret-sentinel" "grant_type=client_credentials&a=1&b=2&c=3&d=4&e=5&f=6&g=7&h=8" (Just contentType)
+      (bodyCredentialsResponse, bodyCredentialsBody) <- postToken "composed-oauth-client" "oauth-secret-sentinel" "grant_type=client_credentials&client_id=composed-oauth-client&client_secret=oauth-secret-sentinel" (Just contentType)
+      (duplicateGrantResponse, duplicateGrantBody) <- postToken "composed-oauth-client" "oauth-secret-sentinel" "grant_type=client_credentials&grant_type=authorization_code" (Just contentType)
+      (oversizedBodyResponse, oversizedBody) <-
+        postToken "composed-oauth-client" "oauth-secret-sentinel" (TextEncoding.decodeUtf8 (ByteString.replicate 2049 120)) (Just contentType)
+      expectAll
+        ( (Wai.responseStatus invalidScopeResponse `shouldBe` Http.status400)
+            :| [ invalidScopeBody `shouldBe` "{\"error\":\"invalid_scope\"}",
+                 Wai.responseStatus invalidGrantResponse `shouldBe` Http.status400,
+                 invalidGrantBody `shouldBe` "{\"error\":\"unsupported_grant_type\"}",
+                 Wai.responseStatus malformedScopeResponse `shouldBe` Http.status400,
+                 malformedScopeBody `shouldBe` "{\"error\":\"invalid_scope\"}",
+                 Wai.responseStatus unsupportedMediaResponse `shouldBe` Http.status400,
+                 unsupportedMediaBody `shouldBe` "{\"error\":\"invalid_request\"}",
+                 Wai.responseStatus missingMediaResponse `shouldBe` Http.status400,
+                 missingMediaBody `shouldBe` "{\"error\":\"invalid_request\"}",
+                 Wai.responseStatus malformedFormResponse `shouldBe` Http.status400,
+                 malformedFormBody `shouldBe` "{\"error\":\"invalid_request\"}",
+                 Wai.responseStatus tooManyFieldsResponse `shouldBe` Http.status400,
+                 tooManyFieldsBody `shouldBe` "{\"error\":\"invalid_request\"}",
+                 Wai.responseStatus bodyCredentialsResponse `shouldBe` Http.status400,
+                 bodyCredentialsBody `shouldBe` "{\"error\":\"invalid_request\"}",
+                 Text.isInfixOf "oauth-secret-sentinel" bodyCredentialsBody `shouldBe` False,
+                 Wai.responseStatus duplicateGrantResponse `shouldBe` Http.status400,
+                 duplicateGrantBody `shouldBe` "{\"error\":\"invalid_request\"}",
+                 Wai.responseStatus oversizedBodyResponse `shouldBe` Http.status400,
+                 oversizedBody `shouldBe` "{\"error\":\"invalid_request\"}",
+                 lookup "Cache-Control" (Wai.responseHeaders invalidScopeResponse) `shouldBe` Just "private, no-store",
+                 lookup "Cache-Control" (Wai.responseHeaders invalidGrantResponse) `shouldBe` Just "private, no-store",
+                 lookup "Cache-Control" (Wai.responseHeaders malformedScopeResponse) `shouldBe` Just "private, no-store",
+                 lookup "Cache-Control" (Wai.responseHeaders unsupportedMediaResponse) `shouldBe` Just "private, no-store",
+                 lookup "Cache-Control" (Wai.responseHeaders missingMediaResponse) `shouldBe` Just "private, no-store",
+                 lookup "Cache-Control" (Wai.responseHeaders malformedFormResponse) `shouldBe` Just "private, no-store",
+                 lookup "Cache-Control" (Wai.responseHeaders tooManyFieldsResponse) `shouldBe` Just "private, no-store",
+                 lookup "Cache-Control" (Wai.responseHeaders bodyCredentialsResponse) `shouldBe` Just "private, no-store",
+                 lookup "Cache-Control" (Wai.responseHeaders duplicateGrantResponse) `shouldBe` Just "private, no-store",
+                 lookup "Cache-Control" (Wai.responseHeaders oversizedBodyResponse) `shouldBe` Just "private, no-store"
+               ]
+        )
+
+      authorizationMetadataResponse <- performWaiRequest (pure oauthApplication) (waiRequest [".well-known", "oauth-authorization-server", "tenant"])
+      authorizationMetadataBody <- readResponseBody authorizationMetadataResponse
+      protectedResourceResponse <- performWaiRequest (pure oauthApplication) (waiRequest [".well-known", "oauth-protected-resource", "api", "v1"])
+      protectedResourceBody <- readResponseBody protectedResourceResponse
+      jwksResponse <- performWaiRequest (pure oauthApplication) (waiRequest ["tenant", "oauth", "jwks.json"])
+      jwksBody <- readResponseBody jwksResponse
+      let authorizationObject = decodeJsonObject authorizationMetadataBody
+          protectedResourceObject = decodeJsonObject protectedResourceBody
+          jwksObject = decodeJsonObject jwksBody
+          publicKeys = jwksObject >>= (KeyMap.lookup "keys" >=> asJsonArray)
+          publicKey = publicKeys >>= listToMaybe . toList >>= asJsonObject
+          expectedJwksObject = asJsonObject (Aeson.toJSON (composedJwtPublicJwkSet (composedApiClientTokenJwtRuntime tokenEnvironment)))
+      expectAll
+        ( (Wai.responseStatus authorizationMetadataResponse `shouldBe` Http.status200)
+            :| [ Wai.responseStatus protectedResourceResponse `shouldBe` Http.status200,
+                 Wai.responseStatus jwksResponse `shouldBe` Http.status200,
+                 jwksObject `shouldBe` expectedJwksObject,
+                 (authorizationObject >>= (KeyMap.lookup "issuer" >=> asJsonText)) `shouldBe` Just "https://issuer.example.test/tenant",
+                 (authorizationObject >>= (KeyMap.lookup "token_endpoint" >=> asJsonText)) `shouldBe` Just "https://issuer.example.test/tenant/oauth/token",
+                 (authorizationObject >>= (KeyMap.lookup "jwks_uri" >=> asJsonText)) `shouldBe` Just "https://issuer.example.test/tenant/oauth/jwks.json",
+                 (authorizationObject >>= (KeyMap.lookup "response_types_supported" >=> asJsonArray)) `shouldBe` Just [],
+                 (authorizationObject >>= (KeyMap.lookup "scopes_supported" >=> asJsonArray))
+                   `shouldBe` Just [Aeson.String "catalog:read", Aeson.String "orders:write"],
+                 (authorizationObject >>= (KeyMap.lookup "token_endpoint_auth_methods_supported" >=> asJsonArray)) `shouldSatisfy` maybe False (elem (Aeson.String "client_secret_basic")),
+                 maybe False (KeyMap.member "token_endpoint_auth_signing_alg_values_supported") authorizationObject `shouldBe` False,
+                 (protectedResourceObject >>= (KeyMap.lookup "resource" >=> asJsonText)) `shouldBe` Just "https://resource.example.test/api/v1",
+                 (protectedResourceObject >>= (KeyMap.lookup "authorization_servers" >=> asJsonArray)) `shouldSatisfy` maybe False (elem (Aeson.String "https://issuer.example.test/tenant")),
+                 (protectedResourceObject >>= (KeyMap.lookup "scopes_supported" >=> asJsonArray))
+                   `shouldBe` Just [Aeson.String "catalog:read", Aeson.String "orders:write"],
+                 (publicKey >>= (KeyMap.lookup "kid" >=> asJsonText)) `shouldBe` Just "composed-oauth-test-v1",
+                 (publicKey >>= (KeyMap.lookup "alg" >=> asJsonText)) `shouldBe` Just "RS256",
+                 (publicKey >>= (KeyMap.lookup "use" >=> asJsonText)) `shouldBe` Just "sig",
+                 maybe False (\key -> not (any (`KeyMap.member` key) ["d", "p", "q", "dp", "dq", "qi"])) publicKey `shouldBe` True,
+                 maybe False (KeyMap.member "protected_resources") authorizationObject `shouldBe` False
+               ]
+        )
+
+      let invalidIssuerConfiguration = requiredOAuthEither "OAuth test issuer config" (mkComposedJwtConfiguration "http://issuer.example.test" "account-web" "https://resource.example.test/api/v1" "composed-oauth-test-v1")
+          invalidResourceConfiguration = requiredOAuthEither "OAuth test resource config" (mkComposedJwtConfiguration "https://issuer.example.test" "account-web" "https://resource.example.test/api?v=1" "composed-oauth-test-v1")
+      let configuredError configuration =
+            case loadComposedJwtRuntime configuration signingKey (JoseJwk.JWKSet [signingKey]) of
+              Left _ -> Nothing
+              Right runtime ->
+                case mkComposedOAuthDependencies (tokenEnvironment {composedApiClientTokenJwtRuntime = runtime}) of
+                  Left failure -> Just failure
+                  Right _ -> Nothing
+      case (configuredError invalidIssuerConfiguration, configuredError invalidResourceConfiguration) of
+        (Just ComposedOAuthIssuerMustBeHttpsUrl, Just ComposedOAuthResourceMustBeHttpsUrl) -> pure ()
+        _ -> expectationFailure "expected the OAuth route constructor to reject an HTTP issuer and a queried resource URL"
+
   it "serves the composed documentation page as complete SSR through the production WAI interpreter" $ do
     composedSite <- requiredComposedSite
     waiApplication <- toWaiApplication (Site.buildSiteApplication composedSite)
@@ -2033,7 +2318,8 @@ defaultComposedSiteDependencies =
     { composedStaticAssets = defaultComposedStaticAssets,
       composedLocalePolicy = defaultLocalePolicy,
       composedCsrfProtection = testCsrfProtection,
-      composedDomainCapabilities = ComposedDomainCapabilities catalogQueries catalogCommands ordersQueries ordersCommands
+      composedDomainCapabilities = ComposedDomainCapabilities catalogQueries catalogCommands ordersQueries ordersCommands,
+      composedOAuthDependencies = Nothing
     }
 
 withLocalePolicy :: LocalePolicy -> ComposedSiteDependencies -> ComposedSiteDependencies
@@ -2139,6 +2425,100 @@ formPostRequest segments fields = do
     )
   where
     encodedBody = Http.renderSimpleQuery False fields
+
+withComposedOAuthEnvironment :: (ComposedApiClientTokenEnvironment -> PasswordHash -> JoseJwk.JWK -> IO result) -> IO result
+withComposedOAuthEnvironment action = do
+  generatedSigningKey <- JoseJwk.genJWK (JwaJwk.RSAGenParam 1024)
+  let signingKey = generatedSigningKey & JoseJwk.jwkKid ?~ "composed-oauth-test-v1"
+      jwtConfiguration =
+        requiredOAuthEither
+          "OAuth test JWT configuration"
+          (mkComposedJwtConfiguration "https://issuer.example.test/tenant" "account-web" "https://resource.example.test/api/v1" "composed-oauth-test-v1")
+      jwtRuntime = requiredOAuthEither "OAuth test JWT runtime" (loadComposedJwtRuntime jwtConfiguration signingKey (JoseJwk.JWKSet [signingKey]))
+      testHashPolicy =
+        requiredCsrf
+          "OAuth test Argon2id policy"
+          (mkPasswordHashingPolicy (argon2Iterations 1) (argon2MemoryKib 8) (argon2Parallelism 1))
+      passwordHash =
+        requiredCsrf
+          "OAuth test API-client hash"
+          (hashPasswordWithSalt testHashPolicy (ByteString.pack [0 .. 15]) (mkPassword "oauth-secret-sentinel"))
+      clientId = requiredOAuthEither "OAuth test client ID" (mkComposedApiClientId "composed-oauth-client")
+      allowedScopes = [requiredOAuthScope "catalog:read"]
+      client = requiredOAuthEither "OAuth test API client" (mkComposedApiClient clientId passwordHash allowedScopes allowedScopes)
+      storeUnavailable = ApiClientStoreUnavailable (mkAuthenticationDependency (requiredSecurityFailureCodeOrDie "composed.oauth.test-store-unavailable"))
+  workGate <- newPasswordWorkGate (requiredCsrf "OAuth test password-work budget" (mkPasswordWorkBudget 65536))
+  now <- currentUnixTimeNanoseconds
+  let clientStore =
+        ApiClientStore
+          { findApiClient = \requestedClientId ->
+              pure
+                ( if composedApiClientIdText requestedClientId == "composed-oauth-client"
+                    then Right (Just client)
+                    else Right Nothing
+                ),
+            establishApiClient = \_ -> pure (Left storeUnavailable)
+          }
+      tokenEnvironment =
+        ComposedApiClientTokenEnvironment
+          { composedApiClientTokenStore = clientStore,
+            composedApiClientTokenWorkGate = workGate,
+            composedApiClientTokenJwtRuntime = jwtRuntime,
+            composedApiClientTokenClock = pure now
+          }
+  action tokenEnvironment passwordHash signingKey
+
+composedOAuthPostRequest :: [Text] -> Text -> Text -> Text -> Maybe Text -> IO Wai.Request
+composedOAuthPostRequest path clientId secret formValue maybeMediaType = do
+  let formBytes = TextEncoding.encodeUtf8 formValue
+      basicCredentials = Base64.encode (TextEncoding.encodeUtf8 (clientId <> ":" <> secret))
+      requestHeaders =
+        [(Http.hAuthorization, "Basic " <> basicCredentials)]
+          <> maybe [] (\mediaType -> [(Http.hContentType, TextEncoding.encodeUtf8 mediaType)]) maybeMediaType
+  bodyChunks <- newIORef [formBytes]
+  pure
+    ( Wai.setRequestBodyChunks
+        (nextRequestBodyChunk bodyChunks)
+        ( (waiRequest path)
+            { Wai.requestMethod = "POST",
+              Wai.requestHeaders = requestHeaders,
+              Wai.requestBodyLength = Wai.KnownLength (fromIntegral (ByteString.length formBytes)),
+              Wai.isSecure = True
+            }
+        )
+    )
+
+decodeJsonObject :: Text -> Maybe Aeson.Object
+decodeJsonObject body =
+  Aeson.decodeStrict' (TextEncoding.encodeUtf8 body) >>= asJsonObject
+
+asJsonObject :: Aeson.Value -> Maybe Aeson.Object
+asJsonObject value =
+  case value of
+    Aeson.Object objectValue -> Just objectValue
+    _ -> Nothing
+
+asJsonText :: Aeson.Value -> Maybe Text
+asJsonText value =
+  case value of
+    Aeson.String textValue -> Just textValue
+    _ -> Nothing
+
+asJsonArray :: Aeson.Value -> Maybe [Aeson.Value]
+asJsonArray value =
+  case value of
+    Aeson.Array arrayValue -> Just (toList arrayValue)
+    _ -> Nothing
+
+requiredOAuthScope :: Text -> OAuth2Scope
+requiredOAuthScope value =
+  case mkOAuth2Scope value of
+    Left _ -> error "invalid authored composed OAuth test scope"
+    Right scope -> scope
+
+requiredOAuthEither :: (Show failure) => String -> Either failure value -> value
+requiredOAuthEither label =
+  either (\failure -> error ("expected " <> label <> ": " <> show failure)) id
 
 requiredModuleName :: Text -> ModuleName
 requiredModuleName value =

@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | App-owned placement and presentation for the AHI-6 reference controls.
+-- | App-owned placement and presentation for the dialog-overlay and application-controls design's reference controls.
 -- Harch owns the dialog's typed semantic/capture contract; this module owns
 -- the concrete language choices and the Help link's floating presentation.
 -- The Help action remains ordinary typed native-link composition because that

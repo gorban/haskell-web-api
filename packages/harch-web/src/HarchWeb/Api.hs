@@ -1,7 +1,7 @@
 -- | Low-level HTTP API matching, codecs, and response helpers.
 --
 -- This facade does /not/ itself define the application's route dispatcher.
--- The AC design decision extends the shared
+-- The typed declarative endpoint design decision extends the shared
 -- 'HarchWeb.Routing.RouteCodec'/'HarchWeb.Site.RouteDefinition' boundary and
 -- the server response interpreter so pages, actions, and APIs have one
 -- method/path owner: 'apiEndpointFamily' validates one heterogeneous
@@ -15,7 +15,7 @@
 -- compatibility table and the intermediate @apiRouteEndpointMiddleware@
 -- typed-WAI-middleware composition were removed 2026-08-13 once every
 -- application in this repository had migrated onto the family registry (see
--- the AK decision record). A typed endpoint may declare a scoped multipart
+-- the legacy-surface-removal decision record). A typed endpoint may declare a scoped multipart
 -- request capability through 'ApiMultipartRequestBody'; its storage adapter
 -- remains supplied by 'HarchWeb.Api.Multipart'. A typed endpoint may instead
 -- declare a bounded, incremental request stream through
@@ -39,6 +39,7 @@ module HarchWeb.Api
     SomeApiRouteEndpoint (..),
     ApiEndpointRequest (..),
     ApiRequestBody (..),
+    ApiRequestBodyFailure (..),
     ApiRequestBodyByteLimit,
     ApiStreamingRequest (..),
     RequestBodyReadFailure (..),

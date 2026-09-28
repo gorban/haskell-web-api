@@ -2,9 +2,9 @@
 
 -- | Declarative site composition.
 --
--- FQ8 makes the stable route-table, shell, and CSRF declaration inputs one
+-- The review finding makes the stable route-table, shell, and CSRF declaration inputs one
 -- 'SimpleSiteConfiguration'. Dynamic policy, middleware, action, and
--- reporter customizations stay on 'Site' itself. Decision record (AHI-4E,
+-- reporter customizations stay on 'Site' itself. Decision record (OpenAPI documentation and Swagger UI,
 -- 2026-09-21): a route definition owns a pure method policy over its parsed
 -- request, rather than reducing it to a static method list at site assembly.
 -- This preserves endpoint availability derived from a bounded context snapshot

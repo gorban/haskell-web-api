@@ -3,18 +3,21 @@
 -- | A compiled demonstration of the typed 'HarchWeb.Api' endpoint boundary:
 -- a hand-written request-body decoder and response encoders as the
 -- extension points 'HarchWeb.Api' does not build in, negotiated JSON/custom
--- media responses, and a bounded multipart upload. AC closed the shared
+-- media responses, and a bounded multipart upload. The typed declarative API
+-- endpoint boundary work closed the shared
 -- method-aware 'HarchWeb.RouteCodec'/'HarchWeb.Site.RouteDefinition'
 -- boundary this module used to wait on: 'declarativeApiEndpoints' is now
 -- composed through 'HarchWeb.Api.apiRouteEndpointFamilyCodec'/
 -- 'apiRouteEndpointFamilyDefinition' into an ordinary 'HarchWeb.Site.Site',
 -- rather than the removed legacy @apiEndpoint@\/@apiEndpointMiddleware@
--- pair this module previously used. Migrating this example is the AC
--- follow-up named in @TASKS.md@; @web-api@'s own @\/api\/status@\/@\/api\/second@
+-- pair this module previously used. Migrating this example is the remaining
+-- follow-up of the typed declarative API endpoint boundary work;
+-- @web-api@'s own @\/api\/status@\/@\/api\/second@
 -- routes remain a separate, larger follow-up (they additionally need
 -- per-response observability attributes/log entries, a capability the typed
--- endpoint boundary does not yet expose). See ../../README.md and the AC
--- decision record in docs/design-guidance.md.
+-- endpoint boundary does not yet expose). See ../../README.md and the typed
+-- declarative API endpoint boundary decision record in
+-- docs/design-guidance.md.
 --
 -- The endpoint table owns the whole application's routing, so this example
 -- uses 'HarchWeb.Site.apiOnlySite'. That small extension of the shared site

@@ -153,7 +153,7 @@ throwClientActionFailure publicResponse code typeName detail =
         appFailureDiagnostics = buildFailureDiagnostics code typeName detail
       }
 
--- | Decision (AHI-5-DOC, 2026-09-11): required-audit reporting extends the
+-- | Decision (README ownership review, 2026-09-11): required-audit reporting extends the
 -- existing application action-failure interpreter. That boundary already owns
 -- private diagnostics and low-cardinality attributes; a Harch telemetry API
 -- would invert ownership, while a post-commit logger would weaken the atomic

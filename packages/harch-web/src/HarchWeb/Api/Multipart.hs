@@ -23,7 +23,7 @@
 -- property that lets a caller stream large file parts without buffering them
 -- whole.
 --
--- Decision (PR-SEC1, 2026-08-28): a completed upload is registered with the
+-- Decision (review finding, 2026-08-28): a completed upload is registered with the
 -- scoped cleanup list before its staged reference is cleared, under one
 -- masked handoff.  Promotion is continuation-based: the application owns the
 -- completed value only after its continuation returns normally.  An exception

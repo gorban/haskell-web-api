@@ -844,8 +844,9 @@ spec = do
         `shouldReturn` "{\"status\":\"ok\",\"locale\":\"en\"}"
 
       -- 'pureApplication' has 'HarchWeb.AuthenticationDisabled' security, and
-      -- '/api/second' now requires the AHI-4D resource authentication
-      -- profile: through the real WAI adapter (unlike the lower-level
+      -- '/api/second' now requires the resource authentication profile the
+      -- scoped API-authentication design defines: through the real WAI
+      -- adapter (unlike the lower-level
       -- 'HarchWeb.renderResponse' the dispatch/hostile-content/database-
       -- failure tests below use, which bypasses guard resolution entirely),
       -- a protected endpoint under disabled security fails closed with
@@ -1097,8 +1098,9 @@ spec = do
                          meBody `shouldBe` ("{\"username\":null,\"email\":\"" <> emailAddressText runtimeEmail <> "\"}")
                        ]
                 )
-              -- AHI-4D slice 5's combined resource profile admits the same
-              -- account cookie unconditionally (no scope required), through
+              -- The combined resource profile from slice 5 of the scoped
+              -- API-authentication work admits the same account cookie
+              -- unconditionally (no scope required), through
               -- the real 'runtimeAuthenticationProfiles' registration this
               -- runtime application composes with — not a synthetic
               -- pipeline value, exercising the actual registered "resource"
@@ -1111,8 +1113,9 @@ spec = do
                 ( (Wai.responseStatus secondApiResponse `shouldBe` Http.status200)
                     :| [lookup Http.hContentType (Wai.responseHeaders secondApiResponse) `shouldBe` Just "application/json"]
                 )
-              -- The account profile's existing guard is reused as-is (see the
-              -- AHI-4D decision record): an unauthenticated request receives
+              -- The account profile's existing guard is reused as-is, as the
+              -- scoped API-authentication design decided: an unauthenticated
+              -- request receives
               -- the same login-redirect challenge every other
               -- 'RequireAuthenticated' route already gives, not a JSON 401.
               unauthenticatedMeResponse <- performWaiRequest (HarchWeb.toWaiApplication runtimeApplication) (waiRequest ["api", "me"])
@@ -1147,8 +1150,9 @@ spec = do
                     case Password.hashPasswordWithSalt testPasswordHashingPolicy "fedcba9876543210" (Password.mkPassword "runtime-token-secret") of
                       Just value -> value
                       Nothing -> error "expected a valid test API-client secret hash"
-                  -- AHI-4D's PRD requires proving an API-client principal
-                  -- cannot satisfy /api/me merely by carrying a same-named
+                  -- The scoped API-authentication requirements call for
+                  -- proving that an API-client principal cannot satisfy
+                  -- /api/me merely by carrying a same-named
                   -- "profile:read:self" scope. That scope must stay off the
                   -- main 'oauthClientId' fixture above, or the
                   -- 'invalidScopeRequest' assertion below (which relies on
@@ -1224,8 +1228,9 @@ spec = do
                       :| [lookup Http.hContentType (Wai.responseHeaders secondApiBearerResponse) `shouldBe` Just "application/json"]
                   )
 
-                -- AHI-4D's PRD: "API-client identity cannot satisfy this
-                -- [/api/me] merely by carrying the same text scope." /api/me
+                -- The scoped API-authentication requirements state:
+                -- "API-client identity cannot satisfy this [/api/me] merely
+                -- by carrying the same text scope." /api/me
                 -- stays on the account-only profile (WebApi.Route keeps its
                 -- access requirement 'RequireAuthenticated', not the
                 -- combined resource profile), whose claims parser requires
@@ -1255,7 +1260,7 @@ spec = do
                 invalidClientBody <- readResponseBody invalidClientResponse
                 expectAll
                   ( (Wai.responseStatus invalidClientResponse `shouldBe` Http.status401)
-                      :| [ lookup "WWW-Authenticate" (Wai.responseHeaders invalidClientResponse) `shouldBe` Just "Basic",
+                      :| [ lookup "WWW-Authenticate" (Wai.responseHeaders invalidClientResponse) `shouldBe` Just "Basic realm=\"oauth-token\", charset=\"UTF-8\"",
                            invalidClientBody `shouldBe` "{\"error\":\"invalid_client\"}"
                          ]
                   )
@@ -1992,8 +1997,9 @@ spec = do
             serverThreadId <- forkIO $ do
               result <- try (runWithConfig outputHandle runtimeAppConfig runtimeEnvironmentConfig) :: IO (Either SomeException ())
               writeIORef completionReference (Just result)
-            -- '/api/second' now requires the AHI-4D resource authentication
-            -- profile (account cookie/bearer or a scoped API-client bearer
+            -- '/api/second' now requires the resource authentication profile
+            -- the scoped API-authentication design defines (account
+            -- cookie/bearer or a scoped API-client bearer
             -- token); minting either credential over a real socket is
             -- covered by the focused resource-profile tests instead. The
             -- rendered '/second' page consumes the exact same environment-

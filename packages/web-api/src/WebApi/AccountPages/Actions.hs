@@ -2,7 +2,7 @@
 
 -- | Account action orchestration and CSRF policy.
 --
--- Decision record (AHI-4C, 2026-09-03): session-bound CSRF belongs at Harch's
+-- Decision record (secure login and admission, 2026-09-03): session-bound CSRF belongs at Harch's
 -- existing typed action boundary, after its mandatory transport validation and
 -- before any workflow can run.  This application supplies one signed backend,
 -- whose binding is the complete canonical set of live account and MFA

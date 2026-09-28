@@ -9,10 +9,10 @@
 -- This module predates OTLP export: it began as JSON support (both encoding
 -- and a hand-rolled parser into a 'JsonValue' tree) for ACME's native
 -- protocol client, which was removed for having zero production callers
--- (see the DG decision record in @docs/design-guidance.md@). The parsing
+-- (see the native-ACME-client decision record in @docs/design-guidance.md@). The parsing
 -- half had no other caller either — OTLP export only ever used these three
--- byte-builder encoders — so it was not carried forward (see the DH decision
--- record in @docs/design-guidance.md@).
+-- byte-builder encoders — so it was not carried forward (see the JSON-parser
+-- removal decision record in @docs/design-guidance.md@).
 module HarchWeb.Acme.Json
   ( jsonArrayBytes,
     jsonObjectBytes,

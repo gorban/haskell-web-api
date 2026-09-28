@@ -84,7 +84,8 @@ Autocomplete values are application policy expressed with Harch's open
 
 ### Composed-domain admission controls
 
-AHI-4C's `composed-domains` reference flow has a separate,
+The `composed-domains` reference flow from the secure-login and admission
+design has a separate,
 application-owned admission workflow. It is deliberately not part of the
 `web-api` account/MFA matrix above: its principal, encrypted TOTP secret,
 durable session, and cookie are all distinct from account identity and MFA

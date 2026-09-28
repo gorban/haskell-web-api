@@ -20,7 +20,7 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import Unit.WebApi.TestSupport (migrationPostgresTestConfig, postgresTestConfig)
 import WebApi.ActivityAudit
 import WebApi.Config (DatabaseConfig (..))
-import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), accountAuditAppendResultFixStatements, accountAuditControlledAppendPolicyStatements, accountAuditInitialMaintenanceStatements, accountAuditInsertPolicyFixStatements, accountAuditMaintenanceJobName, accountAuditMaintenanceSchedule, accountAuditMigrationStatements, accountAuditRegistrationDeliveryStatements, accountAuditRuntimeReconciliationStatements, accountAuditVerificationResendDeliveryStatements, bootstrapAccountAuditSchedulerWithRunner, cronRunDetailsRetentionJobName, cronRunDetailsRetentionSchedule, installAccountAuditSchedulerStatements)
+import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), accountAuditAppendResultFixStatements, accountAuditControlledAppendPolicyStatements, accountAuditInitialMaintenanceStatements, accountAuditInsertPolicyFixStatements, accountAuditMaintenanceJobName, accountAuditMaintenanceSchedule, accountAuditMigrationStatements, accountAuditRegistrationDeliveryStatements, accountAuditRuntimeReconciliationStatements, accountAuditSchedulerTargetFixStatements, accountAuditVerificationResendDeliveryStatements, bootstrapAccountAuditSchedulerWithRunner, cronRunDetailsRetentionJobName, cronRunDetailsRetentionSchedule, installAccountAuditSchedulerStatements)
 
 spec = describe "WebApi.ActivityAudit" $ do
   it "encodes every closed audit event with a stable code, version, and bounded detail" $ do
@@ -100,7 +100,7 @@ spec = describe "WebApi.ActivityAudit" $ do
       )
 
   it "keeps the example scheduler contract on fixed safe maintenance commands" $ do
-    let schedulerSql = Text.unlines installAccountAuditSchedulerStatements
+    let schedulerSql = Text.unlines (installAccountAuditSchedulerStatements "web_api_'dev")
     expectAll
       ( (accountAuditMaintenanceJobName `shouldBe` "account-audit-maintenance")
           :| [ accountAuditMaintenanceSchedule `shouldBe` "0 3 * * *",
@@ -111,6 +111,45 @@ spec = describe "WebApi.ActivityAudit" $ do
                ("interval '30 days'" `Text.isInfixOf` schedulerSql) `shouldBe` True
              ]
       )
+
+  it "escapes the configured target database in both owned cron jobs" $ do
+    let schedulerSql = Text.unlines (installAccountAuditSchedulerStatements "web_api_'dev")
+    shouldBe (Text.isInfixOf "cron.schedule_in_database('account-audit-maintenance'" schedulerSql) True
+    shouldBe (Text.isInfixOf "cron.schedule_in_database('web-api-cron-run-details-retention'" schedulerSql) True
+    shouldBe (Text.isInfixOf "$$SELECT account_audit.maintain_activity_partitions();$$, 'web_api_''dev');" schedulerSql) True
+    shouldBe (Text.isInfixOf "cron.schedule(" schedulerSql) False
+
+  it "targets the migration database from a separate cron control connection" $ do
+    recordedCommandsReference <- newIORef ([] :: [PostgresCommand])
+    let schedulerDatabaseConfig =
+          postgresTestConfig
+            { databaseName = "cron_control",
+              databaseUser = "web_api_audit_scheduler",
+              databasePassword = "scheduler-secret"
+            }
+        successfulRunner postgresCommand = do
+          modifyIORef' recordedCommandsReference (<> [postgresCommand])
+          pure (PostgresCommandResult ExitSuccess Text.empty Text.empty)
+    result <- bootstrapAccountAuditSchedulerWithRunner successfulRunner migrationPostgresTestConfig schedulerDatabaseConfig
+    recordedCommands <- readIORef recordedCommandsReference
+    let schedulerCommands = Text.pack . unwords . postgresArguments <$> drop 1 recordedCommands
+    shouldBe result (Right ())
+    shouldBe (length schedulerCommands) 2
+    shouldBe (all (Text.isInfixOf "cron_control") schedulerCommands) True
+    shouldBe (all (Text.isInfixOf "'web_api_prod'") schedulerCommands) True
+
+  it "grants only the scheduler registration function needed for explicit database targeting" $ do
+    let schemaSql = Text.unlines accountAuditMigrationStatements
+        targetFixSql = Text.unlines accountAuditSchedulerTargetFixStatements
+    shouldBe
+      (Text.isInfixOf "GRANT EXECUTE ON FUNCTION cron.schedule(TEXT, TEXT, TEXT) TO web_api_audit_scheduler" schemaSql)
+      True
+    shouldBe
+      (Text.isInfixOf "REVOKE EXECUTE ON FUNCTION cron.schedule(TEXT, TEXT, TEXT) FROM web_api_audit_scheduler" targetFixSql)
+      True
+    shouldBe
+      (Text.isInfixOf "GRANT EXECUTE ON FUNCTION cron.schedule_in_database(TEXT, TEXT, TEXT, TEXT, TEXT, BOOLEAN) TO web_api_audit_scheduler" targetFixSql)
+      True
 
   it "reconciles the scheduler login as owner before registering jobs through its direct connection" $ do
     recordedCommandsReference <- newIORef ([] :: [PostgresCommand])

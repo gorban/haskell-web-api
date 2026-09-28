@@ -7,7 +7,7 @@ import Data.List.NonEmpty (NonEmpty ((:|)))
 import HarchWeb.Action qualified as Action
 import HarchWeb.Api
   ( ApiEndpointContract (..),
-    ApiFieldFailurePolicy (ApiRenderFieldFailures, ApiUseGenericFieldFailure),
+    ApiFieldFailurePolicy (ApiRenderFieldFailures, ApiRenderFieldFailuresWithStatus, ApiUseGenericFieldFailure),
     ApiMethod (ApiPost),
     ApiRequestBody (ApiUrlEncodedFormRequestBody),
     ApiRequestData (..),
@@ -58,6 +58,7 @@ spec = describe "Unit.Orders.Api" $ do
     case apiEndpointContractFieldFailurePolicy contract of
       ApiUseGenericFieldFailure -> pure ()
       ApiRenderFieldFailures _ -> expectationFailure "the contract must use the generic field failure"
+      ApiRenderFieldFailuresWithStatus _ -> expectationFailure "the contract must use the generic field failure"
     case apiEndpointContractEncoders contract of
       responseEncoder :| _ ->
         apiResponseEncoderContentType responseEncoder `shouldBe` apiContentType jsonMediaType

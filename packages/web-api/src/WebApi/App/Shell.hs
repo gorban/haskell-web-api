@@ -73,7 +73,7 @@ appNavigationItems =
     HarchWeb.NavigationItem "Profile" ProfileRoute
   ]
 
--- | AHI-1 keeps application styling and shell composition in app-owned typed
+-- | The component and styling architecture design keeps application styling and shell composition in app-owned typed
 -- functions.  The shell consumes the context's already-validated path prefix
 -- so the declared stylesheet follows the same mount point as routes and
 -- runtime assets, without introducing another proxy-header parser.

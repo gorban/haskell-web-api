@@ -322,7 +322,7 @@ authenticateSmtp connection config capabilities credentials = do
         "235"
     )
 
--- | PR-SEC4: SMTP response text is provider-controlled and can contain
+-- | SMTP response text is provider-controlled and can contain
 -- recipient or account data.  The exception therefore retains only its
 -- protocol status; callers keep the returned lines solely for local protocol
 -- decisions.

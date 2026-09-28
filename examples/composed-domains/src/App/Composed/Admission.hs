@@ -8,7 +8,7 @@
 -- 'App.Composed.Admission.Session'. Keeping this public rail here prevents
 -- transports from choosing different proof or session interpretations.
 --
--- Decision (AHI-4C-AMH, 2026-09-04): split the former combined admission
+-- Decision (admission-workflow split, 2026-09-04): split the former combined admission
 -- workflow by its two stable capabilities without widening the application
 -- surface. Harch still owns the generic cancellation-safe reservation handoff
 -- and the endpoint dispatcher; this application owns credential encryption,
@@ -173,6 +173,7 @@ admissionRequirement :: RootRoute -> AdmissionRequirement
 admissionRequirement (UnlocalizedCatalogApi _) = AllowWithoutAdmission
 admissionRequirement (UnlocalizedOrdersApi _) = AllowWithoutAdmission
 admissionRequirement (UnlocalizedDocs _) = AllowWithoutAdmission
+admissionRequirement (UnlocalizedOAuth _) = AllowWithoutAdmission
 admissionRequirement (Localized _ localRoute) =
   case localRoute of
     Public (PublicAdmission _) -> AllowWithoutAdmission
@@ -212,6 +213,7 @@ admissionChallenge endpointRequest =
               UnlocalizedCatalogApi _ -> requestRoute routeRequest
               UnlocalizedOrdersApi _ -> requestRoute routeRequest
               UnlocalizedDocs _ -> requestRoute routeRequest
+              UnlocalizedOAuth _ -> requestRoute routeRequest
               Localized selectedLocale _ -> Localized selectedLocale (Public (PublicAdmission (admissionReturnTarget (requestRoute routeRequest)))),
           requestContext = requestContext routeRequest
         }
@@ -220,6 +222,7 @@ admissionReturnTarget :: RootRoute -> AdmissionReturnTarget
 admissionReturnTarget (UnlocalizedCatalogApi _) = ReturnToAccountLogin
 admissionReturnTarget (UnlocalizedOrdersApi _) = ReturnToAccountLogin
 admissionReturnTarget (UnlocalizedDocs _) = ReturnToAccountLogin
+admissionReturnTarget (UnlocalizedOAuth _) = ReturnToAccountLogin
 admissionReturnTarget (Localized _ localRoute) =
   case localRoute of
     Catalog CatalogIndex -> ReturnToCatalogIndex

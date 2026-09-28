@@ -2,7 +2,7 @@
 
 -- | Pure app-owned profile presentation.
 --
--- AHI-1 keeps optional identity values explicit in props and renders absence
+-- The component and styling architecture design keeps optional identity values explicit in props and renders absence
 -- as absence.  The component does not read session/application state; the
 -- exhaustive 'WebApi.Page.Model.ProfilePageModel' fold remains at the route
 -- rendering boundary that owns those states.

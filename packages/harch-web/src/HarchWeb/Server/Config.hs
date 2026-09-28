@@ -75,7 +75,7 @@ data CertbotConfig = CertbotConfig
 -- supported built-in path. DNS or other custom authentication belongs in an
 -- operator-controlled executable wrapper that obtains its own credentials
 -- from a root-owned file or managed environment, never from this framework's
--- configuration (PR-SEC5, 2026-08-28).
+-- configuration (review finding, 2026-08-28).
 instance Show CertbotConfig where
   showsPrec precedence certbotConfig =
     showParen

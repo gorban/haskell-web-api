@@ -74,7 +74,8 @@ databaseAutostartArguments setupConfig = do
     ]
 
 -- | The repository's local bootstrap must match the tested database feature
--- set.  In particular, AHI-5's account-audit maintenance needs @pg_cron@ to
+-- set.  In particular, the account-audit maintenance from the activity-audit
+-- design needs @pg_cron@ to
 -- be preloaded at server start, which the stock PostgreSQL image cannot do.
 -- The application-level build helper materializes this pinned local image
 -- before an opt-in autostart is used.

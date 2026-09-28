@@ -10,7 +10,7 @@ import HarchWeb.Security
 import Network.Socket qualified as Socket
 
 -- | Each row is one previously-separate 'it' case, tabled per
--- @docs/design-guidance.md@'s CN decision record: one act
+-- @docs/design-guidance.md@'s one-act/one-comparison decision record: one act
 -- ('parseCidrBlock'), one comparison ('shouldBe'), differing only in the
 -- input string and expected network. This is "Shape A" — each row keeps its
 -- own name, so nothing is lost from the hspec output; the three cases that

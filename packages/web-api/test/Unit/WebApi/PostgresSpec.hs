@@ -241,8 +241,8 @@ spec =
     it "keeps the delivered token valid until a real PostgreSQL resend claim settles" $ do
       ensureDefaultPostgresAvailable
       runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig `shouldReturn` Right ()
-      let accountId = requiredAccountId "ahi2_resend_account"
-          emailAddress = requiredEmailAddress "ahi2-resend@example.test"
+      let accountId = requiredAccountId "verification_resend_account"
+          emailAddress = requiredEmailAddress "verification-resend@example.test"
           oldToken = requiredVerificationToken (Text.replicate 43 "a")
           candidateToken = requiredVerificationToken (Text.replicate 43 "b")
           concurrentTokens = fmap (requiredVerificationToken . Text.replicate 43) ["c", "d", "e", "f"]
@@ -301,8 +301,8 @@ spec =
     it "reclaims resend claims and rolling delivery history at their retention boundaries" $ do
       ensureDefaultPostgresAvailable
       runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig `shouldReturn` Right ()
-      let accountId = requiredAccountId "ahi2_boundary_account"
-          emailAddress = requiredEmailAddress "ahi2-boundary@example.test"
+      let accountId = requiredAccountId "verification_boundary_account"
+          emailAddress = requiredEmailAddress "verification-boundary@example.test"
           policy = fromMaybe (error "expected resend policy") (mkVerificationResendPolicy 1 1 1 100000)
           token value = requiredVerificationToken (Text.replicate 43 value)
           verification value = Account.mkStoredEmailVerification accountId emailAddress 1000 (token value)
@@ -884,7 +884,7 @@ spec =
       ensureDefaultPostgresAvailable
       runPostgresMigrations defaultMigrationPostgresConfig `shouldReturn` Right ()
       runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT change_id FROM web_api.database_changes ORDER BY change_order ASC;"
-        `shouldReturn` Right ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1", "keyed-login-attempt-groups-v1", "remove-session-csrf-v1", "account-audit-schema-v1", "account-audit-controlled-append-policy-v1", "account-audit-controlled-append-rls-v2", "account-audit-append-result-v1", "account-audit-initial-maintenance-v1", "account-audit-session-issue-v1", "account-audit-session-issue-conflict-fix-v1", "account-audit-session-issue-insert-privilege-fix-v1", "account-audit-registration-delivery-v1", "account-audit-verification-resend-delivery-v1", "api-clients-v1", "api-client-secret-hash-format-v1"]
+        `shouldReturn` Right ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1", "keyed-login-attempt-groups-v1", "remove-session-csrf-v1", "account-audit-schema-v1", "account-audit-controlled-append-policy-v1", "account-audit-controlled-append-rls-v2", "account-audit-append-result-v1", "account-audit-initial-maintenance-v1", "account-audit-session-issue-v1", "account-audit-session-issue-conflict-fix-v1", "account-audit-session-issue-insert-privilege-fix-v1", "account-audit-registration-delivery-v1", "account-audit-verification-resend-delivery-v1", "api-clients-v1", "api-client-secret-hash-format-v1", "account-audit-scheduler-target-v1"]
       runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT column_name FROM information_schema.columns WHERE table_schema = 'web_api' AND table_name IN ('account_sessions', 'mfa_enrollment_sessions') AND column_name = 'csrf_token';"
         `shouldReturn` Right []
       withUnusedTcpEndpoint $ \unusedEndpoint ->
@@ -900,9 +900,9 @@ spec =
 
     it "cuts a legacy ledger over atomically without changing its applied timestamp" $ do
       ensureDefaultPostgresAvailable
-      let schemaName = "ahi4c_database_change_cutover"
-          legacyChange = DatabaseChanges.DatabaseChange (DatabaseChanges.DatabaseChangeId "legacy-v1") ("CREATE TABLE \"ahi4c_database_change_cutover\".\"legacy_marker\" (id INTEGER);" :| [])
-          addedChange = DatabaseChanges.DatabaseChange (DatabaseChanges.DatabaseChangeId "new-v2") ("CREATE TABLE \"ahi4c_database_change_cutover\".\"new_marker\" (id INTEGER);" :| [])
+      let schemaName = "database_change_cutover"
+          legacyChange = DatabaseChanges.DatabaseChange (DatabaseChanges.DatabaseChangeId "legacy-v1") ("CREATE TABLE \"database_change_cutover\".\"legacy_marker\" (id INTEGER);" :| [])
+          addedChange = DatabaseChanges.DatabaseChange (DatabaseChanges.DatabaseChangeId "new-v2") ("CREATE TABLE \"database_change_cutover\".\"new_marker\" (id INTEGER);" :| [])
           ledger =
             DatabaseChanges.DatabaseChangeLedger
               { DatabaseChanges.databaseChangeLedgerSchema = schemaName,
@@ -911,12 +911,12 @@ spec =
                 DatabaseChanges.databaseChangeLedgerLockId = 782476312
               }
           setupSql =
-            "DROP SCHEMA IF EXISTS \"ahi4c_database_change_cutover\" CASCADE; "
-              <> "CREATE SCHEMA \"ahi4c_database_change_cutover\"; "
-              <> "CREATE TABLE \"ahi4c_database_change_cutover\".\"schema_migrations\" (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL); "
-              <> "INSERT INTO \"ahi4c_database_change_cutover\".\"schema_migrations\" (version, applied_at) VALUES ('legacy-v1', TIMESTAMPTZ '2001-02-03 04:05:06+00'); "
+            "DROP SCHEMA IF EXISTS \"database_change_cutover\" CASCADE; "
+              <> "CREATE SCHEMA \"database_change_cutover\"; "
+              <> "CREATE TABLE \"database_change_cutover\".\"schema_migrations\" (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL); "
+              <> "INSERT INTO \"database_change_cutover\".\"schema_migrations\" (version, applied_at) VALUES ('legacy-v1', TIMESTAMPTZ '2001-02-03 04:05:06+00'); "
               <> "SELECT 'ready';"
-          cleanupSql = "DROP SCHEMA IF EXISTS \"ahi4c_database_change_cutover\" CASCADE; SELECT 'removed';"
+          cleanupSql = "DROP SCHEMA IF EXISTS \"database_change_cutover\" CASCADE; SELECT 'removed';"
           connection = DatabaseChanges.DatabaseChangeConnectionString (runtimeConnectionString defaultMigrationPostgresConfig)
       bracket_
         (runRuntimeRowsQuery defaultMigrationPostgresConfig setupSql `shouldReturn` Right ["ready"])
@@ -926,19 +926,19 @@ spec =
           runRuntimeRowsQuery
             defaultMigrationPostgresConfig
             ( "SELECT change_id || '|' || change_order::TEXT || '|' || sql_digest || '|' || to_char(applied_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') "
-                <> "FROM \"ahi4c_database_change_cutover\".\"database_changes\" WHERE change_id = 'legacy-v1';"
+                <> "FROM \"database_change_cutover\".\"database_changes\" WHERE change_id = 'legacy-v1';"
             )
             `shouldReturn` Right ["legacy-v1|1|" <> DatabaseChanges.databaseChangeDigest legacyChange <> "|2001-02-03T04:05:06Z"]
           runRuntimeRowsQuery
             defaultMigrationPostgresConfig
-            "SELECT change_id || '|' || change_order::TEXT || '|' || sql_digest FROM \"ahi4c_database_change_cutover\".\"database_changes\" WHERE change_id = 'new-v2';"
+            "SELECT change_id || '|' || change_order::TEXT || '|' || sql_digest FROM \"database_change_cutover\".\"database_changes\" WHERE change_id = 'new-v2';"
             `shouldReturn` Right ["new-v2|2|" <> DatabaseChanges.databaseChangeDigest addedChange]
 
     it "uses the durable database-change ledger and keeps application migration SQL out of a legacy ledger" $ do
       ensureDefaultPostgresAvailable
       runPostgresMigrations defaultMigrationPostgresConfig `shouldReturn` Right ()
       runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT change_id FROM web_api.database_changes ORDER BY change_order ASC;"
-        `shouldReturn` Right ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1", "keyed-login-attempt-groups-v1", "remove-session-csrf-v1", "account-audit-schema-v1", "account-audit-controlled-append-policy-v1", "account-audit-controlled-append-rls-v2", "account-audit-append-result-v1", "account-audit-initial-maintenance-v1", "account-audit-session-issue-v1", "account-audit-session-issue-conflict-fix-v1", "account-audit-session-issue-insert-privilege-fix-v1", "account-audit-registration-delivery-v1", "account-audit-verification-resend-delivery-v1", "api-clients-v1", "api-client-secret-hash-format-v1"]
+        `shouldReturn` Right ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1", "keyed-login-attempt-groups-v1", "remove-session-csrf-v1", "account-audit-schema-v1", "account-audit-controlled-append-policy-v1", "account-audit-controlled-append-rls-v2", "account-audit-append-result-v1", "account-audit-initial-maintenance-v1", "account-audit-session-issue-v1", "account-audit-session-issue-conflict-fix-v1", "account-audit-session-issue-insert-privilege-fix-v1", "account-audit-registration-delivery-v1", "account-audit-verification-resend-delivery-v1", "api-clients-v1", "api-client-secret-hash-format-v1", "account-audit-scheduler-target-v1"]
       runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT table_name FROM information_schema.tables WHERE table_schema = 'web_api' AND table_name = 'schema_migrations';"
         `shouldReturn` Right []
 

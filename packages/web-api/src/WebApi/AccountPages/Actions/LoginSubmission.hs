@@ -2,7 +2,7 @@
 
 -- | Password/MFA login-submission interpretation.
 --
--- Decision record (AHI-5-WF2, 2026-09-19): keep the public action façade and
+-- Decision record (activity-audit workflow, 2026-09-19): keep the public action façade and
 -- its 'AccountActionWorkflow'/'AppM' failure rail, but give the complete
 -- account-login submission concern one internal owner.  Its explicit input
 -- keeps request context and user fields together while this module preserves

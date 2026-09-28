@@ -1,11 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Immutable PostgreSQL changes owned by the composed admission example.
+-- | Immutable PostgreSQL changes owned by the composed example's admission
+-- and OAuth-client storage.
 --
 -- The schema is intentionally separate from @web_api@: admission credentials,
--- opaque admission sessions, and synchronizer records must not be usable as
--- account/MFA/session state.  The shared runner supplies transaction, digest,
--- and ledger guarantees; this module owns only this application's schema.
+-- opaque admission sessions, synchronizer records, and API-client credentials
+-- must not become account/MFA/session state. Runtime roles receive only the
+-- adapter-specific grants; operator setup owns credential writes. The shared
+-- runner supplies transaction, digest, and ledger guarantees, while this
+-- module owns only this application's additive schema changes.
 module App.Composed.Postgres
   ( ComposedDatabaseConnectionString (..),
     composedDatabaseChanges,
@@ -91,6 +94,15 @@ composedDatabaseChanges =
               "GRANT SELECT, INSERT, UPDATE, DELETE ON composed.admission_attempt_groups, composed.admission_attempts TO web_api_runtime;",
               "GRANT USAGE, SELECT ON SEQUENCE composed.admission_attempt_groups_attempt_group_id_seq TO web_api_runtime;",
               "GRANT EXECUTE ON FUNCTION composed.reserve_admission_attempt_group(JSONB, BIGINT, BIGINT, BIGINT) TO web_api_runtime;"
+            ]
+      },
+    DatabaseChange
+      { databaseChangeId = DatabaseChangeId "api-clients-v1",
+        databaseChangeStatements =
+          NonEmpty.fromList
+            [ "CREATE TABLE IF NOT EXISTS composed.api_clients (client_id TEXT PRIMARY KEY, active_secret_hash TEXT NOT NULL, is_enabled BOOLEAN NOT NULL DEFAULT true, CHECK (char_length(client_id) BETWEEN 1 AND 128), CHECK (char_length(active_secret_hash) > 0));",
+              "CREATE TABLE IF NOT EXISTS composed.api_client_scopes (client_id TEXT NOT NULL REFERENCES composed.api_clients (client_id) ON DELETE CASCADE, scope_text TEXT NOT NULL, is_default BOOLEAN NOT NULL DEFAULT false, scope_position INTEGER NOT NULL, PRIMARY KEY (client_id, scope_text), UNIQUE (client_id, scope_position), CHECK (char_length(scope_text) BETWEEN 1 AND 128), CHECK (scope_position >= 0));",
+              "GRANT SELECT ON composed.api_clients, composed.api_client_scopes TO web_api_runtime;"
             ]
       }
   ]

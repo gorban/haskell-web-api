@@ -5,9 +5,9 @@
 -- for the framework-capability-gap decision this pragma records.
 {-# OPTIONS_GHC -Wno-deprecations #-}
 
--- | The AHI-4D combined account-or-API-client-bearer authentication profile.
+-- | The scoped API-authentication design's combined account-or-API-client-bearer authentication profile.
 --
--- Decision record (AHI-4D slice 5, 2026-09-17): @GET \/api\/second@ must admit
+-- Decision record (scoped API authentication, 2026-09-17): @GET \/api\/second@ must admit
 -- either an already-authenticated account (cookie or bearer, exactly like the
 -- existing account profile) or an OAuth 2.0 API-client bearer token carrying
 -- a sufficient scope. Neither the account profile nor the client-credentials

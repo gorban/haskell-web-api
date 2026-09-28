@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Typed path/operation construction for 'HarchWeb.OpenApi.Document'
--- (AHI-4E-MH). One module owns the construction rail: each available
+-- (the OpenAPI document split). One module owns the construction rail: each available
 -- endpoint becomes one typed @openapi3@ 'Operation' whose request, response,
 -- and security shapes come from the same declarations runtime dispatch
 -- executes. 'OpenApiDocumentFailure' lives here because these builders are
@@ -271,6 +271,7 @@ requestMediaTypes requestBody =
     ApiNoRequestBody -> []
     ApiBufferedRequestBody _ _ decoders -> map apiBodyDecoderMediaType decoders
     ApiUrlEncodedFormRequestBody {} -> [urlEncodedFormMediaType]
+    ApiUrlEncodedFormRequestBodyWithFailure {} -> [urlEncodedFormMediaType]
     ApiStreamingRequestBody _ -> []
     ApiMultipartRequestBody _ _ -> [requireApiMediaType "multipart/form-data"]
 

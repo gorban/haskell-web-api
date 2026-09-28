@@ -8,13 +8,13 @@
 -- route observation, and runs the installed guard rail. It deliberately does
 -- not route, read a body, invoke a handler, or render a response.
 --
--- Decision (PR-F2, 2026-09-05): extend the existing dispatcher with this
+-- Decision (review finding, 2026-09-05): extend the existing dispatcher with this
 -- private collaborator instead of adding another router or security pipeline.
 -- Route matching, body admission, timing, finalization, and handler invocation
 -- retain their established single owners; this module owns only the cohesive
 -- post-match selection/observation/guard responsibility.
 --
--- Decision (AHI-5-RID, 2026-09-09): the framework-owned disabled-security
+-- Decision (request correlation, 2026-09-09): the framework-owned disabled-security
 -- response receives the request ID explicitly from request execution. This
 -- makes this one framework diagnostic copyable without a global response-body
 -- rewrite: application protocol, stream, and raw WAI representations continue

@@ -220,7 +220,7 @@ data ClientActionFailurePresentation route context = ClientActionFailurePresenta
 -- deliberately absent from the renderer input, so a branded page cannot
 -- accidentally reflect a provider exception or another unsafe detail.
 --
--- Decision (AHI-4C, 2026-09-10): server-detected terminal failures extend
+-- Decision (secure login and admission, 2026-09-10): server-detected terminal failures extend
 -- the existing action-result and response-rendering algebra instead of adding
 -- an application exception protocol or a second action dispatcher.  See the
 -- matching decision in @docs/design-guidance.md@.
@@ -292,12 +292,12 @@ data ClientActionFailureDestinations route context = ClientActionFailureDestinat
 -- | Client-action status shares the ordinary response boundary's exact HTTP
 -- status representation, including its reason phrase.
 --
--- Decision (AHI-7, 2026-08-31): focus extends this existing response with
+-- Decision (accessible field validation, 2026-08-31): focus extends this existing response with
 -- 'ElementId' rather than an application string or a parallel focus command.
 -- The JSON encoder is the sole boundary that erases the ID to text, making a
 -- mismatch with typed field renderers harder to author.
 --
--- Decision (AHI-4C, 2026-09-03): action navigation extends this same response
+-- Decision (secure login and admission, 2026-09-03): action navigation extends this same response
 -- with a typed 'RouteRequest', rather than a URL callback or raw JSON URL.
 -- The final encoder has the root 'RouteCodec', and mounted modules map their
 -- child destination while retaining local patches and diagnostics. This keeps
@@ -402,7 +402,7 @@ pageResponseHeaderValues (PageResponseHeaders headers) = headers
 -- prepared 'PageSecurity'. This extends the existing response boundary with a
 -- closed capability subset; it is not another request dispatcher.
 --
--- AHI-4C relies on this distinction to prevent an API, asset, SSE, or guard
+-- The secure-login and admission design relies on this distinction to prevent an API, asset, SSE, or guard
 -- from manufacturing a page response outside the pre-render security path.
 data NonPageResponse route context
   = NonPageBodyResponse ResponseBody

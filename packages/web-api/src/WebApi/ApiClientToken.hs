@@ -3,7 +3,7 @@
 -- | OAuth 2.0 client-credentials verification and durable API-client bearer
 -- token issuance.
 --
--- Decision record (AHI-4D slice 4/5, 2026-09-16): connect
+-- Decision record (scoped API authentication, 2026-09-16): connect
 -- 'HarchWeb.ApiClientStore''s issuance view to Argon2 secret verification and
 -- token issuance at this one workflow, rather than adding a second
 -- authentication dispatcher or a second JWK file. An unknown client ID and a
@@ -26,7 +26,7 @@
 -- widening the account signer's fixed 'Crypto.JWT.ClaimsSet' claims type with
 -- a second module-owned 'ToJSON' instance. This module only issues a token:
 -- HTTP routing, protocol error encoding, and bearer-token
--- establishment/verification remain later AHI-4D work.
+-- establishment/verification remain later scoped API-authentication work.
 module WebApi.ApiClientToken
   ( ApiClientTokenEnvironment (..),
     ApiClientTokenOutcome (..),

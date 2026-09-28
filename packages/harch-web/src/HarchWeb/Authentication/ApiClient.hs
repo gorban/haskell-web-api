@@ -1,6 +1,6 @@
 -- | Storage-neutral durable API-client establishment.
 --
--- Decision record (AHI-4D slice 3, 2026-09-13): keep durable API-client
+-- Decision record (API authentication and OAuth client credentials, slice 3, 2026-09-13): keep durable API-client
 -- lookup at the existing proof-to-principal boundary, but make the storage
 -- capability application supplied.  JWT verification alone cannot establish
 -- a revocable client principal: an adapter must load its current disabled,

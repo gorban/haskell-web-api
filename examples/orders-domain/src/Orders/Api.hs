@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | The @orders.api@ application module (AHI-4E composed-domains slice):
+-- | The @orders.api@ application module (the composed-domains slice of the
+-- OpenAPI documentation and Swagger UI work):
 -- a second, distinct module the composed root mounts at @/api/orders@ while
 -- @orders.web@ keeps the HTML surface at @/orders@. Both are transports over
 -- the same 'OrdersCommands' port: this module exposes
@@ -102,7 +103,8 @@ data OrdersApiAction
 
 data OrdersApiRoute
   = OrdersSubmit
-  | -- | The API family's own not-found route (AHI-4E), mirroring web-api's
+  | -- | The API family's own not-found route (part of the OpenAPI
+    -- documentation and Swagger UI work), mirroring web-api's
     -- @ApiNotFound@ convention: the module's codec parses every unmatched
     -- sub-path here so an undeclared @/api/orders/@ path renders exactly the
     -- representation the protocol's empty 404 renders, instead of falling

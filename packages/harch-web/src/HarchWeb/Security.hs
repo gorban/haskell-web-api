@@ -5,13 +5,13 @@
 -- extraction. Request-resource limits (byte/count/timeout/concurrency
 -- bounds and the pre-routing 'HarchWeb.Security.RequestLimits.validateRequestHead'
 -- gate) live in "HarchWeb.Security.RequestLimits" instead, re-exported here
--- wholesale — split out 2026-08-13 to close the AL module-health
+-- wholesale — split out 2026-08-13 to close the module-health
 -- export-count signal (48 exports, over the 40 threshold). That cluster
 -- was already fully self-contained (no dependency on 'RequestPolicyConfig'
 -- or anything else this module owns), so the split needed no
 -- @.Internal@-module plumbing; the response-header/CORS, request-context,
 -- and path/redirect clusters that remain here are genuinely coupled to
--- each other (see the AL decision record in @docs/design-guidance.md@) and
+-- each other (see the RequestLimits-split decision record in @docs/design-guidance.md@) and
 -- were deliberately left unsplit rather than forced apart.
 module HarchWeb.Security
   ( module HarchWeb.Security.ForwardedTrust,
@@ -108,7 +108,7 @@ data RequestContextField = RequestContextField
 -- explicitly rendered value as an application-owned rate-limit key, but may
 -- not turn an arbitrary request header into a trusted client identity.
 --
--- Decision (AHI-3, 2026-09-01): this extends the existing request-context
+-- Decision (keyed authentication budget, 2026-09-01): this extends the existing request-context
 -- resolver rather than adding an application forwarding parser.  A trusted
 -- @Forwarded@ or @X-Forwarded-For@ token is accepted only when it is a short
 -- address-shaped ASCII value; malformed values safely fall back to the

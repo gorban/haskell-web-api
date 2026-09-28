@@ -78,7 +78,8 @@ is_documented_tls_compatibility_warning() {
   return 1
 }
 
-# openapi3-3.2.5 is the only released version selected by the AHI-4E package.
+# openapi3-3.2.5 is the only released version selected by the `harch-web-openapi`
+# package (the OpenAPI documentation and Swagger UI work).
 # The full released OpenAPI and insert-ordered-containers suites are rebuilt by
 # tools/test-openapi3-compatibility-stack.sh. Keep this one source header exact:
 # a changed location, category, or additional warning remains actionable.

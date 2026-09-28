@@ -3,7 +3,8 @@
 
 -- | Fixtures and assertions genuinely shared across the @Unit.WebApi@ specs.
 --
--- The CN helper-usage audit (2026-08-25) keeps this as one test-only boundary:
+-- The module-boundary split's helper-usage audit (2026-08-25) keeps this as
+-- one test-only boundary:
 -- configuration, account, route, page, PostgreSQL, and runtime specs share its
 -- values directly, while the App runtime's socket/OTLP helpers retain their
 -- private implementation details here.  Helpers with no external consumer are
@@ -448,7 +449,8 @@ apiNotFoundRequest =
       HarchWeb.requestContext = defaultRequestContext
     }
 
--- | The AHI-4E OpenAPI specification endpoint at @\/docs\/openapi.json@:
+-- | The OpenAPI specification endpoint at @\/docs\/openapi.json@ (part of
+-- the OpenAPI documentation and Swagger UI work):
 -- locale-independent like every protocol route, so its request carries the
 -- plain default context.
 docsOpenApiSpecRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
@@ -458,7 +460,8 @@ docsOpenApiSpecRequest =
       HarchWeb.requestContext = defaultRequestContext
     }
 
--- | The AHI-4E Swagger UI page at @\/docs@: locale-independent like the
+-- | The Swagger UI page at @\/docs@ (part of the OpenAPI documentation and
+-- Swagger UI work): locale-independent like the
 -- specification endpoint it presents, so its request carries the plain
 -- default context.
 docsSwaggerRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
@@ -478,8 +481,8 @@ expectedApiJsonProtocolResponse jsonBody =
   HarchWeb.ProtocolResponse
     { HarchWeb.protocolResponseStatus = Http.status200,
       -- Vary: Accept is unconditional on every typed API endpoint response,
-      -- even a single-representation one (see the BF task record): the
-      -- response genuinely depends on the request's Accept header, whether
+      -- even a single-representation one: the response genuinely depends on
+      -- the request's Accept header, whether
       -- or not an alternative representation happens to be declared.
       HarchWeb.protocolResponseHeaders = [(Http.hContentType, "application/json"), (Http.hVary, "Accept")],
       HarchWeb.protocolResponseBody = HarchWeb.ProtocolResponseBytes jsonBody,
