@@ -1532,8 +1532,11 @@ outage add no logs, telemetry attributes, or database-operation spans. It compar
 runtime's sanitized public set and verifies a served access token with that
 same runtime. A real PostgreSQL integration proves owner-created client rows
 are readable by the runtime role while client and scope writes remain denied.
-AHI-4E-OAUTH remains open until the complete repository gates and exact-SHA PR
-CI have passed.
+AHI-4E-OAUTH's local repository gates and exact-SHA PR CI passed on
+2026-09-28 (`cdfb3f9e`, CI
+[36394213979](https://github.com/gorban/haskell-web-api/actions/runs/36394213979);
+required PR checks green). The parent AHI-4E remains open for its separate
+module-health follow-ups.
 
 **Named module-health follow-up (AHI-4E-OAUTH, 2026-09-27):** the quality
 report measured `App.Composed.OAuth` at 530 lines with 24 imports, exceeding
@@ -1543,6 +1546,22 @@ token handling and discovery/JWKS still share one large module. The local
 follow-up `TASKS/ahi-4e-oauth-module-health.md` reviews and extracts cohesive
 ownership while retaining the typed dispatcher, bounded body owner, and route
 coverage. This structural follow-up does not defer any AHI-4E protocol surface.
+
+**Ownership decision before the AHI-4E-OMH split (2026-09-28):** keep
+`App.Composed.OAuth` as the stable application facade and the sole owner of
+route composition, endpoint paths/metadata, and the secure-transport guard.
+Move validated issuer/resource configuration, token-protocol handling, and
+discovery/JWKS rendering behind private modules owned respectively by
+`App.Composed.OAuth.Configuration`, `.Token`, and `.Discovery`. This keeps the
+existing typed dispatcher and response/body-failure contracts intact; the
+private modules separate cohesive application concerns without adding a second
+router or changing Harch's capabilities. The existing byte/field limits,
+status-preserving field policy, OAuth failures, Basic challenge, public-only
+JWKS, and no-store token responses remain the owners' contract. The refactor
+adds no new durable resource for untrusted input and does not change how token
+request bytes are bounded or discarded. Preserve behavioral coverage directly;
+do not suppress a compiler, lint, or coverage finding to make the extraction
+pass.
 
 Verified by the new `Unit.WebApi.Api.EndpointsSpec` cases (extension failure
 rail, all four family-path resolutions plus the unknown-path rail, both scope

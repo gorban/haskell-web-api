@@ -44,6 +44,9 @@ library
     App.Composed.Model
     App.Composed.Mounts
     App.Composed.OAuth
+    App.Composed.OAuth.Configuration
+    App.Composed.OAuth.Discovery
+    App.Composed.OAuth.Token
     App.Composed.Postgres
     App.Composed.Postgres.AdmissionAttemptStore
     App.Composed.Postgres.AdmissionCredentialStore
