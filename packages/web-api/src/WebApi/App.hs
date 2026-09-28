@@ -1,121 +1,72 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Web-api application composition.
+-- | Compose web-api's typed Site, page routes, actions, security profiles,
+-- and application-owned request context. Runtime resource acquisition and
+-- listener startup live in 'WebApi.App.Runtime'; this module remains the
+-- single owner of application composition.
 --
--- The injected setup and composition environments work groups the three reporters runtime setup always supplies together in
--- 'RuntimeApplicationReporters'; page, account, policy, and route values
--- remain explicit because they vary per application composition.
--- The account-workflow composition extraction moves account-workflow construction into its own private collaborator:
--- runtime and unavailable workflows must share one process-wide password-work
--- gate, while this module remains the explicit application/site composition
--- boundary.
+-- Decision record (AHI-4E module health, 2026-09-28): split runtime/config
+-- startup into 'WebApi.App.Runtime', which depends on this composition
+-- boundary. Route declarations, request policy, account workflow, and the
+-- security registry remain assembled here; the runtime module adds concrete
+-- PostgreSQL/JWT/reporter dependencies without duplicating those tables or
+-- adding a second dispatcher.
+-- The Swagger page has no site-navigation label, so its typed page definition
+-- records 'Nothing' directly. 'buildAppRouteDefinition' exposes this exact
+-- route metadata as a typed composition seam, so the no-navigation contract
+-- can be tested without adding the page to the site's link list.
 --
--- The activity-audit design extends that boundary through 'Site.siteAttachRouteObservation': the
--- root attaches declared endpoint facts only after typed route selection,
--- rather than deriving audit attribution from a URL or action input.  This is
--- the trusted-context handoff consumed by the application-owned atomic
--- account-session/audit operation.  The generic session port remains
--- available for ordinary session lifecycle operations; login uses the
--- narrower operation so it cannot commit the session without its required
--- audit activity. Other selected audit-producing mutations remain activity-audit
--- follow-up work.
---
--- Decision record (scoped API authentication, 2026-09-13): production composition uses
--- the root-owned public/account profile registry. Only protected account page
--- and action declarations select the cookie-or-bearer JWT guard. The action
--- CSRF selector receives that resolved declaration and its established source
--- fact, so only bearer-only account requests omit CSRF; cookie and dual-source
--- requests retain it. This extends the existing post-match/action lifecycle
--- rather than adding a token-specific middleware or route matcher.
---
--- Decision record (scoped API authentication, 2026-09-17): every 'HarchWeb.Application'
--- and 'HarchWeb.ApplicationSecurity' signature here now carries
--- 'WebApi.Route.AppAuthorization' instead of @()@, ahead of the combined
--- account-or-API-client-bearer profile that will first construct
--- 'HarchWeb.RequireAuthorized'; see the widening decision record in
--- @docs\/design-guidance.md@. That same commit named this module as now
--- marginally over this document's module-health line\/import threshold
--- (501 lines, 27 imports); no split is done here, see that record for the
--- named follow-up.
---
--- Decision record (scoped API authentication, 2026-09-17): 'runtimeAuthenticationProfiles'
--- registers a third profile, 'WebApi.Route.resourceAuthenticationProfileName',
--- built from 'WebApi.ResourceAuthentication.resourceAuthenticationPipeline'
--- and reusing this module's already-wired account session store/clock plus
--- the durable API-client store already owned by
--- 'WebApi.AppEffect.accountWorkflowApiClientTokenEnvironment' (the same store
--- 'WebApi.Api.Endpoints.tokenApiRouteDefinition' issues bearer tokens
--- against). It secures @GET \/api\/second@; see the full decision record in
--- @docs\/design-guidance.md@. The API-client store argument here stayed
--- unforced under HPC until 'Unit.WebApi.AppSpec' replayed a real minted
--- bearer token against @GET \/api\/second@ on the composed runtime
--- application; see that document's coverage-gap finding for the same
--- decision record.
+-- The root attaches declared route facts only after typed route selection
+-- through 'Site.siteAttachRouteObservation'. The existing admission rail also
+-- chooses the account or resource JWT profile after matching; client-action
+-- CSRF remains required for cookie and dual-source requests and is omitted
+-- only for the established bearer-only account source.
 module WebApi.App
   ( buildAppWithDatabase,
     buildAppWithDatabaseAndAccountWorkflow,
     buildAppWithDatabaseAndAccountWorkflowAndSecurity,
+    buildAppWithDatabaseAndReporters,
+    buildAppWithDatabaseAndReportersAndSecurity,
+    buildAppRouteDefinition,
+    RuntimeApplicationReporters (..),
     runtimeAuthenticationProfiles,
     buildApp,
     buildRuntimeAccountWorkflow,
     buildRuntimeAccountWorkflowWithJwt,
     buildRuntimeAccountWorkflowWithJwtRuntime,
-    buildRuntimeAppWithAccountJwt,
-    buildRuntimeAppWithDatabaseBuilder,
     otlpExportFailureMessage,
-    run,
-    runWithConfig,
     runtimeRequestObservabilityReporter,
     unavailableAccountWorkflow,
   )
 where
 
-import Control.Applicative ((<|>))
-import Control.Exception (bracket)
-import Data.ByteString qualified as ByteString
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text qualified as Text
-import Data.Text.Encoding qualified as TextEncoding
-import Data.Text.IO qualified as TextIO
 import HarchWeb qualified
 import HarchWeb.Action (decodeAction)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.OpenApi (OpenApiDocumentProvider)
-import HarchWeb.OpenApi.Swagger (swaggerUiAssetsRoot)
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
-import System.Directory (doesFileExist)
-import System.IO (Handle, hFlush)
-import WebApi.AccountJwt (AccountJwtLoadError, AccountJwtRuntime, accountJwtAuthenticationPipeline, loadAccountJwtRuntime)
+import WebApi.AccountJwt (AccountJwtRuntime, accountJwtAuthenticationPipeline)
 import WebApi.AccountPages (AccountAction, accountActionEndpointMetadata, accountActionRoute, accountActions, accountCsrfProtection, handleAccountAction)
-import WebApi.Api.Endpoints (docsOpenApiSpecRouteDefinition, meApiRouteDefinition, requireWebApiOpenApiDocumentProvider, secondApiRouteDefinition, statusApiRouteDefinition, tokenApiRouteDefinition, webApiOpenApiDocumentProvider)
+import WebApi.Api.Endpoints (meApiRouteDefinition, secondApiRouteDefinition, statusApiRouteDefinition, tokenApiRouteDefinition)
+import WebApi.Api.OpenApiDocs (docsOpenApiSpecRouteDefinition, requireWebApiOpenApiDocumentProvider, webApiOpenApiDocumentProvider)
 import WebApi.ApiClientToken qualified as ApiClientToken
 import WebApi.App.AccountWorkflow (buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwt, buildRuntimeAccountWorkflowWithJwtRuntime, unavailableAccountWorkflow)
 import WebApi.App.Observability
   ( otlpExportFailureMessage,
-    runtimeApplicationLogReporter,
-    runtimeConnectionObservabilityReporter,
     runtimeRequestObservabilityReporter,
   )
 import WebApi.App.Shell (appPageShellForPage, appRuntimeAssets)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config
   ( AppConfig (..),
-    AppEnvironmentConfig (..),
-    AppStartupConfig (..),
-    AppStartupConfigLoadError,
-    DatabaseConfig,
-    ListenerConfig (..),
-    ListenerScheme (..),
-    databasePoolCapacity,
-    loadAppStartupConfig,
   )
 import WebApi.Database (PageRepository, defaultPageRepository)
 import WebApi.DocsSwagger (docsSwaggerPage)
 import WebApi.Pages.Generated qualified as PagesGenerated
-import WebApi.Postgres.Pool (PostgresPool, closePostgresPool, newPostgresPool)
-import WebApi.Postgres.Runtime (buildRuntimePostgresPageRepository)
 import WebApi.ResourceAuthentication qualified as ResourceAuthentication
 import WebApi.Response (apiNotFoundResponse, renderLocale, selectResponseWithDatabaseAndAccountWorkflow, todoLocation)
 import WebApi.Route
@@ -149,7 +100,8 @@ buildAppWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow =
 
 -- | Compose a supplied application workflow with an explicit endpoint-security
 -- policy. This is the pluggable assembly point for embedders and test
--- applications; the production server uses 'buildRuntimeAppWithAccountJwt'
+-- applications; the production server uses
+-- 'WebApi.App.Runtime.buildRuntimeAppWithAccountJwt'
 -- so it can only start with startup-validated key material and durable
 -- principal establishment.
 buildAppWithDatabaseAndAccountWorkflowAndSecurity ::
@@ -276,7 +228,8 @@ buildAppWithDatabaseAndOptionalReportersAndSecurity config pageRepository !accou
     appRequestLocale = HarchWeb.locale . renderLocale
 
     -- OpenAPI documentation and Swagger UI: resolve the startup-cached OpenAPI provider exactly once, with
-    -- the same eager-binding discipline 'buildRuntimeAppWithAccountJwt'
+    -- the same eager-binding discipline
+    -- 'WebApi.App.Runtime.buildRuntimeAppWithAccountJwt'
     -- already applies to @!accountWorkflow@. A typed document-construction
     -- failure (an invalid title, a duplicate operation, an unresolvable
     -- security profile) therefore surfaces while the framework forces this
@@ -319,7 +272,10 @@ appNavigationRoutes :: [AppRoute]
 appNavigationRoutes =
   [HomeRoute, SecondRoute, TodoRoute, RegistrationRoute, LoginRoute, ProfileRoute]
 
-{-# ANN buildAppRouteDefinition ("HLint: ignore Redundant $!" :: String) #-}
+-- | Build the exact typed Site route definition for one route with its
+-- application dependencies supplied explicitly. Exposing this composition
+-- seam lets embedders inspect or reuse declaration metadata without building
+-- a second route table.
 buildAppRouteDefinition ::
   AppConfig ->
   PageRepository ->
@@ -350,11 +306,9 @@ buildAppRouteDefinition config pageRepository accountWorkflow docsOpenApiDocumen
     -- SSR, stylesheet, and enhancement descriptor all arrive from the
     -- typed Swagger surface in 'WebApi.DocsSwagger'.
     DocsSwaggerRoute ->
-      -- Per docs/design-guidance.md's never-mask-a-gate-finding rule: the
-      -- @$!@ on the navigation label below is a confirmed, reproducible fix
-      -- for the documented HPC pattern where a directly passed literal stays
-      -- unticked despite real execution through this definition.
-      (Site.pageRoute (endpointMetadata route) $! Nothing)
+      Site.pageRoute
+        (endpointMetadata route)
+        Nothing
         (\_security request -> pure (docsSwaggerPage request))
     _ ->
       Site.RouteDefinition
@@ -387,30 +341,6 @@ routeNavigationLabel route = lookup route navigationLabels
         (LoginRoute, "Sign in"),
         (ProfileRoute, "Profile")
       ]
-
--- | The runnable server path supplies the immutable startup-validated JWT
--- runtime. Keeping the legacy three-argument builder available lets storage
--- and observability tests assemble an application whose login issuer is
--- deliberately unavailable, rather than loading key files as a test side
--- effect.
-buildRuntimeAppWithAccountJwt ::
-  PostgresPool ->
-  AppConfig ->
-  AppEnvironmentConfig ->
-  AccountJwtRuntime ->
-  HarchWeb.Application AppRoute AccountAction AppRequestContext AppAuthorization
-buildRuntimeAppWithAccountJwt pool config environmentConfig jwtRuntime =
-  buildAppWithDatabaseAndReportersAndSecurity
-    (withPublicBaseUrlRedirectAuthority environmentConfig config)
-    (buildRuntimePostgresPageRepository pool)
-    accountWorkflow
-    (runtimeApplicationReporters environmentConfig config)
-    (runtimeAuthenticationProfiles accountWorkflow jwtRuntime)
-  where
-    -- The selected issuer is a strict field of 'AccountWorkflow': construct
-    -- the record now so application startup cannot defer that validated
-    -- security dependency until the first successful login.
-    !accountWorkflow = buildRuntimeAccountWorkflowWithJwtRuntime pool environmentConfig (Just jwtRuntime)
 
 -- | The root keeps public operation as its explicit default and gives only
 -- account declarations the JWT guard. The declaration names are statically validated, distinct literals; no request
@@ -458,132 +388,3 @@ runtimeAuthenticationProfiles accountWorkflow jwtRuntime =
 
 publicAuthenticationProfileName :: HarchWeb.AuthenticationProfileName
 publicAuthenticationProfileName = HarchWeb.requiredAuthenticationProfileNameOrDie "public"
-
-buildRuntimeAppWithDatabaseBuilder ::
-  AppConfig ->
-  (DatabaseConfig -> PageRepository) ->
-  AppEnvironmentConfig ->
-  HarchWeb.Application AppRoute AccountAction AppRequestContext AppAuthorization
-buildRuntimeAppWithDatabaseBuilder config buildPageRepository environmentConfig =
-  let pageRepository = buildPageRepository (databaseConfig environmentConfig)
-   in buildAppWithDatabaseAndReporters
-        (withPublicBaseUrlRedirectAuthority environmentConfig config)
-        pageRepository
-        unavailableAccountWorkflow
-        (runtimeApplicationReporters environmentConfig config)
-
-runtimeApplicationReporters :: AppEnvironmentConfig -> AppConfig -> RuntimeApplicationReporters
-runtimeApplicationReporters environmentConfig config =
-  RuntimeApplicationReporters
-    { runtimeApplicationRequestObservabilityReporter = runtimeRequestObservabilityReporter (appMode environmentConfig) config,
-      runtimeApplicationConnectionObservabilityReporter = runtimeConnectionObservabilityReporter (appMode environmentConfig) config,
-      runtimeApplicationReporterLog = runtimeApplicationLogReporter
-    }
-
--- | The HTTPS-upgrade redirect must never echo a client-supplied @Host@
--- header into its target (see 'HarchWeb.httpsRedirectAuthority'). Every
--- web-api deployment already declares a canonical @PUBLIC_BASE_URL@ (used
--- for email links), including a TLS-offloading deployment whose own
--- listeners are HTTP-only and so cannot supply
--- 'WebApi.Config.defaultHttpsRedirectAuthority''s listener-derived guess.
--- Prefer the host parsed from that required setting, falling back to the
--- config-derived guess only if @PUBLIC_BASE_URL@ is malformed.
-withPublicBaseUrlRedirectAuthority :: AppEnvironmentConfig -> AppConfig -> AppConfig
-withPublicBaseUrlRedirectAuthority !environmentConfig config =
-  config
-    { requestPolicy =
-        (requestPolicy config)
-          { HarchWeb.httpsRedirectAuthority =
-              authorityFromPublicBaseUrl (publicBaseUrl environmentConfig)
-                <|> HarchWeb.httpsRedirectAuthority (requestPolicy config)
-          }
-    }
-
-authorityFromPublicBaseUrl :: Text.Text -> Maybe ByteString.ByteString
-authorityFromPublicBaseUrl baseUrl =
-  case Text.stripPrefix "https://" baseUrl <|> Text.stripPrefix "http://" baseUrl of
-    Nothing -> Nothing
-    Just afterScheme ->
-      let authority = Text.takeWhile (\character -> character /= '/' && character /= '?' && character /= '#') afterScheme
-          host = Text.takeWhile (/= ':') authority
-       in if Text.null host then Nothing else Just (TextEncoding.encodeUtf8 host)
-
-runWithConfig :: Handle -> AppConfig -> AppEnvironmentConfig -> IO ()
-runWithConfig outputHandle appConfig !environmentConfig = do
-  jwtRuntimeResult <- loadAccountJwtRuntime (accountJwtConfiguration environmentConfig)
-  jwtRuntime <- either throwAccountJwtLoadError pure jwtRuntimeResult
-  let runtimeDatabaseConfig = databaseConfig environmentConfig
-  bracket
-    (newPostgresPool (databasePoolCapacity runtimeDatabaseConfig) runtimeDatabaseConfig)
-    closePostgresPool
-    ( \pool -> do
-        announceParsedListenerConfigs outputHandle appConfig
-        HarchWeb.runServer outputHandle appConfig (buildRuntimeAppWithAccountJwt pool appConfig environmentConfig jwtRuntime)
-    )
-
-throwAccountJwtLoadError :: AccountJwtLoadError -> IO value
-throwAccountJwtLoadError loadError =
-  ioError (userError ("Failed to load account JWT configuration: " <> show loadError))
-
-run :: Handle -> IO ()
-run outputHandle = do
-  configFileStatuses <- loadDefaultStartupConfigFileStatuses
-  either throwStartupLoadError (runLoadedStartupConfig outputHandle configFileStatuses) =<< loadAppStartupConfig
-
-throwStartupLoadError :: AppStartupConfigLoadError -> IO ()
-throwStartupLoadError loadError =
-  ioError (userError ("Failed to load app startup config: " <> show loadError))
-
-runLoadedStartupConfig :: Handle -> [(FilePath, Bool)] -> AppStartupConfig -> IO ()
-runLoadedStartupConfig
-  outputHandle
-  configFileStatuses
-  AppStartupConfig
-    { startupEnvironmentConfig = environmentConfig,
-      startupAppConfig = appConfig
-    } = do
-    announceConfigFileStatuses outputHandle configFileStatuses
-    do
-      swaggerAssetsRoot <- swaggerUiAssetsRoot "/docs/assets"
-      let appConfigWithDocs =
-            appConfig
-              { staticAssets =
-                  (staticAssets appConfig)
-                    { HarchWeb.staticAssetRoots = HarchWeb.staticAssetRoots (staticAssets appConfig) <> [swaggerAssetsRoot]
-                    }
-              }
-      runWithConfig outputHandle appConfigWithDocs environmentConfig
-
-loadDefaultStartupConfigFileStatuses :: IO [(FilePath, Bool)]
-loadDefaultStartupConfigFileStatuses =
-  traverse
-    (\filePath -> (filePath,) <$> doesFileExist filePath)
-    [".env", ".env.local"]
-
-announceConfigFileStatuses :: Handle -> [(FilePath, Bool)] -> IO ()
-announceConfigFileStatuses outputHandle configFileStatuses = do
-  mapM_ (TextIO.hPutStrLn outputHandle . renderConfigFileStatus) configFileStatuses
-  hFlush outputHandle
-  where
-    renderConfigFileStatus (filePath, fileExists) =
-      if fileExists
-        then "Loaded config file: ./" <> Text.pack filePath
-        else "Config file missing: ./" <> Text.pack filePath
-
-announceParsedListenerConfigs :: Handle -> AppConfig -> IO ()
-announceParsedListenerConfigs outputHandle appConfig = do
-  mapM_ (TextIO.hPutStrLn outputHandle . renderParsedListenerConfig) (listenerConfigs appConfig)
-  hFlush outputHandle
-  where
-    renderParsedListenerConfig listenerConfig =
-      "Parsed listener config: "
-        <> listenerUrlPrefix (listenerScheme listenerConfig)
-        <> listenerHost listenerConfig
-        <> ":"
-        <> Text.pack (show (listenerPort listenerConfig))
-
-listenerUrlPrefix :: ListenerScheme -> Text.Text
-listenerUrlPrefix listenerScheme =
-  case listenerScheme of
-    Http -> "http://"
-    Https -> "https://"

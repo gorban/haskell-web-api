@@ -1598,6 +1598,14 @@ the explicit snapshot builder at a bounded cache boundary and later map a
 typed failure to a safe unavailable response. This slice does not add that
 route, schemas/statuses/security mapping, or Swagger UI.
 
+**Ownership decision — web-api endpoint documentation, API protocols, and runtime (2026-09-28):** keep `WebApi.Api.Endpoints` as the application-facing collection of the four real typed endpoint values, and let `WebApi.Api.OpenApiDocs` interpret those same values for the startup-cached document. The documentation interpreter owns family mounting, metadata/security projection, and the specification route; it does not declare a parallel endpoint inventory or dispatch requests. `WebApi.Api.Mount` owns the one `/api` path fact used by both endpoint declarations and documentation mounting, keeping the two consumers acyclic.
+
+The documentation extraction initially left `WebApi.Api.Endpoints` above the module-health trigger. A second ownership review found a cohesive protocol boundary: `WebApi.Api.Endpoints.OAuthToken` owns the RFC 6749 client-credentials request bounds, Basic/form decoding composition, token issuance adapter, and protocol-specific failure mapping. `WebApi.Api.Endpoints` re-exports that exact `tokenApiEndpoint` with the status, second-page, and account endpoints, so runtime composition and OpenAPI still consume the same values. `WebApi.Api.Endpoints.Support` owns only the construction helpers shared across those endpoint declarations. This extends the existing typed endpoint boundary and existing framework codecs; no new route dispatcher, request parser, or framework capability is needed.
+
+Keep `WebApi.App` as the site-composition owner and place concrete startup/configuration, PostgreSQL/JWT resource acquisition, and listener startup in `WebApi.App.Runtime`, which depends on the composition module. The shared `/api` mount is the only lower-level new module needed to avoid an import cycle. No new durable resource is introduced for untrusted input; the OAuth body remains bounded and owned by Harch's typed endpoint request decoder. Remove the coverage-only strictness from the route-definition and page-shell constructors instead of retaining `$!` or a lint suppression; strict startup forcing remains only where it owns eager runtime resource realization. The prefixed `/docs` WAI assertion preserves request path-prefix behavior for the rendered spec, bundle, CSS, and enhancement asset URLs.
+
+The full coverage gate then identified values that the old strictness had forced but runtime behavior did not consume. Keep the Swagger page out of navigation with `Nothing`, and test that value by inspecting the exact typed route definition through the composable `buildAppRouteDefinition` seam instead of forcing it during requests. The page route itself is fixed as `DocsSwaggerRoute` in the Swagger props builder, which now accepts only the varying request context; the shell therefore consumes only that context to prefix enhancement URLs. The existing prefixed WAI assertion exercises the resulting rendered URLs.
+
 **Follow-up decision — verified TLS compatibility exception (2026-09-12): use
 the current public TLS/Warp releases, with the smallest source-compatible bound
 exceptions and an executable proof of their limits.** The warning-clean TLS-1.x
@@ -3010,7 +3018,7 @@ exact behavior `Integration.WebApiSpec`'s "maps runtime PostgreSQL connection fa
 shelling out to psql" test already asserted; making pool construction eager and fail-fast at startup
 would have been a legitimate but different design with its own tradeoffs, changing today's "database
 down at startup still serves non-DB routes" behavior — not made unilaterally here. The pool is
-threaded as an explicit prop from `WebApi.App`'s `runWithConfig` through `buildRuntimeApp` and
+threaded as an explicit prop from `WebApi.App.Runtime`'s `runWithConfig` through `buildRuntimeAppWithAccountJwt` and
 `buildRuntimeAccountWorkflow`, one pool shared by every repository builder, per the explicit-prop caching precedent above
 (explicit-prop caching over a second `unsafePerformIO`/`NOINLINE` global) rather than joining
 `otlpExportQueue`/`otlpHttpManager`'s existing shape. Every `buildRuntimePostgresX`/
@@ -4477,19 +4485,25 @@ declarations" test now compares two constructed `OAuth2Scope` values
 directly (not only through `Either`'s derived `Eq`, whose default `/=` ticks
 only `==`).
 
-**Named module-health consequence: `WebApi.App` now marginally exceeds this
-document's conjunctive line/import threshold (501 lines, 27 imports; the
-precedent above established the line threshold as strict `>500`, so 500
-lines did not previously trigger it).** The one added line is the new
-`AppAuthorization` import symbol in the existing `WebApi.Route` import list;
-the module's already-27 imports are unchanged. This crossing is real, not an
-artifact of formatting, so it is named rather than silently absorbed: a
-follow-up task should re-run `tools/haskell-quality-report.sh` when the next
-`WebApi.App` change lands and consider splitting the module (candidate
-boundary: the `buildAppWithDatabase*`/
-`buildAppWithDatabaseAndOptionalReportersAndSecurity` composition ladder
-versus route dispatch) if the margin grows further. No split is done here —
-this commit is scoped to the mechanical widening alone.
+**Named module-health consequence and implementation decision (2026-09-28):** the earlier
+`WebApi.App` crossing (501 lines, 27 imports) and the AHI-4E documentation
+wiring's oversized `WebApi.Api.Endpoints` were tracked in
+`TASKS/web-api-app-and-endpoints-module-health.md`. The implementation now
+keeps `WebApi.App` at typed site composition, moves startup/configuration and
+listener runtime to `WebApi.App.Runtime`, and moves OpenAPI interpretation to
+`WebApi.Api.OpenApiDocs`. Because the first extraction still left
+`WebApi.Api.Endpoints` at 553 lines, the cohesive RFC 6749 token-protocol
+ownership described above was moved to `WebApi.Api.Endpoints.OAuthToken`, with
+shared endpoint construction helpers in `WebApi.Api.Endpoints.Support`.
+
+The fresh `tools/haskell-quality-report.sh` run on 2026-09-28 measured
+`WebApi.App` at 381 lines/15 imports and `WebApi.Api.Endpoints` at 308
+lines/14 imports; their extracted runtime, documentation, token, and support
+modules are also each below 500 lines. The report found no local import cycle.
+The cut preserves one application route/security composition and one endpoint
+value per API operation. The structural trigger is now below threshold; full
+repository-gate and exact-full-SHA PR CI evidence are tracked in the local task
+record before the follow-up is marked complete.
 
 ### Decision record — the scoped API-authentication design slice 5: securing `GET /api/second` (2026-09-17)
 
@@ -4776,7 +4790,7 @@ requires a second application claim parser.
 The former exported `buildRuntimeApp` composition omitted the account JWT
 guard and was therefore removed rather than retained as a convenient runtime
 test constructor. The only runnable-server composition is now
-`buildRuntimeAppWithAccountJwt`, which requires the startup-validated runtime;
+`WebApi.App.Runtime.buildRuntimeAppWithAccountJwt`, which requires the startup-validated runtime;
 tests that need an intentionally unavailable issuer compose the existing
 explicit application/workflow builder instead. This closes a capability gap at
 the constructor boundary rather than relying on callers to remember which

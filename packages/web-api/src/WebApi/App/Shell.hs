@@ -27,12 +27,8 @@ import WebApi.Route
 -- contributes its page-enhancement descriptor here (harch-web-openapi's
 -- 'swaggerUiPageEnhancement'), so the Site-rendered application path and the
 -- compatibility renderer below both emit the same enhancement script in SSR.
--- Per docs/design-guidance.md's never-mask-a-gate-finding rule: the @$!@ on
--- the route and context below is a confirmed, reproducible fix for the
--- documented HPC pattern where a bare local binding used as a direct record
--- argument stays unticked despite real execution (the descriptor's props
--- genuinely flow into the rendered page and its script URL).
-{-# ANN appPageShellForPage ("HLint: ignore Redundant $!" :: String) #-}
+-- The branch fixes the route as 'DocsSwaggerRoute'; the request context remains
+-- explicit because it determines prefixed asset URLs.
 appPageShellForPage :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> HarchWeb.PageShell AppRoute AppRequestContext
 appPageShellForPage config page =
   let shell = buildAppPageShellConfig config (HarchWeb.pageContext page)
@@ -42,7 +38,7 @@ appPageShellForPage config page =
             { HarchWeb.shellRuntimeDescriptors =
                 HarchWeb.shellRuntimeDescriptors shell
                   <> [ swaggerUiPageEnhancement
-                         (docsSwaggerUiProps ((HarchWeb.RouteRequest $! HarchWeb.pageRoute page) $! HarchWeb.pageContext page))
+                         (docsSwaggerUiProps (HarchWeb.pageContext page))
                      ]
             }
         else shell

@@ -7,6 +7,11 @@
 -- assets, mounted under @/docs/assets@. Every URL is applied through the
 -- application's path prefix at render time, so a deployed prefix cannot
 -- leave the page pointing at root-absolute asset locations.
+--
+-- Decision record (AHI-4E module health, 2026-09-28): the Swagger page route
+-- is fixed here, so 'docsSwaggerUiProps' accepts only request context. The
+-- page consumes its typed route from those props, while the shell consumes
+-- only the context-derived prefixed asset URLs from the same builder.
 module WebApi.DocsSwagger
   ( docsSwaggerPage,
     docsSwaggerUiProps,
@@ -23,15 +28,16 @@ import HarchWeb.OpenApi.Swagger
     swaggerUiPage,
     swaggerUiStylesheet,
   )
-import WebApi.Route (AppRequestContext, AppRoute, requestPathPrefix)
+import WebApi.Route (AppRequestContext, AppRoute (DocsSwaggerRoute), requestPathPrefix)
 
--- | The typed Swagger surface's props for one request: the exact values the
--- page renders and the shell's page-enhancement descriptor reads, with every
--- URL (including the fallback's document link) applied through the request's
--- path prefix. One builder keeps the rendered page and its behavior-module
--- descriptor on the same URLs.
-docsSwaggerUiProps :: RouteRequest AppRoute AppRequestContext -> SwaggerUiProps AppRoute AppRequestContext
-docsSwaggerUiProps request =
+-- | The typed Swagger surface's props for one request context: the exact
+-- values the page renders and the shell's page-enhancement descriptor reads,
+-- with every URL (including the fallback's document link) applied through
+-- the request's path prefix. The page route is fixed by this module; one
+-- builder keeps the rendered page and behavior-module descriptor on the same
+-- URLs.
+docsSwaggerUiProps :: AppRequestContext -> SwaggerUiProps AppRoute AppRequestContext
+docsSwaggerUiProps context =
   baseProps
     { swaggerUiSpecUrl = specUrl,
       swaggerUiBundleUrl = prefixed (swaggerUiBundleUrl baseProps),
@@ -40,8 +46,8 @@ docsSwaggerUiProps request =
       swaggerUiFallbackBody = swaggerUiFallback specUrl
     }
   where
-    prefix = requestPathPrefix (requestContext request)
-    baseProps = defaultSwaggerUiProps (requestRoute request) (requestContext request)
+    prefix = requestPathPrefix context
+    baseProps = defaultSwaggerUiProps DocsSwaggerRoute context
     specUrl = requiredSwaggerSpecUrlOrDie (prefixed "/docs/openapi.json")
     prefixed path = HarchWeb.urlPathText (HarchWeb.applyPathPrefix prefix (HarchWeb.mkUrlPath path))
 
@@ -54,4 +60,4 @@ docsSwaggerPage request =
     { HarchWeb.pageStylesheets = [swaggerUiStylesheet props]
     }
   where
-    props = docsSwaggerUiProps request
+    props = docsSwaggerUiProps (requestContext request)

@@ -90,12 +90,14 @@ library
     WebApi.AccountSessionAudit
     WebApi.ActivityAudit
     WebApi.Api.Endpoints
+    WebApi.Api.OpenApiDocs
     WebApi.ApiClient
     WebApi.ApiClientToken
     WebApi.App
     WebApi.App.Enhancements
     WebApi.App.Observability
     WebApi.App.Reauthentication
+    WebApi.App.Runtime
     WebApi.App.Shell
     WebApi.AppEffect
     WebApi.Components.AppControls
@@ -134,6 +136,9 @@ library
     WebApi.AccountPages.Actions.Profile
     WebApi.AccountPages.Actions.Registration
     WebApi.AccountPages.FieldIds
+    WebApi.Api.Endpoints.OAuthToken
+    WebApi.Api.Endpoints.Support
+    WebApi.Api.Mount
     WebApi.App.AccountWorkflow
     WebApi.Components.PageFrame
     WebApi.Components.Profile

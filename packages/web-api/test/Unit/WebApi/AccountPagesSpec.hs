@@ -48,8 +48,9 @@ import WebApi.AccountPages.Validation (Validation, invalid, valid, validate3, va
 import WebApi.AccountPrincipal (mkAccountPrincipal)
 import WebApi.AccountSessionAudit (AccountSessionAuditStore (..), AccountSessionAuditStoreError (..))
 import WebApi.ActivityAudit (AccountActivity (..), AccountAuditEvent (AccountSessionEnded, AccountSessionIssued, AuthenticationRejected, PendingRegistrationDelivered, VerificationResendDelivered), ActivityAuditStore (..), ActivityAuditStoreError (..), AuditAuthenticationMethod (..), AuditAuthenticationStage (PasswordAuthenticationStage, SecondFactorAuthenticationStage), AuditRegistrationDeliveryStage (RegistrationCreated, RegistrationRetried), AuditSessionEndReason (ExplicitLogout), activityIdFromDatabase)
-import WebApi.App (buildRuntimeAppWithDatabaseBuilder, unavailableAccountWorkflow)
+import WebApi.App (unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
+import WebApi.App.Runtime (buildRuntimeAppWithDatabaseBuilder)
 import WebApi.AppEffect qualified as AppEffect
 import WebApi.Config (AppEnvironmentConfig (..), defaultAppConfig, defaultAppEnvironmentConfig)
 import WebApi.Database (defaultPageRepository)

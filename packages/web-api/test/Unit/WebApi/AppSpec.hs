@@ -25,6 +25,7 @@ import HarchWeb.Email (emailAddressText, mkEmailAddress)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Password qualified as Password
 import HarchWeb.Session (OpaqueSession (..), generateSessionId)
+import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import System.IO (hClose)
@@ -39,10 +40,12 @@ import WebApi.Account (AccountProfileStore (AccountProfileStore), AccountStore (
 import WebApi.AccountJwt (AccountJwtIssuer (..), AccountJwtRawConfiguration (..), SharedJwtIssuance (sharedJwtActiveKeyId), accountJwtIssuerFromRuntime, accountJwtRuntimeSharedIssuance, loadAccountJwtRuntime, mkAccountJwtConfiguration)
 import WebApi.ActivityAudit (AccountActivity (..), ActivityAuditStore (..), ActivityAuditStoreError (ActivityAuditUnavailable), activityIdFromDatabase)
 import WebApi.Api.Endpoints (noApiRequestFields)
+import WebApi.Api.OpenApiDocs (requireWebApiOpenApiDocumentProvider, webApiOpenApiDocumentProvider)
 import WebApi.ApiClient (mkApiClientId)
 import WebApi.ApiClientToken (ApiClientTokenEnvironment (apiClientTokenIssuance, apiClientTokenStore))
-import WebApi.App (buildAppWithDatabase, buildAppWithDatabaseAndAccountWorkflow, buildAppWithDatabaseAndAccountWorkflowAndSecurity, buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwtRuntime, buildRuntimeAppWithAccountJwt, buildRuntimeAppWithDatabaseBuilder, otlpExportFailureMessage, runWithConfig, runtimeAuthenticationProfiles, unavailableAccountWorkflow)
+import WebApi.App (buildAppRouteDefinition, buildAppWithDatabase, buildAppWithDatabaseAndAccountWorkflow, buildAppWithDatabaseAndAccountWorkflowAndSecurity, buildRuntimeAccountWorkflow, buildRuntimeAccountWorkflowWithJwtRuntime, otlpExportFailureMessage, runtimeAuthenticationProfiles, unavailableAccountWorkflow)
 import WebApi.App.Observability (requestObservabilityLogContext, runOtlpExportAction, runtimeRequestObservabilityReporterWithLog)
+import WebApi.App.Runtime (buildRuntimeAppWithAccountJwt, buildRuntimeAppWithDatabaseBuilder, runWithConfig)
 import WebApi.AppEffect (AccountWorkflow (accountWorkflowActivityAuditStore, accountWorkflowApiClientTokenEnvironment, accountWorkflowCredentialStore, accountWorkflowEmailDelivery, accountWorkflowJwtIssuer, accountWorkflowLoginAttemptStore, accountWorkflowPasswordWorkGate, accountWorkflowProfileStore, accountWorkflowSessionStore, accountWorkflowStore))
 import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), AppMode (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), TlsCertificateSource (..), TlsConfig (..), databasePoolCapacity, defaultAppConfig, defaultAppEnvironmentConfig, defaultTlsPolicy)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), PageRepository (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed, defaultPageRepository)
@@ -67,6 +70,22 @@ spec = do
   describe "buildApp" $ do
     it "constructs the application description against the HarchWeb facade" $
       HarchWeb.appName pureApplication `shouldBe` "web-api"
+
+    it "keeps the Swagger page out of site navigation" $ do
+      let docsRouteDefinition =
+            buildAppRouteDefinition
+              defaultAppConfig
+              defaultPageRepository
+              unavailableAccountWorkflow
+              ( requireWebApiOpenApiDocumentProvider
+                  ( webApiOpenApiDocumentProvider
+                      defaultPageRepository
+                      (accountWorkflowProfileStore unavailableAccountWorkflow)
+                      (accountWorkflowApiClientTokenEnvironment unavailableAccountWorkflow)
+                  )
+              )
+              DocsSwaggerRoute
+      Site.routeNavigationLabel docsRouteDefinition `shouldBe` Nothing
 
     it "retains explicitly supplied endpoint security at the application composition boundary" $ do
       let application =
@@ -905,6 +924,10 @@ spec = do
             (waiRequest ["app", "assets", "navigation.js"])
               { Wai.requestHeaders = [("X-Forwarded-Prefix", "/app")]
               }
+          prefixedDocsRequest =
+            (waiRequest ["app", "docs"])
+              { Wai.requestHeaders = [("X-Forwarded-Prefix", "/app")]
+              }
           prefixedApplication =
             buildApp
               navigationAppConfig
@@ -922,6 +945,17 @@ spec = do
       assetResponse <- performWaiRequest (HarchWeb.toWaiApplication prefixedApplication) prefixedAssetRequest
       Wai.responseStatus assetResponse `shouldBe` Http.status200
       lookup Http.hContentType (Wai.responseHeaders assetResponse) `shouldBe` Just "application/javascript; charset=utf-8"
+
+      docsResponse <- performWaiRequest (HarchWeb.toWaiApplication prefixedApplication) prefixedDocsRequest
+      Wai.responseStatus docsResponse `shouldBe` Http.status200
+      docsBody <- readResponseBody docsResponse
+      expectAll
+        ( (Text.isInfixOf "data-swagger-spec-url=\"/app/docs/openapi.json\"" docsBody `shouldBe` True)
+            :| [ Text.isInfixOf "data-swagger-bundle-url=\"/app/docs/assets/swagger-ui-bundle.js\"" docsBody `shouldBe` True,
+                 Text.isInfixOf "href=\"/app/docs/assets/swagger-ui.css\"" docsBody `shouldBe` True,
+                 Text.isInfixOf "src=\"/app/docs/assets/swagger-enhancement.js\"" docsBody `shouldBe` True
+               ]
+        )
 
     it "fails closed for hostile trusted forwarded prefixes in rendered links and script sources" $ do
       let hostilePrefixes = ["//attacker.example", "/app\\attacker", "/app?next=attacker", "/app%2Fattacker"]

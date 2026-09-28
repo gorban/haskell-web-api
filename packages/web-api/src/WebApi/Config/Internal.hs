@@ -1263,7 +1263,7 @@ defaultHttpsRedirectPort parsedListeners =
 -- the host of this app's own HTTPS listener, when exactly one distinct host
 -- is declared. This only covers a deployment that terminates TLS itself; a
 -- deployment behind a TLS-offloading proxy declares no HTTPS listener at
--- all, so 'WebApi.App.buildRuntimeAppWithAccountJwt' overrides this with the host parsed
+-- all, so 'WebApi.App.Runtime.buildRuntimeAppWithAccountJwt' overrides this with the host parsed
 -- from @PUBLIC_BASE_URL@, which is required in every deployment shape.
 defaultHttpsRedirectAuthority :: [ListenerConfig] -> Maybe ByteString.ByteString
 defaultHttpsRedirectAuthority parsedListeners =
