@@ -368,7 +368,8 @@ composedPageShell page =
       shellMainAttributes = [],
       shellNavigationLifecycle = Nothing,
       shellStylesheets = [],
-      shellRuntimeDescriptors = docsEnhancement
+      shellRuntimeDescriptors = docsEnhancement,
+      shellFooter = Nothing
     }
   where
     selectedLocale = requestLocale (requestCore (pageContext page))

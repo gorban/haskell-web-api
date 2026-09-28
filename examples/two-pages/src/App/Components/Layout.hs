@@ -45,7 +45,8 @@ twoPageShell page =
         ],
       shellNavigationLifecycle = Nothing,
       shellStylesheets = [stylesheet (AssetPath "/assets/two-pages.css")],
-      shellRuntimeDescriptors = pageEnhancements (pageRoute page)
+      shellRuntimeDescriptors = pageEnhancements (pageRoute page),
+      shellFooter = Nothing
     }
 
 pageEnhancements :: TwoPageRoute -> [RuntimeDescriptor]
