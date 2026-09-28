@@ -37,6 +37,8 @@ library
     App.Composed.Admission.Session
     App.Composed.Admission.Types
     App.Composed.AdmissionSetup
+    App.Composed.Auth.Runtime
+    App.Composed.Auth.Token
     App.Composed.CsrfSynchronizer
     App.Composed.DeploymentConfig
     App.Composed.Docs
