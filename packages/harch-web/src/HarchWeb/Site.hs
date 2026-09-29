@@ -96,14 +96,28 @@ data RouteHandler route context
 -- | Nonnegative navigation position. Equal positions retain the candidate
 -- route inventory's order when the Site renderer sorts declarations.
 newtype NavigationOrder = NavigationOrder Natural
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord)
+
+instance Show NavigationOrder where
+  showsPrec precedence (NavigationOrder order) =
+    showParen (precedence > 10) $
+      showString "NavigationOrder " . showsPrec 11 order
 
 -- | A route's request-context-resolved navigation label and position.
 data RouteNavigation = RouteNavigation
   { routeNavigationOrder :: NavigationOrder,
     routeNavigationLabel :: Text
   }
-  deriving (Eq, Show)
+  deriving (Eq)
+
+instance Show RouteNavigation where
+  showsPrec precedence (RouteNavigation order label) =
+    showParen (precedence > 10) $
+      showString "RouteNavigation {routeNavigationOrder = "
+        . shows order
+        . showString ", routeNavigationLabel = "
+        . shows label
+        . showString "}"
 
 data RouteDefinition route context authorization = RouteDefinition
   { -- | Pure, optional navigation declaration for the current request context.

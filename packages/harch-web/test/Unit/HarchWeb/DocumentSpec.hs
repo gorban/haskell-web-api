@@ -15,7 +15,7 @@ import Data.List ()
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe ()
 import Data.Text ()
-import Data.Text qualified as Text (isInfixOf, isSuffixOf, length)
+import Data.Text qualified as Text (isInfixOf, isSuffixOf, length, pack)
 import Data.Text.Encoding qualified as TextEncoding ()
 import HarchWeb (AssetPath (AssetPath), CssClass (GlobalCssClass), Document (Document, documentBodyAttributes, documentBootstrapHooks, documentFooter, documentLanguage, documentMainAttributes, documentMainContent, documentMainId, documentNavigation, documentNavigationAttributes, documentNavigationLifecycle, documentRuntimeDescriptors, documentStylesheets, documentTitle, documentViewportPolicy), HtmlAttribute (HtmlAttribute, attributeName, attributeValue), LiveRegion (AssertiveAlert, PoliteStatus), NavigationAnnouncement (AnnounceElementText), NavigationFocusTarget (FocusElement), NavigationLifecycle (navigationAnnouncement, navigationFocusTarget, navigationSkipLink, navigationStatusClass), NavigationSkipLink (NavigationSkipLink, skipLinkClass, skipLinkLabel), Page (Page, pageBody, pageBootstrapHooks, pageContext, pageRoute, pageStylesheets, pageTitle), PageShell (shellMainAttributes, shellNavigationItems, shellNavigationLifecycle, shellRuntimeDescriptors, shellStylesheets), ResolvedNavigationItem (ResolvedNavigationItem, navigationHref, navigationIsActive, navigationLabel, navigationRoute), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (DeferredModule, PageEnhancementModule), RuntimeNonce (runtimeNonceValue), ViewportPolicy (ResponsiveViewport), buildNavigation, buildPageShell, generateRuntimeNonce, literalElementId, liveRegionAttributes, locale, mainNavigationLifecycle, pageRuntimeDescriptors, responsiveViewport, shellFooter, stylesheet, text, withPageRuntimeDescriptors, withPageStylesheets)
 import HarchWeb.Action qualified as Action ()
@@ -164,8 +164,7 @@ movedSpec = do
       documentRuntimeDescriptors document
         `shouldBe` shellDescriptor
         : pageDescriptors
-      show page `shouldContain` "pageRuntimeDescriptors"
-      show page `shouldContain` "page-extra"
+      Text.isSuffixOf "/assets/page-extra.js\"}]}" (Text.pack (show page)) `shouldBe` True
 
     it "keeps the closed responsive viewport policy comparable and inspectable" $ do
       responsiveViewport `shouldBe` ResponsiveViewport

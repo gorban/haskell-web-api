@@ -301,10 +301,10 @@ spec =
                  laterOrder >= firstOrder `shouldBe` True,
                  min firstOrder laterOrder `shouldBe` firstOrder,
                  max firstOrder laterOrder `shouldBe` laterOrder,
-                 show firstOrder `shouldBe` "NavigationOrder 10",
+                 Text.pack (show firstOrder) `shouldBe` "NavigationOrder 10",
                  firstNavigation `shouldBe` Site.RouteNavigation firstOrder "Home",
                  firstNavigation `shouldNotBe` Site.RouteNavigation firstOrder "Other",
-                 show firstNavigation `shouldBe` "RouteNavigation {routeNavigationOrder = NavigationOrder 10, routeNavigationLabel = \"Home\"}"
+                 Text.pack (show firstNavigation) `shouldBe` "RouteNavigation {routeNavigationOrder = NavigationOrder 10, routeNavigationLabel = \"Home\"}"
                ]
         )
 
