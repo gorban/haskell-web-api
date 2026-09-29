@@ -164,6 +164,8 @@ movedSpec = do
       documentRuntimeDescriptors document
         `shouldBe` shellDescriptor
         : pageDescriptors
+      show page `shouldContain` "pageRuntimeDescriptors"
+      show page `shouldContain` "page-extra"
 
     it "keeps the closed responsive viewport policy comparable and inspectable" $ do
       responsiveViewport `shouldBe` ResponsiveViewport

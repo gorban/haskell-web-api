@@ -75,7 +75,8 @@ spec =
       moduleActionRoute moduleValue catalogContext RefreshCatalogTarget
         `shouldBe` Just CatalogIndex
       let definition = moduleEndpoints moduleValue CatalogIndex
-      fmap Site.routeNavigationLabel (Site.routeNavigation definition catalogContext) `shouldBe` Just "Catalog"
+      Site.routeNavigation definition catalogContext
+        `shouldBe` Just (Site.RouteNavigation (Site.NavigationOrder 0) "Catalog")
       endpointProtocol (routeMetadata definition) `shouldBe` HtmlEndpoint
       endpointAccess (routeMetadata definition) `shouldBe` RequireAuthorized MayReadCatalog
       endpointNameText (endpointName (routeMetadata definition)) `shouldBe` "catalog.index"

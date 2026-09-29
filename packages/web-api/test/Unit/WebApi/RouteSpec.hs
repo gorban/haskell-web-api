@@ -45,6 +45,15 @@ requiredRouteLocation target =
     Right location -> location
 
 spec = do
+  describe "routeNavigationDeclaration" $
+    it "omits API, not-found, and generated routes from page navigation" $
+      expectAll
+        ( (WebApi.Route.routeNavigationDeclaration (Api StatusApi) defaultRequestContext `shouldBe` Nothing)
+            :| [ WebApi.Route.routeNavigationDeclaration NotFoundRoute defaultRequestContext `shouldBe` Nothing,
+                 WebApi.Route.routeNavigationDeclaration ShowcaseRoute defaultRequestContext `shouldBe` Nothing
+               ]
+        )
+
   describe "closed route families" $
     it "keeps every page and API constructor enumerable, comparable, and inspectable" $ do
       let pageRoutes = [minBound .. maxBound] :: [PageRoute]
