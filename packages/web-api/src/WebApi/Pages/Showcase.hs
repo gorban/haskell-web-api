@@ -2,9 +2,8 @@
 
 -- | @\/showcase@ — the single-file page-module exemplar.
 --
--- Everything this page owns lives in this one file: the typed 'ShowcaseData'
--- model and its loader, the scoped styles declared beside the markup, the
--- enhancement hooks, and the @[harch| … |]@ body.  The route is implied by
+-- Everything this static page owns lives in this one file: its scoped styles,
+-- enhancement hooks, and @[harch| … |]@ body. The route is implied by
 -- the file name ('WebApi.Pages.Showcase' → @\/showcase@) through
 -- 'Core.PageRoutes.Generator'.  This page and 'WebApi.Pages.ShowcaseAlternate'
 -- deliberately define the same local class names (@card@, @heading@) with
@@ -17,68 +16,64 @@ import HarchWeb
     CssClass (..),
     CssScope,
     Html,
+    Page (..),
+    RouteMethod (RouteGet),
     cssScope,
     harch,
+    routeMethodPolicy,
     stylesheet,
     text,
+    unboundedRouteExecutionPolicy,
   )
-import HarchWeb.Site (RouteDefinition)
-import WebApi.Config (AppConfig)
-import WebApi.PageModule
-  ( PageFailure,
-    PageModule (..),
-    pageModuleDefinition,
-  )
+import HarchWeb qualified
+import HarchWeb.Site (RouteDefinition (..), RouteHandler (PageRouteHandler))
+import WebApi.Config (appTitlePrefix)
+import WebApi.PageModule (PageDefinitionContext (..))
 import WebApi.Route
   ( AppAuthorization,
     AppRequestContext,
     AppRoute (ShowcaseRoute),
     endpointMetadata,
     routeEnhancementHooks,
-    routeMetadata,
-    routePageTitle,
   )
-
-data ShowcaseData = ShowcaseData
-  { showcaseHeading :: Text,
-    showcaseCard :: Text
-  }
-
-loadShowcase :: IO (Either PageFailure ShowcaseData)
-loadShowcase =
-  pure
-    ( Right
-        ShowcaseData
-          { showcaseHeading = "Showcase",
-            showcaseCard = "This card is styled by showcase.css only."
-          }
-    )
+import WebApi.Route qualified as Route
 
 scope :: CssScope
 scope = cssScope "showcase"
 
-showcaseModule :: PageModule ShowcaseData
-showcaseModule =
-  PageModule
-    { pageModuleEndpointMetadata = endpointMetadata ShowcaseRoute,
-      pageModuleNavLabel = Nothing,
-      pageModuleTitle = routePageTitle (routeMetadata ShowcaseRoute),
-      pageModuleStylesheets = [stylesheet (AssetPath "/assets/styles/pages/showcase.css")],
-      pageModuleHooks = routeEnhancementHooks (routeMetadata ShowcaseRoute),
-      pageModuleLoad = loadShowcase,
-      pageModuleRender = \loaded ->
-        pure
-          ( [harch|
-              <section data-page="showcase" class={ScopedCssClass scope "root"}>
-                <h1 class={ScopedCssClass scope "heading"}>{text (showcaseHeading loaded)}</h1>
-                <div class={ScopedCssClass scope "card"}>
-                  <p>{text (showcaseCard loaded)}</p>
-                </div>
-              </section>
-            |] ::
-              Html
-          )
+pageDefinition :: PageDefinitionContext -> RouteDefinition AppRoute AppRequestContext AppAuthorization
+pageDefinition context =
+  RouteDefinition
+    { routeNavigation = const Nothing,
+      routeMetadata = endpointMetadata ShowcaseRoute,
+      routeMethods = const (routeMethodPolicy [RouteGet]),
+      routeExecutionPolicy = unboundedRouteExecutionPolicy,
+      routeHandler =
+        PageRouteHandler $ \_ routeRequest ->
+          pure
+            ( HarchWeb.RenderedPage $
+                Page
+                  { pageTitle = appTitlePrefix (pageDefinitionConfig context) <> ": " <> Route.routePageTitle (Route.routeMetadata ShowcaseRoute),
+                    pageRoute = HarchWeb.requestRoute routeRequest,
+                    pageContext = HarchWeb.requestContext routeRequest,
+                    pageBody =
+                      [harch|
+                          <section data-page="showcase" class={ScopedCssClass scope "root"}>
+                            <h1 class={ScopedCssClass scope "heading"}>{text showcaseHeading}</h1>
+                            <div class={ScopedCssClass scope "card"}>
+                              <p>{text showcaseCard}</p>
+                            </div>
+                          </section>
+                        |] ::
+                        Html,
+                    pageBootstrapHooks = routeEnhancementHooks (Route.routeMetadata ShowcaseRoute),
+                    pageStylesheets = [stylesheet (AssetPath "/assets/styles/pages/showcase.css")]
+                  }
+            )
     }
 
-pageDefinition :: AppConfig -> RouteDefinition AppRoute AppRequestContext AppAuthorization
-pageDefinition = pageModuleDefinition showcaseModule
+showcaseHeading :: Text
+showcaseHeading = "Showcase"
+
+showcaseCard :: Text
+showcaseCard = "This card is styled by showcase.css only."

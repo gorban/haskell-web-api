@@ -2,7 +2,7 @@
 
 -- | @\/showcase-alternate@ — the deliberate scoped-CSS collision twin.
 --
--- This page defines the same local class names as 'WebApi.Pages.Showcase' —
+-- This static page defines the same local class names as 'WebApi.Pages.Showcase' —
 -- @card@ and @heading@ — with deliberately different values.  If scoping ever
 -- regressed, one page would style the other; the browser test asserts each
 -- page keeps only its own rules.
@@ -14,68 +14,64 @@ import HarchWeb
     CssClass (..),
     CssScope,
     Html,
+    Page (..),
+    RouteMethod (RouteGet),
     cssScope,
     harch,
+    routeMethodPolicy,
     stylesheet,
     text,
+    unboundedRouteExecutionPolicy,
   )
-import HarchWeb.Site (RouteDefinition)
-import WebApi.Config (AppConfig)
-import WebApi.PageModule
-  ( PageFailure,
-    PageModule (..),
-    pageModuleDefinition,
-  )
+import HarchWeb qualified
+import HarchWeb.Site (RouteDefinition (..), RouteHandler (PageRouteHandler))
+import WebApi.Config (appTitlePrefix)
+import WebApi.PageModule (PageDefinitionContext (..))
 import WebApi.Route
   ( AppAuthorization,
     AppRequestContext,
     AppRoute (ShowcaseAlternateRoute),
     endpointMetadata,
     routeEnhancementHooks,
-    routeMetadata,
-    routePageTitle,
   )
-
-data ShowcaseAlternateData = ShowcaseAlternateData
-  { showcaseAlternateHeading :: Text,
-    showcaseAlternateCard :: Text
-  }
-
-loadShowcaseAlternate :: IO (Either PageFailure ShowcaseAlternateData)
-loadShowcaseAlternate =
-  pure
-    ( Right
-        ShowcaseAlternateData
-          { showcaseAlternateHeading = "Showcase alternate",
-            showcaseAlternateCard = "This card is styled by showcase-alternate.css only."
-          }
-    )
+import WebApi.Route qualified as Route
 
 scope :: CssScope
 scope = cssScope "showcase-alternate"
 
-showcaseAlternateModule :: PageModule ShowcaseAlternateData
-showcaseAlternateModule =
-  PageModule
-    { pageModuleEndpointMetadata = endpointMetadata ShowcaseAlternateRoute,
-      pageModuleNavLabel = Nothing,
-      pageModuleTitle = routePageTitle (routeMetadata ShowcaseAlternateRoute),
-      pageModuleStylesheets = [stylesheet (AssetPath "/assets/styles/pages/showcase-alternate.css")],
-      pageModuleHooks = routeEnhancementHooks (routeMetadata ShowcaseAlternateRoute),
-      pageModuleLoad = loadShowcaseAlternate,
-      pageModuleRender = \loaded ->
-        pure
-          ( [harch|
-              <section data-page="showcase-alternate" class={ScopedCssClass scope "root"}>
-                <h1 class={ScopedCssClass scope "heading"}>{text (showcaseAlternateHeading loaded)}</h1>
-                <div class={ScopedCssClass scope "card"}>
-                  <p>{text (showcaseAlternateCard loaded)}</p>
-                </div>
-              </section>
-            |] ::
-              Html
-          )
+pageDefinition :: PageDefinitionContext -> RouteDefinition AppRoute AppRequestContext AppAuthorization
+pageDefinition context =
+  RouteDefinition
+    { routeNavigation = const Nothing,
+      routeMetadata = endpointMetadata ShowcaseAlternateRoute,
+      routeMethods = const (routeMethodPolicy [RouteGet]),
+      routeExecutionPolicy = unboundedRouteExecutionPolicy,
+      routeHandler =
+        PageRouteHandler $ \_ routeRequest ->
+          pure
+            ( HarchWeb.RenderedPage $
+                Page
+                  { pageTitle = appTitlePrefix (pageDefinitionConfig context) <> ": " <> Route.routePageTitle (Route.routeMetadata ShowcaseAlternateRoute),
+                    pageRoute = HarchWeb.requestRoute routeRequest,
+                    pageContext = HarchWeb.requestContext routeRequest,
+                    pageBody =
+                      [harch|
+                          <section data-page="showcase-alternate" class={ScopedCssClass scope "root"}>
+                            <h1 class={ScopedCssClass scope "heading"}>{text showcaseAlternateHeading}</h1>
+                            <div class={ScopedCssClass scope "card"}>
+                              <p>{text showcaseAlternateCard}</p>
+                            </div>
+                          </section>
+                        |] ::
+                        Html,
+                    pageBootstrapHooks = routeEnhancementHooks (Route.routeMetadata ShowcaseAlternateRoute),
+                    pageStylesheets = [stylesheet (AssetPath "/assets/styles/pages/showcase-alternate.css")]
+                  }
+            )
     }
 
-pageDefinition :: AppConfig -> RouteDefinition AppRoute AppRequestContext AppAuthorization
-pageDefinition = pageModuleDefinition showcaseAlternateModule
+showcaseAlternateHeading :: Text
+showcaseAlternateHeading = "Showcase alternate"
+
+showcaseAlternateCard :: Text
+showcaseAlternateCard = "This card is styled by showcase-alternate.css only."

@@ -72,6 +72,7 @@ data AppMessage
   | AuthenticatedProfileSummary
   | UnavailableProfileSummary
   | Second
+  | SecondPageNoHighlights
   | SecondPageUnavailable
   | SecondPageLoadFailed
   | ChooseLanguage
@@ -228,6 +229,8 @@ messageTemplateFor messageKey appLocale =
     (UnavailableProfileSummary, Spanish) -> [message|Tu perfil no está disponible temporalmente.|]
     (Second, English) -> [message|Second|]
     (Second, Spanish) -> [message|Segunda|]
+    (SecondPageNoHighlights, English) -> [message|No highlights yet.|]
+    (SecondPageNoHighlights, Spanish) -> [message|Aún no hay destacados.|]
     (SecondPageUnavailable, English) -> [message|Second page content is temporarily unavailable.|]
     (SecondPageUnavailable, Spanish) -> [message|El contenido de la segunda pagina no esta disponible temporalmente.|]
     (SecondPageLoadFailed, English) -> [message|Could not load second page data.|]

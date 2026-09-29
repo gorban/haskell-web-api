@@ -22,7 +22,7 @@ import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (defaultAppConfig)
 import WebApi.Database (defaultPageRepository)
 import WebApi.Profile (ProfileLoadError (..), ProfileState (..), loadProfileForPrincipal)
-import WebApi.Response (selectResponseWithDatabaseAndAccountWorkflow)
+import WebApi.Response (selectResponseWithAccountWorkflow, selectResponseWithDatabaseAndAccountWorkflow)
 import WebApi.Route (AppRoute (..), defaultRequestContext)
 import WebApi.Route qualified
 
@@ -85,6 +85,7 @@ spec =
                  responseDiagnosticAttributes unavailableResponse `shouldBe` profileFailureAttributes "AccountStoreError",
                  responseDiagnosticLogs unavailableResponse `shouldBe` ["Profile loading failed: AccountStoreError"],
                  responseDiagnosticDatabaseOperations unavailableResponse `shouldBe` [],
+                 responsePageTitle secondPageResponse `shouldBe` "web-api: Second",
                  responsePageBody secondPageResponse `shouldSatisfy` Text.isInfixOf "data-page=\"second\""
                ]
         )
@@ -98,9 +99,8 @@ assertProfileResult action matches = do
 
 profileResponse :: AccountWorkflow -> WebApi.Route.AppRequestContext -> IO (HarchWeb.PageResult AppRoute WebApi.Route.AppRequestContext)
 profileResponse workflow requestContext =
-  selectResponseWithDatabaseAndAccountWorkflow
+  selectResponseWithAccountWorkflow
     defaultAppConfig
-    defaultPageRepository
     workflow
     (HarchWeb.RouteRequest ProfileRoute requestContext)
 

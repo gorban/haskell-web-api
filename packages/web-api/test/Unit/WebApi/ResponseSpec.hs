@@ -97,6 +97,7 @@ spec =
           HarchWeb.responseLogEntries metadata
             `shouldBe` ["Profile loading failed: AccountStoreError"]
           HarchWeb.responseDatabaseOperations metadata `shouldBe` []
+          HarchWeb.pageTitle page `shouldBe` "web-api: Profile"
           HarchWeb.renderHtml (HarchWeb.pageBody page)
             `shouldNotSatisfy` Text.isInfixOf "profile database unavailable"
         HarchWeb.RenderedPage _ -> expectationFailure "expected unavailable profile diagnostics"

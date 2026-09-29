@@ -65,9 +65,10 @@ import WebApi.Config
   )
 import WebApi.Database (PageRepository, defaultPageRepository)
 import WebApi.DocsSwagger (docsSwaggerPage)
+import WebApi.PageModule (PageDefinitionContext (..))
 import WebApi.Pages.Generated qualified as PagesGenerated
 import WebApi.ResourceAuthentication qualified as ResourceAuthentication
-import WebApi.Response (apiNotFoundResponse, renderLocale, selectResponseWithDatabaseAndAccountWorkflow, todoLocation)
+import WebApi.Response (apiNotFoundResponse, renderLocale, selectResponseWithAccountWorkflow, todoLocation)
 import WebApi.Route
   ( AppAuthorization,
     AppRequestContext (..),
@@ -298,7 +299,12 @@ buildAppRouteDefinition config pageRepository accountWorkflow docsOpenApiDocumen
     -- (see 'WebApi.PageModule'): title, hooks, scoped styles, load rail, and
     -- body all arrive from the page module.
     GeneratedPages generatedPage ->
-      PagesGenerated.pageRouteDefinition config generatedPage
+      PagesGenerated.pageRouteDefinition
+        PageDefinitionContext
+          { pageDefinitionConfig = config,
+            pageDefinitionPageRepository = pageRepository
+          }
+        generatedPage
     -- OpenAPI documentation and Swagger UI: the docs page is an ordinary typed page route; its
     -- SSR, stylesheet, and enhancement descriptor all arrive from the
     -- typed Swagger surface in 'WebApi.DocsSwagger'.
@@ -314,7 +320,7 @@ buildAppRouteDefinition config pageRepository accountWorkflow docsOpenApiDocumen
           Site.routeMethods = const (HarchWeb.routeMethodPolicy (appRouteMethods route)),
           Site.routeExecutionPolicy = HarchWeb.unboundedRouteExecutionPolicy,
           Site.routeHandler = Site.PageRouteHandler $
-            \_ -> selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow
+            \_ -> selectResponseWithAccountWorkflow config accountWorkflow
         }
 
 protocolRouteDefinition :: AppRoute -> (HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.NonPageResponse AppRoute AppRequestContext)) -> Site.RouteDefinition AppRoute AppRequestContext AppAuthorization

@@ -1,14 +1,14 @@
 {-# LANGUAGE PatternSynonyms #-}
 
 -- | The reference application's typed route algebra, route metadata, and
--- request context. Localized navigation labels are currently declared in the
--- route-level 'routeNavigationDeclaration' table and resolved through
--- HarchWeb's shared ordering function, which keeps Site and standalone
--- rendering consistent. This is a partial adoption of page-owned navigation:
--- moving each declaration beside its page module remains the G8 follow-up in
--- the web-api template authoring-quality task. A separate route module-health
--- follow-up now also covers the module's public export count; preserve the
--- single route codec while splitting only cohesive ownership.
+-- request context. Site-mounted generated pages supply navigation through
+-- their page definitions. The route-level 'routeNavigationDeclaration'
+-- remains the compatibility projection used by standalone rendering; its
+-- mirrored generated-page entry and the remaining metadata tables are the
+-- explicit P3 cleanup in the web-api template authoring-quality task. A
+-- separate route module-health follow-up covers the module's public export
+-- count; preserve the single route codec while splitting only cohesive
+-- ownership.
 module WebApi.Route
   ( AppAuthorization,
     AppLocale (..),
@@ -92,7 +92,6 @@ data RouteSelectionError
 
 data PageRoute
   = HomePage
-  | SecondPage
   | TodoPage
   | RegistrationPage
   | EmailVerificationPage
@@ -142,7 +141,7 @@ pattern ShowcaseAlternateRoute :: AppRoute
 pattern ShowcaseAlternateRoute = GeneratedPages Generated.ShowcaseAlternatePage
 
 pattern SecondRoute :: AppRoute
-pattern SecondRoute = Page SecondPage
+pattern SecondRoute = GeneratedPages Generated.SecondPage
 
 pattern TodoRoute :: AppRoute
 pattern TodoRoute = Page TodoPage
@@ -453,6 +452,9 @@ routeNavigationDeclaration :: AppRoute -> AppRequestContext -> Maybe Site.RouteN
 routeNavigationDeclaration route requestContext =
   case route of
     HomeRoute -> declare 0 HomeNavigationLabel
+    -- The standalone compatibility renderer still resolves this declaration
+    -- from the route table. The mounted Site uses WebApi.Pages.Second's local
+    -- declaration; P3 removes this mirror with the compatibility projection.
     SecondRoute -> declare 10 Second
     TodoRoute -> declare 20 TodoPageHeading
     RegistrationRoute -> declare 30 CreateAccount
@@ -479,34 +481,38 @@ routeMetadata route =
       RouteMetadata (Just "showcase") "" "Showcase" ["web-api-showcase"]
     GeneratedPages Generated.ShowcaseAlternatePage ->
       RouteMetadata (Just "showcase-alternate") "" "Showcase alternate" ["web-api-showcase-alternate"]
+    GeneratedPages Generated.SecondPage ->
+      RouteMetadata (Just "second") "/second" "Second" ["second-page"]
 
 -- | Stable, application-authored endpoint identities for the existing route
 -- table. The secure-login and admission design's configured root guard establishes a principal before the
 -- protected profile/logout handlers run; public routes remain explicit.
+-- Match the underlying constructors here: 'SecondRoute' is a compatibility
+-- pattern for a generated page, so matching both names would shadow its
+-- generated metadata row.
 endpointMetadata :: AppRoute -> EndpointMetadata AppAuthorization
 endpointMetadata route =
   case route of
-    HomeRoute -> html "web.home" "/{locale}"
-    SecondRoute -> html "web.second" "/{locale}/second"
-    TodoRoute -> html "web.todo" "/{locale}/todo"
-    RegistrationRoute -> html "account.registration" "/{locale}/register"
-    EmailVerificationRoute -> html "account.email-verification" "/{locale}/verify"
-    MfaEnrollmentRoute -> html "account.mfa-enrollment" "/{locale}/mfa"
-    LoginRoute -> html "account.login" "/{locale}/login"
-    LogoutRoute -> protectedHtml "account.logout" "/{locale}/logout"
-    ProfileRoute -> protectedHtml "account.profile" "/{locale}/profile"
-    LanguageRoute -> html "web.language" "/{locale}/language"
-    HelpRoute -> html "web.help" "/{locale}/help"
-    DocsSwaggerRoute -> html "web.docs" "/{locale}/docs"
-    NotFoundRoute -> html "web.not-found" "/{locale}/404"
-    StatusApiRoute -> api "api.status" "/api/status"
+    Page HomePage -> html "web.home" "/{locale}"
+    Page TodoPage -> html "web.todo" "/{locale}/todo"
+    Page RegistrationPage -> html "account.registration" "/{locale}/register"
+    Page EmailVerificationPage -> html "account.email-verification" "/{locale}/verify"
+    Page MfaEnrollmentPage -> html "account.mfa-enrollment" "/{locale}/mfa"
+    Page LoginPage -> html "account.login" "/{locale}/login"
+    Page LogoutPage -> protectedHtml "account.logout" "/{locale}/logout"
+    Page ProfilePage -> protectedHtml "account.profile" "/{locale}/profile"
+    Page LanguagePage -> html "web.language" "/{locale}/language"
+    Page HelpPage -> html "web.help" "/{locale}/help"
+    Page DocsSwaggerPage -> html "web.docs" "/{locale}/docs"
+    Page PageNotFound -> html "web.not-found" "/{locale}/404"
+    Api StatusApi -> api "api.status" "/api/status"
     -- Scoped API authentication: an account cookie/bearer session is authorized
     -- unconditionally; an API-client bearer token must carry the
     -- 'resourceReadScope' scope (directly, or via its current durable
     -- allowance). See 'WebApi.ResourceAuthentication' and the scoped
     -- API-authentication design's
     -- decision record in @docs/design-guidance.md@.
-    SecondApiRoute ->
+    Api SecondApi ->
       HarchWeb.withAuthenticationProfile
         resourceAuthenticationProfileName
         (declaredMetadata ApiEndpoint (HarchWeb.RequireAuthorized (HarchWeb.RequireAnyScope (resourceReadScope NonEmpty.:| []))) "api.second" "/api/second")
@@ -516,24 +522,25 @@ endpointMetadata route =
     -- parse and can never reach this handler merely by presenting a
     -- similarly named scope. See the scoped API-authentication design's decision record in
     -- @docs/design-guidance.md@.
-    MeApiRoute -> protectedApi "api.me" "/api/me"
+    Api MeApi -> protectedApi "api.me" "/api/me"
     -- The token endpoint authenticates its OAuth client itself (HTTP Basic
     -- client-credentials, verified against the durable API-client store), so
     -- it declares 'AllowUnauthenticated' like every other API route here: no
     -- account session or bearer JWT establishes the caller before this
     -- handler runs. See the scoped API-authentication design's decision record in
     -- @docs/design-guidance.md@.
-    TokenApiRoute -> api "api.oauth-token" "/api/oauth/token"
+    Api TokenApi -> api "api.oauth-token" "/api/oauth/token"
     -- OpenAPI documentation and Swagger UI: the specification is an ordinary unauthenticated typed API
     -- endpoint; its security choice stays this application's, exactly like
     -- every other route's metadata here.
-    DocsOpenApiSpecRoute -> api "api.openapi-spec" "/docs/openapi.json"
-    ApiNotFoundRoute -> api "api.not-found" "/api/404"
+    Api DocsOpenApiSpec -> api "api.openapi-spec" "/docs/openapi.json"
+    Api ApiNotFound -> api "api.not-found" "/api/404"
     -- Generated pages keep their route presentation here (the single source
     -- every web-api route uses); their page modules read these values for
     -- titles and hooks while owning their model, body, and scoped styles.
     GeneratedPages Generated.ShowcasePage -> html "web.showcase" "/{locale}/showcase"
     GeneratedPages Generated.ShowcaseAlternatePage -> html "web.showcase-alternate" "/{locale}/showcase-alternate"
+    GeneratedPages Generated.SecondPage -> html "web.second" "/{locale}/second"
 
 -- Per docs/design-guidance.md's never-mask-a-gate-finding rule: the @$!@ on
 -- the name and template below is a confirmed, reproducible fix for the
@@ -574,7 +581,6 @@ pageRouteMetadata :: PageRoute -> RouteMetadata
 pageRouteMetadata pageRoute =
   case pageRoute of
     HomePage -> RouteMetadata Nothing Text.empty "Home" []
-    SecondPage -> RouteMetadata (Just "second") "/second" "Second" ["second-page"]
     TodoPage -> RouteMetadata (Just "todo") "/todo" "TODO" []
     RegistrationPage -> RouteMetadata (Just "register") "/register" "Create account" []
     EmailVerificationPage -> RouteMetadata (Just "verify") "/verify" "Verify email" []

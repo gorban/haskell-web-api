@@ -4,11 +4,14 @@ module WebApi.Response
     jsonErrorBody,
     jsonText,
     pageFailureDiagnostics,
+    pageErrorResponseMetadata,
+    pageSuccessResponseMetadata,
     renderLocale,
     todoLocation,
     apiNotFoundResponse,
     meApiSuccessBody,
     secondRouteApiBody,
+    selectResponseWithAccountWorkflow,
     selectResponseWithDatabaseAndAccountWorkflow,
     selectResponseWithDatabase,
     selectResponse,
@@ -68,6 +71,16 @@ selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkfl
   if isProfilePageRequest routeRequest
     then selectProfileResponse config accountWorkflow routeRequest
     else selectResponseWithDatabase config pageRepository routeRequest
+
+-- | Select a legacy page response after database-backed pages have moved into
+-- their page definitions. The profile still uses its account workflow; other
+-- legacy pages use the default repository because the application dispatcher
+-- sends injected page repositories directly to their owning page definitions.
+selectResponseWithAccountWorkflow :: AppConfig -> AccountWorkflow -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.PageResult AppRoute AppRequestContext)
+selectResponseWithAccountWorkflow config accountWorkflow routeRequest =
+  if isProfilePageRequest routeRequest
+    then selectProfileResponse config accountWorkflow routeRequest
+    else selectResponse config routeRequest
 
 isProfilePageRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Bool
 isProfilePageRequest routeRequest =

@@ -61,7 +61,6 @@ spec = do
           apiRoutes = [minBound .. maxBound] :: [ApiRoute]
       pageRoutes
         `shouldBe` [ WebApi.Route.HomePage,
-                     WebApi.Route.SecondPage,
                      WebApi.Route.TodoPage,
                      WebApi.Route.RegistrationPage,
                      WebApi.Route.EmailVerificationPage,
@@ -77,15 +76,14 @@ spec = do
       apiRoutes `shouldBe` [StatusApi, SecondApi, MeApi, TokenApi, DocsOpenApiSpec, ApiNotFound]
       minBound `shouldBe` WebApi.Route.HomePage
       maxBound `shouldBe` WebApi.Route.PageNotFound
-      succ WebApi.Route.HomePage `shouldBe` WebApi.Route.SecondPage
+      succ WebApi.Route.HomePage `shouldBe` WebApi.Route.TodoPage
       pred WebApi.Route.PageNotFound `shouldBe` WebApi.Route.DocsSwaggerPage
-      WebApi.Route.HomePage `shouldNotBe` WebApi.Route.SecondPage
+      WebApi.Route.HomePage `shouldNotBe` WebApi.Route.TodoPage
       enumFrom WebApi.Route.HomePage `shouldBe` pageRoutes
-      enumFromThen WebApi.Route.HomePage WebApi.Route.SecondPage `shouldBe` pageRoutes
-      enumFromThenTo WebApi.Route.HomePage WebApi.Route.SecondPage WebApi.Route.PageNotFound `shouldBe` pageRoutes
+      enumFromThen WebApi.Route.HomePage WebApi.Route.TodoPage `shouldBe` pageRoutes
+      enumFromThenTo WebApi.Route.HomePage WebApi.Route.TodoPage WebApi.Route.PageNotFound `shouldBe` pageRoutes
       map show pageRoutes
         `shouldBe` [ "HomePage",
-                     "SecondPage",
                      "TodoPage",
                      "RegistrationPage",
                      "EmailVerificationPage",
@@ -99,7 +97,7 @@ spec = do
                      "PageNotFound"
                    ]
       showList pageRoutes ""
-        `shouldBe` "[HomePage,SecondPage,TodoPage,RegistrationPage,EmailVerificationPage,MfaEnrollmentPage,LoginPage,LogoutPage,ProfilePage,LanguagePage,HelpPage,DocsSwaggerPage,PageNotFound]"
+        `shouldBe` "[HomePage,TodoPage,RegistrationPage,EmailVerificationPage,MfaEnrollmentPage,LoginPage,LogoutPage,ProfilePage,LanguagePage,HelpPage,DocsSwaggerPage,PageNotFound]"
       minBound `shouldBe` StatusApi
       maxBound `shouldBe` ApiNotFound
       succ StatusApi `shouldBe` SecondApi
@@ -124,27 +122,44 @@ spec = do
     it "keeps its derived values, paths, and route tables complete" $ do
       let generatedPages = [minBound .. maxBound] :: [Generated.PageRoute]
       generatedPages `shouldBe` Generated.allPageRoutes
-      generatedPages `shouldBe` [Generated.ShowcasePage, Generated.ShowcaseAlternatePage]
-      minBound `shouldBe` Generated.ShowcasePage
+      generatedPages `shouldBe` [Generated.SecondPage, Generated.ShowcasePage, Generated.ShowcaseAlternatePage]
+      minBound `shouldBe` Generated.SecondPage
       maxBound `shouldBe` Generated.ShowcaseAlternatePage
+      succ Generated.SecondPage `shouldBe` Generated.ShowcasePage
       succ Generated.ShowcasePage `shouldBe` Generated.ShowcaseAlternatePage
+      pred Generated.ShowcasePage `shouldBe` Generated.SecondPage
       pred Generated.ShowcaseAlternatePage `shouldBe` Generated.ShowcasePage
+      toEnum (fromEnum Generated.SecondPage) `shouldBe` Generated.SecondPage
       toEnum (fromEnum Generated.ShowcasePage) `shouldBe` Generated.ShowcasePage
-      enumFrom Generated.ShowcasePage `shouldBe` generatedPages
-      enumFromThen Generated.ShowcasePage Generated.ShowcaseAlternatePage `shouldBe` generatedPages
-      enumFromTo Generated.ShowcasePage Generated.ShowcaseAlternatePage `shouldBe` generatedPages
+      enumFrom Generated.SecondPage `shouldBe` generatedPages
+      enumFrom Generated.ShowcasePage `shouldBe` [Generated.ShowcasePage, Generated.ShowcaseAlternatePage]
+      enumFromThen Generated.SecondPage Generated.ShowcasePage `shouldBe` generatedPages
+      enumFromThen Generated.ShowcasePage Generated.ShowcaseAlternatePage `shouldBe` [Generated.ShowcasePage, Generated.ShowcaseAlternatePage]
+      enumFromTo Generated.SecondPage Generated.ShowcaseAlternatePage `shouldBe` generatedPages
+      enumFromTo Generated.ShowcasePage Generated.ShowcaseAlternatePage `shouldBe` [Generated.ShowcasePage, Generated.ShowcaseAlternatePage]
+      enumFromThenTo Generated.SecondPage Generated.ShowcasePage Generated.ShowcaseAlternatePage `shouldBe` generatedPages
       enumFromThenTo Generated.ShowcasePage Generated.ShowcaseAlternatePage Generated.ShowcaseAlternatePage `shouldBe` [Generated.ShowcasePage, Generated.ShowcaseAlternatePage]
+      Generated.SecondPage == Generated.SecondPage `shouldBe` True
+      Generated.SecondPage /= Generated.ShowcasePage `shouldBe` True
       Generated.ShowcasePage == Generated.ShowcasePage `shouldBe` True
       Generated.ShowcasePage /= Generated.ShowcaseAlternatePage `shouldBe` True
+      shows Generated.SecondPage "" `shouldBe` show Generated.SecondPage
       shows Generated.ShowcasePage "" `shouldBe` show Generated.ShowcasePage
+      showsPrec 11 Generated.SecondPage "" `shouldSatisfy` (not . null)
       showsPrec 11 Generated.ShowcaseAlternatePage "" `shouldSatisfy` (not . null)
-      showList generatedPages "" `shouldBe` "[ShowcasePage,ShowcaseAlternatePage]"
-      map show generatedPages `shouldBe` ["ShowcasePage", "ShowcaseAlternatePage"]
+      showList generatedPages "" `shouldBe` "[SecondPage,ShowcasePage,ShowcaseAlternatePage]"
+      map show generatedPages `shouldBe` ["SecondPage", "ShowcasePage", "ShowcaseAlternatePage"]
+      Generated.pageRoutePath Generated.SecondPage `shouldBe` "/second"
       Generated.pageRoutePath Generated.ShowcasePage `shouldBe` "/showcase"
       Generated.pageRoutePath Generated.ShowcaseAlternatePage `shouldBe` "/showcase-alternate"
+      Generated.parsePageRoute "/second" `shouldBe` Just Generated.SecondPage
       Generated.parsePageRoute "/showcase" `shouldBe` Just Generated.ShowcasePage
       Generated.parsePageRoute "/showcase-alternate" `shouldBe` Just Generated.ShowcaseAlternatePage
       Generated.parsePageRoute "/showcase/extra" `shouldBe` Nothing
+      routePageSuffix (WebApi.Route.routeMetadata (WebApi.Route.GeneratedPages Generated.SecondPage)) `shouldBe` "/second"
+      routePageTitle (WebApi.Route.routeMetadata (WebApi.Route.GeneratedPages Generated.SecondPage)) `shouldBe` "Second"
+      HarchWeb.endpointNameText (HarchWeb.endpointName (WebApi.Route.endpointMetadata (WebApi.Route.GeneratedPages Generated.SecondPage))) `shouldBe` "web.second"
+      HarchWeb.routeTemplateText (HarchWeb.endpointRouteTemplate (WebApi.Route.endpointMetadata (WebApi.Route.GeneratedPages Generated.SecondPage))) `shouldBe` "/{locale}/second"
       ( case WebApi.Route.ShowcaseRoute of
           WebApi.Route.ShowcaseRoute -> True
           _ -> False
@@ -157,6 +172,8 @@ spec = do
         `shouldBe` True
       show (WebApi.Route.GeneratedPages Generated.ShowcasePage) `shouldBe` "GeneratedPages ShowcasePage"
       show (WebApi.Route.GeneratedPages Generated.ShowcaseAlternatePage) `shouldBe` "GeneratedPages ShowcaseAlternatePage"
+      show (WebApi.Route.GeneratedPages Generated.SecondPage) `shouldBe` "SecondRoute"
+      WebApi.Route.appRouteMethods (WebApi.Route.GeneratedPages Generated.SecondPage) `shouldBe` [HarchWeb.RouteGet]
       WebApi.Route.appRouteMethods (WebApi.Route.GeneratedPages Generated.ShowcasePage) `shouldBe` [HarchWeb.RouteGet]
       routePageSuffix (WebApi.Route.routeMetadata (WebApi.Route.GeneratedPages Generated.ShowcasePage)) `shouldBe` ""
       routePageTitle (WebApi.Route.routeMetadata (WebApi.Route.GeneratedPages Generated.ShowcasePage)) `shouldBe` "Showcase"

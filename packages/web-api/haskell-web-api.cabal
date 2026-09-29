@@ -114,6 +114,7 @@ library
     WebApi.PageModule
     WebApi.Pages.Generated
     WebApi.Pages.Route.Generated
+    WebApi.Pages.Second
     WebApi.Pages.Showcase
     WebApi.Pages.ShowcaseAlternate
     WebApi.PageShell
@@ -276,6 +277,7 @@ test-suite haskell-web-api-tests
     Unit.WebApi.MfaEnrollmentSpec
     Unit.WebApi.Page.BuildingSpec
     Unit.WebApi.Page.RenderingSpec
+    Unit.WebApi.Pages.SecondSpec
     Unit.WebApi.Pages.ShowcaseSpec
     Unit.WebApi.PageSpec
     Unit.WebApi.Postgres.AccountRepositorySpec

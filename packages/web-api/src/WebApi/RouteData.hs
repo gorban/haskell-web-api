@@ -22,6 +22,7 @@ import WebApi.Database
     secondPageDataHighlights,
     secondPageDataSummary,
   )
+import WebApi.Pages.Route.Generated qualified as Generated
 import WebApi.Route
   ( AppRequestContext,
     AppRoute (..),
@@ -95,11 +96,11 @@ routeDataPlan route =
     -- The docs page renders its typed Swagger surface through its own
     -- 'Site.pageRoute' definition ('WebApi.DocsSwagger'); this plan is
     -- likewise unreachable for it.
+    GeneratedPages Generated.SecondPage -> LoadSecondRouteData
     GeneratedPages _ -> UseStaticRouteData NotFoundRouteDataResult
     Page pageRoute ->
       case pageRoute of
         HomePage -> UseStaticRouteData NotFoundRouteDataResult
-        SecondPage -> LoadSecondRouteData
         TodoPage -> UseStaticRouteData TodoRouteDataResult
         RegistrationPage -> UseStaticRouteData RegistrationRouteDataResult
         EmailVerificationPage -> UseStaticRouteData EmailVerificationRouteDataResult

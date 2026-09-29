@@ -8,12 +8,15 @@ import HarchWeb.Site (RouteDefinition (routeNavigation))
 import TestCore.Wai (performWaiRequest, readResponseBody, waiRequest)
 import Unit.WebApi.TestSupport (pureApplication)
 import WebApi.Config (defaultAppConfig)
-import WebApi.PageModule (PageFailure (..), PageModule (..), pageModulePage, renderPageFailure)
+import WebApi.Database (defaultPageRepository)
+import WebApi.PageModule (PageDefinitionContext (..))
 import WebApi.Pages.Showcase qualified as Showcase
 import WebApi.Pages.ShowcaseAlternate qualified as ShowcaseAlternate
-import WebApi.Route (AppRoute (DocsSwaggerRoute, ShowcaseAlternateRoute, ShowcaseRoute), RouteMetadata (..), defaultRequestContext, endpointMetadata, renderRoutePath, routeEnhancementHooks, routeMetadata, routePageSegment, routePageTitle)
+import WebApi.Route (AppRoute (DocsSwaggerRoute, ShowcaseAlternateRoute, ShowcaseRoute), RouteMetadata (..), defaultRequestContext, renderRoutePath, routeEnhancementHooks, routeMetadata, routePageSegment, routePageTitle)
 
 spec = describe "WebApi.Pages showcase family" $ do
+  let pageDefinitionContext = PageDefinitionContext defaultAppConfig defaultPageRepository
+
   describe "route presentation (the shared tables)" $ do
     it "projects each generated page's metadata" $ do
       expectAll
@@ -63,47 +66,10 @@ spec = describe "WebApi.Pages showcase family" $ do
                ]
         )
 
-  describe "the typed load-failure rail" $ do
-    it "renders the shared failure page when a page load fails" $ do
-      let failingModule =
-            PageModule
-              { pageModuleEndpointMetadata = endpointMetadata ShowcaseRoute,
-                pageModuleNavLabel = Nothing,
-                pageModuleTitle = "Showcase",
-                pageModuleStylesheets = [],
-                pageModuleHooks = [],
-                pageModuleLoad = pure (Left (PageFailureMessage "database unavailable")),
-                pageModuleRender = \_ -> pure (HarchWeb.text "unreachable")
-              }
-          request =
-            HarchWeb.RouteRequest
-              { HarchWeb.requestRoute = ShowcaseRoute,
-                HarchWeb.requestContext = defaultRequestContext
-              }
-      page <- pageModulePage failingModule defaultAppConfig request
-      let rendered = Text.unpack (HarchWeb.renderHtml (HarchWeb.pageBody page))
-      expectAll
-        ( (rendered `shouldContain` "Something went wrong")
-            :| [ rendered `shouldContain` "database unavailable",
-                 HarchWeb.pageTitle page `shouldBe` "web-api: Showcase",
-                 HarchWeb.pageBootstrapHooks page `shouldBe` []
-               ]
-        )
-
-    it "keeps the failure rendering total for any failure message" $ do
-      Text.isInfixOf
-        "boom"
-        (HarchWeb.renderHtml (renderPageFailure (PageFailureMessage "boom")))
-        `shouldBe` True
-      show (PageFailureMessage "boom") `shouldBe` "PageFailureMessage \"boom\""
-      PageFailureMessage "boom" == PageFailureMessage "boom" `shouldBe` True
-      PageFailureMessage "boom" /= PageFailureMessage "bang" `shouldBe` True
-      showsPrec 11 (PageFailureMessage "boom") "" `shouldSatisfy` (not . null)
-      showList [PageFailureMessage "boom"] "" `shouldSatisfy` (not . null)
-
-    it "keeps the generated pages' modules owning no navigation label" $ do
-      isNothing (routeNavigation (Showcase.pageDefinition defaultAppConfig) defaultRequestContext) `shouldBe` True
-      isNothing (routeNavigation (ShowcaseAlternate.pageDefinition defaultAppConfig) defaultRequestContext) `shouldBe` True
+  describe "page-owned navigation" $ do
+    it "keeps the generated showcase pages out of navigation" $ do
+      isNothing (routeNavigation (Showcase.pageDefinition pageDefinitionContext) defaultRequestContext) `shouldBe` True
+      isNothing (routeNavigation (ShowcaseAlternate.pageDefinition pageDefinitionContext) defaultRequestContext) `shouldBe` True
 
   describe "the /docs Swagger page as an ordinary typed surface" $ do
     it "renders complete SSR with the fallback, mount, prefixed assets, and enhancement descriptor" $ do
@@ -122,7 +88,7 @@ spec = describe "WebApi.Pages showcase family" $ do
                ]
         )
 
-    it "keeps the route presentation in the shared tables" $ do
+    it "projects the Swagger route presentation" $ do
       expectAll
         ( (routePageSegment (routeMetadata DocsSwaggerRoute) `shouldBe` Just "docs")
             :| [ routePageTitle (routeMetadata DocsSwaggerRoute) `shouldBe` "Documentation",

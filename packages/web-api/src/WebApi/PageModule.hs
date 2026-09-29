@@ -1,110 +1,87 @@
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE QuasiQuotes #-}
-
--- | The single-file page-module authoring unit for the 'WebApi.Pages' family.
+-- | Application-owned page construction over the framework's existing
+-- 'HarchWeb.Site.RouteDefinition' and request/response types.
 --
--- Decision record (2026-09-25, authoring-quality exemplar): a page module is
--- the Haskell analogue of a Svelte single-file component — one @.hs@ file
--- supplies the page title, its scoped styles, its enhancement hooks, its data
--- loading with a typed failure rail, and its @[harch| … |]@ body, and the
--- file name implies the route through 'Core.PageRoutes.Generator'.  The unit
--- is deliberately a thin composition of existing framework pieces
--- ('HarchWeb.Document.Page', 'HarchWeb.Site.pageRoute', 'Stylesheet') rather
--- than a new abstraction: @pageDefinition@ takes the application's 'AppConfig'
--- because page handlers are functions of configuration (the generator's
--- context parameter exists for exactly this shape), while the module's
--- presentation values stay static so 'WebApi.Route.routeMetadata' can project
--- them without a config.  The corresponding stylesheet is colocated by name
--- under @public\/styles\/pages\/@ and is scoped CSS in the 'HarchWeb.CssScope'
--- convention.
+-- The page adapter receives the one route request and opaque 'PageSecurity'
+-- value prepared by Site, then interprets its page-local load outcome once
+-- into the existing 'HarchWeb.PageResult'. It extends the existing dispatch
+-- boundary rather than creating another router or response interpreter.
+-- 'PageDefinitionContext' is the generator's application assembly input;
+-- individual page definitions extract only the capabilities they own.
+-- Dynamic pages use this adapter for one typed load and pure outcome mapping;
+-- static pages construct a 'RouteDefinition' directly instead of inventing a
+-- loader or failure rail.
 module WebApi.PageModule
-  ( PageFailure (..),
+  ( PageDefinitionContext (..),
+    PageRequest (..),
     PageModule (..),
     pageModuleDefinition,
-    pageModulePage,
-    renderPageFailure,
   )
 where
 
-import Data.Text (Text)
 import HarchWeb
   ( EndpointMetadata,
-    Html,
-    Page (..),
-    RouteRequest (..),
-    Stylesheet,
-    harch,
-    text,
+    PageResult,
+    RouteMethodPolicy,
+    RouteRequest,
+    unboundedRouteExecutionPolicy,
   )
-import HarchWeb.Site (RouteDefinition)
-import HarchWeb.Site qualified as Site
-import WebApi.Config (AppConfig, appTitlePrefix)
+import HarchWeb.Csrf (PageSecurity)
+import HarchWeb.Site
+  ( RouteDefinition (..),
+    RouteHandler (PageRouteHandler),
+    RouteNavigation,
+  )
+import WebApi.Config (AppConfig)
+import WebApi.Database (PageRepository)
 import WebApi.Route
   ( AppAuthorization,
     AppRequestContext,
     AppRoute,
   )
 
--- | How a page load can fail.  Expected outcomes are ordinary values, never
--- exceptions; the application renders one shared failure page.
-newtype PageFailure
-  = PageFailureMessage Text
-  deriving (Eq, Show)
-
--- | Everything one page owns.  The route itself is implied by the module's
--- file name, so the record only carries what the page supplies.
-data PageModule loaded = PageModule
-  { pageModuleEndpointMetadata :: EndpointMetadata AppAuthorization,
-    pageModuleNavLabel :: Maybe Text,
-    pageModuleTitle :: Text,
-    pageModuleStylesheets :: [Stylesheet],
-    pageModuleHooks :: [Text],
-    pageModuleLoad :: IO (Either PageFailure loaded),
-    pageModuleRender :: loaded -> IO Html
+-- | Dependencies passed to generated page definitions at application
+-- assembly. 'AppConfig' remains configuration-only; page modules select their
+-- own repository or other cohesive capabilities from this record.
+data PageDefinitionContext = PageDefinitionContext
+  { pageDefinitionConfig :: AppConfig,
+    pageDefinitionPageRepository :: PageRepository
   }
 
--- | Build the page's 'RouteDefinition' the application mounts.  The load
--- failure rail renders the shared failure page instead of propagating a
--- 'Left' through the handler.
+-- | The request facts a page needs after route selection and before loading.
+-- 'PageSecurity' is the exact opaque value prepared once by Site; pages pass
+-- it to existing controls and do not reconstruct or retain it.
+data PageRequest = PageRequest
+  { pageRequestRoute :: RouteRequest AppRoute AppRequestContext,
+    pageRequestSecurity :: PageSecurity
+  }
+
+-- | One page's existing route declaration, load operation, and pure outcome
+-- interpretation. Load outcomes stay specific to each page.
+data PageModule dependencies outcome = PageModule
+  { pageModuleEndpointMetadata :: EndpointMetadata AppAuthorization,
+    pageModuleNavigation :: AppRequestContext -> Maybe RouteNavigation,
+    pageModuleMethods :: RouteMethodPolicy,
+    pageModuleLoad :: dependencies -> PageRequest -> IO outcome,
+    pageModuleRespond :: PageRequest -> outcome -> PageResult AppRoute AppRequestContext
+  }
+
+-- | Compose one page adapter into the application's existing route table.
+-- Admission metadata, method policy, and execution policy continue through
+-- the shared Site dispatcher; the page receives the request and its already
+-- prepared security value only after dispatch has selected it.
 pageModuleDefinition ::
-  PageModule loaded -> AppConfig -> RouteDefinition AppRoute AppRequestContext AppAuthorization
-pageModuleDefinition pageModule config =
-  Site.pageRoute
-    (pageModuleEndpointMetadata pageModule)
-    (pageModuleNavLabel pageModule)
-    (\_security request -> pageModulePage pageModule config request)
-
--- | The page-module handler: run the load with its typed failure rail, then
--- compose the 'Page'. Split from 'pageModuleDefinition' so tests can drive
--- the rail directly.
-pageModulePage ::
-  PageModule loaded ->
-  AppConfig ->
-  HarchWeb.RouteRequest AppRoute AppRequestContext ->
-  IO (Page AppRoute AppRequestContext)
-pageModulePage pageModule config request = do
-  let finishPage body =
-        Page
-          { pageTitle = appTitlePrefix config <> ": " <> pageModuleTitle pageModule,
-            pageRoute = requestRoute request,
-            pageContext = requestContext request,
-            pageBody = body,
-            pageBootstrapHooks = pageModuleHooks pageModule,
-            pageStylesheets = pageModuleStylesheets pageModule
-          }
-  pageModuleLoad pageModule >>= \case
-    Left failure -> pure (finishPage (renderPageFailure failure))
-    Right loaded -> finishPage <$> pageModuleRender pageModule loaded
-
--- | The one shared load-failure page.
-renderPageFailure :: PageFailure -> Html
-renderPageFailure failure =
-  [harch|
-    <section data-page="load-failure">
-      <h1>Something went wrong</h1>
-      <p>{text (pageFailureText failure)}</p>
-    </section>
-  |]
-  where
-    pageFailureText :: PageFailure -> Text
-    pageFailureText (PageFailureMessage message) = message
+  PageModule dependencies outcome ->
+  dependencies ->
+  RouteDefinition AppRoute AppRequestContext AppAuthorization
+pageModuleDefinition pageModule dependencies =
+  RouteDefinition
+    { routeNavigation = pageModuleNavigation pageModule,
+      routeMetadata = pageModuleEndpointMetadata pageModule,
+      routeMethods = const (pageModuleMethods pageModule),
+      routeExecutionPolicy = unboundedRouteExecutionPolicy,
+      routeHandler =
+        PageRouteHandler $ \pageSecurity routeRequest -> do
+          let pageRequest = PageRequest routeRequest pageSecurity
+          outcome <- pageModuleLoad pageModule dependencies pageRequest
+          pure (pageModuleRespond pageModule pageRequest outcome)
+    }

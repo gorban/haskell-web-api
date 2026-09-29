@@ -130,10 +130,12 @@ registerPageRouteRule
             (static runPageGeneration)
             (pagesDirectory, getSymbolicPath generatedDirectory)
         )
-        [ FileDependency
-            (Location (makeSymbolicPath ".") (makeRelativePathEx sourceFile))
-        | sourceFile <- sourceFiles
-        ]
+        ( FileDependency (Location (makeSymbolicPath ".") (makeRelativePathEx "SetupHooks.hs"))
+            : [ FileDependency
+                  (Location (makeSymbolicPath ".") (makeRelativePathEx sourceFile))
+              | sourceFile <- sourceFiles
+              ]
+        )
         ( Location generatedDirectory (makeRelativePathEx "WebApi/Pages/Route/Generated.hs")
             :| [ Location generatedDirectory (makeRelativePathEx "WebApi/Pages/Generated.hs"),
                  Location generatedDirectory (makeRelativePathEx "harch-page-routes.manifest")
@@ -152,8 +154,8 @@ runPageGeneration (pagesDirectory, generatedDirectory) = do
             applicationRouteTypeName = "AppRoute",
             requestContextTypeName = "AppRequestContext",
             authorizationTypeName = "AppAuthorization",
-            pageDefinitionContextTypeName = Just "AppConfig",
-            pageDefinitionContextModuleName = Just "WebApi.Config"
+            pageDefinitionContextTypeName = Just "PageDefinitionContext",
+            pageDefinitionContextModuleName = Just "WebApi.PageModule"
           }
       )
   either (ioError . userError . show) (const (pure ())) generationResult
