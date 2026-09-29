@@ -31,6 +31,7 @@ custom-setup
     transformers ^>=0.6.1.2,
 
 common common
+  default-extensions: OverloadedStrings
   ghc-options:
     -Wall
     -Wcompat

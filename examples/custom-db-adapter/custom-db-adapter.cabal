@@ -15,6 +15,7 @@ build-type: Simple
 extra-doc-files: README.md
 
 common common
+  default-extensions: OverloadedStrings
   ghc-options:
     -Wall
     -Wcompat

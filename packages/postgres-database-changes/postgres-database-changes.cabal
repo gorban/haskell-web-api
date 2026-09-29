@@ -15,6 +15,7 @@ category: Database
 build-type: Simple
 
 common common
+  default-extensions: OverloadedStrings
   ghc-options:
     -Wall
     -Wcompat

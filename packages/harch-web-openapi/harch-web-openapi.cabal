@@ -27,6 +27,7 @@ data-files:
   assets/swagger-ui/swagger-ui.css
 
 common common
+  default-extensions: OverloadedStrings
   ghc-options:
     -Wall
     -Wcompat

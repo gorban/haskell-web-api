@@ -40,6 +40,7 @@ extra-doc-files: CHANGELOG.md
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 -- extra-source-files:
 common common
+  default-extensions: OverloadedStrings
   -- Common warning flags.
   ghc-options:
     -Wall

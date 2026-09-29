@@ -56,6 +56,7 @@ custom-setup
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 common common
+  default-extensions: OverloadedStrings
   -- Common warning flags.
   ghc-options:
     -Wall

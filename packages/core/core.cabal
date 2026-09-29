@@ -39,6 +39,7 @@ build-type: Simple
 extra-doc-files: CHANGELOG.md
 
 common common
+  default-extensions: OverloadedStrings
   -- Common warning flags.
   ghc-options:
     -Wall

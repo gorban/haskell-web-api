@@ -54,6 +54,7 @@ extra-source-files:
   playwright-runner/runner.cjs
 
 common common
+  default-extensions: OverloadedStrings
   -- Common warning flags.
   ghc-options:
     -Wall
