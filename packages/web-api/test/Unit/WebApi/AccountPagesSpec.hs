@@ -46,7 +46,7 @@ import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buil
 import WebApi.AccountPages.Validation (Validation, invalid, valid, validate3, validate4, validationResult)
 import WebApi.AccountPrincipal (mkAccountPrincipal)
 import WebApi.AccountSessionAudit (AccountSessionAuditStore (..), AccountSessionAuditStoreError (..))
-import WebApi.ActivityAudit (AccountActivity (..), AccountAuditEvent (AccountSessionEnded, AccountSessionIssued, AuthenticationRejected, PendingRegistrationDelivered, VerificationResendDelivered), ActivityAuditStore (..), ActivityAuditStoreError (..), AuditAuthenticationMethod (..), AuditAuthenticationStage (PasswordAuthenticationStage, SecondFactorAuthenticationStage), AuditRegistrationDeliveryStage (RegistrationCreated, RegistrationRetried), AuditSessionEndReason (ExplicitLogout), activityIdFromDatabase)
+import WebApi.ActivityAudit (AccountActivity (..), AccountAuditEvent (AccountSessionEnded, AccountSessionIssued, AuthenticationRejected, PendingRegistrationDelivered, VerificationResendDelivered), ActivityAuditStore (..), ActivityAuditStoreError (..), AuditAuthenticationMethod (..), AuditAuthenticationStage (PasswordAuthenticationStage, SecondFactorAuthenticationStage), AuditRegistrationDeliveryStage (RegistrationCreated, RegistrationRetried), AuditSessionEndReason (ExplicitLogout), activityIdFromDatabase, auditRouteEndpointName, auditRouteLocale, auditRouteMountChain, auditRouteTemplate)
 import WebApi.App (unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Runtime (buildRuntimeAppWithDatabaseBuilder)
@@ -54,7 +54,7 @@ import WebApi.AppEffect qualified as AppEffect
 import WebApi.Config (AppEnvironmentConfig (..), defaultAppConfig, defaultAppEnvironmentConfig)
 import WebApi.Database (defaultPageRepository)
 import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..), LoginAttemptAdmission (..), LoginAttemptBudget (..), LoginAttemptBudgets, LoginAttemptReservation (..), LoginAttemptScope (..), LoginAttemptStore (..), LoginAttemptStoreError (..), LoginIdentifier (..), PasswordLoginEnvironment (..), PasswordLoginResult (..), beginPasswordLoginWithIdentifier, defaultPasswordRehasher, loginAttemptBudgetsToList, loginAttemptPolicy, loginAttemptScope, loginAttemptScopeStorageKey, mkLoginAttemptBudgets)
-import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
+import WebApi.Mfa (MfaConfirmationAuditContext (..), MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), ProfilePageModel (..), SignedOutProfilePageDetails (..), buildPageModelFromRouteData, renderPageFromRouteData)
 import WebApi.PendingRegistrationAudit (PendingRegistrationAuditStore (..), PendingRegistrationAuditStoreError (..))
@@ -913,7 +913,7 @@ spec = do
               _ -> expectationFailure "expected unavailable MFA persistence"
       assertMfaUnavailable (loadTotpEnrollment unconfiguredMfaStore accountId)
       assertMfaUnavailable (saveUnconfirmedTotpEnrollment unconfiguredMfaStore accountId "secret" 0)
-      assertMfaUnavailable (confirmTotpEnrollment unconfiguredMfaStore accountId ("hash" :| []) 0)
+      assertMfaUnavailable (confirmTotpEnrollment unconfiguredMfaStore accountId ("hash" :| []) 0 (MfaConfirmationAuditContext testRequestId Nothing))
       assertMfaUnavailable (loadUnusedRecoveryCodeHashes unconfiguredMfaStore accountId)
       assertMfaUnavailable (consumeRecoveryCodeHash unconfiguredMfaStore accountId "hash" 0)
       assertMfaUnavailable (markTotpCodeUsed unconfiguredMfaStore accountId 0)
@@ -1343,7 +1343,7 @@ spec = do
             MfaStore
               { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (error "unexpected enrollment save"),
                 loadTotpEnrollment = \account -> (account `shouldBe` accountId) >> pure (Right (Just (StoredTotpEnrollment encryptedTotpSecret (Just 1) Nothing))),
-                confirmTotpEnrollment = \_ _ _ -> pure (error "unexpected enrollment confirmation"),
+                confirmTotpEnrollment = \_ _ _ _ -> pure (error "unexpected enrollment confirmation"),
                 loadUnusedRecoveryCodeHashes = \_ -> pure (Right []),
                 consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption"),
                 markTotpCodeUsed = \_ _ -> pure (Right True)
@@ -1457,7 +1457,7 @@ spec = do
                   MfaStore
                     { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (error "unexpected enrollment save"),
                       loadTotpEnrollment = \_ -> pure enrollmentResult,
-                      confirmTotpEnrollment = \_ _ _ -> pure (error "unexpected enrollment confirmation"),
+                      confirmTotpEnrollment = \_ _ _ _ -> pure (error "unexpected enrollment confirmation"),
                       loadUnusedRecoveryCodeHashes = \_ -> pure (Right []),
                       consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption"),
                       markTotpCodeUsed = \_ _ -> pure (Right True)
@@ -1950,7 +1950,7 @@ spec = do
                   MfaStore
                     { saveUnconfirmedTotpEnrollment = \_ _ _ -> error "unexpected enrollment save",
                       loadTotpEnrollment = \_ -> pure (Right (Just confirmedEnrollment)),
-                      confirmTotpEnrollment = \_ _ _ -> error "unexpected enrollment confirmation",
+                      confirmTotpEnrollment = \_ _ _ _ -> error "unexpected enrollment confirmation",
                       loadUnusedRecoveryCodeHashes = \_ -> pure (Right []),
                       consumeRecoveryCodeHash = \_ _ _ -> error "unexpected recovery-code consumption",
                       markTotpCodeUsed = \_ _ -> error "unexpected TOTP counter update"
@@ -2036,7 +2036,16 @@ spec = do
     it "captures a complete authenticator enrollment and returns recovery codes in one patch" $ do
       encryptedSecretReference <- newIORef Nothing
       confirmationHashesReference <- newIORef []
+      confirmationRoutesReference <- newIORef []
       let accountId = requiredAccountId "account_01"
+          auditRoute =
+            RouteObservation
+              { observedEndpointName = fromRight (error "expected valid endpoint name") (mkEndpointName "account.mfa-enrollment"),
+                observedMountChain = requiredModuleNameOrDie "web-api" :| [],
+                observedRouteTemplate = fromRight (error "expected valid route template") (mkRouteTemplate "/mfa"),
+                observedLocale = Localization.locale "en"
+              }
+          spanishAuditRoute = auditRoute {observedLocale = Localization.locale "es"}
           mfaStore =
             MfaStore
               { saveUnconfirmedTotpEnrollment = \receivedAccountId encryptedSecret receivedNow -> do
@@ -2047,9 +2056,20 @@ spec = do
                 loadTotpEnrollment = \receivedAccountId -> do
                   receivedAccountId `shouldBe` accountId
                   fmap (Right . fmap (\secretValue -> StoredTotpEnrollment secretValue Nothing Nothing)) (readIORef encryptedSecretReference),
-                confirmTotpEnrollment = \receivedAccountId hashes receivedNow -> do
+                confirmTotpEnrollment = \receivedAccountId hashes receivedNow receivedAuditContext -> do
                   receivedAccountId `shouldBe` accountId
                   receivedNow `shouldBe` 123456000000000
+                  mfaConfirmationRequestId receivedAuditContext `shouldBe` testRequestId
+                  case mfaConfirmationRoute receivedAuditContext of
+                    Nothing -> expectationFailure "expected the trusted route observation to reach MFA confirmation"
+                    Just trustedAuditRoute -> do
+                      expectAll
+                        ( (auditRouteEndpointName trustedAuditRoute `shouldBe` "account.mfa-enrollment")
+                            :| [ auditRouteMountChain trustedAuditRoute `shouldBe` "web-api",
+                                 auditRouteTemplate trustedAuditRoute `shouldBe` "/mfa"
+                               ]
+                        )
+                      modifyIORef' confirmationRoutesReference (auditRouteLocale trustedAuditRoute :)
                   writeIORef confirmationHashesReference (toList hashes)
                   pure (Right True),
                 loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
@@ -2082,13 +2102,15 @@ spec = do
               _ -> expectationFailure "expected one enrollment patch" >> pure Text.empty
           Nothing -> expectationFailure "expected enrollment action" >> pure Text.empty
       totpSecret <- maybe (expectationFailure "expected a valid enrollment secret" >> pure (error "unreachable")) pure (Totp.mkTotpSecret secret)
-      confirmed <- handleAccountAction workflow (request "/mfa" defaultRequestContext [("intent", "confirm"), ("code", Totp.totpCodeText (Totp.totpCode 123456 totpSecret))])
+      confirmed <- handleAccountAction workflow (request "/mfa" (defaultRequestContext {requestCorrelationId = Just testRequestId, requestRouteObservation = Just auditRoute}) [("intent", "confirm"), ("code", Totp.totpCodeText (Totp.totpCode 123456 totpSecret))])
       confirmed `shouldSatisfy` \case
         Just response -> Http.statusCode (HarchWeb.clientActionStatus response) == 200 && any (Text.isInfixOf "data-recovery-codes=\"true\"" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
         Nothing -> False
       confirmed `shouldSatisfy` maybe False actionResponseHasValidClientActionTransport
       confirmationHashes <- readIORef confirmationHashesReference
       length confirmationHashes `shouldBe` 8
+      confirmationRoutes <- readIORef confirmationRoutesReference
+      reverse confirmationRoutes `shouldBe` ["en"]
       spanishStarted <- handleAccountAction workflow (request "/es/mfa" (defaultRequestContext {requestLocale = Spanish}) [("intent", "start")])
       spanishStarted `shouldSatisfy` \case
         Just response -> Http.statusCode (HarchWeb.clientActionStatus response) == 200 && HarchWeb.clientActionFocusId response == Just (HarchWeb.literalElementId "mfa-code") && any (Text.isInfixOf "Agrega este secreto" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
@@ -2105,15 +2127,16 @@ spec = do
               _ -> expectationFailure "expected one Spanish enrollment patch" >> pure Text.empty
           Nothing -> expectationFailure "expected a Spanish enrollment action" >> pure Text.empty
       spanishTotpSecret <- maybe (expectationFailure "expected a valid Spanish enrollment secret" >> pure (error "unreachable")) pure (Totp.mkTotpSecret spanishSecret)
-      spanishConfirmed <- handleAccountAction workflow (request "/es/mfa" (defaultRequestContext {requestLocale = Spanish}) [("intent", "confirm"), ("code", Totp.totpCodeText (Totp.totpCode 123456 spanishTotpSecret))])
+      spanishConfirmed <- handleAccountAction workflow (request "/es/mfa" (defaultRequestContext {requestLocale = Spanish, requestCorrelationId = Just testRequestId, requestRouteObservation = Just spanishAuditRoute}) [("intent", "confirm"), ("code", Totp.totpCodeText (Totp.totpCode 123456 spanishTotpSecret))])
       spanishConfirmed `shouldSatisfy` \case
         Just response -> Http.statusCode (HarchWeb.clientActionStatus response) == 200 && isNothing (HarchWeb.clientActionFocusId response) && any (Text.isInfixOf "Autenticador registrado" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
         Nothing -> False
+      reverse <$> readIORef confirmationRoutesReference `shouldReturn` ["en", "es"]
 
     it "returns every MFA enrollment action error as a localized region patch" $ do
       let accountId = requiredAccountId "account_01"
-          request fields = typedAccountActionRequest "POST" "/mfa" fields (defaultRequestContext {requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue})
-          spanishRequest fields = typedAccountActionRequest "POST" "/es/mfa" fields (defaultRequestContext {requestLocale = Spanish, requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue})
+          request fields = typedAccountActionRequest "POST" "/mfa" fields (defaultRequestContext {requestCorrelationId = Just testRequestId, requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue})
+          spanishRequest fields = typedAccountActionRequest "POST" "/es/mfa" fields (defaultRequestContext {requestCorrelationId = Just testRequestId, requestLocale = Spanish, requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue})
           workflowFor mfaStore =
             unavailableAccountWorkflow
               { accountWorkflowMfaStore = mfaStore,
@@ -2126,7 +2149,7 @@ spec = do
             MfaStore
               { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure saveResult,
                 loadTotpEnrollment = \_ -> pure loadResult,
-                confirmTotpEnrollment = \_ _ _ -> pure confirmationResult,
+                confirmTotpEnrollment = \_ _ _ _ -> pure confirmationResult,
                 loadUnusedRecoveryCodeHashes = \_ -> error "unexpected recovery-code lookup",
                 consumeRecoveryCodeHash = \_ _ _ -> error "unexpected recovery-code consumption",
                 markTotpCodeUsed = \_ _ -> error "unexpected TOTP counter update"
@@ -2159,6 +2182,88 @@ spec = do
       expectSpanish (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "other")] 422 Nothing "Elige una accion de registro"
       expect (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment encryptedTotpSecret Nothing Nothing))) (Right False)) [("intent", "confirm"), ("code", "000000")] 422 (Just "mfa-code") "That authenticator code is invalid"
       expectSpanish (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment encryptedTotpSecret Nothing Nothing))) (Right False)) [("intent", "confirm"), ("code", "000000")] 422 (Just "mfa-code") "Ese codigo de autenticador no es valido"
+      forM_
+        [ (ActivityAuditUnavailable, "unavailable", False),
+          (ActivityAuditCapacityExceeded, "capacity-exhausted", True),
+          (ActivityAuditCorruptResult, "corrupt-result", False)
+        ]
+        $ \(auditError, failureKind, expectsCapacitySignal) -> do
+          let confirmationCode = Totp.totpCodeText (Totp.totpCode 123456 validTotpSecret)
+              auditedStore = mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment encryptedTotpSecret Nothing Nothing))) (Left (MfaStoreAuditAppendFailed auditError))
+          auditFailure <- handleAccountAction (workflowFor auditedStore) (request [("intent", "confirm"), ("code", confirmationCode)])
+          auditFailure `shouldSatisfy` actionHasStatusAndFocus 503 (Just "mfa-code") "temporarily unavailable"
+          assertRequiredAuditFailureSignal "mfa-enrollment-confirmation" failureKind expectsCapacitySignal auditFailure
+      confirmationAttempts <- newIORef (0 :: Int)
+      let noAttributionStore =
+            (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment encryptedTotpSecret Nothing Nothing))) (Right True))
+              { confirmTotpEnrollment = \_ _ _ _ -> modifyIORef' confirmationAttempts (+ 1) >> pure (Right True)
+              }
+          requestWithoutAttribution =
+            typedAccountActionRequest
+              "POST"
+              "/mfa"
+              [ ("intent", "confirm"),
+                ("code", Totp.totpCodeText (Totp.totpCode 123456 validTotpSecret))
+              ]
+              (defaultRequestContext {requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue})
+          overlongAuditRoute =
+            RouteObservation
+              { observedEndpointName = fromRight (error "expected valid endpoint name") (mkEndpointName "account.mfa-enrollment"),
+                observedMountChain =
+                  requiredModuleNameOrDie (Text.replicate 128 "a")
+                    :| [ requiredModuleNameOrDie (Text.replicate 128 "b"),
+                         requiredModuleNameOrDie (Text.replicate 128 "c"),
+                         requiredModuleNameOrDie (Text.replicate 128 "d"),
+                         requiredModuleNameOrDie "e"
+                       ],
+                observedRouteTemplate = fromRight (error "expected valid route template") (mkRouteTemplate "/mfa"),
+                observedLocale = Localization.locale "en"
+              }
+          requestWithOverlongAuditRoute =
+            typedAccountActionRequest
+              "POST"
+              "/mfa"
+              [ ("intent", "confirm"),
+                ("code", Totp.totpCodeText (Totp.totpCode 123456 validTotpSecret))
+              ]
+              ( defaultRequestContext
+                  { requestCorrelationId = Just testRequestId,
+                    requestRouteObservation = Just overlongAuditRoute,
+                    requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue
+                  }
+              )
+      missingAttribution <- handleAccountAction (workflowFor noAttributionStore) requestWithoutAttribution
+      attemptsAfterMissingAttribution <- readIORef confirmationAttempts
+      case missingAttribution of
+        Just response ->
+          expectAll
+            ( (Just response `shouldSatisfy` actionHasStatusAndFocus 503 (Just "mfa-code") "temporarily unavailable")
+                :| [ attemptsAfterMissingAttribution `shouldBe` 0,
+                     HarchWeb.clientActionObservabilityAttributes response
+                       `shouldContain` [ Observability.ObservabilityAttribute "error.type" (Observability.TextAttribute "MfaAuditAttributionUnavailable"),
+                                         Observability.ObservabilityAttribute "app.failure.code" (Observability.TextAttribute "account.mfa.confirm")
+                                       ],
+                     HarchWeb.clientActionLogEntries response
+                       `shouldBe` ["ERROR [account.mfa.confirm] trusted request audit attribution was unavailable"]
+                   ]
+            )
+        Nothing -> expectationFailure "expected a missing MFA audit attribution response"
+      malformedRoute <- handleAccountAction (workflowFor noAttributionStore) requestWithOverlongAuditRoute
+      attemptsAfterMalformedRoute <- readIORef confirmationAttempts
+      case malformedRoute of
+        Just response ->
+          expectAll
+            ( (Just response `shouldSatisfy` actionHasStatusAndFocus 503 (Just "mfa-code") "temporarily unavailable")
+                :| [ attemptsAfterMalformedRoute `shouldBe` 0,
+                     HarchWeb.clientActionObservabilityAttributes response
+                       `shouldContain` [ Observability.ObservabilityAttribute "error.type" (Observability.TextAttribute "MfaAuditAttributionUnavailable"),
+                                         Observability.ObservabilityAttribute "app.failure.code" (Observability.TextAttribute "account.mfa.confirm")
+                                       ],
+                     HarchWeb.clientActionLogEntries response
+                       `shouldBe` ["ERROR [account.mfa.confirm] trusted request audit attribution was unavailable"]
+                   ]
+            )
+        Nothing -> expectationFailure "expected an overlong MFA audit route response"
       let unusedMfaStore = mfaStoreFor (Right True) (Right Nothing) (Right False)
           withSessionStore sessionStore = (workflowFor unusedMfaStore) {accountWorkflowMfaEnrollmentSessionStore = sessionStore}
           unavailableSessionStore =
@@ -2206,7 +2311,10 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 403 Nothing "invalid or has expired")
       forM_
         [ (MfaEnrollmentRecoveryCodeHashingFailed, "RecoveryCodeHashingError", "recovery-code hashing failed"),
-          (MfaEnrollmentEncryptionFailed, "TotpEncryptionError", "TOTP secret encryption failed")
+          (MfaEnrollmentEncryptionFailed, "TotpEncryptionError", "TOTP secret encryption failed"),
+          (MfaEnrollmentStoreError (MfaStoreAuditAppendFailed ActivityAuditUnavailable), "MfaStoreError", "required audit append failed: unavailable"),
+          (MfaEnrollmentStoreError (MfaStoreAuditAppendFailed ActivityAuditCapacityExceeded), "MfaStoreError", "required audit append failed: capacity-exhausted"),
+          (MfaEnrollmentStoreError (MfaStoreAuditAppendFailed ActivityAuditCorruptResult), "MfaStoreError", "required audit append failed: corrupt-result")
         ]
         $ \(failureValue, expectedType, expectedDetail) ->
           case mfaEnrollmentFailureDiagnostics AppEffect.MfaEnrollmentConfirmFailure failureValue of

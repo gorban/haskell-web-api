@@ -15,7 +15,8 @@ import HarchWeb.Password (defaultPasswordHashingPolicy)
 import HarchWeb.RecoveryCode (RecoveryCode, RecoveryCodeHash, generateRecoveryCode, hashRecoveryCode, hashRecoveryCodeWithSalt, mkRecoveryCode)
 import HarchWeb.Secret (EncryptionNonce, SecretEncryptionKey, encryptSecret, encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
 import HarchWeb.Totp (TotpCode, TotpSecret, generateTotpSecret, mkTotpCode, mkTotpSecret, renderTotpSecret, totpCode)
-import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
+import Unit.WebApi.TestSupport (testRequestId)
+import WebApi.Mfa (MfaConfirmationAuditContext (..), MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaConfirmationEnvironment (..), MfaEnrollmentConfirmation (..), MfaEnrollmentEnvironment (..), MfaEnrollmentError (..), MfaEnrollmentStart (..), confirmMfaEnrollment, confirmMfaEnrollmentWith, startMfaEnrollment)
 
 spec =
@@ -30,8 +31,8 @@ spec =
                 loadTotpEnrollment = \_ -> do
                   encryptedSecret <- readIORef encryptedSecretReference
                   pure (Right (fmap (\secretValue -> StoredTotpEnrollment secretValue Nothing Nothing) encryptedSecret)),
-                confirmTotpEnrollment = \receivedAccountId hashes _ ->
-                  pure (Right (receivedAccountId == accountId && length hashes == 8 && not (any Text.null hashes))),
+                confirmTotpEnrollment = \receivedAccountId hashes _ receivedAuditContext ->
+                  pure (Right (receivedAccountId == accountId && length hashes == 8 && not (any Text.null hashes) && mfaConfirmationRequestId receivedAuditContext == testRequestId)),
                 loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
                 consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption"),
                 markTotpCodeUsed = \_ _ -> pure (error "unexpected TOTP counter update")
@@ -40,7 +41,7 @@ spec =
       case started of
         Left _ -> expectationFailure "expected production enrollment start to succeed"
         Right (MfaEnrollmentStart secret) -> do
-          confirmation <- confirmMfaEnrollment (productionConfirmationEnvironment store) accountId (totpCode 123456 secret)
+          confirmation <- confirmMfaEnrollment (productionConfirmationEnvironment store) accountId (totpCode 123456 secret) testMfaAuditContext
           case confirmation of
             Left _ -> expectationFailure "expected production enrollment confirmation to succeed"
             Right confirmed -> do
@@ -57,7 +58,7 @@ spec =
                   modifyIORef' savedValuesReference ((savedAccountId, encryptedSecret, now) :)
                   pure (Right True),
                 loadTotpEnrollment = \_ -> pure (error "unexpected load"),
-                confirmTotpEnrollment = \_ _ _ -> pure (error "unexpected confirmation"),
+                confirmTotpEnrollment = \_ _ _ _ -> pure (error "unexpected confirmation"),
                 loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
                 consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption"),
                 markTotpCodeUsed = \_ _ -> pure (error "unexpected TOTP counter update")
@@ -87,25 +88,31 @@ spec =
                   if receivedAccountId == accountId
                     then pure (Right (Just (StoredTotpEnrollment encryptedSecret Nothing Nothing)))
                     else pure (error "unexpected account"),
-                confirmTotpEnrollment = \receivedAccountId hashes now -> do
-                  modifyIORef' confirmationCallsReference ((receivedAccountId, hashes, now) :)
+                confirmTotpEnrollment = \receivedAccountId hashes now receivedAuditContext -> do
+                  modifyIORef' confirmationCallsReference ((receivedAccountId, hashes, now, receivedAuditContext) :)
                   pure (Right True),
                 loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
                 consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption"),
                 markTotpCodeUsed = \_ _ -> pure (error "unexpected TOTP counter update")
               }
           hashCode recoveryCode = pure (hashRecoveryCodeWithSalt defaultPasswordHashingPolicy "0123456789abcdef" recoveryCode)
-      confirmation <- confirmMfaEnrollmentWith (confirmationEnvironment (nextFrom recoveryCodes) hashCode store) accountId (totpCode 123456 secret)
+      confirmation <- confirmMfaEnrollmentWith (confirmationEnvironment (nextFrom recoveryCodes) hashCode store) accountId (totpCode 123456 secret) testMfaAuditContext
       if confirmation == Right (MfaEnrollmentConfirmation recoveryCodes)
         then pure ()
         else expectationFailure "expected the encrypted enrollment to be confirmed"
       confirmationCalls <- readIORef confirmationCallsReference
       case confirmationCalls of
-        [(receivedAccountId, hashes, now)] ->
+        [(receivedAccountId, hashes, now, receivedAuditContext)] -> do
           expectAll
             ( (receivedAccountId `shouldBe` accountId)
-                :| [length hashes `shouldBe` 8, now `shouldBe` 500]
+                :| [ length hashes `shouldBe` 8,
+                     now `shouldBe` 500,
+                     mfaConfirmationRequestId receivedAuditContext `shouldBe` testRequestId
+                   ]
             )
+          case mfaConfirmationRoute receivedAuditContext of
+            Nothing -> pure ()
+            Just _ -> expectationFailure "expected no optional route observation"
         _ -> expectationFailure "expected one confirmation call"
 
     it "rejects missing, corrupt, already-confirmed, invalid-code, hash, and store outcomes" $ do
@@ -117,7 +124,7 @@ spec =
             MfaStore
               { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (error "unexpected save"),
                 loadTotpEnrollment = \_ -> pure enrollment,
-                confirmTotpEnrollment = \_ _ _ -> pure confirmation,
+                confirmTotpEnrollment = \_ _ _ _ -> pure confirmation,
                 loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
                 consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption"),
                 markTotpCodeUsed = \_ _ -> pure (error "unexpected TOTP counter update")
@@ -125,7 +132,7 @@ spec =
           oneCode = requiredRecoveryCode "0123456789ABCDEF0123"
           successfulHash recoveryCode = pure (hashRecoveryCodeWithSalt defaultPasswordHashingPolicy "0123456789abcdef" recoveryCode)
           failingHash _ = modifyIORef' hashCallsReference (+ 1) >> pure Nothing
-          confirmWith store generatedCode hashing = confirmMfaEnrollmentWith (confirmationEnvironment generatedCode hashing store) accountId suppliedCode
+          confirmWith store generatedCode hashing = confirmMfaEnrollmentWith (confirmationEnvironment generatedCode hashing store) accountId suppliedCode testMfaAuditContext
       confirmWith (validStore (Left (MfaStoreUnavailable "unavailable")) (Right True)) (pure oneCode) successfulHash
         `shouldReturnEqual` Left (MfaEnrollmentStoreError (MfaStoreUnavailable "unavailable"))
       confirmWith (validStore (Right Nothing) (Right True)) (pure oneCode) successfulHash
@@ -138,7 +145,7 @@ spec =
         `shouldReturnEqual` Left MfaEnrollmentCorruptSecret
       confirmWith (validStore (Right (Just (StoredTotpEnrollment encryptedSecret (Just 1) Nothing))) (Right True)) (pure oneCode) successfulHash
         `shouldReturnEqual` Left MfaEnrollmentConfirmationRejected
-      confirmMfaEnrollmentWith (confirmationEnvironment (pure oneCode) successfulHash (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing Nothing))) (Right True))) accountId (requiredTotpCode "000000")
+      confirmMfaEnrollmentWith (confirmationEnvironment (pure oneCode) successfulHash (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing Nothing))) (Right True))) accountId (requiredTotpCode "000000") testMfaAuditContext
         `shouldReturnEqual` Left MfaEnrollmentInvalidCode
       confirmWith (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing Nothing))) (Right True)) (pure oneCode) failingHash
         `shouldReturnEqual` Left MfaEnrollmentRecoveryCodeHashingFailed
@@ -173,7 +180,7 @@ storeWithSave result =
   MfaStore
     { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure result,
       loadTotpEnrollment = \_ -> pure (error "unexpected load"),
-      confirmTotpEnrollment = \_ _ _ -> pure (error "unexpected confirmation"),
+      confirmTotpEnrollment = \_ _ _ _ -> pure (error "unexpected confirmation"),
       loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
       consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption"),
       markTotpCodeUsed = \_ _ -> pure (error "unexpected TOTP counter update")
@@ -260,6 +267,9 @@ accountId =
   case mkAccountId "account_01" of
     Just value -> value
     Nothing -> error "expected a valid account id"
+
+testMfaAuditContext :: MfaConfirmationAuditContext
+testMfaAuditContext = MfaConfirmationAuditContext testRequestId Nothing
 
 startMfaEnrollmentWith :: IO TotpSecret -> (SecretEncryptionKey -> ByteString.ByteString -> IO (Maybe Text.Text)) -> MfaStore -> SecretEncryptionKey -> AccountId -> Integer -> IO (Either MfaEnrollmentError MfaEnrollmentStart)
 startMfaEnrollmentWith generateSecret encrypt store key enrollmentAccountId now =

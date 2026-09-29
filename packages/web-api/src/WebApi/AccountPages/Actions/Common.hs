@@ -264,6 +264,7 @@ data RequiredAuditOperation
   = AccountSessionIssueAudit
   | PendingRegistrationDeliveryAudit
   | VerificationResendDeliveryAudit
+  | MfaEnrollmentConfirmationAudit
 
 -- | Closed application-only classification for a required audit append. The
 -- generic account lifecycle carries the matching cases in 'AccountStoreError'
@@ -279,6 +280,7 @@ requiredAuditOperationName operation =
     AccountSessionIssueAudit -> "account-session-issue"
     PendingRegistrationDeliveryAudit -> "pending-registration-delivery"
     VerificationResendDeliveryAudit -> "verification-resend-delivery"
+    MfaEnrollmentConfirmationAudit -> "mfa-enrollment-confirmation"
 
 requiredAuditFailureKind :: RequiredAuditFailure -> Text
 requiredAuditFailureKind auditFailure =
@@ -322,6 +324,9 @@ mfaStoreErrorMessage storeError =
   case storeError of
     MfaStoreUnavailable detail -> detail
     MfaStoreCorruptData detail -> detail
+    MfaStoreAuditAppendFailed ActivityAuditUnavailable -> "required audit append failed: unavailable"
+    MfaStoreAuditAppendFailed ActivityAuditCapacityExceeded -> "required audit append failed: capacity-exhausted"
+    MfaStoreAuditAppendFailed ActivityAuditCorruptResult -> "required audit append failed: corrupt-result"
 
 loginAttemptStoreErrorMessage :: LoginAttemptStoreError -> Text
 loginAttemptStoreErrorMessage storeError =

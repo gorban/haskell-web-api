@@ -19,7 +19,7 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import Unit.WebApi.TestSupport (migrationPostgresTestConfig, postgresTestConfig)
 import WebApi.ActivityAudit
 import WebApi.Config (DatabaseConfig (..))
-import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), accountAuditAppendResultFixStatements, accountAuditControlledAppendPolicyStatements, accountAuditInitialMaintenanceStatements, accountAuditInsertPolicyFixStatements, accountAuditMaintenanceJobName, accountAuditMaintenanceSchedule, accountAuditMigrationStatements, accountAuditRegistrationDeliveryStatements, accountAuditRuntimeReconciliationStatements, accountAuditSchedulerTargetFixStatements, accountAuditVerificationResendDeliveryStatements, bootstrapAccountAuditSchedulerWithRunner, cronRunDetailsRetentionJobName, cronRunDetailsRetentionSchedule, installAccountAuditSchedulerStatements)
+import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), accountAuditAppendResultFixStatements, accountAuditControlledAppendPolicyStatements, accountAuditInitialMaintenanceStatements, accountAuditInsertPolicyFixStatements, accountAuditMaintenanceJobName, accountAuditMaintenanceSchedule, accountAuditMfaEnrollmentStatements, accountAuditMigrationStatements, accountAuditRegistrationDeliveryStatements, accountAuditRuntimeReconciliationStatements, accountAuditSchedulerTargetFixStatements, accountAuditVerificationResendDeliveryStatements, bootstrapAccountAuditSchedulerWithRunner, cronRunDetailsRetentionJobName, cronRunDetailsRetentionSchedule, installAccountAuditSchedulerStatements)
 
 spec = describe "WebApi.ActivityAudit" $ do
   it "encodes every closed audit event with a stable code, version, and bounded detail" $ do
@@ -76,6 +76,7 @@ spec = describe "WebApi.ActivityAudit" $ do
         appendResultSql = Text.unlines accountAuditAppendResultFixStatements
         registrationDeliverySql = Text.unlines accountAuditRegistrationDeliveryStatements
         verificationResendDeliverySql = Text.unlines accountAuditVerificationResendDeliveryStatements
+        mfaEnrollmentSql = Text.unlines accountAuditMfaEnrollmentStatements
         setupSql = Text.unlines accountAuditInitialMaintenanceStatements
         reconciliationSql = Text.unlines (accountAuditRuntimeReconciliationStatements "web_api_dev" "runtime\"role")
     expectAll
@@ -92,6 +93,10 @@ spec = describe "WebApi.ActivityAudit" $ do
                auditMigrationExpectation "atomic verification-resend operation" ("complete_verification_resend_with_activity" `Text.isInfixOf` verificationResendDeliverySql),
                auditMigrationExpectation "verification-resend generic lifecycle invocation" ("web_api.complete_verification_resend" `Text.isInfixOf` verificationResendDeliverySql),
                auditMigrationExpectation "verification-resend least privilege" ("GRANT SELECT, DELETE ON TABLE web_api.verification_resend_claims TO account_audit_owner" `Text.isInfixOf` verificationResendDeliverySql),
+               auditMigrationExpectation "atomic MFA confirmation" ("account_audit.append_activity" `Text.isInfixOf` mfaEnrollmentSql && "MFA enrollment audit append returned no activity" `Text.isInfixOf` mfaEnrollmentSql),
+               auditMigrationExpectation "MFA audit owner column grants" ("GRANT SELECT (account_id, confirmed_at_nanoseconds), UPDATE (confirmed_at_nanoseconds) ON TABLE web_api.account_totp TO account_audit_owner" `Text.isInfixOf` mfaEnrollmentSql),
+               auditMigrationExpectation "MFA function overload casts" ("'mfa-enrolled'::TEXT, 1::SMALLINT, NULL::TEXT" `Text.isInfixOf` mfaEnrollmentSql),
+               auditMigrationExpectation "MFA audit runtime function grant" ("confirm_mfa_enrollment_with_activity(TEXT, BIGINT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT[])" `Text.isInfixOf` reconciliationSql),
                auditMigrationExpectation "reader and scheduler connection grants" ("GRANT CONNECT ON DATABASE \"web_api_dev\" TO web_api_audit_reader, web_api_audit_scheduler" `Text.isInfixOf` reconciliationSql),
                auditMigrationExpectation "quoted runtime role identifier" ("\"runtime\"\"role\"" `Text.isInfixOf` reconciliationSql),
                auditMigrationExpectation "runtime scope literal" ("VALUES ('runtime\"role', 'default')" `Text.isInfixOf` reconciliationSql)

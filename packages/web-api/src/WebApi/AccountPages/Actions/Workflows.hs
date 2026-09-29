@@ -62,6 +62,7 @@ import WebApi.AppEffect
     throwAppFailure,
   )
 import WebApi.Localization (AppMessage (..))
+import WebApi.Mfa (MfaConfirmationAuditContext (..), MfaStoreError (..))
 import WebApi.MfaEnrollment
   ( MfaConfirmationEnvironment (..),
     MfaEnrollmentConfirmation (..),
@@ -178,14 +179,17 @@ confirmMfaAction :: AccountActionRequest -> Account.AccountId -> Text -> Account
 confirmMfaAction actionRequest accountId codeValue =
   case Totp.mkTotpCode codeValue of
     Nothing -> pure (mfaEnrollmentResponse (accountActionResponseContext actionRequest Http.status422 (Just mfaCodeId) []) (MfaEnrollmentForm Nothing [] True (Just (localized actionRequest EnterAuthenticatorCode)) True))
-    Just code -> do
-      confirmed <- confirmMfaEnrollmentNow accountId code
-      case confirmed of
-        Right (MfaEnrollmentConfirmation recoveryCodes) -> pure (mfaEnrollmentResponse (accountActionResponseContext actionRequest Http.status200 Nothing noHeaders) (MfaEnrollmentForm Nothing (map RecoveryCode.recoveryCodeText (toList recoveryCodes)) False (Just (localized actionRequest AuthenticatorEnrolled)) False))
+    Just code ->
+      case mfaConfirmationAuditContext actionRequest of
         Left errorValue -> interpretMfaFailure actionRequest MfaEnrollmentConfirmFailure (Just mfaCodeId) errorValue
+        Right auditContext -> do
+          confirmed <- confirmMfaEnrollmentNow accountId code auditContext
+          case confirmed of
+            Right (MfaEnrollmentConfirmation recoveryCodes) -> pure (mfaEnrollmentResponse (accountActionResponseContext actionRequest Http.status200 Nothing noHeaders) (MfaEnrollmentForm Nothing (map RecoveryCode.recoveryCodeText (toList recoveryCodes)) False (Just (localized actionRequest AuthenticatorEnrolled)) False))
+            Left errorValue -> interpretMfaFailure actionRequest MfaEnrollmentConfirmFailure (Just mfaCodeId) errorValue
 
-confirmMfaEnrollmentNow :: Account.AccountId -> Totp.TotpCode -> AppM publicFailure (Either MfaEnrollmentError MfaEnrollmentConfirmation)
-confirmMfaEnrollmentNow accountId code = do
+confirmMfaEnrollmentNow :: Account.AccountId -> Totp.TotpCode -> MfaConfirmationAuditContext -> AppM publicFailure (Either MfaEnrollmentError MfaEnrollmentConfirmation)
+confirmMfaEnrollmentNow accountId code auditContext = do
   workflow <- accountWorkflow
   liftIO $ do
     now <- accountWorkflowClock workflow
@@ -200,6 +204,17 @@ confirmMfaEnrollmentNow accountId code = do
         }
       accountId
       code
+      auditContext
+
+mfaConfirmationAuditContext :: AccountActionRequest -> Either MfaEnrollmentError MfaConfirmationAuditContext
+mfaConfirmationAuditContext actionRequest = do
+  let requestContext = HarchWeb.clientActionContext actionRequest
+  requestId <- maybe (Left MfaEnrollmentAuditAttributionUnavailable) Right (requestCorrelationId requestContext)
+  route <-
+    traverse
+      (either (const (Left MfaEnrollmentAuditAttributionUnavailable)) Right . auditRouteObservationFromTrusted)
+      (requestRouteObservation requestContext)
+  pure MfaConfirmationAuditContext {mfaConfirmationRequestId = requestId, mfaConfirmationRoute = route}
 
 interpretMfaFailure ::
   AccountActionRequest ->
@@ -212,9 +227,21 @@ interpretMfaFailure actionRequest failureCodeValue focusId errorValue =
         mfaEnrollmentResponse
           (accountActionResponseContext actionRequest status focusId [])
           (MfaEnrollmentForm Nothing [] (isJust focusId) (Just (mfaErrorMessage actionRequest errorValue)) True)
-   in case mfaEnrollmentFailureDiagnostics failureCodeValue errorValue of
-        Nothing -> pure (response Http.status422)
-        Just diagnostics -> throwAppFailure AppFailure {appFailurePublic = response Http.status503, appFailureDiagnostics = diagnostics}
+   in case mfaRequiredAuditFailure errorValue of
+        Just auditFailure ->
+          throwRequiredAuditFailure (response Http.status503) failureCodeValue MfaEnrollmentConfirmationAudit auditFailure
+        Nothing ->
+          case mfaEnrollmentFailureDiagnostics failureCodeValue errorValue of
+            Nothing -> pure (response Http.status422)
+            Just diagnostics -> throwAppFailure AppFailure {appFailurePublic = response Http.status503, appFailureDiagnostics = diagnostics}
+
+mfaRequiredAuditFailure :: MfaEnrollmentError -> Maybe RequiredAuditFailure
+mfaRequiredAuditFailure errorValue =
+  case errorValue of
+    MfaEnrollmentStoreError (MfaStoreAuditAppendFailed ActivityAuditUnavailable) -> Just RequiredAuditUnavailable
+    MfaEnrollmentStoreError (MfaStoreAuditAppendFailed ActivityAuditCapacityExceeded) -> Just RequiredAuditCapacityExceeded
+    MfaEnrollmentStoreError (MfaStoreAuditAppendFailed ActivityAuditCorruptResult) -> Just RequiredAuditCorruptResult
+    _ -> Nothing
 
 mfaEnrollmentFailureDiagnostics :: FailureCode -> MfaEnrollmentError -> Maybe FailureDiagnostics
 mfaEnrollmentFailureDiagnostics failureCodeValue errorValue =
@@ -223,6 +250,7 @@ mfaEnrollmentFailureDiagnostics failureCodeValue errorValue =
     MfaEnrollmentCorruptSecret -> Just (failureDiagnostics "CorruptTotpEnrollment" "stored TOTP secret could not be decoded")
     MfaEnrollmentRecoveryCodeHashingFailed -> Just (failureDiagnostics "RecoveryCodeHashingError" "recovery-code hashing failed")
     MfaEnrollmentEncryptionFailed -> Just (failureDiagnostics "TotpEncryptionError" "TOTP secret encryption failed")
+    MfaEnrollmentAuditAttributionUnavailable -> Just (failureDiagnostics "MfaAuditAttributionUnavailable" "trusted request audit attribution was unavailable")
     _ -> Nothing
   where
     failureDiagnostics = buildFailureDiagnostics failureCodeValue

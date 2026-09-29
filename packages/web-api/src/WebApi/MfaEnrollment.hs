@@ -40,7 +40,8 @@ import HarchWeb.Totp
     validateTotpCode,
   )
 import WebApi.Mfa
-  ( MfaStore (..),
+  ( MfaConfirmationAuditContext,
+    MfaStore (..),
     MfaStoreError,
     StoredTotpEnrollment (..),
   )
@@ -54,6 +55,7 @@ data MfaEnrollmentError
   | MfaEnrollmentConfirmationRejected
   | MfaEnrollmentRecoveryCodeHashingFailed
   | MfaEnrollmentEncryptionFailed
+  | MfaEnrollmentAuditAttributionUnavailable
   deriving (Eq)
 
 newtype MfaEnrollmentStart = MfaEnrollmentStart
@@ -126,8 +128,9 @@ confirmMfaEnrollment ::
   MfaConfirmationEnvironment ->
   AccountId ->
   TotpCode ->
+  MfaConfirmationAuditContext ->
   IO (Either MfaEnrollmentError MfaEnrollmentConfirmation)
-confirmMfaEnrollment environment accountId suppliedCode =
+confirmMfaEnrollment environment accountId suppliedCode auditContext =
   runExceptT $ do
     enrollment <-
       liftMfaStore (loadTotpEnrollment mfaStore accountId)
@@ -137,7 +140,7 @@ confirmMfaEnrollment environment accountId suppliedCode =
     guardError MfaEnrollmentInvalidCode (validateTotpCode nowSeconds 1 secret suppliedCode)
     recoveryCodes <- liftIO (generateRecoveryCodes generateCode)
     recoveryCodeHashes <- traverse hashGeneratedRecoveryCode recoveryCodes
-    confirmed <- liftMfaStore (confirmTotpEnrollment mfaStore accountId recoveryCodeHashes nowNanoseconds)
+    confirmed <- liftMfaStore (confirmTotpEnrollment mfaStore accountId recoveryCodeHashes nowNanoseconds auditContext)
     guardError MfaEnrollmentConfirmationRejected confirmed
     pure (MfaEnrollmentConfirmation recoveryCodes)
   where
@@ -157,6 +160,7 @@ confirmMfaEnrollmentWith ::
   MfaConfirmationEnvironment ->
   AccountId ->
   TotpCode ->
+  MfaConfirmationAuditContext ->
   IO (Either MfaEnrollmentError MfaEnrollmentConfirmation)
 confirmMfaEnrollmentWith = confirmMfaEnrollment
 

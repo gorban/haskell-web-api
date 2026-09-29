@@ -11,22 +11,32 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Word (Word64)
 import HarchWeb.Account (AccountId, accountIdText)
+import HarchWeb.RequestId (requestIdText)
 import HarchWeb.Time (UnixTimeNanoseconds, unixTimeNanoseconds, unixTimeNanosecondsValue)
 import Text.Read (readMaybe)
+import WebApi.ActivityAudit
+  ( ActivityAuditStoreError (..),
+    AuditRouteObservation,
+    auditRouteEndpointName,
+    auditRouteLocale,
+    auditRouteMountChain,
+    auditRouteTemplate,
+  )
 import WebApi.Mfa
-  ( MfaStore (..),
+  ( MfaConfirmationAuditContext (..),
+    MfaStore (..),
     MfaStoreError (..),
     StoredTotpEnrollment (..),
   )
 import WebApi.Postgres.Pool (PostgresPool)
-import WebApi.Postgres.Runtime (renderUnexpectedResultShape, runPooledParameterizedRowsQuery)
+import WebApi.Postgres.Runtime (renderUnexpectedResultShape, runPooledNullableParameterizedRowsQuery)
 
 buildRuntimePostgresMfaStore :: PostgresPool -> MfaStore
 buildRuntimePostgresMfaStore !pool =
-  buildRuntimePostgresMfaStoreWithRunner runPooledParameterizedRowsQuery pool
+  buildRuntimePostgresMfaStoreWithRunner runPooledNullableParameterizedRowsQuery pool
 
 buildRuntimePostgresMfaStoreWithRunner ::
-  (source -> Text -> [Text] -> IO (Either Text [[Text]])) ->
+  (source -> Text -> [Maybe Text] -> IO (Either Text [[Text]])) ->
   source ->
   MfaStore
 buildRuntimePostgresMfaStoreWithRunner runQuery source =
@@ -41,32 +51,35 @@ buildRuntimePostgresMfaStoreWithRunner runQuery source =
   where
     saveEnrollment accountId encryptedSecret now =
       runMfaStoreQuery
-        (runQuery source saveUnconfirmedTotpEnrollmentQuery [accountIdText accountId, encryptedSecret, Text.pack (show (unixTimeNanosecondsValue now))])
+        (runQuery source saveUnconfirmedTotpEnrollmentQuery [Just (accountIdText accountId), Just encryptedSecret, Just (Text.pack (show (unixTimeNanosecondsValue now)))])
         (decodeMatchingAccount "unexpected TOTP enrollment result: " accountId)
 
     loadEnrollment accountId =
       runMfaStoreQuery
-        (runQuery source loadTotpEnrollmentQuery [accountIdText accountId])
+        (runQuery source loadTotpEnrollmentQuery [Just (accountIdText accountId)])
         decodeTotpEnrollment
 
-    confirmEnrollment accountId recoveryCodeHashes now =
-      runMfaStoreQuery
-        (runQuery source (confirmTotpEnrollmentQuery recoveryCodeHashes) (accountIdText accountId : Text.pack (show (unixTimeNanosecondsValue now)) : NonEmpty.toList recoveryCodeHashes))
-        (decodeMatchingAccount "unexpected TOTP confirmation result: " accountId)
+    confirmEnrollment accountId recoveryCodeHashes now auditContext =
+      runExceptT $ do
+        rows <-
+          liftEitherWith
+            confirmationAuditStoreError
+            (runQuery source (confirmTotpEnrollmentQuery (length (NonEmpty.toList recoveryCodeHashes))) (confirmationParameters accountId recoveryCodeHashes now auditContext))
+        liftEither (decodeMatchingAccount "unexpected TOTP confirmation result: " accountId rows)
 
     loadRecoveryCodeHashes accountId =
       runMfaStoreQuery
-        (runQuery source loadUnusedRecoveryCodeHashesQuery [accountIdText accountId])
+        (runQuery source loadUnusedRecoveryCodeHashesQuery [Just (accountIdText accountId)])
         decodeRecoveryCodeHashes
 
     consumeRecoveryCode accountId recoveryCodeHash now =
       runMfaStoreQuery
-        (runQuery source consumeRecoveryCodeHashQuery [accountIdText accountId, recoveryCodeHash, Text.pack (show (unixTimeNanosecondsValue now))])
+        (runQuery source consumeRecoveryCodeHashQuery [Just (accountIdText accountId), Just recoveryCodeHash, Just (Text.pack (show (unixTimeNanosecondsValue now)))])
         (decodeMatchingAccount "unexpected recovery-code consumption result: " accountId)
 
     markCodeUsed accountId counter =
       runMfaStoreQuery
-        (runQuery source markTotpCodeUsedQuery [accountIdText accountId, Text.pack (show counter)])
+        (runQuery source markTotpCodeUsedQuery [Just (accountIdText accountId), Just (Text.pack (show counter))])
         (decodeMatchingAccount "unexpected TOTP counter update result: " accountId)
 
 runMfaStoreQuery :: IO (Either Text [[Text]]) -> ([[Text]] -> Either MfaStoreError value) -> IO (Either MfaStoreError value)
@@ -140,8 +153,34 @@ loadUnusedRecoveryCodeHashesQuery = "SELECT code_hash FROM web_api.account_recov
 consumeRecoveryCodeHashQuery = "UPDATE web_api.account_recovery_codes SET used_at_nanoseconds = $3 WHERE account_id = $1 AND code_hash = $2 AND used_at_nanoseconds IS NULL RETURNING account_id;"
 markTotpCodeUsedQuery = "UPDATE web_api.account_totp SET last_used_totp_counter = $2 WHERE account_id = $1 AND (last_used_totp_counter IS NULL OR last_used_totp_counter < $2) RETURNING account_id;"
 
-confirmTotpEnrollmentQuery :: NonEmpty.NonEmpty Text -> Text
-confirmTotpEnrollmentQuery recoveryCodeHashes =
-  "WITH confirmed AS (UPDATE web_api.account_totp SET confirmed_at_nanoseconds = $2 WHERE account_id = $1 AND confirmed_at_nanoseconds IS NULL RETURNING account_id), removed_codes AS (DELETE FROM web_api.account_recovery_codes WHERE account_id IN (SELECT account_id FROM confirmed)), issued_codes AS (INSERT INTO web_api.account_recovery_codes (account_id, code_hash, created_at_nanoseconds) SELECT confirmed.account_id, recovery_codes.code_hash, $2 FROM confirmed CROSS JOIN (VALUES "
-    <> Text.intercalate ", " ["($" <> Text.pack (show parameterIndex) <> ")" | parameterIndex <- [3 .. 2 + length (NonEmpty.toList recoveryCodeHashes)]]
-    <> ") AS recovery_codes(code_hash)) SELECT account_id FROM confirmed;"
+confirmationAuditStoreError :: Text -> MfaStoreError
+confirmationAuditStoreError databaseError
+  | "account audit partition capacity is exhausted" `Text.isInfixOf` databaseError =
+      MfaStoreAuditAppendFailed ActivityAuditCapacityExceeded
+  | otherwise = MfaStoreAuditAppendFailed ActivityAuditUnavailable
+
+confirmationParameters :: AccountId -> NonEmpty.NonEmpty Text -> UnixTimeNanoseconds -> MfaConfirmationAuditContext -> [Maybe Text]
+confirmationParameters accountId recoveryCodeHashes now MfaConfirmationAuditContext {mfaConfirmationRequestId, mfaConfirmationRoute} =
+  [ Just (accountIdText accountId),
+    Just (Text.pack (show (unixTimeNanosecondsValue now))),
+    Just (requestIdText mfaConfirmationRequestId)
+  ]
+    <> routeParameters mfaConfirmationRoute
+    <> fmap Just (NonEmpty.toList recoveryCodeHashes)
+
+routeParameters :: Maybe AuditRouteObservation -> [Maybe Text]
+routeParameters maybeRoute =
+  case maybeRoute of
+    Nothing -> [Nothing, Nothing, Nothing, Nothing]
+    Just auditRoute ->
+      [ Just (auditRouteEndpointName auditRoute),
+        Just (auditRouteMountChain auditRoute),
+        Just (auditRouteTemplate auditRoute),
+        Just (auditRouteLocale auditRoute)
+      ]
+
+confirmTotpEnrollmentQuery :: Int -> Text
+confirmTotpEnrollmentQuery recoveryCodeCount =
+  "SELECT account_id FROM account_audit.confirm_mfa_enrollment_with_activity($1, $2::BIGINT, $3, $4, $5, $6, $7, "
+    <> Text.intercalate ", " ["$" <> Text.pack (show parameterIndex) | parameterIndex <- [8 .. 7 + recoveryCodeCount]]
+    <> ");"

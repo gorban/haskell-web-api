@@ -224,7 +224,7 @@ spec = do
             MfaStore
               { saveUnconfirmedTotpEnrollment = \_ _ _ -> error "unexpected enrollment save",
                 loadTotpEnrollment = \_ -> pure (Right (Just (StoredTotpEnrollment "not-needed-for-recovery-code" (Just 100) Nothing))),
-                confirmTotpEnrollment = \_ _ _ -> error "unexpected enrollment confirmation",
+                confirmTotpEnrollment = \_ _ _ _ -> error "unexpected enrollment confirmation",
                 loadUnusedRecoveryCodeHashes = \receivedAccountId -> receivedAccountId `seq` pure (Right [recoveryCodeHashText recoveryCodeHash]),
                 consumeRecoveryCodeHash = \receivedAccountId receivedHash receivedNow -> do
                   expectAll
@@ -317,7 +317,7 @@ spec = do
             MfaStore
               { saveUnconfirmedTotpEnrollment = \_ _ _ -> error "unexpected enrollment save",
                 loadTotpEnrollment = \_ -> pure enrollment,
-                confirmTotpEnrollment = \_ _ _ -> error "unexpected enrollment confirmation",
+                confirmTotpEnrollment = \_ _ _ _ -> error "unexpected enrollment confirmation",
                 loadUnusedRecoveryCodeHashes = \_ -> pure (Right []),
                 consumeRecoveryCodeHash = \_ _ _ -> error "unexpected recovery-code consumption",
                 markTotpCodeUsed = \_ _ -> error "unexpected TOTP counter update"
@@ -361,7 +361,7 @@ spec = do
             MfaStore
               { saveUnconfirmedTotpEnrollment = \_ _ _ -> error "unexpected enrollment save",
                 loadTotpEnrollment = \_ -> pure (Right (Just confirmedEnrollment)),
-                confirmTotpEnrollment = \_ _ _ -> error "unexpected enrollment confirmation",
+                confirmTotpEnrollment = \_ _ _ _ -> error "unexpected enrollment confirmation",
                 loadUnusedRecoveryCodeHashes = \_ -> pure recoveryResult,
                 consumeRecoveryCodeHash = \_ _ _ -> pure consumptionResult,
                 markTotpCodeUsed = \_ _ -> error "unexpected TOTP counter update"
@@ -1000,7 +1000,7 @@ mfaStore result =
   MfaStore
     { saveUnconfirmedTotpEnrollment = \_ _ _ -> error "unexpected enrollment save",
       loadTotpEnrollment = \requestedAccountId -> requestedAccountId `seq` pure result,
-      confirmTotpEnrollment = \_ _ _ -> error "unexpected enrollment confirmation",
+      confirmTotpEnrollment = \_ _ _ _ -> error "unexpected enrollment confirmation",
       loadUnusedRecoveryCodeHashes = \_ -> error "unexpected recovery-code lookup",
       consumeRecoveryCodeHash = \_ _ _ -> error "unexpected recovery-code consumption",
       markTotpCodeUsed = \_ _ -> pure (Right True)
@@ -1048,7 +1048,7 @@ storeWithLookups lookupResults = do
           case currentResults of
             [] -> error "unexpected extra enrollment lookup"
             result : remainingResults -> modifyIORef' resultsReference (const remainingResults) >> pure result,
-        confirmTotpEnrollment = \_ _ _ -> error "unexpected enrollment confirmation",
+        confirmTotpEnrollment = \_ _ _ _ -> error "unexpected enrollment confirmation",
         loadUnusedRecoveryCodeHashes = \_ -> error "unexpected recovery-code lookup",
         consumeRecoveryCodeHash = \_ _ _ -> error "unexpected recovery-code consumption",
         markTotpCodeUsed = \_ _ -> error "unexpected TOTP counter update"

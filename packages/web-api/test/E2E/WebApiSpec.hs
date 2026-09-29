@@ -1484,7 +1484,7 @@ reauthenticationProfileWorkflow sessionExpiry attemptStore environmentConfig iss
         MfaStore
           { saveUnconfirmedTotpEnrollment = \_ _ _ -> error "unexpected enrollment save",
             loadTotpEnrollment = \_ -> pure (Right (Just enrollment)),
-            confirmTotpEnrollment = \_ _ _ -> error "unexpected enrollment confirmation",
+            confirmTotpEnrollment = \_ _ _ _ -> error "unexpected enrollment confirmation",
             loadUnusedRecoveryCodeHashes = \_ -> pure (Right []),
             consumeRecoveryCodeHash = \_ _ _ -> pure (Right True),
             markTotpCodeUsed = \_ _ -> pure (Right True)
@@ -1671,7 +1671,7 @@ mfaEnrollmentBrowserWorkflow =
         MfaStore
           { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (Right True),
             loadTotpEnrollment = \_ -> error "invalid browser code must not load the enrollment",
-            confirmTotpEnrollment = \_ _ _ -> error "invalid browser code must not confirm the enrollment",
+            confirmTotpEnrollment = \_ _ _ _ -> error "invalid browser code must not confirm the enrollment",
             loadUnusedRecoveryCodeHashes = \_ -> error "unexpected recovery-code load",
             consumeRecoveryCodeHash = \_ _ _ -> error "unexpected recovery-code consumption",
             markTotpCodeUsed = \_ _ -> error "unexpected TOTP replay write"

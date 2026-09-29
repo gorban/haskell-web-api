@@ -33,6 +33,7 @@ import WebApi.Postgres.ActivityAuditMigration
     accountAuditControlledAppendPolicyStatements,
     accountAuditInitialMaintenanceStatements,
     accountAuditInsertPolicyFixStatements,
+    accountAuditMfaEnrollmentStatements,
     accountAuditMigrationStatements,
     accountAuditRegistrationDeliveryStatements,
     accountAuditRuntimeReconciliationStatements,
@@ -113,7 +114,8 @@ webApiDatabaseChanges =
     change "account-audit-verification-resend-delivery-v1" accountAuditVerificationResendDeliveryStatements,
     change "api-clients-v1" apiClientMigrationStatements,
     change "api-client-secret-hash-format-v1" apiClientSecretHashFormatMigrationStatements,
-    change "account-audit-scheduler-target-v1" accountAuditSchedulerTargetFixStatements
+    change "account-audit-scheduler-target-v1" accountAuditSchedulerTargetFixStatements,
+    change "account-audit-mfa-enrollment-v1" accountAuditMfaEnrollmentStatements
   ]
   where
     change changeId statements =

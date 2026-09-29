@@ -5099,9 +5099,24 @@ payload, route, or ambient transaction.
 This deliberately extends the existing application composition and generic
 registration callback instead of putting durable policy in Harch, adding a
 generic post-commit logger, or making all account storage depend on PostgreSQL.
-The covered event is only pending-registration delivery. Verification resend,
-email verification, known-account rejection, and MFA enrollment remain
-explicit activity-audit atomic-workflow follow-ups; this slice does not claim them.
+The covered event is only pending-registration delivery.
+
+**Follow-up slice: atomically confirm MFA enrollment and record its required
+audit event (durable activity audit, 2026-09-29).** Extend the existing
+`MfaStore.confirmTotpEnrollment` operation, because it already owns the
+confirmation timestamp and replacement of recovery-code hashes. Its adapter
+now calls the controlled `account_audit.confirm_mfa_enrollment_with_activity`
+function with the opaque request ID and trusted route projection from the
+existing post-match action context. The database function fixes the event to
+`MfaEnrolled`, replaces only the existing eight-code recovery set, and calls
+`append_activity` before returning; invalid audit fields, an unavailable
+partition, or capacity exhaustion roll back the confirmation and code changes
+with the audit row. The function owner receives only the column-level
+privileges required for that transition, while the runtime receives execute
+permission on the operation. Required-audit failure uses the existing action
+failure boundary and stable capacity signal. This completes only successful
+MFA enrollment; TOTP login, recovery-code consumption, email verification, and
+the remaining catalog/operations proof still have their own AHI-5 criteria.
 
 **Follow-up slice: explicit logout revokes first and accepts a bounded audit
 gap (durable activity audit, 2026-09-09).** `AccountSessionAuditStore` remains deliberately

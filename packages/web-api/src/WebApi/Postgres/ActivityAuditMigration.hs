@@ -3,12 +3,11 @@
 --
 -- Decision record (durable activity audit, 2026-09-07): extend the existing
 -- 'Postgres.DatabaseChange' ownership boundary rather than introducing an
--- audit-specific migration runner or putting PostgreSQL policy in Harch.  The
--- controlled append and maintenance functions are the only database-side
--- mutation boundaries.  They derive audit scope from @session_user@, use
--- owner-managed policy/registry tables, and keep retention whole-partition so
--- an application can replace its scheduler without replacing the security
--- model.
+-- audit-specific migration runner or putting PostgreSQL policy in Harch.
+-- Controlled append, maintenance, and narrow domain-transaction wrappers
+-- derive audit scope from @session_user@ and use owner-managed policy and
+-- registry tables. They keep retention whole-partition so an application can
+-- replace its scheduler without replacing the security model.
 module WebApi.Postgres.ActivityAuditMigration
   ( accountAuditMigrationStatements,
     accountAuditInsertPolicyFixStatements,
@@ -21,6 +20,7 @@ module WebApi.Postgres.ActivityAuditMigration
     accountAuditSchedulerTargetFixStatements,
     accountAuditRegistrationDeliveryStatements,
     accountAuditVerificationResendDeliveryStatements,
+    accountAuditMfaEnrollmentStatements,
     accountAuditRuntimeReconciliationStatements,
   )
 where
@@ -111,6 +111,7 @@ accountAuditRuntimeReconciliationStatements databaseName runtimeRoleName =
     "GRANT EXECUTE ON FUNCTION account_audit.issue_account_session_with_activity(TEXT, TEXT, BIGINT, BIGINT, TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) TO " <> quotedIdentifier runtimeRoleName <> ";",
     "GRANT EXECUTE ON FUNCTION account_audit.complete_pending_registration_delivery_with_activity(TEXT, TEXT, TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) TO " <> quotedIdentifier runtimeRoleName <> ";",
     "GRANT EXECUTE ON FUNCTION account_audit.complete_verification_resend_with_activity(TEXT, TEXT, BIGINT, TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) TO " <> quotedIdentifier runtimeRoleName <> ";",
+    "GRANT EXECUTE ON FUNCTION account_audit.confirm_mfa_enrollment_with_activity(TEXT, BIGINT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT[]) TO " <> quotedIdentifier runtimeRoleName <> ";",
     "INSERT INTO account_audit.runtime_scope (runtime_role_name, audit_scope_id) VALUES (" <> quotedLiteral runtimeRoleName <> ", 'default') ON CONFLICT (runtime_role_name) DO NOTHING;"
   ]
 
@@ -229,6 +230,66 @@ accountAuditVerificationResendDeliveryStatements =
     "ALTER FUNCTION account_audit.complete_verification_resend_with_activity(TEXT, TEXT, BIGINT, TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) OWNER TO account_audit_owner;",
     "REVOKE ALL ON FUNCTION account_audit.complete_verification_resend_with_activity(TEXT, TEXT, BIGINT, TEXT, TEXT, TEXT, SMALLINT, TEXT, TEXT, TEXT, TEXT, TEXT) FROM PUBLIC;"
   ]
+
+-- | Extend the existing MFA confirmation transaction with its required
+-- account-audit event. The application runtime receives execute-only access;
+-- the function owner receives the exact column privileges needed to confirm
+-- TOTP and replace recovery-code hashes.
+accountAuditMfaEnrollmentStatements :: [Text]
+accountAuditMfaEnrollmentStatements =
+  [ "GRANT USAGE ON SCHEMA web_api TO account_audit_owner;",
+    "GRANT SELECT (account_id, confirmed_at_nanoseconds), UPDATE (confirmed_at_nanoseconds) ON TABLE web_api.account_totp TO account_audit_owner;",
+    "GRANT SELECT (account_id), DELETE ON TABLE web_api.account_recovery_codes TO account_audit_owner;",
+    "GRANT INSERT (account_id, code_hash, created_at_nanoseconds) ON TABLE web_api.account_recovery_codes TO account_audit_owner;",
+    confirmMfaEnrollmentWithActivityFunction,
+    "ALTER FUNCTION account_audit.confirm_mfa_enrollment_with_activity(TEXT, BIGINT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT[]) OWNER TO account_audit_owner;",
+    "REVOKE ALL ON FUNCTION account_audit.confirm_mfa_enrollment_with_activity(TEXT, BIGINT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT[]) FROM PUBLIC;"
+  ]
+
+confirmMfaEnrollmentWithActivityFunction :: Text
+confirmMfaEnrollmentWithActivityFunction =
+  Text.unlines
+    [ "CREATE OR REPLACE FUNCTION account_audit.confirm_mfa_enrollment_with_activity(",
+      "  p_account_id TEXT, p_confirmed_at BIGINT, p_request_id TEXT,",
+      "  p_route_endpoint_name TEXT, p_route_mount_chain TEXT, p_route_template TEXT, p_route_locale TEXT,",
+      "  VARIADIC p_recovery_code_hashes TEXT[]",
+      ") RETURNS TABLE(account_id TEXT)",
+      "LANGUAGE plpgsql VOLATILE SECURITY DEFINER",
+      "SET search_path = pg_catalog, account_audit",
+      "AS $$",
+      "DECLARE",
+      "  v_account_id TEXT;",
+      "  v_activity_id BIGINT;",
+      "BEGIN",
+      "  IF cardinality(p_recovery_code_hashes) <> 8",
+      "     OR EXISTS (SELECT 1 FROM unnest(p_recovery_code_hashes) AS recovery_hash(code_hash) WHERE code_hash IS NULL OR octet_length(code_hash) NOT BETWEEN 1 AND 512) THEN",
+      "    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'MFA enrollment confirmation received invalid recovery-code hashes';",
+      "  END IF;",
+      "",
+      "  UPDATE web_api.account_totp AS totp",
+      "  SET confirmed_at_nanoseconds = p_confirmed_at",
+      "  WHERE totp.account_id = p_account_id AND totp.confirmed_at_nanoseconds IS NULL",
+      "  RETURNING totp.account_id INTO v_account_id;",
+      "  IF NOT FOUND THEN RETURN; END IF;",
+      "",
+      "  DELETE FROM web_api.account_recovery_codes WHERE web_api.account_recovery_codes.account_id = v_account_id;",
+      "  INSERT INTO web_api.account_recovery_codes (account_id, code_hash, created_at_nanoseconds)",
+      "  SELECT v_account_id, code_hash, p_confirmed_at FROM unnest(p_recovery_code_hashes) AS recovery_hash(code_hash);",
+      "",
+      "  SELECT appended.activity_id INTO v_activity_id",
+      "  FROM account_audit.append_activity(",
+      "    v_account_id, p_request_id, 'mfa-enrolled'::TEXT, 1::SMALLINT, NULL::TEXT,",
+      "    p_route_endpoint_name, p_route_mount_chain, p_route_template, p_route_locale",
+      "  ) AS appended;",
+      "  IF NOT FOUND THEN",
+      "    RAISE EXCEPTION USING ERRCODE = 'XX000', MESSAGE = 'MFA enrollment audit append returned no activity';",
+      "  END IF;",
+      "",
+      "  account_id := v_account_id;",
+      "  RETURN NEXT;",
+      "END;",
+      "$$;"
+    ]
 
 completePendingRegistrationDeliveryWithActivityFunction :: Text
 completePendingRegistrationDeliveryWithActivityFunction =

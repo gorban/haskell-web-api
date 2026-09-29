@@ -4,9 +4,11 @@
 -- observation and telemetry-safe security event. This module owns the closed
 -- account activity catalog and converts a trusted observation into bounded
 -- audit columns; it accepts neither a request path nor arbitrary payload text.
--- The PostgreSQL repository and transactional account-operation integration
--- remain subsequent slices of the activity-audit design work, so this module deliberately does not claim an
--- append is yet atomic with account state.
+-- The standalone append exposed here does not guarantee business-state
+-- atomicity. AHI-5 composes selected owning workflows through narrow PostgreSQL
+-- transaction functions; MFA enrollment confirmation now uses that boundary.
+-- TOTP login, recovery-code consumption, email verification, and the remaining
+-- catalog integration still require their own AHI-5 decisions.
 module WebApi.ActivityAudit
   ( AccountActivity (..),
     AccountAuditEvent (..),
@@ -175,3 +177,4 @@ data ActivityAuditStoreError
   = ActivityAuditUnavailable
   | ActivityAuditCapacityExceeded
   | ActivityAuditCorruptResult
+  deriving (Eq)

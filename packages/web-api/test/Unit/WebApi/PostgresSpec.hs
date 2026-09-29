@@ -30,7 +30,7 @@ import WebApi.App (buildAppWithDatabase)
 import WebApi.Components.AppControls (appControls)
 import WebApi.Config (DatabaseConfig (..), DatabaseSslMode (..), DatabaseTransportSecurity (..), defaultAppConfig)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), SecondPageData (..))
-import WebApi.Mfa (MfaStore (..), StoredTotpEnrollment (..))
+import WebApi.Mfa (MfaConfirmationAuditContext (..), MfaStore (..), StoredTotpEnrollment (..))
 import WebApi.Postgres (buildPostgresPageRepository)
 import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStore, buildRuntimePostgresPageRepositoryWithRunner, databaseTransportEnvironment, decodeRuntimeQueryValue, libpqConnectionValue, migrationStatementsFor, newPostgresPool, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRequiredScalarCommand, runRowsCommand, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, runtimeConnectionString, seedStatements)
 import WebApi.Route (AppRoute (..), defaultRequestContext)
@@ -829,8 +829,9 @@ spec =
               Right actual | actual == expected -> pure ()
               _ -> expectationFailure label
       let recoveryCodeHash = Account.accountIdText accountId <> "-recovery-hash"
+          recoveryCodeHashes = fmap (\index -> recoveryCodeHash <> "-" <> Text.pack (show index)) ((1 :: Int) :| [2 .. 8])
       assertMfaBoolResult "expected the first enrollment start to succeed" (saveUnconfirmedTotpEnrollment mfaStoreForAccount accountId "encrypted-envelope" 600) True
-      assertMfaBoolResult "expected confirmation to succeed" (confirmTotpEnrollment mfaStoreForAccount accountId (recoveryCodeHash :| []) 700) True
+      assertMfaBoolResult "expected confirmation to succeed" (confirmTotpEnrollment mfaStoreForAccount accountId recoveryCodeHashes 700 (MfaConfirmationAuditContext testRequestId Nothing)) True
       assertMfaBoolResult "expected a restart against a confirmed enrollment to be rejected" (saveUnconfirmedTotpEnrollment mfaStoreForAccount accountId "attacker-supplied-envelope" 800) False
       enrollmentAfterRejectedRestart <- loadTotpEnrollment mfaStoreForAccount accountId
       case enrollmentAfterRejectedRestart of
@@ -883,7 +884,7 @@ spec =
       ensureDefaultPostgresAvailable
       runPostgresMigrations defaultMigrationPostgresConfig `shouldReturn` Right ()
       runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT change_id FROM web_api.database_changes ORDER BY change_order ASC;"
-        `shouldReturn` Right ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1", "keyed-login-attempt-groups-v1", "remove-session-csrf-v1", "account-audit-schema-v1", "account-audit-controlled-append-policy-v1", "account-audit-controlled-append-rls-v2", "account-audit-append-result-v1", "account-audit-initial-maintenance-v1", "account-audit-session-issue-v1", "account-audit-session-issue-conflict-fix-v1", "account-audit-session-issue-insert-privilege-fix-v1", "account-audit-registration-delivery-v1", "account-audit-verification-resend-delivery-v1", "api-clients-v1", "api-client-secret-hash-format-v1", "account-audit-scheduler-target-v1"]
+        `shouldReturn` Right ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1", "keyed-login-attempt-groups-v1", "remove-session-csrf-v1", "account-audit-schema-v1", "account-audit-controlled-append-policy-v1", "account-audit-controlled-append-rls-v2", "account-audit-append-result-v1", "account-audit-initial-maintenance-v1", "account-audit-session-issue-v1", "account-audit-session-issue-conflict-fix-v1", "account-audit-session-issue-insert-privilege-fix-v1", "account-audit-registration-delivery-v1", "account-audit-verification-resend-delivery-v1", "api-clients-v1", "api-client-secret-hash-format-v1", "account-audit-scheduler-target-v1", "account-audit-mfa-enrollment-v1"]
       runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT column_name FROM information_schema.columns WHERE table_schema = 'web_api' AND table_name IN ('account_sessions', 'mfa_enrollment_sessions') AND column_name = 'csrf_token';"
         `shouldReturn` Right []
       withUnusedTcpEndpoint $ \unusedEndpoint ->
@@ -937,7 +938,7 @@ spec =
       ensureDefaultPostgresAvailable
       runPostgresMigrations defaultMigrationPostgresConfig `shouldReturn` Right ()
       runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT change_id FROM web_api.database_changes ORDER BY change_order ASC;"
-        `shouldReturn` Right ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1", "keyed-login-attempt-groups-v1", "remove-session-csrf-v1", "account-audit-schema-v1", "account-audit-controlled-append-policy-v1", "account-audit-controlled-append-rls-v2", "account-audit-append-result-v1", "account-audit-initial-maintenance-v1", "account-audit-session-issue-v1", "account-audit-session-issue-conflict-fix-v1", "account-audit-session-issue-insert-privilege-fix-v1", "account-audit-registration-delivery-v1", "account-audit-verification-resend-delivery-v1", "api-clients-v1", "api-client-secret-hash-format-v1", "account-audit-scheduler-target-v1"]
+        `shouldReturn` Right ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1", "verification-resend-lifecycle-v1", "keyed-login-attempt-groups-v1", "remove-session-csrf-v1", "account-audit-schema-v1", "account-audit-controlled-append-policy-v1", "account-audit-controlled-append-rls-v2", "account-audit-append-result-v1", "account-audit-initial-maintenance-v1", "account-audit-session-issue-v1", "account-audit-session-issue-conflict-fix-v1", "account-audit-session-issue-insert-privilege-fix-v1", "account-audit-registration-delivery-v1", "account-audit-verification-resend-delivery-v1", "api-clients-v1", "api-client-secret-hash-format-v1", "account-audit-scheduler-target-v1", "account-audit-mfa-enrollment-v1"]
       runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT table_name FROM information_schema.tables WHERE table_schema = 'web_api' AND table_name = 'schema_migrations';"
         `shouldReturn` Right []
 
