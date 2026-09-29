@@ -122,8 +122,10 @@ spec =
       Action.actionEndpointTarget (moduleActionCodec mountedModule) 42 "POST" "/catalog/tenant-42/save"
         `shouldBe` Just ParentSaveTarget
       moduleActionRoute mountedModule 42 ParentSaveTarget `shouldBe` Just (CatalogRoute ChildItemRoute)
-      Site.routeNavigation mountedDefinition 42
-        `shouldBe` Just (Site.RouteNavigation (Site.NavigationOrder 3) "Catalog tenant-42")
+      ( Site.routeNavigation mountedDefinition 42
+          == Just (Site.RouteNavigation (Site.NavigationOrder 3) "Catalog tenant-42")
+        )
+        `shouldBe` True
       Site.routeMethods mountedDefinition (RouteRequest (CatalogRoute ChildItemRoute) 42) `shouldBe` routeMethodPolicy [RouteGet]
       Site.routeExecutionPolicy mountedDefinition `shouldBe` unboundedRouteExecutionPolicy
       let mountedNotFoundRequest = notFoundRequest (moduleRouteCodec mountedModule) 42

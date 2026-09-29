@@ -3,6 +3,7 @@ module Unit.Catalog.ApiSpec (spec) where
 import Catalog.Api
 import Catalog.Domain (CatalogContext (..), CatalogPolicy (MayReadCatalog), CatalogQueries (..), catalogLocaleCode)
 import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.Maybe (isNothing)
 import HarchWeb.Action qualified as Action
 import HarchWeb.Api
   ( ApiAvailability (ApiAvailable, ApiHidden),
@@ -111,7 +112,7 @@ spec = describe "Unit.Catalog.Api" $ do
       Nothing -> pure ()
       Just _ -> expectationFailure "catalog api module must not handle actions"
     let definition = moduleEndpoints moduleValue CatalogItems
-    Site.routeNavigation definition catalogContext `shouldBe` Nothing
+    isNothing (Site.routeNavigation definition catalogContext) `shouldBe` True
     endpointNameText (endpointName (routeMetadata definition)) `shouldBe` "catalog.items"
     routeTemplateText (endpointRouteTemplate (routeMetadata definition)) `shouldBe` "/items"
     endpointProtocol (routeMetadata definition) `shouldBe` ApiEndpoint
@@ -125,7 +126,7 @@ spec = describe "Unit.Catalog.Api" $ do
       ProtocolRouteHandler _ -> pure ()
       PageRouteHandler _ -> expectationFailure "the unlisted preview is a protocol endpoint"
     let notFoundDefinition = moduleEndpoints moduleValue CatalogApiNotFound
-    Site.routeNavigation notFoundDefinition catalogContext `shouldBe` Nothing
+    isNothing (Site.routeNavigation notFoundDefinition catalogContext) `shouldBe` True
     routeExecutionPolicy notFoundDefinition `shouldBe` unboundedRouteExecutionPolicy
     endpointNameText (endpointName (routeMetadata notFoundDefinition)) `shouldBe` "catalog.not-found"
     routeTemplateText (endpointRouteTemplate (routeMetadata notFoundDefinition)) `shouldBe` "/404"

@@ -287,24 +287,24 @@ spec =
         ProtocolResponseResult _ ->
           expectationFailure "expected a page response for the home route"
 
-    it "keeps navigation order and route declarations comparable and inspectable" $ do
+    it "keeps navigation orders and route declarations comparable" $ do
       let firstOrder = Site.NavigationOrder 10
           laterOrder = Site.NavigationOrder 20
           firstNavigation = Site.RouteNavigation firstOrder "Home"
       expectAll
-        ( (firstOrder `shouldBe` Site.NavigationOrder 10)
-            :| [ firstOrder `shouldNotBe` laterOrder,
+        ( ((firstOrder == Site.NavigationOrder 10) `shouldBe` True)
+            :| [ (firstOrder /= laterOrder) `shouldBe` True,
                  compare firstOrder laterOrder `shouldBe` LT,
                  firstOrder < laterOrder `shouldBe` True,
                  laterOrder > firstOrder `shouldBe` True,
                  firstOrder <= firstOrder `shouldBe` True,
                  laterOrder >= firstOrder `shouldBe` True,
-                 min firstOrder laterOrder `shouldBe` firstOrder,
-                 max firstOrder laterOrder `shouldBe` laterOrder,
-                 Text.pack (show firstOrder) `shouldBe` "NavigationOrder 10",
-                 firstNavigation `shouldBe` Site.RouteNavigation firstOrder "Home",
-                 firstNavigation `shouldNotBe` Site.RouteNavigation firstOrder "Other",
-                 Text.pack (show firstNavigation) `shouldBe` "RouteNavigation {routeNavigationOrder = NavigationOrder 10, routeNavigationLabel = \"Home\"}"
+                 (min firstOrder laterOrder == firstOrder) `shouldBe` True,
+                 (max firstOrder laterOrder == laterOrder) `shouldBe` True,
+                 (firstNavigation == Site.RouteNavigation firstOrder "Home") `shouldBe` True,
+                 (firstNavigation /= Site.RouteNavigation firstOrder "Other") `shouldBe` True,
+                 (Site.routeNavigationOrder firstNavigation == firstOrder) `shouldBe` True,
+                 Site.routeNavigationLabel firstNavigation `shouldBe` "Home"
                ]
         )
 

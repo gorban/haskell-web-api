@@ -1488,14 +1488,14 @@ spec = describe "Unit.App.Composed" $ do
         renderHtml (pageBody page) `shouldBe` "<h1>Login</h1>"
         pageBootstrapHooks page `shouldBe` []
       _ -> expectationFailure "expected the public login definition to return a page"
-    Site.routeNavigation assetDefinition publicContext `shouldBe` Nothing
+    isNothing (Site.routeNavigation assetDefinition publicContext) `shouldBe` True
     endpointName (routeMetadata assetDefinition) `shouldBe` requiredEndpointName "root.public.assets"
     routeTemplateText (endpointRouteTemplate (routeMetadata assetDefinition)) `shouldBe` "/public/assets/*"
     endpointProtocol (routeMetadata assetDefinition) `shouldBe` AssetEndpoint
     endpointAccess (routeMetadata assetDefinition) `shouldBe` AllowUnauthenticated
     Site.routeMethods assetDefinition (RouteRequest (Public (PublicAsset (StaticAssetRoute (routePathSegments assetLocation)))) publicContext) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
     routeExecutionPolicy assetDefinition `shouldBe` unboundedRouteExecutionPolicy
-    Site.routeNavigation missingDefinition publicContext `shouldBe` Nothing
+    isNothing (Site.routeNavigation missingDefinition publicContext) `shouldBe` True
     endpointName (routeMetadata missingDefinition) `shouldBe` requiredEndpointName "root.public.not-found"
     routeTemplateText (endpointRouteTemplate (routeMetadata missingDefinition)) `shouldBe` "/public/404"
     endpointProtocol (routeMetadata missingDefinition) `shouldBe` HtmlEndpoint

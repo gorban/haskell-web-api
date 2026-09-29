@@ -2,6 +2,7 @@
 
 import Data.ByteString.Lazy.Char8 qualified as LazyByteString
 import Data.Map.Strict qualified as Map
+import Data.Maybe (isNothing)
 import HarchWeb.EndpointMetadata (AccessRequirement (AllowUnauthenticated), EndpointMetadata, EndpointProtocol (ApiEndpoint), mkEndpointMetadata, requiredEndpointNameOrDie, requiredRouteTemplateOrDie)
 import HarchWeb.OpenApi
 import HarchWeb.Routing (RouteMethod (RouteGet), RouteRequest (..), routeMethodPolicy)
@@ -15,7 +16,7 @@ spec =
     it "uses the shared GET route policy and serves provider bytes as OpenAPI JSON" $ do
       provider <- requireRight (mkCachedOpenApiDocumentProvider (OpenApiDocumentDetails "Catalog API" "1.0") Map.empty () [])
       let definition = openApiDocumentRouteDefinition documentMetadata provider :: RouteDefinition () () ()
-      routeNavigation definition () `shouldBe` Nothing
+      isNothing (routeNavigation definition ()) `shouldBe` True
       routeMetadata definition `shouldBe` documentMetadata
       routeMethods definition (RouteRequest () ()) `shouldBe` routeMethodPolicy [RouteGet]
       routeExecutionPolicy definition `shouldBe` unboundedRouteExecutionPolicy

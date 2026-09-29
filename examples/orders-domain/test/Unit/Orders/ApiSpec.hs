@@ -2,6 +2,7 @@ module Unit.Orders.ApiSpec (spec) where
 
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.Maybe (isNothing)
 import HarchWeb.Action qualified as Action
 import HarchWeb.Api
   ( ApiEndpointContract (..),
@@ -116,7 +117,7 @@ spec = describe "Unit.Orders.Api" $ do
       Nothing -> pure ()
       Just _ -> expectationFailure "orders api module must not handle actions"
     let definition = moduleEndpoints moduleValue OrdersSubmit
-    Site.routeNavigation definition ordersContext `shouldBe` Nothing
+    isNothing (Site.routeNavigation definition ordersContext) `shouldBe` True
     endpointNameText (endpointName (routeMetadata definition)) `shouldBe` "orders.submit"
     routeTemplateText (endpointRouteTemplate (routeMetadata definition)) `shouldBe` "/"
     endpointProtocol (routeMetadata definition) `shouldBe` ApiEndpoint
@@ -148,7 +149,7 @@ spec = describe "Unit.Orders.Api" $ do
           _ -> expectationFailure "expected a protocol response"
       PageRouteHandler _ -> expectationFailure "orders submit is a protocol endpoint"
     let notFoundDefinition = moduleEndpoints moduleValue OrdersApiNotFound
-    Site.routeNavigation notFoundDefinition ordersContext `shouldBe` Nothing
+    isNothing (Site.routeNavigation notFoundDefinition ordersContext) `shouldBe` True
     routeExecutionPolicy notFoundDefinition `shouldBe` unboundedRouteExecutionPolicy
     endpointNameText (endpointName (routeMetadata notFoundDefinition)) `shouldBe` "orders.not-found"
     routeTemplateText (endpointRouteTemplate (routeMetadata notFoundDefinition)) `shouldBe` "/404"

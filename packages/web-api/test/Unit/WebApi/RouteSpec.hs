@@ -3,6 +3,7 @@
 import Control.Exception (ErrorCall (..), evaluate)
 import Control.Monad (forM_)
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Maybe (isNothing)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
@@ -48,9 +49,9 @@ spec = do
   describe "routeNavigationDeclaration" $
     it "omits API, not-found, and generated routes from page navigation" $
       expectAll
-        ( (WebApi.Route.routeNavigationDeclaration (Api StatusApi) defaultRequestContext `shouldBe` Nothing)
-            :| [ WebApi.Route.routeNavigationDeclaration NotFoundRoute defaultRequestContext `shouldBe` Nothing,
-                 WebApi.Route.routeNavigationDeclaration ShowcaseRoute defaultRequestContext `shouldBe` Nothing
+        ( (isNothing (WebApi.Route.routeNavigationDeclaration (Api StatusApi) defaultRequestContext) `shouldBe` True)
+            :| [ isNothing (WebApi.Route.routeNavigationDeclaration NotFoundRoute defaultRequestContext) `shouldBe` True,
+                 isNothing (WebApi.Route.routeNavigationDeclaration ShowcaseRoute defaultRequestContext) `shouldBe` True
                ]
         )
 

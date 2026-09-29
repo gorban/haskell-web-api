@@ -3,6 +3,7 @@
 {-# SPEC #-}
 
 import Control.Exception (ErrorCall (..))
+import Data.Maybe (isNothing)
 import HarchWeb.EndpointMetadata (AccessRequirement (AllowUnauthenticated), EndpointMetadata, EndpointProtocol (AssetEndpoint), mkEndpointMetadata, requiredEndpointNameOrDie, requiredRouteTemplateOrDie)
 import HarchWeb.Routing (RouteCodec (..), RouteLocation (..), RouteMethod (RouteGet), RouteParseResult (..), RouteRequest (..), requiredPathSegment, routeMethodPolicy)
 import HarchWeb.Routing qualified as Routing
@@ -44,7 +45,7 @@ spec =
         notFoundRequest codec () `shouldBe` RouteRequest (StaticAssetRoute []) ()
         Routing.routeMethods codec (RouteRequest (StaticAssetRoute (routePathSegments location)) ()) `shouldBe` routeMethodPolicy [RouteGet]
         let definition = staticAssetRouteDefinition staticAssets metadata
-        routeNavigation definition () `shouldBe` Nothing
+        isNothing (routeNavigation definition ()) `shouldBe` True
         routeMetadata definition `shouldBe` metadata
         Site.routeMethods definition (RouteRequest (StaticAssetRoute (routePathSegments location)) ()) `shouldBe` routeMethodPolicy [RouteGet]
         routeExecutionPolicy definition `shouldBe` unboundedRouteExecutionPolicy
