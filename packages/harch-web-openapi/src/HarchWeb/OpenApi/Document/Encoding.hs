@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | The narrow raw-JSON adapters for 'HarchWeb.OpenApi.Document'
 -- (the OpenAPI document split): @openapi3@'s typed model can neither retain validated @x-*@
 -- operation members nor emit an explicit empty @security@ array, so encoding

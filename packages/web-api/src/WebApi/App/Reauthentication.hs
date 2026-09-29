@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | The secure-login and admission design's reference adapter owns only account-dialog presentation around
 -- Harch's retained-action lifecycle.  It never reads, copies, stores, or
 -- submits the original form values: the capture kernel keeps that bounded

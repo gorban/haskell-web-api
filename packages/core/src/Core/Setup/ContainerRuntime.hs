@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Shared container-runtime fallback for setup prerequisites.
 --
 -- The review finding groups the three stable outcome constructors for a

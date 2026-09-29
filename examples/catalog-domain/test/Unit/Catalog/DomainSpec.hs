@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Unit.Catalog.DomainSpec (spec) where
 
 import Catalog.Domain

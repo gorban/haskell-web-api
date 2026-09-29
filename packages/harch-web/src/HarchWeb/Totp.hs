@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module HarchWeb.Totp
   ( TotpCode,
     TotpSecret,

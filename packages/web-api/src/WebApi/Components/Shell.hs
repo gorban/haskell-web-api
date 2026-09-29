@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | App-owned shell configuration.
 --
 -- The component and styling architecture design composes the existing Harch shell, stylesheet, and validated path

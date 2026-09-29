@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module WebApi.Page.Rendering
   ( renderPageBody,
     renderPageBodyForLocale,

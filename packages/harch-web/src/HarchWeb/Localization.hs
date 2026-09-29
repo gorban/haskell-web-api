@@ -1,5 +1,4 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | ICU-backed, application-extensible message lookup and rendering.
 --

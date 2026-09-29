@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | Locale-root adaptation for an already-composed local module.  Locale
 -- parsing remains root-owned and typed; local Catalog, Orders, and Public

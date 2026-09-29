@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Ephemeral JWK material for tests that deliberately start the real server.
 --
 -- The fixture writes a freshly generated keypair into a temporary directory,

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Private admission control for complete WAI request lifecycles.
 --
 -- This module owns the concurrent-request gate because its state and lifetime

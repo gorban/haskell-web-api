@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | Fixtures and assertions genuinely shared across the @Unit.WebApi@ specs.
 --

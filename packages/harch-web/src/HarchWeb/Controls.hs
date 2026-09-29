@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Typed authoring controls for enhanced navigation and client actions.
 --
 -- The low-level markup attributes remain available for deliberately external

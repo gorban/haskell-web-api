@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Application-owned durable account-audit vocabulary.
 --
 -- Decision record (durable activity audit, 2026-09-05): Harch Web owns only the trusted route

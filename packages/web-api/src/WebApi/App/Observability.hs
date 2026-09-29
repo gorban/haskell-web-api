@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module WebApi.App.Observability
   ( otlpExportFailureMessage,
     requestObservabilityLogContext,

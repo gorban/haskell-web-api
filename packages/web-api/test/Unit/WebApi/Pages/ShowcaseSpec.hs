@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 {-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty ((:|)))

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Unit.Orders.DomainSpec (spec) where
 
 import Data.List.NonEmpty (NonEmpty ((:|)))

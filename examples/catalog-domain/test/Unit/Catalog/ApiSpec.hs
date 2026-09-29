@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Unit.Catalog.ApiSpec (spec) where
 
 import Catalog.Api

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Validated authentication-proof transport and browser cookie policy.
 --
 -- Decision record (review finding, 2026-09-05): this internal owner keeps the existing

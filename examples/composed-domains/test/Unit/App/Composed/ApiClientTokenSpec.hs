@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 {-# SPEC #-}
 
 import App.Composed.ApiClient

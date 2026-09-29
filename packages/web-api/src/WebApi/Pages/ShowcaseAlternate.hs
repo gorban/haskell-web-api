@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | @\/showcase-alternate@ — the deliberate scoped-CSS collision twin.

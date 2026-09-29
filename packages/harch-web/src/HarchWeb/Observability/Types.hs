@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Private typed observability foundation shared by the public API and OTLP
 -- exporter implementation.
 module HarchWeb.Observability.Types

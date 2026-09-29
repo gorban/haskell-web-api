@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | The thin server-owning composition root for independently packaged
 -- Catalog and Orders modules.  Closed root values, domain mounts, public
 -- routes, and locale adaptation are private modules with their own stable

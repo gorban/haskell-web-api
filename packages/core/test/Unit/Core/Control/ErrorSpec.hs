@@ -1,3 +1,5 @@
+{-# LANGUAGE NoOverloadedStrings #-}
+
 {-# SPEC #-}
 
 import Control.Monad.Except (runExceptT, throwError)
@@ -13,7 +15,7 @@ spec = describe "handleError" $ do
     result `shouldBe` "handled: error"
 
   it "passes the error to the handler" $ do
-    let expectedError = "specific error message"
+    let expectedError = "specific error message" :: String
     result <- throwError expectedError `handleError` pure
     result `shouldBe` expectedError
 

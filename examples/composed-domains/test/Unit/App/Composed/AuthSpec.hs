@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Unit.App.Composed.AuthSpec (spec) where
 
 import App.Composed.Auth

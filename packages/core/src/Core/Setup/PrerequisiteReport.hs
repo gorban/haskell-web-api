@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Setup prerequisite reporting.
 --
 -- The review finding makes the loader, reachability checks, autostart

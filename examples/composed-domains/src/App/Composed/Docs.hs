@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | The composed root's documentation surface (from the OpenAPI
 -- documentation and Swagger UI work): the typed

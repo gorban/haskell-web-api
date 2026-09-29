@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Runtime-owned OTLP reporting installed by 'HarchWeb.Server.runServer'.
 --
 -- Decision (configured OTLP runtime export, 2026-09-14): extend the existing

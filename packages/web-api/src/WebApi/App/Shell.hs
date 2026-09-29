@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module WebApi.App.Shell
   ( appPageShellForPage,
     buildAppPageShell,

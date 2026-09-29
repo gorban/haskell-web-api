@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | PostgreSQL adapter for the composed example's durable OAuth clients.
 --

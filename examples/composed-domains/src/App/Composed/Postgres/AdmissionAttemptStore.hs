@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | PostgreSQL adapter for the composed application's grouped admission
 -- attempt lifecycle.  It consumes only the application's closed budget
 -- algebra; the generic reservation hand-off remains in Harch.

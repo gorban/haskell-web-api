@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Validated issuer/resource settings shared by the composed OAuth owners.
 module App.Composed.OAuth.Configuration
   ( ComposedOAuthConfigurationError (..),

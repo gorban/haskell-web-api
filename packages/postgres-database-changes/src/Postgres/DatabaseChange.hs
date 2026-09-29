@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | PostgreSQL-specific, connection-scoped application of immutable ordered
 -- database changes.  This module deliberately does not import an application
 -- configuration type: applications own their connection credentials, schema,

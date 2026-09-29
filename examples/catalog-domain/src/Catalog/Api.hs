@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | The @catalog.api@ application module (the composed-domains slice of the
 -- OpenAPI documentation and Swagger UI work):
 -- a second, distinct module the composed root mounts at @/api/catalog@ while

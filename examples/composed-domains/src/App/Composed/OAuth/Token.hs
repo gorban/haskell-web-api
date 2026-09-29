@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Client-credentials request decoding and OAuth token response semantics.
 module App.Composed.OAuth.Token
   ( ComposedOAuthTokenFailure (..),

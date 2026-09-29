@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Buffered API request decoding and response rendering.
 module HarchWeb.Api.Response
   ( ApiBodyDecoder (..),

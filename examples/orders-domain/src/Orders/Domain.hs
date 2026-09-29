@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | An independently packaged Orders module.  Its read model and command
 -- adapter are explicit constructor inputs; neither needs a composition root
 -- route, authentication implementation, or server-owned capability.

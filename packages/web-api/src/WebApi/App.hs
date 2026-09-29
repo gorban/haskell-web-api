@@ -1,5 +1,4 @@
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | Compose web-api's typed Site, page routes, actions, security profiles,
 -- and application-owned request context. Runtime resource acquisition and

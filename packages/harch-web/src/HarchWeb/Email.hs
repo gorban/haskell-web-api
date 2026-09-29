@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | SMTP delivery with a deliberately narrow authenticated-transport policy.
 --
 -- Decision (AW, 2026-08-18): extend the existing SMTP configuration boundary

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Opt-in request-resource limits checked before route parsing, middleware,
 -- and request observability. This module owns only the request-budget
 -- boundary; response security headers, request-context extraction, and

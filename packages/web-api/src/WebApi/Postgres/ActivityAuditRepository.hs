@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | PostgreSQL implementation of the application-owned audit append port.
 --
 -- Decision record (durable activity audit, 2026-09-07): extend 'ActivityAuditStore' through

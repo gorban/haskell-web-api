@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Pure, incremental multipart boundary scanning. This module owns only
 -- byte-level framing and its retained-byte limits; interpreting headers,
 -- fields, and storage belongs to the consumer layer.

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Private parsing and derived defaults for certbot command-line options.
 --
 -- The framework facade retains the supported helpers, while certificate

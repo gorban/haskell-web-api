@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Account-action workflows.
 --
 -- Decision record (durable activity audit, 2026-09-11): retain known-account rejection

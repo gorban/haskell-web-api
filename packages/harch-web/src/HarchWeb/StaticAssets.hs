@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Typed static-asset declarations and browser-visible asset URLs.
 --
 -- Filesystem matching and WAI responses remain server implementation details;

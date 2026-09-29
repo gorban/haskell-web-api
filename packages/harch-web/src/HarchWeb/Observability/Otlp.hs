@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Private OTLP transport and identifier generation.
 --
 -- The public observability API exposes typed spans and exporter configuration;

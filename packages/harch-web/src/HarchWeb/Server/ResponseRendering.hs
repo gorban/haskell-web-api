@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Response finalization and WAI rendering for typed applications.
 module HarchWeb.Server.ResponseRendering
   ( applyResponseHeaders,

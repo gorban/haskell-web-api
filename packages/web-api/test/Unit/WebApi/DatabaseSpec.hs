@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 {-# SPEC #-}
 
 import Unit.WebApi.TestSupport hiding (databaseConfig)

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Database migration and seeding command execution.
 --
 -- FQ9 makes loaders and runners one injected 'DatabaseSetupDependencies'

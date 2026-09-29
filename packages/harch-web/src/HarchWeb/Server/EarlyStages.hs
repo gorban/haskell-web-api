@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Private framework-owned pre-routing response interpreter.
 --
 -- Runtime assets, policy preflight/redirects, static assets, and malformed

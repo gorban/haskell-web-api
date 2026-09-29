@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Pure, validated endpoint declarations shared by route and action codecs.
 -- Keeping this layer below response execution lets every declared endpoint
 -- carry the same metadata without making action decoding depend on guards.

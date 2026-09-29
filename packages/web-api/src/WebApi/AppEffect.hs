@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module WebApi.AppEffect
   ( AccountWorkflow (..),
     AppFailure (..),

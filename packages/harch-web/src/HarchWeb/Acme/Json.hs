@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Minimal JSON byte-level encoding helpers backing
 -- "HarchWeb.Observability.Otlp.Wire"'s OTLP JSON export. Public only so this
 -- package's own test suite can exercise it directly; nothing outside

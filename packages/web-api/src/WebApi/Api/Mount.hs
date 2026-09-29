@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | The one shared mount prefix for web-api's endpoint declarations and
 -- OpenAPI family. Keeping this path fact below both owners avoids a dependency
 -- cycle: endpoint declarations need its rendered path, while OpenApiDocs

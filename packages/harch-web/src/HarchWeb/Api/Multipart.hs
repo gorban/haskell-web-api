@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
 -- | A bounded, incremental @multipart\/form-data@ consumer (RFC 7578, RFC

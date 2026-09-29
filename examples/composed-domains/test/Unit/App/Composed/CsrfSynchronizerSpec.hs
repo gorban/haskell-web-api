@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 module Unit.App.Composed.CsrfSynchronizerSpec (spec) where
 

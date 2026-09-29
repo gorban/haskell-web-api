@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Browser application fixtures use Hspec's existing scoped hooks: immutable
 -- configuration and temporary assets may span the suite, and server lifetime is
 -- selected explicitly with aroundAllWith or aroundWith. Browser sessions remain

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 {-# SPEC #-}
 
 import Data.ByteString.Lazy.Char8 qualified as LazyByteString

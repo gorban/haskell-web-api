@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | The closed OpenAPI security-scheme vocabulary an application may attach
 -- to a documented family.
 --

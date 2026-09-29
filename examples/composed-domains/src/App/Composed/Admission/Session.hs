@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Durable admission-session issuance, validation, and CSRF grant binding.
 --
 -- The session is an application capability, not an Harch authentication

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module TestSupport.RealPostgres
   ( databaseSetupEnvironment,
     containerizedPsqlScriptContents,

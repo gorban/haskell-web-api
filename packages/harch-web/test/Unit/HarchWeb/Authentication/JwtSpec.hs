@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 {-# SPEC #-}
 
 import Crypto.JOSE.JWA.JWK qualified as JwaJwk

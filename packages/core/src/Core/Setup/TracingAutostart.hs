@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Core.Setup.TracingAutostart
   ( TracingAutostartResult (..),
     attemptTracingAutostart,

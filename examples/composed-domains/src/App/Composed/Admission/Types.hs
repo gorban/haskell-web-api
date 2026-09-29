@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Opaque application-owned identifiers for the composed admission domain.
 -- They intentionally do not reuse an account ID: admission and account
 -- identity have independent provisioning, session tables, cookies, and

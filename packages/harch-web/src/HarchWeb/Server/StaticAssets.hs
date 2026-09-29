@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Private filesystem dispatch for configured static assets.
 --
 -- A matched asset is authenticated against its canonical configured root before

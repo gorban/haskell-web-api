@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | PostgreSQL persistence for opaque composed-admission sessions.
 module App.Composed.Postgres.AdmissionSessionStore
   ( buildPostgresAdmissionSessionStoreWithRunner,

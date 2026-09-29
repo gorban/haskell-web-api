@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | A CSRF-protected, JS-optional native file-upload form using the typed
 -- endpoint boundary (see 'HarchWeb.Api.Endpoint's route-family registry).

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module App.App
   ( buildApplication,
     twoPageServerConfig,

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module HarchWeb.Password
   ( Argon2Iterations,
     Argon2MemoryKib,

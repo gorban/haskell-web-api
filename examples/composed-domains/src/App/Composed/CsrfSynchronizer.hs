@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | The composed application's durable synchronizer-token CSRF adapter.
 --
 -- Harch still parses the one host-only cookie and submitted field in constant

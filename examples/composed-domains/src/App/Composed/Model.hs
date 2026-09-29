@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Closed root values and locale policy owned by the composed-domains
 -- application. Domain packages depend on none of these values: the root maps
 -- their local routes, actions, contexts, and policy values at an explicit

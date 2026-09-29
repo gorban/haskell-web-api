@@ -1,5 +1,4 @@
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | Private representation shared by the endpoint declaration, family, and
 -- runtime modules.  Keeping the constructors here lets the route-family

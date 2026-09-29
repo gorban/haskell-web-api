@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Immutable PostgreSQL changes owned by the composed example's admission
 -- and OAuth-client storage.
 --

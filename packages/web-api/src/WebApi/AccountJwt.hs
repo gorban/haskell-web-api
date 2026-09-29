@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Application-owned RS256 account-session JWT admission.
 --
 -- This public facade owns application meaning after a compact proof is

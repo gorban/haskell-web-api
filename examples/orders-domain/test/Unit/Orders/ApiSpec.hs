@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Unit.Orders.ApiSpec (spec) where
 
 import Data.IORef (newIORef, readIORef, writeIORef)

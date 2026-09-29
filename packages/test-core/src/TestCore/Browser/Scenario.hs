@@ -1,6 +1,5 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | Haskell-authored browser scenarios. The Node process remains a thin
 -- Playwright adapter; scenario control flow and assertions stay here.

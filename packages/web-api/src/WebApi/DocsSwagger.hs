@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | The @/docs@ Swagger UI page as an ordinary typed application surface
 -- (a later slice of the OpenAPI documentation and Swagger UI work). The page renders complete SSR with a script-free
 -- fallback and an enhancement mount; the pinned self-hosted renderer,

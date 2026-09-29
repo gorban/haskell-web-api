@@ -1,5 +1,4 @@
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | Typed SSR document authoring and rendering.
 module HarchWeb.Document

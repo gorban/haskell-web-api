@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Typed path/operation construction for 'HarchWeb.OpenApi.Document'
 -- (the OpenAPI document split). One module owns the construction rail: each available
 -- endpoint becomes one typed @openapi3@ 'Operation' whose request, response,

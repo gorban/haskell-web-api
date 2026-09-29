@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 {-# SPEC #-}
 
 import Core.PageRoutes.Generator (GenerationError (..), GenerationOutcome (..), GeneratorConfig (..), PageSpec (..), defaultGeneratorConfig, discoverPages, generatePageModules, pageSpecFromRelativePath, renderDispatcherModule, renderManifest, renderRouteModule, validatePageSpecs)

@@ -1,5 +1,4 @@
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | Private configuration and startup-plan vocabulary shared by the server
 -- runtime and the ACME implementation. The supported public surface is

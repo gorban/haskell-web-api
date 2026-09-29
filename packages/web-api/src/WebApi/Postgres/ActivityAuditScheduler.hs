@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | The repository-owned pg_cron command contract for the example audit
 -- deployment.  These statements are deliberately independent of setup I/O:
 -- another application can invoke the same maintenance wrapper from a managed

@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
 -- `verifyClaims` returns jose's fixed 'Crypto.JWT.ClaimsSet', so a caller-
 -- supplied custom-claims subtype cannot carry the OAuth scope claim. The
 -- supported fallback is 'Crypto.JWT.unregisteredClaims'; another local claims

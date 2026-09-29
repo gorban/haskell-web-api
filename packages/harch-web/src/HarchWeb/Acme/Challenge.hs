@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Private HTTP-01 challenge state and response handling.
 --
 -- ACME protocol and certificate-management code use this module through the

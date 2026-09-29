@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Private client-action protocol parsing and response encoding.
 module HarchWeb.Server.ClientAction
   ( ClientActionProtocolError (..),

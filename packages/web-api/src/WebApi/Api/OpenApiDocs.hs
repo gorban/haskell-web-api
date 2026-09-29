@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Interpret web-api's existing endpoint declarations as one cached
 -- OpenAPI document. Endpoint handlers and their typed contracts remain owned
 -- by 'WebApi.Api.Endpoints'; this module owns only family mounting,

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Typed route matching and rendering for HarchWeb applications.
 --
 -- The framework facade re-exports this module. Applications can keep using

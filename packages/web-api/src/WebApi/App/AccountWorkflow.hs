@@ -1,5 +1,4 @@
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | FQ12's private account-workflow composition. Runtime and deliberately
 -- unavailable workflows share the one process-wide password-work gate;

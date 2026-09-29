@@ -1,5 +1,4 @@
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | The RFC 6749 client-credentials endpoint, including its bounded request
 -- declaration, issuance adapter, protocol failures, and response rendering.

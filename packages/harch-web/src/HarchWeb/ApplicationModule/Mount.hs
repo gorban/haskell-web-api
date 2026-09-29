@@ -1,5 +1,4 @@
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | Typed application-module mount adaptation and construction validation.
 module HarchWeb.ApplicationModule.Mount

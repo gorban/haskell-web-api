@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Private loopback-server lifecycle for framework tests and examples.
 --
 -- The public facade exposes 'LocalTestServer', 'withLocalTestServer', and

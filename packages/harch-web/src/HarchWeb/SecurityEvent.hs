@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Trusted security-event contracts shared by endpoint admission and future
 -- application-module composition.
 --

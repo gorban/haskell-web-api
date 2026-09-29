@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | The typed Swagger UI surface (the OpenAPI documentation and Swagger UI work): the ordinary SSR page at

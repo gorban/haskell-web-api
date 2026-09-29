@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Unit.App.Composed.PostgresApiClientStoreSpec (spec) where
 
 import App.Composed

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | PostgreSQL adapter for the durable OAuth API-client store.
 --
 -- Decision record (scoped API authentication, 2026-09-16): each lookup reads its active

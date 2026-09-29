@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Parsing for the per-part @Content-Disposition@ metadata in a multipart
 -- body. This is deliberately pure: the upload driver decides what storage and
 -- lifetime policy to apply after this module identifies the field.

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Typed, optional documentation metadata carried by an API endpoint.
 --
 -- This belongs to the optional @harch-web-openapi@ package: the generic

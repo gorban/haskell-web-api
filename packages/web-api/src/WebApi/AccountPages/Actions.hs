@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Account action orchestration and CSRF policy.
 --
 -- Decision record (secure login and admission, 2026-09-03): session-bound CSRF belongs at Harch's

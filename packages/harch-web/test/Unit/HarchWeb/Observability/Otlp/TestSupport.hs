@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Unit.HarchWeb.Observability.Otlp.TestSupport
   ( CapturedCollectorRequest (..),
     withOtlpCollector,

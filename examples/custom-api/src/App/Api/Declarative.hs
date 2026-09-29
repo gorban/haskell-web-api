@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | A compiled demonstration of the typed 'HarchWeb.Api' endpoint boundary:
 -- a hand-written request-body decoder and response encoders as the
 -- extension points 'HarchWeb.Api' does not build in, negotiated JSON/custom

@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | PostgreSQL adapter for operator-provisioned admission credentials.
 module App.Composed.Postgres.AdmissionCredentialStore

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Public JWKS and OAuth authorization-server/resource metadata responses.
 module App.Composed.OAuth.Discovery
   ( authorizationServerMetadataRouteDefinition,

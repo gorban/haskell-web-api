@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | The accepted-login durable-operation boundary.
 --
 -- Decision (activity-audit workflow, 2026-09-09): keep parsing and interpretation of every

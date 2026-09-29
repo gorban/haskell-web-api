@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Core.PageRoutes.Generator
   ( GenerationError (..),
     GenerationOutcome (..),

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Private certbot-backed ACME runtime lifecycle.
 --
 -- The public facade re-exports the supported plan and preparation helpers, but

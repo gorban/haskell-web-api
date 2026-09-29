@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Application-owned pre-auth admission policy for the composed example.
 --
 -- This module is deliberately the small composition facade. Credential/TOTP

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | The composed application's OAuth token and discovery protocol.
 --
 -- This extends the root's typed route algebra and Harch's bounded API

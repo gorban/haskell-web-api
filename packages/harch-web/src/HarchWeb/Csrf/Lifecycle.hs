@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Opaque page/action CSRF state.
 --
 -- The secure-login and admission design moves page security construction before a page handler builds its

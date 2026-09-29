@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | The client-action protocol interpreter after ordinary route dispatch has
 -- selected its request context.  It owns body bounds, origin/CSRF validation,
 -- decoding, authorization, and handler invocation as one stable protocol

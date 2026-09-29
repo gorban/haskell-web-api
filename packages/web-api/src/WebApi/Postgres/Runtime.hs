@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module WebApi.Postgres.Runtime
   ( PostgresCommand (..),
     PostgresCommandResult (..),

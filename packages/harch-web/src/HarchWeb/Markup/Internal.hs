@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module HarchWeb.Markup.Internal
   ( Attribute (..),
     AttributeName (..),

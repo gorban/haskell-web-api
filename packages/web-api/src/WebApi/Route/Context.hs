@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Trusted application request-context construction.
 --
 -- Decision (authentication-context module split, 2026-09-19): this module owns the explicit context

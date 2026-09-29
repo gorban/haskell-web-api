@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Typed request-field declarations and their WAI extraction boundary.
 --
 -- Decision record (review finding, 2026-08-24): 'RequestCodec' owns the complete

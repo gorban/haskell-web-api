@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Deployment-only inputs for the durable composed-admission assembly.
 --
 -- The database connection and TOTP encryption material are supplied through

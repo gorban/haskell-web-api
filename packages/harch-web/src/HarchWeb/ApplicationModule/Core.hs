@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Core application-module contract and the root-owned adapter to 'Site'.
 --
 -- This private module owns the immutable module declaration, its trusted

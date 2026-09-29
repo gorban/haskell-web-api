@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Private normalization for browser-visible path prefixes.
 module HarchWeb.PathPrefix
   ( PathPrefix,

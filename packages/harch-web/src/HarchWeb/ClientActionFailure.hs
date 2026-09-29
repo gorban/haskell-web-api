@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | The closed, browser-observable failures in Harch's enhanced client-action
 -- lifecycle.
 --

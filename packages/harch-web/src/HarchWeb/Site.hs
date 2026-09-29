@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Declarative site composition.
 --
 -- The review finding makes the stable route-table, shell, and CSRF declaration inputs one

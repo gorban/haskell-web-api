@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Unit.HarchWeb.TestSupport where
 
 import Control.Concurrent (threadDelay)

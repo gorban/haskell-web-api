@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | A domain-owned module with explicit query and command dependencies.  It
 -- knows its local route/action vocabulary only: a composition root chooses
 -- its parent route constructor, mount path, security policy, and request

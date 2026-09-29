@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | PostgreSQL adapter for the composed synchronizer-token capability.
 module App.Composed.Postgres.SynchronizerStore

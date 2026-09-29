@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | The deliberately narrow @jose-0.12@ adapter used by Harch's pluggable
 -- authentication pipeline.  JOSE owns compact parsing, signatures, selected
 -- key lookup, and standard claim validation; this module owns the explicit

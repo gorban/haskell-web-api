@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Stable DOM identities shared by account-form rendering and action focus.
 -- Keeping these as typed values prevents response producers from drifting
 -- away from the controls replaced by their region patches.

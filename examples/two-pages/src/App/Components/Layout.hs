@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module App.Components.Layout
   ( twoPageShell,
   )

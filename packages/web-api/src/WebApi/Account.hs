@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Account registration and verification workflows.
 --
 -- Decision (FQ6, 2026-08-29): verification persistence/expiry stays in

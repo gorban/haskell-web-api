@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Public login capabilities and outcomes.
 --
 -- Decision (FQ6, 2026-08-29): the password and MFA stages share a stable

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Which peers a deployment trusts to supply proxy-forwarded request
 -- context (@X-Forwarded-For@\/@-Proto@\/@-Prefix@, RFC 7239 @Forwarded@).
 -- Split out of "HarchWeb.Security" as a genuinely disjoint concern (CIDR

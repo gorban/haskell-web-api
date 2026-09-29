@@ -1,5 +1,4 @@
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | Private typed request and response contracts for the WAI server pipeline.
 module HarchWeb.Server.Response

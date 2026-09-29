@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Private construction and reporting of request observability.
 --
 -- Request execution owns routing, admission, and response delivery; this

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | OAuth 2.0 protocol declarations that use Harch's ordinary typed API
 -- request boundary.
 --

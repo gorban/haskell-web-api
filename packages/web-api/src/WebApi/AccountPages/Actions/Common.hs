@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Shared account action workflow support.
 --
 -- Decision (FQ6, 2026-08-29): region response metadata is captured in one

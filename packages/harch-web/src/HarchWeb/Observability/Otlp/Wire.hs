@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Private OTLP JSON wire representation.
 --
 -- Decision (CF, 2026-08-19): group this module's OTLP-specific recurring

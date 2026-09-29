@@ -1,5 +1,4 @@
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | Runtime-server and startup configuration for the web-api reference
 -- application. 'WebApi.App' owns the typed site composition; this module

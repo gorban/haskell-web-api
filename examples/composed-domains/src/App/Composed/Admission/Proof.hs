@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Application-owned encrypted credential proof and rate-limit hand-off for
 -- the composed admission flow.
 --

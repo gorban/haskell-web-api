@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Validated media types shared by API request decoding and response
 -- representation negotiation.
 module HarchWeb.Api.MediaType

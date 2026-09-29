@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | Private server-sent-event stream construction and rendering.
 module HarchWeb.Server.Sse

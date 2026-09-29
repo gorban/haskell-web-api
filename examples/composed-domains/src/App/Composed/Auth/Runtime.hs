@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Startup-validated issuer, audience, and RS256 key-set configuration for
 -- the composed example's two-audience JWT runtime.
 module App.Composed.Auth.Runtime

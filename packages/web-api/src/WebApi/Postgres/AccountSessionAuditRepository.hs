@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | PostgreSQL adapter for the one application-owned atomic session/audit
 -- operation.  It invokes one controlled database function; it never composes
 -- independently committed session and audit queries in Haskell.

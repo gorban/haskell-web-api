@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Pending-profile verification-resend action orchestration.
 --
 -- The named input makes it clear that the request context and submitted

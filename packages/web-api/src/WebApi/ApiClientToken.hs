@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | OAuth 2.0 client-credentials verification and durable API-client bearer
 -- token issuance.
 --

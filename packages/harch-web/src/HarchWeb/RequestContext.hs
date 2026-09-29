@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | Safe request facts shared between a root and its mounted application
 -- modules.  The context deliberately has no transport request, raw headers,

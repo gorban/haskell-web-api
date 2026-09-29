@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Validated declarative client-action endpoint codecs.
 --
 -- Decision record (2026-08-18): extend 'ActionCodec', the existing owner of

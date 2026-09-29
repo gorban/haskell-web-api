@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Bounded private security classifications shared by authentication and
 -- security-event contracts. A value is never proof material, a claim,
 -- account identity, or exception text.

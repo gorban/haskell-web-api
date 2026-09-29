@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Database-change migration runs on one short-lived, owner-credential
 -- libpq connection for the complete transaction.  This deliberately differs
 -- from the application's shared runtime pool: a migration is exclusive,

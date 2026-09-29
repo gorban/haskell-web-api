@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 {-# SPEC #-}
 
 import Core.Setup.PrerequisiteConfig qualified as PrerequisiteConfig

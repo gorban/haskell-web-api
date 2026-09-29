@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 {-# SPEC #-}
 
 import Control.Concurrent (forkIO, killThread, newEmptyMVar, putMVar, readMVar, threadDelay)

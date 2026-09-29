@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | App-owned page composition primitives.
 --
 -- The component and styling architecture design deliberately keeps this layer as ordinary, pure typed functions over

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Pure app-owned profile presentation.
 --
 -- The component and styling architecture design keeps optional identity values explicit in props and renders absence

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Operator-only migration and credential provisioning for the composed
 -- example's admission and OAuth clients.
 --

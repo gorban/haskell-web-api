@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 -- Deprecated per upstream jose: reading 'Crypto.JWT.unregisteredClaims' back
 -- off an already-verified 'Crypto.JWT.ClaimsSet'. See this module's Haddock
 -- for the framework-capability-gap decision this pragma records.

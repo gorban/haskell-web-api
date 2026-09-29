@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | OAuth client-credentials verification and API-audience token issuance for
 -- the composed example.
 --

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | PostgreSQL adapter for the one application-owned atomic verification
 -- resend settlement/audit operation. It invokes one controlled function; a
 -- separate generic completion followed by append could otherwise leave a

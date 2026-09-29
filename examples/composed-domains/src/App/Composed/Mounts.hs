@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | Explicit Catalog and Orders adaptations into the composed root's closed
 -- algebra.  The declarations live beside the root model, not in either domain

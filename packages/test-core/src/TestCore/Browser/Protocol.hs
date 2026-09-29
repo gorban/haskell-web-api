@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module TestCore.Browser.Protocol
   ( BrowserSession,
     sendCommand,

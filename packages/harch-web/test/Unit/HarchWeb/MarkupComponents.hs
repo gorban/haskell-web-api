@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Unit.HarchWeb.MarkupComponents
   ( AccountProfile (..),
     AvatarSize (..),

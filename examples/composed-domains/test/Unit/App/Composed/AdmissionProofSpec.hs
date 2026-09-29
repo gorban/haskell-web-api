@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Unit.App.Composed.AdmissionProofSpec (spec) where
 
 import App.Composed

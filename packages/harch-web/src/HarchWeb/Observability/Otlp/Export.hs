@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Private OTLP span projection and export workflows.
 module HarchWeb.Observability.Otlp.Export
   ( exportConnectionObservabilityToOtlp,

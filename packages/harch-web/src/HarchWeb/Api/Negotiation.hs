@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Pure parsing and selection for @Accept@-based representations.
 module HarchWeb.Api.Negotiation
   ( AcceptedRange (..),

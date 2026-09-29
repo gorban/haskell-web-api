@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Immutable PostgreSQL change statements for the application-owned account
 -- audit boundary.
 --

@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | Anonymous public routes and typed static-asset ownership for the composed
 -- root.  Filesystem delivery remains in HarchWeb's single asset interpreter;

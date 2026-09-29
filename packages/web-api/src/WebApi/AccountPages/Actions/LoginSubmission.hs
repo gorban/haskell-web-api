@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Password/MFA login-submission interpretation.
 --
 -- Decision record (activity-audit workflow, 2026-09-19): keep the public action façade and

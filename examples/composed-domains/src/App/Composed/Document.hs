@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | The composed root's one merged OpenAPI document (part of the OpenAPI
 -- documentation and Swagger UI work): both domain
 -- API families aggregated through the exact mounts that install them for

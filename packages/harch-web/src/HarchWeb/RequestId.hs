@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Framework-owned, opaque correlation identifiers for HTTP requests.
 --
 -- Decision record (request correlation, 2026-09-05): request correlation extends the

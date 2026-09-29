@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module TestCore.Browser.Types
   ( BrowserConfig (..),
     BrowserMetrics (..),

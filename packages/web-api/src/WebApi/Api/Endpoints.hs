@@ -1,5 +1,4 @@
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- | @\/api\/status@ and @\/api\/second@ composed through
 -- "HarchWeb.Api.Endpoint"'s typed endpoint boundary rather than the

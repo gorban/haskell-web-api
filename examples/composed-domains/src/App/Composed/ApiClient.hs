@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | Application-owned OAuth client declarations for the composed example.
 --
 -- Decision record (OpenAPI documentation and Swagger UI, 2026-09-27): client identity, the active Argon2id

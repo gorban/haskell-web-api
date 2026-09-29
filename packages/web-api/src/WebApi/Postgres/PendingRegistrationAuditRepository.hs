@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- | PostgreSQL adapter for the one application-owned atomic registration
 -- delivery/audit operation.  It invokes one controlled database function;
 -- independent completion and append queries would make a durable audit gap
