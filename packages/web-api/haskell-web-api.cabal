@@ -132,10 +132,14 @@ library
 
   other-modules:
     WebApi.AccountJwt.Runtime
+    WebApi.AccountPages.Actions.Failure
     WebApi.AccountPages.Actions.Login
     WebApi.AccountPages.Actions.LoginSubmission
     WebApi.AccountPages.Actions.Profile
     WebApi.AccountPages.Actions.Registration
+    WebApi.AccountPages.Actions.Response
+    WebApi.AccountPages.Actions.Support
+    WebApi.AccountPages.Actions.Types
     WebApi.AccountPages.FieldIds
     WebApi.Api.Endpoints.OAuthToken
     WebApi.Api.Endpoints.Support
