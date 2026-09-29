@@ -1,3 +1,7 @@
+-- | Discover static page modules and generate their closed route algebra and
+-- definition dispatcher. Optional application presentation aggregation extends
+-- this same generated registry; it does not add an application-specific type
+-- dependency to the build tool or maintain a second route-keyed table.
 module Core.PageRoutes.Generator
   ( GenerationError (..),
     GenerationOutcome (..),
@@ -70,6 +74,15 @@ data GeneratorConfig = GeneratorConfig
     -- 'pageDefinitionContextTypeName'; leaving both unset keeps the
     -- parameterless dispatcher.
     pageDefinitionContextModuleName :: Maybe String,
+    -- | Optional application declaration type assembled by the same generated
+    -- dispatcher as route definitions. When configured, every discovered page
+    -- must export a top-level @pagePresentation@ value of this type and the
+    -- generated module exposes @pageRoutePresentation :: PageRoute -> Type@.
+    -- The type is imported from 'applicationRouteModuleName', which lets an
+    -- application put it beside its cycle-free route types. The default keeps
+    -- the dispatcher unchanged for consumers that only need route identities
+    -- and definitions.
+    pagePresentationTypeName :: Maybe String,
     routeModuleName :: String,
     dispatcherModuleName :: String,
     applicationRouteModuleName :: String,
@@ -87,6 +100,7 @@ defaultGeneratorConfig pagesDirectory generatedDirectory =
       pageModulePrefix = "App.Pages.",
       pageDefinitionContextTypeName = Nothing,
       pageDefinitionContextModuleName = Nothing,
+      pagePresentationTypeName = Nothing,
       routeModuleName = "App.Pages.Route.Generated",
       dispatcherModuleName = "App.Pages.Generated",
       applicationRouteModuleName = "App.Routes",
@@ -110,6 +124,7 @@ data GenerationError
   | InvalidPageModulePrefix String
   | InvalidPagePath FilePath
   | MissingPageDefinition FilePath
+  | MissingPagePresentation FilePath
   | ConstructorCollision String [FilePath]
   | PathCollision Text [FilePath]
   deriving (Eq, Show)
@@ -125,16 +140,34 @@ generatePageModules config = do
   case discovered of
     Left generationError -> pure (Left generationError)
     Right pageSpecs -> do
-      let routePath = moduleOutputPath config (routeModuleName config)
-          dispatcherPath = moduleOutputPath config (dispatcherModuleName config)
-          manifestPath = generatedSourceDirectory config </> "harch-page-routes.manifest"
-          outputs =
-            [ (routePath, renderRouteModule config pageSpecs),
-              (dispatcherPath, renderDispatcherModule config pageSpecs),
-              (manifestPath, renderManifest pageSpecs)
-            ]
-      changed <- or <$> traverse (uncurry writeIfChanged) outputs
-      pure (Right ((if changed then Generated else Unchanged) (map fst outputs)))
+      presentationResult <- validatePagePresentations config pageSpecs
+      case presentationResult of
+        Left generationError -> pure (Left generationError)
+        Right () -> do
+          let routePath = moduleOutputPath config (routeModuleName config)
+              dispatcherPath = moduleOutputPath config (dispatcherModuleName config)
+              manifestPath = generatedSourceDirectory config </> "harch-page-routes.manifest"
+              outputs =
+                [ (routePath, renderRouteModule config pageSpecs),
+                  (dispatcherPath, renderDispatcherModule config pageSpecs),
+                  (manifestPath, renderManifest pageSpecs)
+                ]
+          changed <- or <$> traverse (uncurry writeIfChanged) outputs
+          pure (Right ((if changed then Generated else Unchanged) (map fst outputs)))
+
+validatePagePresentations :: GeneratorConfig -> [PageSpec] -> IO (Either GenerationError ())
+validatePagePresentations config pageSpecs =
+  case pagePresentationTypeName config of
+    Nothing -> pure (Right ())
+    Just _ -> do
+      results <- forM pageSpecs $ \pageSpec -> do
+        source <- readFile (pagesSourceDirectory config </> pageSourcePath pageSpec)
+        pure
+          ( if hasPagePresentation source
+              then Right ()
+              else Left (MissingPagePresentation (pageSourcePath pageSpec))
+          )
+      pure (sequence_ results)
 
 -- | Discover the page modules under a directory, naming each one under the
 -- supplied module prefix.  The prefix is the application's, so it is an argument
@@ -236,18 +269,20 @@ renderDispatcherModule :: GeneratorConfig -> [PageSpec] -> String
 renderDispatcherModule config pageSpecs =
   unlines
     ( [ "module " <> dispatcherModuleName config,
-        "  ( pageRouteDefinition,",
-        "  )",
-        "where",
-        "",
-        "import "
-          <> applicationRouteModuleName config
-          <> " ("
-          <> intercalate ", " (filter (/= "()") [applicationRouteTypeName config, requestContextTypeName config, authorizationTypeName config])
-          <> ")",
-        "import " <> routeModuleName config <> " (PageRoute (..))",
-        "import HarchWeb.Site (RouteDefinition)"
+        "  ( pageRouteDefinition,"
       ]
+        <> maybe [] (const ["    pageRoutePresentation,"]) (pagePresentationTypeName config)
+        <> [ "  )",
+             "where",
+             "",
+             "import "
+               <> applicationRouteModuleName config
+               <> " ("
+               <> intercalate ", " (filter (/= "()") ([applicationRouteTypeName config, requestContextTypeName config, authorizationTypeName config] <> maybe [] pure (pagePresentationTypeName config)))
+               <> ")",
+             "import " <> routeModuleName config <> " (PageRoute (..))",
+             "import HarchWeb.Site (RouteDefinition)"
+           ]
         <> contextImport
         <> map (\pageSpec -> "import " <> pageModuleName pageSpec <> " qualified") pageSpecs
         <> [ "",
@@ -263,6 +298,15 @@ renderDispatcherModule config pageSpecs =
              "  case route of"
            ]
         <> map (renderRouteCase (renderPageDefinition config)) pageSpecs
+        <> case pagePresentationTypeName config of
+          Nothing -> []
+          Just presentationType ->
+            [ "",
+              "pageRoutePresentation :: PageRoute -> " <> presentationType,
+              "pageRoutePresentation route =",
+              "  case route of"
+            ]
+              <> map (renderRouteCase renderPagePresentation) pageSpecs
     )
   where
     contextParameterType = maybe "" (<> " -> ") (pageDefinitionContextTypeName config)
@@ -280,6 +324,10 @@ renderPageDefinition :: GeneratorConfig -> PageSpec -> Text
 renderPageDefinition config pageSpec =
   Text.pack (pageModuleName pageSpec <> ".pageDefinition")
     <> maybe "" (const " context") (pageDefinitionContextTypeName config)
+
+renderPagePresentation :: PageSpec -> Text
+renderPagePresentation pageSpec =
+  Text.pack (pageModuleName pageSpec <> ".pagePresentation")
 
 renderManifest :: [PageSpec] -> String
 renderManifest pageSpecs =
@@ -339,11 +387,17 @@ validPageModulePrefix pageModulePrefix =
     _ -> False
 
 hasPageDefinition :: String -> Bool
-hasPageDefinition source =
-  any definesPageDefinition (lines source)
+hasPageDefinition = hasTopLevelBinding "pageDefinition"
+
+hasPagePresentation :: String -> Bool
+hasPagePresentation = hasTopLevelBinding "pagePresentation"
+
+hasTopLevelBinding :: String -> String -> Bool
+hasTopLevelBinding bindingName source =
+  any definesBinding (lines source)
   where
-    definesPageDefinition sourceLine =
-      case Text.stripPrefix "pageDefinition" (Text.stripStart (Text.pack sourceLine)) of
+    definesBinding sourceLine =
+      case Text.stripPrefix (Text.pack bindingName) (Text.stripStart (Text.pack sourceLine)) of
         Just remainder ->
           let definitionTail = Text.stripStart remainder
            in "::" `Text.isPrefixOf` definitionTail || "=" `Text.isPrefixOf` definitionTail

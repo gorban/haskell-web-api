@@ -1723,6 +1723,17 @@ Static page registration therefore cannot drift from the discovered module set. 
 decoding, APIs, and app-specific custom pages stay explicit instead of being forced into the static-page
 convention.
 
+**Decision record — discovered page presentation (2026-09-29).** Extend this
+same generated dispatcher with an optional typed `pageRoutePresentation`
+projection, configured by the application with its presentation type in the
+cycle-free route-types module. When enabled, discovery requires each page file
+to export its own `pagePresentation`, and the generator rejects a missing
+declaration before replacing any generated output. Keep the option disabled by
+default so existing generator users retain the same API and generated modules.
+This gives the application one source for discovered page presentation while
+the generator retains ownership of the route identity/definition set; it does
+not make the framework own application titles or add a parallel route registry.
+
 The generator defaults to the two-pages `App.Pages.` namespace, but its
 application-owned `pageModulePrefix` configuration accepts another qualified
 module namespace only when every segment starts uppercase and the value ends in
@@ -4037,7 +4048,7 @@ is insufficient.
 | --- | --- | --- |
 | Complete SSR and enhanced navigation | Implemented | `NavigationLifecycle` is the optional declarative accessibility adapter interpreted by the existing replaceable runtime. The reference adapter focuses the stable main, commits final same-origin redirect URLs, and announces the destination title once; direct loads, incompatible responses, delayed modules, and scripts-disabled links retain native behavior. |
 | Immediate modeled-form capture | Implemented | Extend the kernel contract before adding another enabled framework event type. |
-| Generated static page algebra/dispatch | Implemented | Export `pageDefinition`; keep API and dynamic routes explicit. The generator owns static identity and definition dispatch; localized navigation adoption remains partial and runtime ownership is recorded below. |
+| Generated static page algebra/dispatch | Implemented | Export `pageDefinition`; keep API and dynamic routes explicit. The generator owns static identity and definition dispatch and can optionally aggregate typed, module-local `pagePresentation` values; localized navigation adoption remains partial and runtime ownership is recorded below. |
 | Typed markup and component calls | Implemented | Prefer named record fields; reserve positional `props` for distinct typed values. |
 | Scoped CSS names | Implemented | Use `cssScope`; typed CSS authoring remains future work. |
 | Configured static assets | Implemented | Successful assets are canonical-root-checked file responses with weak ETags, `Last-Modified`, conditional 304s, single-range 206/416 semantics, and `HEAD` metadata; static 404s are never cacheable. |

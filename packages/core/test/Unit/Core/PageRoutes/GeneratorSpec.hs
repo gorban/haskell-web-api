@@ -44,6 +44,7 @@ spec =
               InvalidPageModulePrefix "WebApi.Pages",
               InvalidPagePath "bad.txt",
               MissingPageDefinition "Missing.hs",
+              MissingPagePresentation "MissingPresentation.hs",
               ConstructorCollision "SamePage" ["A.hs", "B.hs"],
               PathCollision "/same" ["A.hs", "B.hs"]
             ]
@@ -117,6 +118,8 @@ spec =
                 pageDefinitionContextModuleName = Just "App.Context"
               }
           contextDispatcherSource = renderDispatcherModule contextConfig pageSpecs
+          presentationConfig = contextConfig {pagePresentationTypeName = Just "PagePresentation"}
+          presentationDispatcherSource = renderDispatcherModule presentationConfig pageSpecs
       expectAll
         ( (routeSource `shouldContain` "data PageRoute\n  = HomePage")
             :| [ routeSource `shouldContain` "PageNotFound -> \"/404\"",
@@ -132,6 +135,12 @@ spec =
                  contextDispatcherSource `shouldContain` "pageRouteDefinition context route =",
                  contextDispatcherSource
                    `shouldContain` "HomePage -> App.Pages.Home.pageDefinition context",
+                 presentationDispatcherSource
+                   `shouldContain` "pageRoutePresentation :: PageRoute -> PagePresentation",
+                 presentationDispatcherSource
+                   `shouldContain` "import App.Routes (TwoPageRoute, PagePresentation)",
+                 presentationDispatcherSource
+                   `shouldContain` "HomePage -> App.Pages.Home.pagePresentation",
                  renderManifest pageSpecs
                    `shouldBe` "Home.hs\thome-hash\nNotFound.hs\tnot-found-hash\nSecond.hs\tsecond-hash\n",
                  renderRouteModule config [] `shouldContain` "  = NoPagesGenerated",
@@ -217,6 +226,58 @@ spec =
                  ]
           )
 
+    it "aggregates declared presentations through the discovered route dispatcher" $
+      withSystemTempDirectory "harch-page-presentation-generation" $ \temporaryDirectory -> do
+        let pagesDirectory = temporaryDirectory </> "pages"
+            generatedDirectory = temporaryDirectory </> "generated"
+            dispatcherPath = generatedDirectory </> "App/Pages/Generated.hs"
+            routePath = generatedDirectory </> "App/Pages/Route/Generated.hs"
+            config =
+              (defaultGeneratorConfig pagesDirectory generatedDirectory)
+                { pagePresentationTypeName = Just "PagePresentation"
+                }
+            definitionAndPresentation =
+              "pageDefinition = page\npagePresentation = presentation\n"
+        writePage pagesDirectory "Home.hs" definitionAndPresentation
+        writePage temporaryDirectory "PageHelper.hs" "not a discoverable page"
+        firstResult <- generatePageModules config
+        firstDispatcher <- TextIO.readFile dispatcherPath
+        writePage pagesDirectory "Second.hs" definitionAndPresentation
+        secondResult <- generatePageModules config
+        secondDispatcher <- TextIO.readFile dispatcherPath
+        removeFile (pagesDirectory </> "Home.hs")
+        writePage pagesDirectory "LandingPage.hs" definitionAndPresentation
+        thirdResult <- generatePageModules config
+        thirdDispatcher <- TextIO.readFile dispatcherPath
+        thirdRouteModule <- TextIO.readFile routePath
+        expectAll
+          ( (firstResult `shouldSatisfy` isGenerated)
+              :| [ firstDispatcher `shouldSatisfy` Text.isInfixOf "HomePage -> App.Pages.Home.pagePresentation",
+                   firstDispatcher `shouldNotSatisfy` Text.isInfixOf "PageHelper.pagePresentation",
+                   secondResult `shouldSatisfy` isGenerated,
+                   secondDispatcher `shouldSatisfy` Text.isInfixOf "SecondPage -> App.Pages.Second.pagePresentation",
+                   thirdResult `shouldSatisfy` isGenerated,
+                   thirdDispatcher `shouldNotSatisfy` Text.isInfixOf "HomePage -> App.Pages.Home.pagePresentation",
+                   thirdDispatcher `shouldSatisfy` Text.isInfixOf "SecondPage -> App.Pages.Second.pagePresentation",
+                   thirdDispatcher `shouldSatisfy` Text.isInfixOf "LandingPagePage -> App.Pages.LandingPage.pagePresentation",
+                   thirdRouteModule `shouldSatisfy` Text.isInfixOf "LandingPagePage -> \"/landing-page\"",
+                   thirdRouteModule `shouldSatisfy` Text.isInfixOf "SecondPage -> \"/second\""
+                 ]
+          )
+
+    it "requires configured page presentations before writing generated files" $
+      withSystemTempDirectory "harch-page-presentation-required" $ \temporaryDirectory -> do
+        let pagesDirectory = temporaryDirectory </> "pages"
+            generatedDirectory = temporaryDirectory </> "generated"
+            config =
+              (defaultGeneratorConfig pagesDirectory generatedDirectory)
+                { pagePresentationTypeName = Just "PagePresentation"
+                }
+        writePage pagesDirectory "Home.hs" "pageDefinition = home"
+        generatePageModules config
+          `shouldReturn` Left (MissingPagePresentation "Home.hs")
+        doesFileExist (generatedDirectory </> "App/Pages/Generated.hs") `shouldReturn` False
+
     it "writes dispatchers that import pages below another application namespace" $
       withSystemTempDirectory "harch-prefixed-page-generation" $ \temporaryDirectory -> do
         let pagesDirectory = temporaryDirectory </> "pages"
@@ -226,11 +287,12 @@ spec =
                 { pageModulePrefix = "WebApi.Pages.",
                   routeModuleName = "WebApi.Pages.Route.Generated",
                   dispatcherModuleName = "WebApi.Pages.Generated",
-                  applicationRouteModuleName = "WebApi.Route",
+                  applicationRouteModuleName = "WebApi.Route.Types",
                   applicationRouteTypeName = "AppRoute",
-                  requestContextTypeName = "AppRequestContext"
+                  requestContextTypeName = "AppRequestContext",
+                  pagePresentationTypeName = Just "PagePresentation"
                 }
-        writePage pagesDirectory "Home.hs" "pageDefinition = home"
+        writePage pagesDirectory "Home.hs" "pageDefinition = home\npagePresentation = presentation"
         generated <- generatePageModules config
         dispatcherSource <- TextIO.readFile (generatedDirectory </> "WebApi/Pages/Generated.hs")
         expectAll
@@ -246,7 +308,11 @@ spec =
               :| [ dispatcherSource
                      `shouldSatisfy` Text.isInfixOf "HomePage -> WebApi.Pages.Home.pageDefinition",
                    dispatcherSource
-                     `shouldSatisfy` Text.isInfixOf "RouteDefinition AppRoute AppRequestContext ()"
+                     `shouldSatisfy` Text.isInfixOf "HomePage -> WebApi.Pages.Home.pagePresentation",
+                   dispatcherSource
+                     `shouldSatisfy` Text.isInfixOf "RouteDefinition AppRoute AppRequestContext ()",
+                   dispatcherSource
+                     `shouldSatisfy` Text.isInfixOf "import WebApi.Route.Types (AppRoute, AppRequestContext, PagePresentation)"
                  ]
           )
 
@@ -289,6 +355,10 @@ hasModules expectedModules pageResult =
   case pageResult of
     Right pageSpecs -> map pageModuleName pageSpecs == expectedModules
     Left _ -> False
+
+isGenerated :: Either GenerationError GenerationOutcome -> Bool
+isGenerated (Right (Generated _)) = True
+isGenerated _ = False
 
 writePage :: FilePath -> FilePath -> String -> IO ()
 writePage pagesDirectory relativePath source = do
