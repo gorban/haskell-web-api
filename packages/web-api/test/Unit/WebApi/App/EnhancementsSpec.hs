@@ -3,6 +3,7 @@
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import HarchWeb qualified
+import HarchWeb.OpenApi.Swagger (swaggerUiPageEnhancement)
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import TestCore.Wai (performWaiRequest, readResponseBody, waiRequest)
@@ -10,8 +11,9 @@ import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi (buildApp)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Reauthentication (reauthenticationRuntimeAsset)
-import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
+import WebApi.App.Shell (appPageShellForPage, buildAppPageShell, buildAppPageShellConfig)
 import WebApi.Config (AppConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
+import WebApi.DocsSwagger (docsSwaggerPage, docsSwaggerUiProps)
 import WebApi.Page (renderPage)
 import WebApi.PageShell qualified as LegacyPageShell
 import WebApi.Route (AppRoute (..), defaultRequestContext, routeMetadata)
@@ -85,6 +87,20 @@ spec =
       Text.isInfixOf "<a href=\"/app\" data-page-link=\"true\">Home</a><a href=\"/app/second\" data-page-link=\"true\" aria-current=\"page\">Second</a>" prefixedShell `shouldBe` True
       Text.isInfixOf "<script type=\"module\" src=\"/app/assets/navigation.js\" defer></script>" prefixedShell `shouldBe` True
       Text.isInfixOf "<link rel=\"stylesheet\" data-harch-stylesheet=\"true\" href=\"/app/assets/styles/app.css\">" prefixedShell `shouldBe` True
+
+    it "uses the route declaration's localized labels in Site and standalone documents" $ do
+      spanishSiteShell <- renderedShellForRequest navigationAppConfig spanishSecondRequest
+      spanishPage <- renderPage navigationAppConfig spanishSecondRequest
+      let spanishStandaloneDocument =
+            HarchWeb.renderDocumentForTests
+              (buildAppPageShell navigationAppConfig spanishPage)
+      expectAll
+        ( (Text.isInfixOf "<a href=\"/es\" data-page-link=\"true\">Inicio</a>" spanishSiteShell `shouldBe` True)
+            :| [ Text.isInfixOf "<a href=\"/es/second\" data-page-link=\"true\" aria-current=\"page\">Segunda</a>" spanishSiteShell `shouldBe` True,
+                 Text.isInfixOf "<a href=\"/es\" data-page-link=\"true\">Inicio</a>" spanishStandaloneDocument `shouldBe` True,
+                 Text.isInfixOf "<a href=\"/es/second\" data-page-link=\"true\" aria-current=\"page\">Segunda</a>" spanishStandaloneDocument `shouldBe` True
+               ]
+        )
 
     it "serves the bundled navigation asset through configured static roots" $ do
       response <- performWaiRequest (HarchWeb.toWaiApplication (buildApp navigationAppConfig)) (waiRequest ["assets", "navigation.js"])
@@ -172,6 +188,16 @@ spec =
                 HarchWeb.navigationStatusClass = Just (HarchWeb.ScopedCssClass (HarchWeb.cssScope "app-shell") "route-status")
               }
           )
+
+    it "keeps the Swagger behavior module on its page, after shared shell assets" $ do
+      let swaggerPage = docsSwaggerPage docsSwaggerRequest
+          swaggerShell = appPageShellForPage defaultAppConfig swaggerPage
+      HarchWeb.pageRuntimeDescriptors swaggerPage
+        `shouldBe` [swaggerUiPageEnhancement (docsSwaggerUiProps (HarchWeb.pageContext swaggerPage))]
+      HarchWeb.shellRuntimeDescriptors swaggerShell
+        `shouldBe` [ HarchWeb.DeferredModule "harch-dialog" "/assets/dialog.js",
+                     HarchWeb.DeferredModule "web-api-reauthentication" "/assets/reauthentication.js"
+                   ]
 
     it "keeps not-found pages inside the shared shell" $ do
       notFoundShell <- renderedShell defaultAppConfig NotFoundRoute

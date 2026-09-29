@@ -7,45 +7,30 @@ module WebApi.App.Shell
 where
 
 import HarchWeb qualified
-import HarchWeb.OpenApi.Swagger (swaggerUiPageEnhancement)
 import WebApi.App.Reauthentication (reauthenticationRuntimeAsset)
 import WebApi.Components.Shell (AppShellProps (..), appPageShell)
 import WebApi.Config (AppConfig (..))
-import WebApi.DocsSwagger (docsSwaggerUiProps)
 import WebApi.Localization (AppMessage (SkipToMainContent), localizedMessage)
 import WebApi.Route
   ( AppLocale (..),
     AppRequestContext (..),
     AppRoute (..),
+    appNavigationItems,
     routeCodec,
   )
 
--- | The application's page shell for one rendered page: the shared shell
--- config plus the page's own runtime descriptors. The Swagger UI page
--- contributes its page-enhancement descriptor here (harch-web-openapi's
--- 'swaggerUiPageEnhancement'), so the Site-rendered application path and the
--- compatibility renderer below both emit the same enhancement script in SSR.
--- The branch fixes the route as 'DocsSwaggerRoute'; the request context remains
--- explicit because it determines prefixed asset URLs.
+-- | The application's shared shell configuration for one rendered page.
+-- Page-owned runtime requirements stay on the 'HarchWeb.Page' value and are
+-- appended by 'HarchWeb.buildPageShell' after these application-wide assets.
 appPageShellForPage :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> HarchWeb.PageShell AppRoute AppRequestContext
 appPageShellForPage config page =
-  let shell = buildAppPageShellConfig config (HarchWeb.pageContext page)
-   in if HarchWeb.pageRoute page == DocsSwaggerRoute
-        then
-          shell
-            { HarchWeb.shellRuntimeDescriptors =
-                HarchWeb.shellRuntimeDescriptors shell
-                  <> [ swaggerUiPageEnhancement
-                         (docsSwaggerUiProps (HarchWeb.pageContext page))
-                     ]
-            }
-        else shell
+  buildAppPageShellConfig config (HarchWeb.pageContext page)
 
 buildAppPageShell :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> HarchWeb.Document AppRoute
 buildAppPageShell config page =
   HarchWeb.buildPageShell
     routeCodec
-    (standalonePageShell (appPageShellForPage config page))
+    (standalonePageShell (HarchWeb.pageContext page) (appPageShellForPage config page))
     page
 
 -- | The compatibility renderer is a complete standalone document builder, so
@@ -53,19 +38,9 @@ buildAppPageShell config page =
 -- the normal application path.  'buildAppPageShellConfig' intentionally does
 -- not include these items: adding them there would duplicate Site-owned
 -- navigation in the running application.
-standalonePageShell :: HarchWeb.PageShell AppRoute AppRequestContext -> HarchWeb.PageShell AppRoute AppRequestContext
-standalonePageShell shell =
-  shell {HarchWeb.shellNavigationItems = appNavigationItems}
-
-appNavigationItems :: [HarchWeb.NavigationItem AppRoute]
-appNavigationItems =
-  [ HarchWeb.NavigationItem "Home" HomeRoute,
-    HarchWeb.NavigationItem "Second" SecondRoute,
-    HarchWeb.NavigationItem "TODO" TodoRoute,
-    HarchWeb.NavigationItem "Create account" RegistrationRoute,
-    HarchWeb.NavigationItem "Sign in" LoginRoute,
-    HarchWeb.NavigationItem "Profile" ProfileRoute
-  ]
+standalonePageShell :: AppRequestContext -> HarchWeb.PageShell AppRoute AppRequestContext -> HarchWeb.PageShell AppRoute AppRequestContext
+standalonePageShell context shell =
+  shell {HarchWeb.shellNavigationItems = appNavigationItems context}
 
 -- | The component and styling architecture design keeps application styling and shell composition in app-owned typed
 -- functions.  The shell consumes the context's already-validated path prefix

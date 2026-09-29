@@ -74,12 +74,14 @@ import WebApi.Route
     AppRoute (..),
     RequestAuthenticationTransport (..),
     accountAuthenticationProfileName,
+    appNavigationRoutes,
     appRouteMethods,
     defaultRequestContext,
     endpointMetadata,
     requestContextFromWaiRequest,
     resourceAuthenticationProfileName,
     routeCodec,
+    routeNavigationDeclaration,
   )
 
 buildAppWithDatabase ::
@@ -267,10 +269,6 @@ buildApp :: AppConfig -> HarchWeb.Application AppRoute AccountAction AppRequestC
 buildApp config =
   buildAppWithDatabase config defaultPageRepository
 
-appNavigationRoutes :: [AppRoute]
-appNavigationRoutes =
-  [HomeRoute, SecondRoute, TodoRoute, RegistrationRoute, LoginRoute, ProfileRoute]
-
 -- | Build the exact typed Site route definition for one route with its
 -- application dependencies supplied explicitly. Exposing this composition
 -- seam lets embedders inspect or reuse declaration metadata without building
@@ -311,7 +309,7 @@ buildAppRouteDefinition config pageRepository accountWorkflow docsOpenApiDocumen
         (\_security request -> pure (docsSwaggerPage request))
     _ ->
       Site.RouteDefinition
-        { Site.routeNavigationLabel = routeNavigationLabel route,
+        { Site.routeNavigation = routeNavigationDeclaration route,
           Site.routeMetadata = endpointMetadata route,
           Site.routeMethods = const (HarchWeb.routeMethodPolicy (appRouteMethods route)),
           Site.routeExecutionPolicy = HarchWeb.unboundedRouteExecutionPolicy,
@@ -322,24 +320,12 @@ buildAppRouteDefinition config pageRepository accountWorkflow docsOpenApiDocumen
 protocolRouteDefinition :: AppRoute -> (HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.NonPageResponse AppRoute AppRequestContext)) -> Site.RouteDefinition AppRoute AppRequestContext AppAuthorization
 protocolRouteDefinition route renderProtocol =
   Site.RouteDefinition
-    { Site.routeNavigationLabel = routeNavigationLabel route,
+    { Site.routeNavigation = routeNavigationDeclaration route,
       Site.routeMetadata = endpointMetadata route,
       Site.routeMethods = const (HarchWeb.routeMethodPolicy (appRouteMethods route)),
       Site.routeExecutionPolicy = HarchWeb.unboundedRouteExecutionPolicy,
       Site.routeHandler = Site.ProtocolRouteHandler (const renderProtocol)
     }
-
-routeNavigationLabel :: AppRoute -> Maybe Text.Text
-routeNavigationLabel route = lookup route navigationLabels
-  where
-    navigationLabels =
-      [ (HomeRoute, "Home"),
-        (SecondRoute, "Second"),
-        (TodoRoute, "TODO"),
-        (RegistrationRoute, "Create account"),
-        (LoginRoute, "Sign in"),
-        (ProfileRoute, "Profile")
-      ]
 
 -- | The root keeps public operation as its explicit default and gives only
 -- account declarations the JWT guard. The declaration names are statically validated, distinct literals; no request

@@ -6,10 +6,14 @@
 -- application's path prefix at render time, so a deployed prefix cannot
 -- leave the page pointing at root-absolute asset locations.
 --
--- Decision record (AHI-4E module health, 2026-09-28): the Swagger page route
--- is fixed here, so 'docsSwaggerUiProps' accepts only request context. The
--- page consumes its typed route from those props, while the shell consumes
--- only the context-derived prefixed asset URLs from the same builder.
+-- Decision record (web-api template authoring, 2026-09-28): the Swagger
+-- behavior module is a page-owned runtime requirement, attached here beside
+-- the page's stylesheet. The shared shell owns only application-wide assets;
+-- 'buildPageShell' orders shell requirements before page requirements.
+--
+-- The Swagger page route is fixed here, so 'docsSwaggerUiProps' accepts only
+-- request context. The page consumes its typed route from those props and
+-- applies one prefix-aware builder to all its asset URLs.
 module WebApi.DocsSwagger
   ( docsSwaggerPage,
     docsSwaggerUiProps,
@@ -24,6 +28,7 @@ import HarchWeb.OpenApi.Swagger
     requiredSwaggerSpecUrlOrDie,
     swaggerUiFallback,
     swaggerUiPage,
+    swaggerUiPageEnhancement,
     swaggerUiStylesheet,
   )
 import WebApi.Route (AppRequestContext, AppRoute (DocsSwaggerRoute), requestPathPrefix)
@@ -54,8 +59,8 @@ docsSwaggerUiProps context =
 -- prefix-applied through the request context.
 docsSwaggerPage :: RouteRequest AppRoute AppRequestContext -> Page AppRoute AppRequestContext
 docsSwaggerPage request =
-  (swaggerUiPage props)
-    { HarchWeb.pageStylesheets = [swaggerUiStylesheet props]
-    }
+  HarchWeb.withPageRuntimeDescriptors
+    (HarchWeb.withPageStylesheets (swaggerUiPage props) [swaggerUiStylesheet props])
+    [swaggerUiPageEnhancement props]
   where
     props = docsSwaggerUiProps (requestContext request)

@@ -14,7 +14,7 @@ where
 import Data.Text (Text)
 import HarchWeb qualified
 import HarchWeb.Localization.Quasi (message)
-import WebApi.Route (AppLocale (..))
+import WebApi.Route.Context (AppLocale (..))
 
 data AppMessage
   = AddAuthenticatorSecret
@@ -83,6 +83,7 @@ data AppMessage
   | HelpAndSupport
   | HelpSummary
   | HelpAccountGuidance
+  | HomeNavigationLabel
   deriving (Bounded, Enum, Eq, Show)
 
 localizedMessage :: AppLocale -> AppMessage -> Text
@@ -249,3 +250,5 @@ messageTemplateFor messageKey appLocale =
     (HelpSummary, Spanish) -> [message|Obtenga ayuda con el acceso y la verificacion de la cuenta.|]
     (HelpAccountGuidance, English) -> [message|Sign in to review your account, or create an account if you do not have one.|]
     (HelpAccountGuidance, Spanish) -> [message|Inicia sesion para revisar tu cuenta o crea una cuenta si no tienes una.|]
+    (HomeNavigationLabel, English) -> [message|Home|]
+    (HomeNavigationLabel, Spanish) -> [message|Inicio|]

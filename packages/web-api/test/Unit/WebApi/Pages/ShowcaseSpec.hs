@@ -3,7 +3,7 @@
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text qualified as Text
 import HarchWeb qualified
-import HarchWeb.Site (RouteDefinition (routeNavigationLabel))
+import HarchWeb.Site (RouteDefinition (routeNavigation))
 import TestCore.Wai (performWaiRequest, readResponseBody, waiRequest)
 import Unit.WebApi.TestSupport (pureApplication)
 import WebApi.Config (defaultAppConfig)
@@ -101,8 +101,8 @@ spec = describe "WebApi.Pages showcase family" $ do
       showList [PageFailureMessage "boom"] "" `shouldSatisfy` (not . null)
 
     it "keeps the generated pages' modules owning no navigation label" $ do
-      routeNavigationLabel (Showcase.pageDefinition defaultAppConfig) `shouldBe` Nothing
-      routeNavigationLabel (ShowcaseAlternate.pageDefinition defaultAppConfig) `shouldBe` Nothing
+      routeNavigation (Showcase.pageDefinition defaultAppConfig) defaultRequestContext `shouldBe` Nothing
+      routeNavigation (ShowcaseAlternate.pageDefinition defaultAppConfig) defaultRequestContext `shouldBe` Nothing
 
   describe "the /docs Swagger page as an ordinary typed surface" $ do
     it "renders complete SSR with the fallback, mount, prefixed assets, and enhancement descriptor" $ do

@@ -1,5 +1,14 @@
 {-# LANGUAGE PatternSynonyms #-}
 
+-- | The reference application's typed route algebra, route metadata, and
+-- request context. Localized navigation labels are currently declared in the
+-- route-level 'routeNavigationDeclaration' table and resolved through
+-- HarchWeb's shared ordering function, which keeps Site and standalone
+-- rendering consistent. This is a partial adoption of page-owned navigation:
+-- moving each declaration beside its page module remains the G8 follow-up in
+-- the web-api template authoring-quality task. A separate route module-health
+-- follow-up now also covers the module's public export count; preserve the
+-- single route codec while splitting only cohesive ownership.
 module WebApi.Route
   ( AppAuthorization,
     AppLocale (..),
@@ -39,6 +48,8 @@ module WebApi.Route
     resourceAuthenticationProfileName,
     resourceReadScope,
     requiredOAuth2ScopeOrDie,
+    appNavigationItems,
+    appNavigationRoutes,
     defaultRequestContext,
     endpointMetadata,
     html,
@@ -50,6 +61,7 @@ module WebApi.Route
     requiredRouteUrl,
     requestContextFromWaiRequest,
     routeMetadata,
+    routeNavigationDeclaration,
     selectRoute,
     routeCodec,
   )
@@ -68,6 +80,8 @@ import HarchWeb.EndpointSecurity
     requiredEndpointNameOrDie,
     requiredRouteTemplateOrDie,
   )
+import HarchWeb.Site qualified as Site
+import WebApi.Localization (AppMessage (CreateAccount, HomeNavigationLabel, Profile, Second, SignIn, TodoPageHeading), localizedMessage)
 import WebApi.Pages.Route.Generated qualified as Generated
 import WebApi.Route.Context
 
@@ -418,6 +432,40 @@ localeFromPrefix _ = Nothing
 looksLikeLocalePrefix :: Text -> Bool
 looksLikeLocalePrefix prefix =
   Text.length prefix == 2 && Text.all isAsciiLower prefix
+
+-- | Candidate inventory passed to Site. Route declarations below decide which
+-- candidates appear and provide their context-specific labels and positions.
+appNavigationRoutes :: [AppRoute]
+appNavigationRoutes =
+  [HomeRoute, SecondRoute, TodoRoute, RegistrationRoute, LoginRoute, ProfileRoute]
+
+-- | Resolve the application's current page navigation through Harch's shared
+-- stable route-declaration resolver. Complete-document compatibility paths use
+-- this same resolver as Site.
+appNavigationItems :: AppRequestContext -> [HarchWeb.NavigationItem AppRoute]
+appNavigationItems =
+  Site.resolveRouteNavigationItems appNavigationRoutes routeNavigationDeclaration
+
+-- | Page-route navigation declarations. Labels follow the active application
+-- locale, and each route owns a nonnegative position. Other route families do
+-- not participate in the page navigation.
+routeNavigationDeclaration :: AppRoute -> AppRequestContext -> Maybe Site.RouteNavigation
+routeNavigationDeclaration route requestContext =
+  case route of
+    HomeRoute -> declare 0 HomeNavigationLabel
+    SecondRoute -> declare 10 Second
+    TodoRoute -> declare 20 TodoPageHeading
+    RegistrationRoute -> declare 30 CreateAccount
+    LoginRoute -> declare 40 SignIn
+    ProfileRoute -> declare 50 Profile
+    _ -> Nothing
+  where
+    declare order message =
+      Just
+        ( Site.RouteNavigation
+            (Site.NavigationOrder order)
+            (localizedMessage (requestLocale requestContext) message)
+        )
 
 routeMetadata :: AppRoute -> RouteMetadata
 routeMetadata route =

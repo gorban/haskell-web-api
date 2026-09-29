@@ -83,7 +83,7 @@ spec = do
                   )
               )
               DocsSwaggerRoute
-      Site.routeNavigationLabel docsRouteDefinition `shouldBe` Nothing
+      Site.routeNavigation docsRouteDefinition defaultRequestContext `shouldBe` Nothing
 
     it "retains explicitly supplied endpoint security at the application composition boundary" $ do
       let application =
