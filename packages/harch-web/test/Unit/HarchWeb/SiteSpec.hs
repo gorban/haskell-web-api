@@ -287,6 +287,70 @@ spec =
         ProtocolResponseResult _ ->
           expectationFailure "expected a page response for the home route"
 
+    it "resolves localized route navigation declarations, sorts positions, omits absent routes, and preserves ties" $ do
+      let localizedHomeRoute =
+            homeRouteDefinition
+              { routeNavigation = \requestContextValue ->
+                  Just
+                    ( Site.RouteNavigation
+                        (Site.NavigationOrder 20)
+                        (if pathPrefix requestContextValue == "/es" then "Inicio" else "Home")
+                    )
+              }
+          localizedSecondRoute =
+            secondRouteDefinition
+              { routeNavigation = \requestContextValue ->
+                  Just
+                    ( Site.RouteNavigation
+                        (Site.NavigationOrder 10)
+                        (if pathPrefix requestContextValue == "/es" then "Segundo" else "Second")
+                    )
+              }
+          localizedSite =
+            sampleSite
+              { siteNavigationRoutes = [HomeRoute, SecondRoute, NotFoundRoute],
+                siteRouteDefinition = \case
+                  HomeRoute -> localizedHomeRoute
+                  SecondRoute -> localizedSecondRoute
+                  route -> sampleRouteDefinition route
+              }
+          tiedSite =
+            localizedSite
+              { siteNavigationRoutes = [SecondRoute, HomeRoute],
+                siteRouteDefinition = \case
+                  HomeRoute -> localizedHomeRoute {routeNavigation = tiedNavigation "Home"}
+                  SecondRoute -> localizedSecondRoute {routeNavigation = tiedNavigation "Second"}
+                  route -> sampleRouteDefinition route
+              }
+          tiedNavigation label requestContextValue =
+            Just (Site.RouteNavigation (Site.NavigationOrder 10) (if pathPrefix requestContextValue == "/es" then label <> " es" else label))
+          navigationFor site requestContextValue = do
+            let siteApplication = buildSiteApplication site
+            PageResponse _ page <-
+              HarchWeb.renderResponse
+                siteApplication
+                (RouteRequest HomeRoute requestContextValue)
+            pure (HarchWeb.documentNavigation (HarchWeb.pageShell siteApplication page))
+          summarizeNavigation =
+            map
+              ( \(HarchWeb.ResolvedNavigationItem label route href isActive) ->
+                  ( label,
+                    route,
+                    href,
+                    isActive
+                  )
+              )
+      spanishNavigation <- navigationFor localizedSite (SampleContext "/es")
+      tiedSpanishNavigation <- navigationFor tiedSite (SampleContext "/es")
+      summarizeNavigation spanishNavigation
+        `shouldBe` [ ("Segundo", SecondRoute, "/es/second", False),
+                     ("Inicio", HomeRoute, "/es", True)
+                   ]
+      summarizeNavigation tiedSpanishNavigation
+        `shouldBe` [ ("Second es", SecondRoute, "/es/second", False),
+                     ("Home es", HomeRoute, "/es", True)
+                   ]
+
     it "renders the configured not-found page through the shared shell with a 404 status" $ do
       response <- performWaiRequest (toWaiApplication (buildSiteApplication sampleSite)) (waiRequest ["missing"])
       Wai.responseStatus response `shouldBe` Http.status404
@@ -669,7 +733,7 @@ secondRouteDefinition =
 apiRouteDefinition :: RouteDefinition SampleRoute SampleContext SampleAuthorization
 apiRouteDefinition =
   RouteDefinition
-    { routeNavigationLabel = Nothing,
+    { routeNavigation = const Nothing,
       routeMetadata = sampleMetadata HarchWeb.ApiEndpoint StatusApiRoute,
       routeMethods = const (HarchWeb.routeMethodPolicy [HarchWeb.RouteGet]),
       routeExecutionPolicy = HarchWeb.unboundedRouteExecutionPolicy,

@@ -17,7 +17,7 @@ import Data.Maybe ()
 import Data.Text ()
 import Data.Text qualified as Text (isInfixOf, isSuffixOf, length)
 import Data.Text.Encoding qualified as TextEncoding ()
-import HarchWeb (AssetPath (AssetPath), CssClass (GlobalCssClass), Document (Document, documentBodyAttributes, documentBootstrapHooks, documentFooter, documentLanguage, documentMainAttributes, documentMainContent, documentMainId, documentNavigation, documentNavigationAttributes, documentNavigationLifecycle, documentRuntimeDescriptors, documentStylesheets, documentTitle, documentViewportPolicy), HtmlAttribute (HtmlAttribute, attributeName, attributeValue), LiveRegion (AssertiveAlert, PoliteStatus), NavigationAnnouncement (AnnounceElementText), NavigationFocusTarget (FocusElement), NavigationLifecycle (navigationAnnouncement, navigationFocusTarget, navigationSkipLink, navigationStatusClass), NavigationSkipLink (NavigationSkipLink, skipLinkClass, skipLinkLabel), Page (Page, pageBody, pageBootstrapHooks, pageContext, pageRoute, pageStylesheets, pageTitle), PageShell (shellMainAttributes, shellNavigationItems, shellNavigationLifecycle, shellStylesheets), ResolvedNavigationItem (ResolvedNavigationItem, navigationHref, navigationIsActive, navigationLabel, navigationRoute), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (DeferredModule, PageEnhancementModule), RuntimeNonce (runtimeNonceValue), ViewportPolicy (ResponsiveViewport), buildNavigation, buildPageShell, generateRuntimeNonce, literalElementId, liveRegionAttributes, locale, mainNavigationLifecycle, responsiveViewport, shellFooter, stylesheet, text)
+import HarchWeb (AssetPath (AssetPath), CssClass (GlobalCssClass), Document (Document, documentBodyAttributes, documentBootstrapHooks, documentFooter, documentLanguage, documentMainAttributes, documentMainContent, documentMainId, documentNavigation, documentNavigationAttributes, documentNavigationLifecycle, documentRuntimeDescriptors, documentStylesheets, documentTitle, documentViewportPolicy), HtmlAttribute (HtmlAttribute, attributeName, attributeValue), LiveRegion (AssertiveAlert, PoliteStatus), NavigationAnnouncement (AnnounceElementText), NavigationFocusTarget (FocusElement), NavigationLifecycle (navigationAnnouncement, navigationFocusTarget, navigationSkipLink, navigationStatusClass), NavigationSkipLink (NavigationSkipLink, skipLinkClass, skipLinkLabel), Page (Page, pageBody, pageBootstrapHooks, pageContext, pageRoute, pageStylesheets, pageTitle), PageShell (shellMainAttributes, shellNavigationItems, shellNavigationLifecycle, shellRuntimeDescriptors, shellStylesheets), ResolvedNavigationItem (ResolvedNavigationItem, navigationHref, navigationIsActive, navigationLabel, navigationRoute), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (DeferredModule, PageEnhancementModule), RuntimeNonce (runtimeNonceValue), ViewportPolicy (ResponsiveViewport), buildNavigation, buildPageShell, generateRuntimeNonce, literalElementId, liveRegionAttributes, locale, mainNavigationLifecycle, pageRuntimeDescriptors, responsiveViewport, shellFooter, stylesheet, text, withPageRuntimeDescriptors, withPageStylesheets)
 import HarchWeb.Action qualified as Action ()
 import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
@@ -133,9 +133,9 @@ movedSpec = do
 
     it "renders page-owned stylesheets after the shell's base styles" $ do
       let styledPage =
-            (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
-              { pageStylesheets = [stylesheet (AssetPath "/assets/page.css")]
-              }
+            withPageStylesheets
+              (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
+              [stylesheet (AssetPath "/assets/page.css")]
           document =
             buildPageShell
               sampleCodec
@@ -143,8 +143,27 @@ movedSpec = do
               styledPage
       documentStylesheets document
         `shouldBe` [stylesheet (AssetPath "/assets/base.css"), stylesheet (AssetPath "/assets/page.css")]
-      (styledPage {pageStylesheets = []} == styledPage) `shouldBe` False
+      (withPageStylesheets styledPage [] == styledPage) `shouldBe` False
       show styledPage `shouldContain` "pageStylesheets"
+
+    it "appends page-owned runtime descriptors after shell declarations without deduplicating names" $ do
+      let shellDescriptor = PageEnhancementModule "shared-name" "/assets/shell-enhancement.js"
+          pageDescriptors =
+            [ PageEnhancementModule "shared-name" "/assets/page-enhancement.js",
+              PageEnhancementModule "page-extra" "/assets/page-extra.js"
+            ]
+          basePage = samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext})
+          page = withPageRuntimeDescriptors basePage pageDescriptors
+          shell = sampleShell {shellRuntimeDescriptors = [shellDescriptor]}
+          document = buildPageShell sampleCodec shell page
+      pageRuntimeDescriptors basePage `shouldBe` []
+      pageRuntimeDescriptors page `shouldBe` pageDescriptors
+      pageRuntimeDescriptors (withPageStylesheets page [stylesheet (AssetPath "/assets/with-runtime.css")])
+        `shouldBe` pageDescriptors
+      page `shouldNotBe` basePage
+      documentRuntimeDescriptors document
+        `shouldBe` shellDescriptor
+        : pageDescriptors
 
     it "keeps the closed responsive viewport policy comparable and inspectable" $ do
       responsiveViewport `shouldBe` ResponsiveViewport

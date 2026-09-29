@@ -551,7 +551,7 @@ spec =
           )
 
       it "keeps the definition's navigation label unset like the single-endpoint adapter" $
-        routeNavigationLabel (apiRouteEndpointFamilyDefinition (const testApiMetadata) testEndpointFamily (at "/api/status")) `shouldBe` Nothing
+        routeNavigation (apiRouteEndpointFamilyDefinition (const testApiMetadata) testEndpointFamily (at "/api/status")) () `shouldBe` Nothing
 
       it "keeps the selected path's endpoint metadata on the generated definition" $ do
         let definition =
@@ -800,7 +800,7 @@ spec =
 
       it "declares its one method in the shared route table" $
         expectAll
-          ( (routeNavigationLabel (apiRouteDefinition testApiMetadata successfulEndpoint) `shouldBe` Nothing)
+          ( (routeNavigation (apiRouteDefinition testApiMetadata successfulEndpoint) () `shouldBe` Nothing)
               :| [ routeMetadata (apiRouteDefinition testApiMetadata successfulEndpoint) `shouldBe` testApiMetadata,
                    routeMethods (apiRouteDefinition testApiMetadata successfulEndpoint) (RouteRequest () ()) `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RoutePost],
                    routeMethods (apiRouteDefinition testApiMetadata domainFailureEndpoint) (RouteRequest () ()) `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet],
@@ -1454,7 +1454,7 @@ spec =
       it "declares its endpoint's own method and no navigation label, unaffected by context" $
         expectAll
           ( (routeMethods contextAwareEndpointDefinition (RouteRequest () "context") `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet])
-              :| [ routeNavigationLabel contextAwareEndpointDefinition `shouldBe` Nothing,
+              :| [ routeNavigation contextAwareEndpointDefinition "context" `shouldBe` Nothing,
                    routeMetadata contextAwareEndpointDefinition `shouldBe` testApiMetadata
                  ]
           )
@@ -1501,7 +1501,7 @@ spec =
         acceptedResponse <- routeResponse fieldFailureDefinition (Wai.defaultRequest {Wai.queryString = [("query", Just "accepted")]}) (RouteRequest () "context")
         domainFailureResponse <- routeResponse fieldFailureDefinition (Wai.defaultRequest {Wai.queryString = [("query", Just "domain")]}) (RouteRequest () "context")
         expectAll
-          ( (routeNavigationLabel fieldFailureDefinition `shouldBe` Nothing)
+          ( (routeNavigation fieldFailureDefinition "context" `shouldBe` Nothing)
               :| [ routeMethods fieldFailureDefinition (RouteRequest () "context") `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet],
                    apiRouteResponseStatus response `shouldBe` HttpTypes.status400,
                    apiRouteResponseBody response `shouldBe` "[MissingApiField ApiQuerySource \"query\"]",
@@ -1529,7 +1529,7 @@ spec =
       it "declares its endpoint's own method and no navigation label, unaffected by context" $
         expectAll
           ( (routeMethods neverFailingContextAwareEndpointDefinition (RouteRequest () "context") `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RoutePost])
-              :| [ routeNavigationLabel neverFailingContextAwareEndpointDefinition `shouldBe` Nothing,
+              :| [ routeNavigation neverFailingContextAwareEndpointDefinition "context" `shouldBe` Nothing,
                    routeMetadata neverFailingContextAwareEndpointDefinition `shouldBe` testApiMetadata
                  ]
           )
@@ -1565,7 +1565,7 @@ spec =
         response <- routeResponse fieldFailureDefinition Wai.defaultRequest (RouteRequest () "context")
         acceptedResponse <- routeResponse fieldFailureDefinition (Wai.defaultRequest {Wai.queryString = [("query", Just "accepted")]}) (RouteRequest () "context")
         expectAll
-          ( (routeNavigationLabel fieldFailureDefinition `shouldBe` Nothing)
+          ( (routeNavigation fieldFailureDefinition "context" `shouldBe` Nothing)
               :| [ routeMethods fieldFailureDefinition (RouteRequest () "context") `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet],
                    apiRouteResponseStatus response `shouldBe` HttpTypes.status400,
                    apiRouteResponseBody response `shouldBe` "[MissingApiField ApiQuerySource \"query\"]",

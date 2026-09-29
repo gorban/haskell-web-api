@@ -77,7 +77,7 @@ import HarchWeb.Server
     validateActionCsrfTransport,
   )
 import HarchWeb.Session (OpaqueSession, renderSessionCookie, sessionId)
-import HarchWeb.Site (RouteDefinition (..), RouteHandler (..))
+import HarchWeb.Site (NavigationOrder (NavigationOrder), RouteDefinition (..), RouteHandler (..), RouteNavigation (RouteNavigation))
 import HarchWeb.StaticAssets (StaticAssetsConfig)
 import HarchWeb.StaticAssets.Route
   ( StaticAssetRoute (..),
@@ -240,7 +240,7 @@ publicRouteDefinition staticAssetsConfig csrfProtection maybeAdmissionWorkflow a
   case routeValue of
     Public (PublicAdmission returnTarget) ->
       RouteDefinition
-        { routeNavigationLabel = Nothing,
+        { routeNavigation = const Nothing,
           routeMetadata = mkEndpointMetadata (requiredEndpointNameOrDie "root.public.admission") (requiredRouteTemplateOrDie "/public/admission") HtmlEndpoint AllowUnauthenticated,
           routeMethods = const (Routing.routeMethodPolicy [Routing.RouteGet]),
           routeExecutionPolicy = unboundedRouteExecutionPolicy,
@@ -261,7 +261,7 @@ publicRouteDefinition staticAssetsConfig csrfProtection maybeAdmissionWorkflow a
       case maybeAdmissionWorkflow of
         Just (sessionConfig, proofConfig) ->
           RouteDefinition
-            { routeNavigationLabel = Nothing,
+            { routeNavigation = const Nothing,
               routeMetadata = mkEndpointMetadata (requiredEndpointNameOrDie "root.public.admission.native") (requiredRouteTemplateOrDie "/public/admission/native") ApiEndpoint AllowUnauthenticated,
               routeMethods = const (Routing.routeMethodPolicy [Routing.RoutePost]),
               routeExecutionPolicy = unboundedRouteExecutionPolicy,
@@ -279,7 +279,7 @@ publicRouteDefinition staticAssetsConfig csrfProtection maybeAdmissionWorkflow a
         Nothing -> error "admission native fallback selected while admission is disabled"
     Public PublicLogin ->
       RouteDefinition
-        { routeNavigationLabel = Just "Login",
+        { routeNavigation = const (Just (RouteNavigation (NavigationOrder 0) "Login")),
           routeMetadata = mkEndpointMetadata (requiredEndpointNameOrDie "root.public.login") (requiredRouteTemplateOrDie "/public/login") HtmlEndpoint AllowUnauthenticated,
           routeMethods = const (Routing.routeMethodPolicy [Routing.RouteGet]),
           routeExecutionPolicy = unboundedRouteExecutionPolicy,
@@ -298,7 +298,7 @@ publicRouteDefinition staticAssetsConfig csrfProtection maybeAdmissionWorkflow a
         }
     Public (PublicAsset assetRoute) ->
       RouteDefinition
-        { routeNavigationLabel = Nothing,
+        { routeNavigation = const Nothing,
           routeMetadata = mkEndpointMetadata (requiredEndpointNameOrDie "root.public.assets") (requiredRouteTemplateOrDie "/public/assets/*") AssetEndpoint AllowUnauthenticated,
           routeMethods = const (Routing.routeMethodPolicy [Routing.RouteGet]),
           routeExecutionPolicy = unboundedRouteExecutionPolicy,
@@ -307,7 +307,7 @@ publicRouteDefinition staticAssetsConfig csrfProtection maybeAdmissionWorkflow a
         }
     Public PublicNotFound ->
       RouteDefinition
-        { routeNavigationLabel = Nothing,
+        { routeNavigation = const Nothing,
           routeMetadata = mkEndpointMetadata (requiredEndpointNameOrDie "root.public.not-found") (requiredRouteTemplateOrDie "/public/404") HtmlEndpoint AllowUnauthenticated,
           routeMethods = const Routing.RouteHidden,
           routeExecutionPolicy = unboundedRouteExecutionPolicy,

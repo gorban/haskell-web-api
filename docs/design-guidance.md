@@ -3989,16 +3989,62 @@ of this navigation component.
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
 the full designed scope shipped; a partial slice must say so and name its follow-up.
 
+### Decision record — page-owned runtime requirements and localized navigation (web-api template authoring, 2026-09-28)
+
+**Decision: extend the existing `Page`/`buildPageShell` and
+`RouteDefinition`/`Site` owners for the two presentation gaps found while
+designing page-local authoring.** `Page` already owns page styles and hooks,
+but enhancement descriptors currently live only on `PageShell`; the
+application compensates by matching the Swagger route in its shell. Add
+page-owned runtime requirements to `Page` and append them after shell
+descriptors in `buildPageShell`. Preserve the existing descriptor validator:
+shell declarations retain precedence, page declarations follow in order, and
+duplicate names or invalid sources remain errors rather than being silently
+deduplicated. This reuses the existing document and enhancement lifecycle and
+does not create a route-keyed runtime registry.
+
+`RouteDefinition` currently offers a static optional navigation label while
+`Site` supplies candidate membership and order. Extend that same declaration
+with a pure function of request context returning an optional label and
+`NavigationOrder`; use a `Natural`-backed order type so negative positions are
+unrepresentable. The Site renderer resolves declarations against the current
+page context, omits absent declarations, and stably sorts by order, preserving
+candidate-list order for ties. Existing static-label helpers declare one
+common order and therefore keep their prior candidate-list ordering. This
+keeps localized label, participation, and position on the route declaration
+and retains the existing Site navigation path. The tracked follow-up is
+`web-api-template-authoring-quality` (framework gaps G3 and G8).
+
+**Shipped slice (2026-09-28):** `Page` now carries runtime descriptors and
+`buildPageShell` appends them after shell descriptors; the Swagger page owns
+its enhancement descriptor beside its stylesheet. `RouteDefinition` now
+resolves optional labels and natural-number order from request context, and
+Site sorts those declarations stably. The application uses the same resolver
+for Site rendering and its standalone document builder, with English and
+Spanish labels. This is still partial page-local navigation adoption:
+`WebApi.Route.routeNavigationDeclaration` centralizes the reference app's
+per-route label/order declarations. G8's remaining application follow-up is
+to move those declarations beside their page modules and derive navigation
+participation from those page-owned declarations.
+
+This is the framework scope needed for page-owned runtime requirements and
+localized ordered navigation. It does not add component-level transitive asset
+collection; reusable components continue to compose explicit companion
+requirements until the separate G4 investigation demonstrates that composition
+is insufficient.
+
 | Area | State | Guidance |
 | --- | --- | --- |
 | Complete SSR and enhanced navigation | Implemented | `NavigationLifecycle` is the optional declarative accessibility adapter interpreted by the existing replaceable runtime. The reference adapter focuses the stable main, commits final same-origin redirect URLs, and announces the destination title once; direct loads, incompatible responses, delayed modules, and scripts-disabled links retain native behavior. |
 | Immediate modeled-form capture | Implemented | Extend the kernel contract before adding another enabled framework event type. |
-| Generated static page algebra/dispatch | Implemented | Export `pageDefinition`; keep API and dynamic routes explicit. |
+| Generated static page algebra/dispatch | Implemented | Export `pageDefinition`; keep API and dynamic routes explicit. The generator owns static identity and definition dispatch; localized navigation adoption remains partial and runtime ownership is recorded below. |
 | Typed markup and component calls | Implemented | Prefer named record fields; reserve positional `props` for distinct typed values. |
 | Scoped CSS names | Implemented | Use `cssScope`; typed CSS authoring remains future work. |
 | Configured static assets | Implemented | Successful assets are canonical-root-checked file responses with weak ETags, `Last-Modified`, conditional 304s, single-range 206/416 semantics, and `HEAD` metadata; static 404s are never cacheable. |
 | Declarative client actions and region patches | Implemented | Declare `ActionCodec` endpoints once; render forms and dispatch from it, then mutate with typed action responses and `RegionPatch`, not page POST/reload workflows. |
 | SSE live updates | Implemented | Start from meaningful SSR content; treat streaming as an enhancement. |
+| Page-owned runtime requirements | Implemented | `Page` carries deferred descriptors and `buildPageShell` preserves shell-first ordering and validation; the Swagger page owns its enhancement descriptor. Component-transitive asset collection remains the explicit G4 follow-up. |
+| Localized page-owned navigation | Partial | `RouteDefinition` provides context-aware labels and natural-number order through Site's stable resolver. The app's Site and standalone paths share localized declarations, but they remain centralized in `WebApi.Route`; G8 in `web-api-template-authoring-quality` tracks moving them beside their page modules. |
 | PostgreSQL and custom adapters | Implemented | Keep operations typed and interpreters app-selectable. Runtime queries share a bounded `WebApi.Postgres.Pool` instead of one connection per query. `DatabaseTransportSecurity` exposes the closed libpq TLS modes; an omitted setting deliberately preserves libpq's own resolution/default (currently `prefer`), while an explicit `verify-full`/CA policy flows to runtime, migration, and `psql`. A real PostgreSQL 17 fixture proves verified success and the untrusted-CA, hostname-mismatch, and TLS-disabled failures. Migrations no longer run per-statement `psql` subprocesses (the transactional migration-connection work). |
 | Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Auth, sessions, MFA, telemetry, TLS, and proxy support are complete. `HarchWeb.Localization` provides ICU-backed application lookup, CLDR rendering, a structural compile-time template quasiquoter, and an extendable empty framework-default layer; `web-api` uses its closed catalog and `examples/localization` proves Icelandic SSR pluralization plus a localized in-memory-adapter API error (review finding, 2026-08-26). Login-attempt reservations retain only the application-owned 15-minute window, delete successful/cancelled rows, cap storage at 100,000 rows, and reject oversized keys before persistence (review finding, 2026-08-24). Argon2 admission is a shared, non-queueing 512-MiB KiB-weighted gate with an eight-operation CPU-concurrency ceiling across registration, password login, and recovery-code verification (review finding, 2026-08-24). |
 | `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints (buffered, URL-encoded form, multipart, and streaming request bodies) and closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`) | Implemented | `examples/custom-api` and `examples/multipart-upload` use the route-family registry; `web-api` uses its existing single dispatcher with `apiRouteDefinitionWithContext` for `/api/status` and `/api/second`. `ApiEndpointContract` groups method, fields/body, representations, and field-failure policy; a path-owning `ApiRouteEndpointDeclaration` is used only for context-free routes, while context-aware definitions reuse the contract (review finding, 2026-08-25). `ApiResponse` carries observability attributes/log entries. The unused compatibility middleware/table was deleted, and `HarchWeb.Api.Endpoint` is now a public facade over private declaration, family, and runtime modules. |

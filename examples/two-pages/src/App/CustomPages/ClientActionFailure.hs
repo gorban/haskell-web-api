@@ -22,7 +22,7 @@ import HarchWeb.Site (RouteDefinition (..), RouteHandler (PageRouteHandler))
 routeDefinition :: FailureReference -> RouteDefinition TwoPageRoute () ()
 routeDefinition failureReference =
   RouteDefinition
-    { routeNavigationLabel = Nothing,
+    { routeNavigation = const Nothing,
       routeMetadata = twoPageClientActionFailureEndpointMetadata,
       routeMethods = const (HarchWeb.routeMethodPolicy [RouteGet]),
       routeExecutionPolicy = HarchWeb.unboundedRouteExecutionPolicy,

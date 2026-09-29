@@ -116,7 +116,7 @@ spec = describe "Unit.Orders.Api" $ do
       Nothing -> pure ()
       Just _ -> expectationFailure "orders api module must not handle actions"
     let definition = moduleEndpoints moduleValue OrdersSubmit
-    routeNavigationLabel definition `shouldBe` Nothing
+    Site.routeNavigation definition ordersContext `shouldBe` Nothing
     endpointNameText (endpointName (routeMetadata definition)) `shouldBe` "orders.submit"
     routeTemplateText (endpointRouteTemplate (routeMetadata definition)) `shouldBe` "/"
     endpointProtocol (routeMetadata definition) `shouldBe` ApiEndpoint
@@ -148,7 +148,7 @@ spec = describe "Unit.Orders.Api" $ do
           _ -> expectationFailure "expected a protocol response"
       PageRouteHandler _ -> expectationFailure "orders submit is a protocol endpoint"
     let notFoundDefinition = moduleEndpoints moduleValue OrdersApiNotFound
-    routeNavigationLabel notFoundDefinition `shouldBe` Nothing
+    Site.routeNavigation notFoundDefinition ordersContext `shouldBe` Nothing
     routeExecutionPolicy notFoundDefinition `shouldBe` unboundedRouteExecutionPolicy
     endpointNameText (endpointName (routeMetadata notFoundDefinition)) `shouldBe` "orders.not-found"
     routeTemplateText (endpointRouteTemplate (routeMetadata notFoundDefinition)) `shouldBe` "/404"

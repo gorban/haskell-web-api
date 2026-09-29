@@ -111,7 +111,7 @@ spec = describe "Unit.Catalog.Api" $ do
       Nothing -> pure ()
       Just _ -> expectationFailure "catalog api module must not handle actions"
     let definition = moduleEndpoints moduleValue CatalogItems
-    routeNavigationLabel definition `shouldBe` Nothing
+    Site.routeNavigation definition catalogContext `shouldBe` Nothing
     endpointNameText (endpointName (routeMetadata definition)) `shouldBe` "catalog.items"
     routeTemplateText (endpointRouteTemplate (routeMetadata definition)) `shouldBe` "/items"
     endpointProtocol (routeMetadata definition) `shouldBe` ApiEndpoint
@@ -125,7 +125,7 @@ spec = describe "Unit.Catalog.Api" $ do
       ProtocolRouteHandler _ -> pure ()
       PageRouteHandler _ -> expectationFailure "the unlisted preview is a protocol endpoint"
     let notFoundDefinition = moduleEndpoints moduleValue CatalogApiNotFound
-    routeNavigationLabel notFoundDefinition `shouldBe` Nothing
+    Site.routeNavigation notFoundDefinition catalogContext `shouldBe` Nothing
     routeExecutionPolicy notFoundDefinition `shouldBe` unboundedRouteExecutionPolicy
     endpointNameText (endpointName (routeMetadata notFoundDefinition)) `shouldBe` "catalog.not-found"
     routeTemplateText (endpointRouteTemplate (routeMetadata notFoundDefinition)) `shouldBe` "/404"

@@ -122,7 +122,8 @@ spec =
       Action.actionEndpointTarget (moduleActionCodec mountedModule) 42 "POST" "/catalog/tenant-42/save"
         `shouldBe` Just ParentSaveTarget
       moduleActionRoute mountedModule 42 ParentSaveTarget `shouldBe` Just (CatalogRoute ChildItemRoute)
-      Site.routeNavigationLabel mountedDefinition `shouldBe` Just "Catalog"
+      Site.routeNavigation mountedDefinition 42
+        `shouldBe` Just (Site.RouteNavigation (Site.NavigationOrder 3) "Catalog tenant-42")
       Site.routeMethods mountedDefinition (RouteRequest (CatalogRoute ChildItemRoute) 42) `shouldBe` routeMethodPolicy [RouteGet]
       Site.routeExecutionPolicy mountedDefinition `shouldBe` unboundedRouteExecutionPolicy
       let mountedNotFoundRequest = notFoundRequest (moduleRouteCodec mountedModule) 42
@@ -935,20 +936,24 @@ malformedChildCodec =
 
 childDefinition :: ChildRoute -> RouteDefinition ChildRoute Text ChildAuthorization
 childDefinition ChildItemRoute =
-  Site.pageRoute
-    childMetadata
-    (Just "Catalog")
-    ( \_ request ->
-        pure
-          Page
-            { pageStylesheets = [],
-              pageTitle = "Catalog",
-              pageRoute = requestRoute request,
-              pageContext = requestContext request,
-              pageBody = text "Item",
-              pageBootstrapHooks = []
-            }
-    )
+  ( Site.pageRoute
+      childMetadata
+      Nothing
+      ( \_ request ->
+          pure
+            Page
+              { pageStylesheets = [],
+                pageTitle = "Catalog",
+                pageRoute = requestRoute request,
+                pageContext = requestContext request,
+                pageBody = text "Item",
+                pageBootstrapHooks = []
+              }
+      )
+  )
+    { routeNavigation = \childContext ->
+        Just (Site.RouteNavigation (Site.NavigationOrder 3) ("Catalog " <> childContext))
+    }
 
 childDefinitionWithResponse :: ChildResponseKind -> RouteDefinition ChildRoute Text ChildAuthorization
 childDefinitionWithResponse responseKind =

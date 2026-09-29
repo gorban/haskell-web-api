@@ -24,7 +24,7 @@ import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb (ClientActionPayload (..), ClientActionRequest (..), ForwardedHeaderTrust (..), ListenerConfig (..), RouteMethod (..), RouteRequest (..), appName, applicationStaticAssets, corsPolicy, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, forwardedHeaderTrust, httpsRedirectAuthority, httpsRedirectPort, listenerConfigs, metricsExporter, notFoundRequest, observability, redirectHttpToHttps, requestConcurrencyLimit, requestPolicy, requestTransportLimits, responseSecurityHeaders, staticAssetContentTypes, staticAssetRoots, staticAssets, staticCacheControlSeconds, strictTransportSecurity, toWaiApplication, tracingExporter, warpDefaultRequestTransportLimits)
 import HarchWeb qualified
 import HarchWeb.Csrf (generateCsrfToken, mkPageCsrf, mkPageSecurity)
-import HarchWeb.Site (routeNavigationLabel, siteName, siteNavigationRoutes, siteRequestPolicy, siteRouteDefinition, siteStaticAssets)
+import HarchWeb.Site (siteName, siteNavigationRoutes, siteRequestPolicy, siteRouteDefinition, siteStaticAssets)
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
@@ -96,9 +96,9 @@ spec =
                      `shouldBe` [HomePage, LiveDataPage, PageNotFound, SecondPage],
                    map show allPageRoutes
                      `shouldBe` ["HomePage", "LiveDataPage", "PageNotFound", "SecondPage"],
-                   routeNavigationLabel (siteRouteDefinition twoPageSite (Page PageNotFound))
+                   Site.routeNavigation (siteRouteDefinition twoPageSite (Page PageNotFound)) ()
                      `shouldBe` Nothing,
-                   routeNavigationLabel (siteRouteDefinition twoPageSite (Api LiveDataEvents))
+                   Site.routeNavigation (siteRouteDefinition twoPageSite (Api LiveDataEvents)) ()
                      `shouldBe` Nothing,
                    Site.routeMethods (siteRouteDefinition twoPageSite (Page HomePage)) (RouteRequest (Page HomePage) ())
                      `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
@@ -110,13 +110,13 @@ spec =
                      `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
                    Site.routeMethods (siteRouteDefinition twoPageSite (Custom NativeSubscriptionFallback)) (RouteRequest (Custom NativeSubscriptionFallback) ())
                      `shouldBe` HarchWeb.routeMethodPolicy [RoutePost],
-                   routeNavigationLabel (siteRouteDefinition twoPageSite (Custom NativeSubscriptionFallback))
+                   Site.routeNavigation (siteRouteDefinition twoPageSite (Custom NativeSubscriptionFallback)) ()
                      `shouldBe` Nothing,
                    Site.routeMethods (siteRouteDefinition twoPageSite (Custom NativeSubscriptionResult)) (RouteRequest (Custom NativeSubscriptionResult) ())
                      `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
                    Site.routeMethods (siteRouteDefinition twoPageSite failureRoute) (RouteRequest failureRoute ())
                      `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
-                   routeNavigationLabel (siteRouteDefinition twoPageSite failureRoute)
+                   Site.routeNavigation (siteRouteDefinition twoPageSite failureRoute) ()
                      `shouldBe` Nothing,
                    staticAssetRoots (siteStaticAssets twoPageSite)
                      `shouldBe` [HarchWeb.StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}],
@@ -374,7 +374,7 @@ spec =
         expectAll
           ( (HarchWeb.pageRoute nativePage `shouldBe` Custom NativeSubscriptionResult)
               :| [ Text.isInfixOf "Subscription received" (HarchWeb.renderHtml (HarchWeb.pageBody nativePage)) `shouldBe` True,
-                   routeNavigationLabel (siteRouteDefinition twoPageSite (Custom NativeSubscriptionResult)) `shouldBe` Nothing,
+                   Site.routeNavigation (siteRouteDefinition twoPageSite (Custom NativeSubscriptionResult)) () `shouldBe` Nothing,
                    Wai.responseStatus response `shouldBe` Http.status200,
                    Text.isInfixOf "Subscription received" responseBody `shouldBe` True
                  ]
@@ -490,7 +490,7 @@ spec =
                      responseBody
                      `shouldBe` True,
                    Text.isInfixOf "<p>summer-release</p>" responseBody `shouldBe` True,
-                   routeNavigationLabel (siteRouteDefinition twoPageSite previewRoute)
+                   Site.routeNavigation (siteRouteDefinition twoPageSite previewRoute) ()
                      `shouldBe` Nothing,
                    renderedResponse `shouldSatisfy` hasPageRoute previewRoute,
                    directlyDefinedResponse `shouldSatisfy` hasPageRoute previewRoute

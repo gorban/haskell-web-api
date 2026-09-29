@@ -74,7 +74,7 @@ spec =
         `shouldBe` Just Action.ApplyActionResponse
       moduleActionRoute moduleValue ordersContext SubmitOrderTarget `shouldBe` Just OrdersIndex
       let definition = moduleEndpoints moduleValue OrdersIndex
-      routeNavigationLabel definition `shouldBe` Just "Orders"
+      fmap Site.routeNavigationLabel (Site.routeNavigation definition ordersContext) `shouldBe` Just "Orders"
       endpointProtocol (routeMetadata definition) `shouldBe` HtmlEndpoint
       endpointAccess (routeMetadata definition) `shouldBe` RequireAuthorized MayReadOrders
       endpointNameText (endpointName (routeMetadata definition)) `shouldBe` "orders.index"

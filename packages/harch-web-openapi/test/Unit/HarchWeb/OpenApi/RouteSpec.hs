@@ -15,7 +15,7 @@ spec =
     it "uses the shared GET route policy and serves provider bytes as OpenAPI JSON" $ do
       provider <- requireRight (mkCachedOpenApiDocumentProvider (OpenApiDocumentDetails "Catalog API" "1.0") Map.empty () [])
       let definition = openApiDocumentRouteDefinition documentMetadata provider :: RouteDefinition () () ()
-      routeNavigationLabel definition `shouldBe` Nothing
+      routeNavigation definition () `shouldBe` Nothing
       routeMetadata definition `shouldBe` documentMetadata
       routeMethods definition (RouteRequest () ()) `shouldBe` routeMethodPolicy [RouteGet]
       routeExecutionPolicy definition `shouldBe` unboundedRouteExecutionPolicy

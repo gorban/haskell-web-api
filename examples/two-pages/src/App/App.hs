@@ -134,7 +134,7 @@ routeDefinition csrfProtection route =
 liveDataEventsRouteDefinition :: RouteDefinition TwoPageRoute () ()
 liveDataEventsRouteDefinition =
   RouteDefinition
-    { routeNavigationLabel = Nothing,
+    { routeNavigation = const Nothing,
       routeMetadata = twoPageEndpointMetadata ApiEndpoint (Api LiveDataEvents),
       routeMethods = const (routeMethodPolicy [RouteGet]),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
@@ -182,7 +182,7 @@ twoPageClientAction actionRequest =
 nativeSubscriptionFallbackRouteDefinition :: CsrfProtection () -> RouteDefinition TwoPageRoute () ()
 nativeSubscriptionFallbackRouteDefinition csrfProtection =
   RouteDefinition
-    { routeNavigationLabel = Nothing,
+    { routeNavigation = const Nothing,
       routeMetadata = twoPageEndpointMetadata ApiEndpoint (Custom NativeSubscriptionFallback),
       routeMethods = const (routeMethodPolicy [RoutePost]),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,

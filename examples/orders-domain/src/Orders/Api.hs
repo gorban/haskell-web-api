@@ -258,7 +258,7 @@ ordersRouteDefinition extension commands route =
 ordersApiNotFoundDefinition :: RouteDefinition OrdersApiRoute OrdersContext OrdersPolicy
 ordersApiNotFoundDefinition =
   RouteDefinition
-    { routeNavigationLabel = Nothing,
+    { routeNavigation = const Nothing,
       routeMetadata = ordersApiNotFoundEndpointMetadata,
       routeMethods = const (routeMethodPolicy []),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,

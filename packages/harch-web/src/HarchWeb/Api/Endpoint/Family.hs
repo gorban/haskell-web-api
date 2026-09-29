@@ -55,7 +55,7 @@ import Network.Wai qualified as Wai
 apiRouteDefinition :: EndpointMetadata authorization -> ApiRouteEndpoint context extension fields body domainFailure response -> RouteDefinition route context authorization
 apiRouteDefinition metadata endpoint =
   RouteDefinition
-    { routeNavigationLabel = Nothing,
+    { routeNavigation = const Nothing,
       routeMetadata = metadata,
       routeMethods = \routeRequest ->
         case apiRouteEndpointAvailability endpoint $! HarchWeb.requestContext routeRequest of
@@ -275,7 +275,7 @@ apiPathRouteMethods family context pathText =
 apiRouteEndpointFamilyDefinition :: (ApiPath -> EndpointMetadata authorization) -> ApiEndpointFamily context extension -> ApiPath -> RouteDefinition ApiPath context authorization
 apiRouteEndpointFamilyDefinition endpointMetadataForPath family apiPath@(ApiPath pathText) =
   RouteDefinition
-    { routeNavigationLabel = Nothing,
+    { routeNavigation = const Nothing,
       routeMetadata = endpointMetadataForPath apiPath,
       routeMethods = \routeRequest -> HarchWeb.routeMethodPolicy (apiPathRouteMethods family (HarchWeb.requestContext routeRequest) pathText),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,

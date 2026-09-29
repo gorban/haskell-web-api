@@ -44,7 +44,7 @@ spec =
         notFoundRequest codec () `shouldBe` RouteRequest (StaticAssetRoute []) ()
         Routing.routeMethods codec (RouteRequest (StaticAssetRoute (routePathSegments location)) ()) `shouldBe` routeMethodPolicy [RouteGet]
         let definition = staticAssetRouteDefinition staticAssets metadata
-        routeNavigationLabel definition `shouldBe` Nothing
+        routeNavigation definition () `shouldBe` Nothing
         routeMetadata definition `shouldBe` metadata
         Site.routeMethods definition (RouteRequest (StaticAssetRoute (routePathSegments location)) ()) `shouldBe` routeMethodPolicy [RouteGet]
         routeExecutionPolicy definition `shouldBe` unboundedRouteExecutionPolicy

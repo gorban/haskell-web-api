@@ -1,4 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE PatternSynonyms #-}
 
 -- | Typed SSR document authoring and rendering.
 module HarchWeb.Document
@@ -11,7 +12,15 @@ module HarchWeb.Document
     NavigationLifecycle (..),
     NavigationRuntime (..),
     NavigationSkipLink (..),
-    Page (..),
+    Page
+      ( Page,
+        pageTitle,
+        pageRoute,
+        pageContext,
+        pageBody,
+        pageBootstrapHooks,
+        pageStylesheets
+      ),
     PageShell (..),
     ResolvedNavigationItem (..),
     RuntimeAsset (..),
@@ -35,6 +44,9 @@ module HarchWeb.Document
     runtimeAssetScriptSource,
     renderDocumentForTests,
     testRuntimeNonce,
+    pageRuntimeDescriptors,
+    withPageStylesheets,
+    withPageRuntimeDescriptors,
     renderDocumentWithNonce,
     renderDocumentWithNonceAndActionCsrf,
     runtimeNonceValue,
@@ -61,19 +73,63 @@ import HarchWeb.StaticAssets (AssetPath (..), CssClass, Stylesheet (..), cssClas
 -- CSS-in-Haskell), authored with
 -- @harch-<scope>-<local>@ selectors and verified by
 -- @tools/check-scoped-css.sh@; 'buildPageShell' renders them after the
--- shell's base styles so page rules win the cascade. This is a narrow
--- slice: per-component style attachment stays application-owned, and the
--- remaining authoring-quality gaps stay open in the web-API template
--- authoring-quality work.
-data Page route context = Page
-  { pageTitle :: Text,
-    pageRoute :: route,
-    pageContext :: context,
-    pageBody :: Html,
-    pageBootstrapHooks :: [Text],
-    -- | Page-owned stylesheets, rendered after the shell's base styles.
-    pageStylesheets :: [Stylesheet]
-  }
+-- shell's base styles so page rules win the cascade.
+--
+-- Decision record (2026-09-28, web-api template authoring, G3): extend this
+-- page owner with deferred runtime requirements and let 'buildPageShell'
+-- append them after shell requirements. The existing 'Page' record pattern
+-- remains source-compatible for construction and field reads and declares no
+-- page-specific runtime requirements; 'withPageRuntimeDescriptors' opts a
+-- page into the additive internal representation. 'withPageStylesheets' is
+-- the explicit updater for the former record-update use case.
+-- Shell and page declarations are kept in order and are not deduplicated, so
+-- the existing runtime's duplicate-name, source, and module validation still
+-- rejects conflicting or invalid declarations. This closes page-level runtime
+-- ownership only; transitive component asset collection remains the explicit
+-- G4 follow-up in the web-api template authoring-quality task.
+-- The repository quality report also found this public module above the
+-- 40-export API threshold. The local 'harch-web-document-api-health'
+-- follow-up must identify a cohesive model/rendering ownership split; it must
+-- move real behavior and cannot turn this implementation into a facade solely
+-- to lower the metric.
+data Page route context = PageInternal (PageContents route context) [RuntimeDescriptor]
+
+data PageContents route context = PageContents Text route context Html [Text] [Stylesheet]
+
+pattern Page :: Text -> route -> context -> Html -> [Text] -> [Stylesheet] -> Page route context
+pattern Page
+  { pageTitle,
+    pageRoute,
+    pageContext,
+    pageBody,
+    pageBootstrapHooks,
+    pageStylesheets
+  } <-
+  PageInternal (PageContents pageTitle pageRoute pageContext pageBody pageBootstrapHooks pageStylesheets) _
+  where
+    Page pageTitle pageRoute pageContext pageBody pageBootstrapHooks pageStylesheets =
+      PageInternal
+        (PageContents pageTitle pageRoute pageContext pageBody pageBootstrapHooks pageStylesheets)
+        []
+
+{-# COMPLETE Page #-}
+
+-- | Page-owned enhancement requirements. Legacy 'Page' values contribute no
+-- page-specific descriptors; shell requirements still apply to them.
+pageRuntimeDescriptors :: Page route context -> [RuntimeDescriptor]
+pageRuntimeDescriptors (PageInternal _ descriptors) = descriptors
+
+-- | Replace the page-owned stylesheet list without discarding its runtime
+-- requirements. This is the explicit updater for callers that previously used
+-- record update syntax on a page value.
+withPageStylesheets :: Page route context -> [Stylesheet] -> Page route context
+withPageStylesheets (PageInternal (PageContents title route context body hooks _) descriptors) stylesheets =
+  PageInternal (PageContents title route context body hooks stylesheets) descriptors
+
+-- | Attach page-owned enhancement requirements while retaining the existing
+-- record-construction pattern and page fields.
+withPageRuntimeDescriptors :: Page route context -> [RuntimeDescriptor] -> Page route context
+withPageRuntimeDescriptors (PageInternal contents _) = PageInternal contents
 
 instance (Eq route, Eq context) => Eq (Page route context) where
   left == right =
@@ -83,6 +139,7 @@ instance (Eq route, Eq context) => Eq (Page route context) where
       && renderHtml (pageBody left) == renderHtml (pageBody right)
       && pageBootstrapHooks left == pageBootstrapHooks right
       && pageStylesheets left == pageStylesheets right
+      && pageRuntimeDescriptors left == pageRuntimeDescriptors right
 
 instance (Show route, Show context) => Show (Page route context) where
   showsPrec precedence page =
@@ -99,7 +156,12 @@ instance (Show route, Show context) => Show (Page route context) where
         . shows (pageBootstrapHooks page)
         . showString ", pageStylesheets = "
         . shows (pageStylesheets page)
-        . showString "}"
+        . case pageRuntimeDescriptors page of
+          [] -> showString "}"
+          descriptors ->
+            showString ", pageRuntimeDescriptors = "
+              . shows descriptors
+              . showString "}"
 
 data HtmlAttribute = HtmlAttribute
   { attributeName :: Text,
@@ -1324,6 +1386,10 @@ buildNavigation codec page =
           }
     )
 
+-- | Combine the site shell and page declarations for a complete document.
+-- Shell runtime descriptors keep their existing order and page descriptors
+-- follow them; duplicate identities are preserved for the runtime's existing
+-- rejection path rather than being hidden by a merge-time deduplication.
 buildPageShell :: (Eq route) => RouteCodec route context -> PageShell route context -> Page route context -> Document route
 
 -- | Decision record: page-owned stylesheets render after the shell's base
@@ -1344,7 +1410,7 @@ buildPageShell codec shell page =
       documentNavigationLifecycle = shellNavigationLifecycle shell,
       documentStylesheets = shellStylesheets shell ++ pageStylesheets page,
       documentViewportPolicy = responsiveViewport,
-      documentRuntimeDescriptors = shellRuntimeDescriptors shell
+      documentRuntimeDescriptors = shellRuntimeDescriptors shell <> pageRuntimeDescriptors page
     }
 
 -- | Renders deterministic markup for tests only. It deliberately has a

@@ -14,6 +14,9 @@
 module HarchWeb.Site
   ( RouteDefinition (..),
     RouteHandler (..),
+    NavigationOrder (..),
+    RouteNavigation (..),
+    resolveRouteNavigationItems,
     Site (..),
     SimpleSiteConfiguration (..),
     apiOnlySite,
@@ -23,6 +26,7 @@ module HarchWeb.Site
   )
 where
 
+import Data.List (sortOn)
 import Data.List.NonEmpty (NonEmpty)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
@@ -65,6 +69,7 @@ import HarchWeb
     freshRequestIdIngress,
     literalElementId,
     navigationRuntimeScriptSource,
+    pageContext,
     requestIdText,
     unboundedRequestHeadLimits,
     unboundedRouteExecutionPolicy,
@@ -78,6 +83,7 @@ import HarchWeb.Observability qualified as Observability
 import HarchWeb.Server.ClientAction (csrfCookieFromRequest)
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
+import Numeric.Natural (Natural)
 
 -- | A matched route is either an SSR page or a protocol endpoint.  Only the
 -- page alternative receives the security state that must be authored into
@@ -87,8 +93,23 @@ data RouteHandler route context
   = PageRouteHandler (PageSecurity -> RouteRequest route context -> IO (PageResult route context))
   | ProtocolRouteHandler (Wai.Request -> RouteRequest route context -> IO (NonPageResponse route context))
 
+-- | Nonnegative navigation position. Equal positions retain the candidate
+-- route inventory's order when the Site renderer sorts declarations.
+newtype NavigationOrder = NavigationOrder Natural
+  deriving (Eq, Ord, Show)
+
+-- | A route's request-context-resolved navigation label and position.
+data RouteNavigation = RouteNavigation
+  { routeNavigationOrder :: NavigationOrder,
+    routeNavigationLabel :: Text
+  }
+  deriving (Eq, Show)
+
 data RouteDefinition route context authorization = RouteDefinition
-  { routeNavigationLabel :: Maybe Text,
+  { -- | Pure, optional navigation declaration for the current request context.
+    -- The Site resolves this against its candidate route inventory; tied
+    -- positions keep inventory order.
+    routeNavigation :: context -> Maybe RouteNavigation,
     -- | Required typed endpoint metadata. Ordinary page/API/action builders
     -- supply authenticated metadata; a public endpoint must name
     -- 'AllowUnauthenticated' explicitly.
@@ -245,7 +266,7 @@ pageRoute ::
   RouteDefinition route context authorization
 pageRoute metadata navigationLabel renderPage =
   RouteDefinition
-    { routeNavigationLabel = navigationLabel,
+    { routeNavigation = routeNavigationAtOrderZero navigationLabel,
       routeMetadata = metadata,
       routeMethods = const (HarchWeb.routeMethodPolicy [HarchWeb.RouteGet]),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
@@ -332,26 +353,42 @@ renderSitePageShell site page =
         site
         page
         ( addRouteNavigation
-            (siteNavigationItems site)
+            (siteNavigationItems site (pageContext page))
             (sitePageShell site page)
         )
     )
     page
 
-siteNavigationItems :: Site route action context authorization -> [NavigationItem route]
+siteNavigationItems :: Site route action context authorization -> context -> [NavigationItem route]
 siteNavigationItems site =
-  mapMaybe
-    ( \routeValue ->
-        fmap
-          ( \navigationLabel ->
-              NavigationItem
-                { navigationLabel = navigationLabel,
-                  navigationRoute = routeValue
-                }
-          )
-          (routeNavigationLabel (siteRouteDefinition site routeValue))
-    )
+  resolveRouteNavigationItems
     (siteNavigationRoutes site)
+    (routeNavigation . siteRouteDefinition site)
+
+-- | Resolve the declarations for a route inventory into rendered navigation
+-- items. Equal positions preserve inventory order through stable 'sortOn'; this
+-- is also the resolver for complete-document paths composed outside a 'Site'.
+resolveRouteNavigationItems :: [route] -> (route -> context -> Maybe RouteNavigation) -> context -> [NavigationItem route]
+resolveRouteNavigationItems candidateRoutes navigationForRoute context =
+  map
+    toNavigationItem
+    ( sortOn
+        (routeNavigationOrder . snd)
+        (mapMaybe navigationForCandidate candidateRoutes)
+    )
+  where
+    navigationForCandidate routeValue =
+      fmap (pairWithRoute routeValue) (navigationForRoute routeValue context)
+    toNavigationItem (routeValue, declaration) =
+      NavigationItem
+        { navigationLabel = routeNavigationLabel declaration,
+          navigationRoute = routeValue
+        }
+    pairWithRoute routeValue declaration = (routeValue, declaration)
+
+routeNavigationAtOrderZero :: Maybe Text -> context -> Maybe RouteNavigation
+routeNavigationAtOrderZero navigationLabel _ =
+  RouteNavigation (NavigationOrder 0) <$> navigationLabel
 
 addRouteNavigation :: [NavigationItem route] -> PageShell route context -> PageShell route context
 addRouteNavigation generatedNavigation shell =

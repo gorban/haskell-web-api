@@ -46,7 +46,7 @@ import HarchWeb.Server
     noClientActionFailureDestinations,
     unboundedRouteExecutionPolicy,
   )
-import HarchWeb.Site (RouteDefinition (..), RouteHandler (PageRouteHandler))
+import HarchWeb.Site (NavigationOrder (NavigationOrder), RouteDefinition (..), RouteHandler (PageRouteHandler), RouteNavigation (RouteNavigation))
 import Network.HTTP.Types qualified as Http
 
 newtype OrderId = OrderId Text
@@ -110,7 +110,7 @@ ordersRouteCodec =
 ordersRouteDefinition :: OrdersQueries -> OrdersRoute -> RouteDefinition OrdersRoute OrdersContext OrdersPolicy
 ordersRouteDefinition queries OrdersIndex =
   RouteDefinition
-    { routeNavigationLabel = Just "Orders",
+    { routeNavigation = const (Just (RouteNavigation (NavigationOrder 0) "Orders")),
       routeMetadata =
         mkEndpointMetadata
           (requiredEndpointNameOrDie "orders.index")

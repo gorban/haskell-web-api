@@ -254,7 +254,7 @@ catalogRouteDefinition extension queries route =
 catalogApiNotFoundDefinition :: RouteDefinition CatalogApiRoute CatalogContext CatalogPolicy
 catalogApiNotFoundDefinition =
   RouteDefinition
-    { routeNavigationLabel = Nothing,
+    { routeNavigation = const Nothing,
       routeMetadata = catalogApiNotFoundEndpointMetadata,
       routeMethods = const (routeMethodPolicy []),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,

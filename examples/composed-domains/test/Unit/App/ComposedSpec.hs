@@ -1472,7 +1472,7 @@ spec = describe "Unit.App.Composed" $ do
         pageTitle page `shouldBe` "Admission"
         renderHtml (pageBody page) `shouldBe` "<section><h1>Admission</h1><p>Admission is not enabled.</p></section>"
       _ -> expectationFailure "expected disabled admission page"
-    routeNavigationLabel loginDefinition `shouldBe` Just "Login"
+    fmap Site.routeNavigationLabel (Site.routeNavigation loginDefinition publicContext) `shouldBe` Just "Login"
     endpointName (routeMetadata loginDefinition) `shouldBe` requiredEndpointName "root.public.login"
     routeTemplateText (endpointRouteTemplate (routeMetadata loginDefinition)) `shouldBe` "/public/login"
     endpointProtocol (routeMetadata loginDefinition) `shouldBe` HtmlEndpoint
@@ -1488,14 +1488,14 @@ spec = describe "Unit.App.Composed" $ do
         renderHtml (pageBody page) `shouldBe` "<h1>Login</h1>"
         pageBootstrapHooks page `shouldBe` []
       _ -> expectationFailure "expected the public login definition to return a page"
-    routeNavigationLabel assetDefinition `shouldBe` Nothing
+    Site.routeNavigation assetDefinition publicContext `shouldBe` Nothing
     endpointName (routeMetadata assetDefinition) `shouldBe` requiredEndpointName "root.public.assets"
     routeTemplateText (endpointRouteTemplate (routeMetadata assetDefinition)) `shouldBe` "/public/assets/*"
     endpointProtocol (routeMetadata assetDefinition) `shouldBe` AssetEndpoint
     endpointAccess (routeMetadata assetDefinition) `shouldBe` AllowUnauthenticated
     Site.routeMethods assetDefinition (RouteRequest (Public (PublicAsset (StaticAssetRoute (routePathSegments assetLocation)))) publicContext) `shouldBe` Routing.routeMethodPolicy [Routing.RouteGet]
     routeExecutionPolicy assetDefinition `shouldBe` unboundedRouteExecutionPolicy
-    routeNavigationLabel missingDefinition `shouldBe` Nothing
+    Site.routeNavigation missingDefinition publicContext `shouldBe` Nothing
     endpointName (routeMetadata missingDefinition) `shouldBe` requiredEndpointName "root.public.not-found"
     routeTemplateText (endpointRouteTemplate (routeMetadata missingDefinition)) `shouldBe` "/public/404"
     endpointProtocol (routeMetadata missingDefinition) `shouldBe` HtmlEndpoint

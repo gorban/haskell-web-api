@@ -53,7 +53,7 @@ import Network.HTTP.Types qualified as Http
 openApiDocumentRouteDefinition :: EndpointMetadata authorization -> OpenApiDocumentProvider context -> RouteDefinition route context authorization
 openApiDocumentRouteDefinition metadata provider =
   RouteDefinition
-    { routeNavigationLabel = Nothing,
+    { routeNavigation = const Nothing,
       routeMetadata = metadata,
       routeMethods = const (routeMethodPolicy [RouteGet]),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,

@@ -55,7 +55,7 @@ staticAssetRouteCodec staticAssetsConfig =
 staticAssetRouteDefinition :: StaticAssetsConfig -> EndpointMetadata authorization -> RouteDefinition StaticAssetRoute context authorization
 staticAssetRouteDefinition staticAssetsConfig metadata =
   RouteDefinition
-    { routeNavigationLabel = Nothing,
+    { routeNavigation = const Nothing,
       routeMetadata = metadata,
       routeMethods = const (routeMethodPolicy [RouteGet]),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,

@@ -46,7 +46,7 @@ import HarchWeb.Server
     noClientActionFailureDestinations,
     unboundedRouteExecutionPolicy,
   )
-import HarchWeb.Site (RouteDefinition (..), RouteHandler (PageRouteHandler))
+import HarchWeb.Site (NavigationOrder (NavigationOrder), RouteDefinition (..), RouteHandler (PageRouteHandler), RouteNavigation (RouteNavigation))
 import Network.HTTP.Types qualified as Http
 
 data CatalogRoute = CatalogIndex
@@ -108,7 +108,7 @@ catalogRouteCodec =
 catalogRouteDefinition :: CatalogQueries -> CatalogRoute -> RouteDefinition CatalogRoute CatalogContext CatalogPolicy
 catalogRouteDefinition queries CatalogIndex =
   RouteDefinition
-    { routeNavigationLabel = Just "Catalog",
+    { routeNavigation = const (Just (RouteNavigation (NavigationOrder 0) "Catalog")),
       routeMetadata =
         mkEndpointMetadata
           (requiredEndpointNameOrDie "catalog.index")
