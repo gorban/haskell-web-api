@@ -130,6 +130,18 @@ warning allowance exists. Retire the local patch only after a public HTTP2
 release includes the lifecycle repair, passes its unpatched suite with `-Werror`,
 and the updated frozen plan passes all repository gates.
 
+The HTTP2 test-only Cabal project also pins `crypton ==2.1.2`. On 2026-09-30,
+the fresh Hackage index selected `crypton-2.1.3`, whose [published source
+archive](https://hackage.haskell.org/package/crypton-2.1.3/crypton-2.1.3.tar.gz)
+contains `cbits/p256/p256_ec.c` but omits its included
+`cbits/p256/p256_verify.h`; its SHA-1 C path also emits an incompatible-pointer
+diagnostic that fails the current toolchain's build. Both failures occur while
+building that unrelated transitive dependency, before HTTP2's tests run. The
+disposable HTTP2 plan therefore fixes it at `crypton-2.1.2`; the `-Werror` gate
+remains intact, and the pin does not affect the repository's frozen runtime
+plan. Move this pin only after a corrected public Crypton source release builds
+strictly and the full compatibility suite passes.
+
 Every one of these four released packages is unpacked fresh from Hackage on
 each run, then patched by `perl` substitutions anchored on a bare `\n`. A
 Hackage metadata revision can change a package's line endings without

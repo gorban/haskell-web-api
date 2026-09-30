@@ -112,8 +112,12 @@ package primitive
   tests: True
 EOF
 
+# crypton-2.1.3's Hackage sdist currently omits the p256_verify.h header
+# included by p256_ec.c and fails its strict C build. Pin the last passing
+# crypton release only in this disposable HTTP2 test plan; keep its warnings
+# fatal and the repository runtime plan independent of this test constraint.
 cat > "$http2_directory/cabal.project.local" <<'EOF'
-constraints: time-manager ==0.2.4
+constraints: time-manager ==0.2.4, crypton ==2.1.2
 
 package http2
   tests: True
