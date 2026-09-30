@@ -11,7 +11,7 @@ module SetupHooks (setupHooks) where
 
 import Control.Monad (filterM, when)
 import Control.Monad.IO.Class (liftIO)
-import Core.PageRoutes.Generator (GeneratorConfig (applicationRouteModuleName, applicationRouteTypeName, authorizationTypeName, dispatcherModuleName, pageDefinitionContextModuleName, pageDefinitionContextTypeName, pageModulePrefix, requestContextTypeName, routeModuleName), defaultGeneratorConfig, generatePageModules)
+import Core.PageRoutes.Generator (GeneratorConfig (applicationRouteModuleName, applicationRouteTypeName, authorizationTypeName, dispatcherModuleName, pageDefinitionContextModuleName, pageDefinitionContextTypeName, pageModulePrefix, pagePresentationTypeName, requestContextTypeName, routeModuleName), defaultGeneratorConfig, generatePageModules)
 import Core.Setup.PrerequisiteReport
   ( DatabasePrerequisiteStatus (DatabasePrerequisiteAutostarted),
     SetupPrerequisiteReport (databasePrerequisiteStatus),
@@ -150,12 +150,13 @@ runPageGeneration (pagesDirectory, generatedDirectory) = do
           { pageModulePrefix = "WebApi.Pages.",
             routeModuleName = "WebApi.Pages.Route.Generated",
             dispatcherModuleName = "WebApi.Pages.Generated",
-            applicationRouteModuleName = "WebApi.Route",
+            applicationRouteModuleName = "WebApi.Route.Types",
             applicationRouteTypeName = "AppRoute",
             requestContextTypeName = "AppRequestContext",
             authorizationTypeName = "AppAuthorization",
             pageDefinitionContextTypeName = Just "PageDefinitionContext",
-            pageDefinitionContextModuleName = Just "WebApi.PageModule"
+            pageDefinitionContextModuleName = Just "WebApi.PageModule",
+            pagePresentationTypeName = Just "PagePresentation"
           }
       )
   either (ioError . userError . show) (const (pure ())) generationResult

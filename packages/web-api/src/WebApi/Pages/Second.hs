@@ -4,13 +4,14 @@
 -- copy is localized from the matched request context. The P2 decision is to
 -- keep loading local to this page and interpret its complete database outcome
 -- once into 'HarchWeb.PageResult'; projecting only the value would discard
--- database timing and private diagnostics. Route metadata and the standalone
--- renderer's navigation mirror remain in 'WebApi.Route' until the P3
--- declarations-and-discovery cleanup. The older public
+-- database timing and private diagnostics. The page-local 'pagePresentation'
+-- supplies the title, hooks, and localized navigation to the generated route
+-- aggregate; endpoint admission remains on the existing 'RouteDefinition'.
+-- The older public
 -- 'WebApi.Response.selectResponseWithDatabase' compatibility path still has
 -- its central @RouteData@ projection for @/second@; retiring that and the
 -- corresponding page-wide renderer is the named P5 cleanup.
-module WebApi.Pages.Second (pageDefinition) where
+module WebApi.Pages.Second (pageDefinition, pagePresentation) where
 
 import Data.Text (Text)
 import HarchWeb
@@ -40,30 +41,40 @@ import WebApi.PageModule
     PageRequest (..),
     pageModuleDefinition,
   )
-import WebApi.Response
+import WebApi.Response.Metadata
   ( FailureSurface (PageFailureSurface),
     pageErrorResponseMetadata,
     pageFailureDiagnostics,
     pageSuccessResponseMetadata,
   )
-import WebApi.Route
+import WebApi.Route.Endpoint (endpointMetadata)
+import WebApi.Route.Types
   ( AppAuthorization,
     AppLocale,
-    AppRequestContext,
+    AppRequestContext (..),
     AppRoute (HomeRoute, SecondRoute),
-    endpointMetadata,
-    renderRouteUrl,
-    requestLocale,
+    PagePresentation (..),
+  )
+import WebApi.Route.Url
+  ( renderRouteUrl,
   )
 
 secondPageModule :: AppConfig -> PageModule PageRepository (DatabaseResult SecondPageData)
 secondPageModule config =
   PageModule
     { pageModuleEndpointMetadata = endpointMetadata SecondRoute,
-      pageModuleNavigation = secondPageNavigation,
+      pageModulePresentation = pagePresentation,
       pageModuleMethods = routeMethodPolicy [RouteGet],
       pageModuleLoad = loadSecondPageForRequest,
       pageModuleRespond = respondToSecondPage config
+    }
+
+pagePresentation :: PagePresentation
+pagePresentation =
+  PagePresentation
+    { pagePresentationTitle = \context -> localizedMessage (requestLocale context) Second,
+      pagePresentationNavigation = secondPageNavigation,
+      pagePresentationEnhancementHooks = ["second-page"]
     }
 
 pageDefinition :: PageDefinitionContext -> RouteDefinition AppRoute AppRequestContext AppAuthorization
@@ -131,14 +142,14 @@ renderSecondPage config pageRequest databaseResult =
                 },
             appControls requestContext (HarchWeb.requestRoute routeRequest)
           ],
-      pageBootstrapHooks = ["second-page"],
+      pageBootstrapHooks = pagePresentationEnhancementHooks pagePresentation,
       pageStylesheets = []
     }
   where
     routeRequest = pageRequestRoute pageRequest
     requestContext = HarchWeb.requestContext routeRequest
     locale = requestLocale requestContext
-    heading = localizedMessage locale Second
+    heading = pagePresentationTitle pagePresentation requestContext
     (summary, content) =
       case databaseResultValue databaseResult of
         Right pageData ->

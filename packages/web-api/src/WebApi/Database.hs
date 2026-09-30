@@ -13,9 +13,7 @@ where
 
 import Data.Text (Text)
 import Data.Word (Word64)
-import WebApi.Route
-  ( AppLocale (..),
-  )
+import WebApi.Route.Context (AppLocale (..))
 
 newtype DatabaseError = SecondPageDataError Text
   deriving (Eq, Show)

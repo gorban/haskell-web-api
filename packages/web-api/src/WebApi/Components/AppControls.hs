@@ -14,12 +14,12 @@ where
 import Data.Text (Text)
 import HarchWeb qualified
 import WebApi.Localization (AppMessage (..), localizedMessage)
-import WebApi.Route
+import WebApi.Route.Types
   ( AppLocale (..),
     AppRequestContext (..),
     AppRoute (..),
-    renderRouteUrl,
   )
+import WebApi.Route.Url (renderRouteUrl)
 
 appControls :: AppRequestContext -> AppRoute -> HarchWeb.Html
 appControls context route =

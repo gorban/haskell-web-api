@@ -3,12 +3,14 @@
 -- | @\/showcase@ — the single-file page-module exemplar.
 --
 -- Everything this static page owns lives in this one file: its scoped styles,
--- enhancement hooks, and @[harch| … |]@ body. The route is implied by
--- the file name ('WebApi.Pages.Showcase' → @\/showcase@) through
--- 'Core.PageRoutes.Generator'.  This page and 'WebApi.Pages.ShowcaseAlternate'
--- deliberately define the same local class names (@card@, @heading@) with
--- different values, to prove scoped-CSS isolation end to end.
-module WebApi.Pages.Showcase (pageDefinition) where
+-- presentation, enhancement hooks, and @[harch| … |]@ body. The route is
+-- implied by the file name ('WebApi.Pages.Showcase' → @\/showcase@) through
+-- 'Core.PageRoutes.Generator'; its generated dispatcher collects this
+-- declaration for Site and standalone rendering. This page and
+-- 'WebApi.Pages.ShowcaseAlternate' deliberately define the same local class
+-- names (@card@, @heading@) with different values, to prove scoped-CSS
+-- isolation end to end.
+module WebApi.Pages.Showcase (pageDefinition, pagePresentation) where
 
 import Data.Text (Text)
 import HarchWeb
@@ -29,22 +31,29 @@ import HarchWeb qualified
 import HarchWeb.Site (RouteDefinition (..), RouteHandler (PageRouteHandler))
 import WebApi.Config (appTitlePrefix)
 import WebApi.PageModule (PageDefinitionContext (..))
-import WebApi.Route
+import WebApi.Route.Endpoint (endpointMetadata)
+import WebApi.Route.Types
   ( AppAuthorization,
     AppRequestContext,
     AppRoute (ShowcaseRoute),
-    endpointMetadata,
-    routeEnhancementHooks,
+    PagePresentation (..),
   )
-import WebApi.Route qualified as Route
 
 scope :: CssScope
 scope = cssScope "showcase"
 
+pagePresentation :: PagePresentation
+pagePresentation =
+  PagePresentation
+    { pagePresentationTitle = const showcaseHeading,
+      pagePresentationNavigation = const Nothing,
+      pagePresentationEnhancementHooks = ["web-api-showcase"]
+    }
+
 pageDefinition :: PageDefinitionContext -> RouteDefinition AppRoute AppRequestContext AppAuthorization
 pageDefinition context =
   RouteDefinition
-    { routeNavigation = const Nothing,
+    { routeNavigation = pagePresentationNavigation pagePresentation,
       routeMetadata = endpointMetadata ShowcaseRoute,
       routeMethods = const (routeMethodPolicy [RouteGet]),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
@@ -53,7 +62,7 @@ pageDefinition context =
           pure
             ( HarchWeb.RenderedPage $
                 Page
-                  { pageTitle = appTitlePrefix (pageDefinitionConfig context) <> ": " <> Route.routePageTitle (Route.routeMetadata ShowcaseRoute),
+                  { pageTitle = appTitlePrefix (pageDefinitionConfig context) <> ": " <> pagePresentationTitle pagePresentation (HarchWeb.requestContext routeRequest),
                     pageRoute = HarchWeb.requestRoute routeRequest,
                     pageContext = HarchWeb.requestContext routeRequest,
                     pageBody =
@@ -66,7 +75,7 @@ pageDefinition context =
                           </section>
                         |] ::
                         Html,
-                    pageBootstrapHooks = routeEnhancementHooks (Route.routeMetadata ShowcaseRoute),
+                    pageBootstrapHooks = pagePresentationEnhancementHooks pagePresentation,
                     pageStylesheets = [stylesheet (AssetPath "/assets/styles/pages/showcase.css")]
                   }
             )

@@ -29,7 +29,6 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
 import HarchWeb qualified
-import HarchWeb.Database qualified as HarchDatabase
 import HarchWeb.Email (emailAddressText)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Username (usernameText)
@@ -37,9 +36,17 @@ import Network.HTTP.Types qualified as Http
 import WebApi.Account (AccountProfile (..))
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppConfig)
-import WebApi.Database (DatabaseError (..), DatabaseOperation (..), PageRepository, defaultPageRepository)
+import WebApi.Database (PageRepository, defaultPageRepository)
 import WebApi.Page (renderPageFromRouteData, renderProfilePageWithState, renderUnavailableProfilePage)
 import WebApi.Profile (ProfileLoadError (..), loadProfileForPrincipal)
+import WebApi.Response.Metadata
+  ( FailureDiagnostics (..),
+    FailureSurface (..),
+    pageErrorResponseMetadata,
+    pageFailureDiagnostics,
+    pageSuccessResponseMetadata,
+    toHarchDatabaseOperation,
+  )
 import WebApi.Route
   ( AppLocale (..),
     AppRequestContext (..),
@@ -193,74 +200,6 @@ apiNotFoundResponse =
 jsonText :: JsonEncoding.Encoding -> Text
 jsonText = TextEncoding.decodeUtf8 . LazyByteString.toStrict . JsonEncoding.encodingToLazyByteString
 
-pageSuccessResponseMetadata :: [DatabaseOperation] -> HarchWeb.ResponseBody
-pageSuccessResponseMetadata databaseOperations =
-  HarchWeb.ResponseBody
-    { HarchWeb.responseStatus = Http.status200,
-      HarchWeb.responseContentType = "text/html; charset=utf-8",
-      HarchWeb.responseBody = "",
-      HarchWeb.responseObservabilityAttributes = [],
-      HarchWeb.responseLogEntries = [],
-      HarchWeb.responseDatabaseOperations = map toHarchDatabaseOperation databaseOperations
-    }
-
-pageErrorResponseMetadata :: FailureDiagnostics -> HarchWeb.ResponseBody
-pageErrorResponseMetadata diagnostics =
-  HarchWeb.ResponseBody
-    { HarchWeb.responseStatus = Http.status500,
-      HarchWeb.responseContentType = "text/html; charset=utf-8",
-      HarchWeb.responseBody = "",
-      HarchWeb.responseObservabilityAttributes = diagnosticsObservabilityAttributes diagnostics,
-      HarchWeb.responseLogEntries = diagnosticsLogEntries diagnostics,
-      HarchWeb.responseDatabaseOperations = diagnosticsDatabaseOperations diagnostics
-    }
-
-data FailureDiagnostics = FailureDiagnostics
-  { diagnosticsObservabilityAttributes :: [Observability.ObservabilityAttribute],
-    diagnosticsLogEntries :: [Text],
-    diagnosticsDatabaseOperations :: [HarchDatabase.DatabaseOperation]
-  }
-
-data FailureSurface
-  = PageFailureSurface
-  | ApiFailureSurface
-
-pageFailureDiagnostics :: FailureSurface -> Text -> Text -> [DatabaseOperation] -> DatabaseError -> FailureDiagnostics
-pageFailureDiagnostics failureSurface routePath routeLabel databaseOperations databaseError =
-  FailureDiagnostics
-    { diagnosticsObservabilityAttributes =
-        [ Observability.ObservabilityAttribute
-            { Observability.attributeName = "error.type",
-              Observability.attributeValue = Observability.TextAttribute "SecondPageDataError"
-            },
-          Observability.ObservabilityAttribute
-            { Observability.attributeName = "app.failure.code",
-              Observability.attributeValue = Observability.TextAttribute "database.second-page-data"
-            },
-          Observability.ObservabilityAttribute
-            { Observability.attributeName = "app.route",
-              Observability.attributeValue = Observability.TextAttribute routePath
-            },
-          Observability.ObservabilityAttribute
-            { Observability.attributeName = "app.surface",
-              Observability.attributeValue = Observability.TextAttribute (renderFailureSurface failureSurface)
-            }
-        ],
-      diagnosticsLogEntries =
-        [ Text.concat
-            [ "Database failure while rendering required ",
-              routeLabel,
-              " ",
-              renderFailureSurface failureSurface,
-              " response",
-              renderDatabaseOperationsSuffix databaseOperations,
-              ": ",
-              Text.pack (show databaseError)
-            ]
-        ],
-      diagnosticsDatabaseOperations = map toHarchDatabaseOperation databaseOperations
-    }
-
 profileFailureDiagnostics :: FailureDiagnostics
 profileFailureDiagnostics =
   FailureDiagnostics
@@ -288,35 +227,3 @@ profileFailureDiagnostics =
 
 profileLoadErrorType :: Text
 profileLoadErrorType = "AccountStoreError"
-
-toHarchDatabaseOperation :: DatabaseOperation -> HarchDatabase.DatabaseOperation
-toHarchDatabaseOperation databaseOperation =
-  HarchDatabase.DatabaseOperation
-    { HarchDatabase.databaseOperationSystem = "postgresql",
-      HarchDatabase.databaseOperationName = databaseOperationName databaseOperation,
-      HarchDatabase.databaseQueryTemplate = databaseQueryTemplate databaseOperation,
-      HarchDatabase.databaseOperationStartedAtNanoseconds = databaseOperationStartedAtNanoseconds databaseOperation,
-      HarchDatabase.databaseOperationEndedAtNanoseconds = databaseOperationEndedAtNanoseconds databaseOperation
-    }
-
-renderDatabaseOperationsSuffix :: [DatabaseOperation] -> Text
-renderDatabaseOperationsSuffix databaseOperations =
-  case databaseOperations of
-    [] -> ""
-    _ ->
-      " after database operations ["
-        <> Text.intercalate
-          ", "
-          [ databaseOperationName databaseOperation
-              <> " ("
-              <> databaseQueryTemplate databaseOperation
-              <> ")"
-          | databaseOperation <- databaseOperations
-          ]
-        <> "]"
-
-renderFailureSurface :: FailureSurface -> Text
-renderFailureSurface failureSurface =
-  case failureSurface of
-    PageFailureSurface -> "page"
-    ApiFailureSurface -> "api"

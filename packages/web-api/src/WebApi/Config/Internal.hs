@@ -145,7 +145,7 @@ import HarchWeb.Csrf
 import HarchWeb.Secret (SecretEncryptionKey, mkSecretEncryptionKey)
 import System.Environment (getEnvironment)
 import Text.Read (readMaybe)
-import WebApi.AccountJwt (AccountJwtConfiguration, AccountJwtConfigurationError (..), AccountJwtRawConfiguration (..), mkAccountJwtConfiguration)
+import WebApi.AccountJwt.Runtime (AccountJwtConfiguration, AccountJwtConfigurationError (..), AccountJwtRawConfiguration (..), mkAccountJwtConfiguration)
 
 data AppMode
   = Development

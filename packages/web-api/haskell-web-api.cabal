@@ -177,7 +177,11 @@ library
     WebApi.Postgres.Runtime
     WebApi.Postgres.SessionRepository
     WebApi.Postgres.VerificationResendAuditRepository
+    WebApi.Response.Metadata
     WebApi.Route.Context
+    WebApi.Route.Endpoint
+    WebApi.Route.Types
+    WebApi.Route.Url
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:

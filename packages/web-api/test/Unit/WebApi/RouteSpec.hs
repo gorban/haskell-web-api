@@ -175,9 +175,9 @@ spec = do
       show (WebApi.Route.GeneratedPages Generated.SecondPage) `shouldBe` "SecondRoute"
       WebApi.Route.appRouteMethods (WebApi.Route.GeneratedPages Generated.SecondPage) `shouldBe` [HarchWeb.RouteGet]
       WebApi.Route.appRouteMethods (WebApi.Route.GeneratedPages Generated.ShowcasePage) `shouldBe` [HarchWeb.RouteGet]
-      routePageSuffix (WebApi.Route.routeMetadata (WebApi.Route.GeneratedPages Generated.ShowcasePage)) `shouldBe` ""
+      routePageSuffix (WebApi.Route.routeMetadata (WebApi.Route.GeneratedPages Generated.ShowcasePage)) `shouldBe` "/showcase"
       routePageTitle (WebApi.Route.routeMetadata (WebApi.Route.GeneratedPages Generated.ShowcasePage)) `shouldBe` "Showcase"
-      routePageSuffix (WebApi.Route.routeMetadata (WebApi.Route.GeneratedPages Generated.ShowcaseAlternatePage)) `shouldBe` ""
+      routePageSuffix (WebApi.Route.routeMetadata (WebApi.Route.GeneratedPages Generated.ShowcaseAlternatePage)) `shouldBe` "/showcase-alternate"
       HarchWeb.endpointNameText (HarchWeb.endpointName (WebApi.Route.endpointMetadata (WebApi.Route.GeneratedPages Generated.ShowcasePage))) `shouldBe` "web.showcase"
       HarchWeb.endpointNameText (HarchWeb.endpointName (WebApi.Route.endpointMetadata (WebApi.Route.GeneratedPages Generated.ShowcaseAlternatePage))) `shouldBe` "web.showcase-alternate"
       HarchWeb.routeTemplateText (HarchWeb.endpointRouteTemplate (WebApi.Route.endpointMetadata (WebApi.Route.GeneratedPages Generated.ShowcasePage))) `shouldBe` "/{locale}/showcase"

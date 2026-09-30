@@ -42,8 +42,11 @@ import WebApi.Route
     AppLocale (..),
     AppRequestContext,
     AppRoute (SecondRoute),
+    appNavigationItems,
+    appNavigationRoutes,
     defaultRequestContext,
     endpointMetadata,
+    routeNavigationDeclaration,
   )
 
 spec =
@@ -177,11 +180,17 @@ spec =
       let pageDefinition = Second.pageDefinition (PageDefinitionContext defaultAppConfig defaultPageRepository)
           englishNavigation = routeNavigation pageDefinition defaultRequestContext
           spanishNavigation = routeNavigation pageDefinition (HarchWeb.requestContext prefixedSpanishSecondRequest)
+          spanishContext = HarchWeb.requestContext prefixedSpanishSecondRequest
+          standaloneSpanishNavigation = routeNavigationDeclaration SecondRoute spanishContext
+          standaloneSpanishItem =
+            any
+              (\(HarchWeb.NavigationItem label route) -> route == SecondRoute && label == "Segunda")
+              (appNavigationItems spanishContext)
           request = prefixedSpanishSecondRequest
           securityCheckingModule =
             PageModule
               { pageModuleEndpointMetadata = endpointMetadata SecondRoute,
-                pageModuleNavigation = const Nothing,
+                pageModulePresentation = Second.pagePresentation,
                 pageModuleMethods = HarchWeb.routeMethodPolicy [HarchWeb.RouteGet],
                 pageModuleLoad = \() receivedRequest ->
                   pure
@@ -202,6 +211,9 @@ spec =
       expectAll
         ( ((englishNavigation == Just (RouteNavigation (NavigationOrder 10) "Second")) `shouldBe` True)
             :| [ (spanishNavigation == Just (RouteNavigation (NavigationOrder 10) "Segunda")) `shouldBe` True,
+                 (standaloneSpanishNavigation == Just (RouteNavigation (NavigationOrder 10) "Segunda")) `shouldBe` True,
+                 shouldBe standaloneSpanishItem True,
+                 shouldContain appNavigationRoutes [SecondRoute],
                  HarchWeb.endpointAccess (endpointMetadata SecondRoute) `shouldBe` HarchWeb.AllowUnauthenticated
                ]
         )

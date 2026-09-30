@@ -17,14 +17,16 @@ import WebApi.Route (AppRoute (DocsSwaggerRoute, ShowcaseAlternateRoute, Showcas
 spec = describe "WebApi.Pages showcase family" $ do
   let pageDefinitionContext = PageDefinitionContext defaultAppConfig defaultPageRepository
 
-  describe "route presentation (the shared tables)" $ do
-    it "projects each generated page's metadata" $ do
+  describe "generated module presentations" $ do
+    it "projects page-owned titles and hooks beside discovered route paths" $ do
       expectAll
         ( (routePageSegment (routeMetadata ShowcaseRoute) `shouldBe` Just "showcase")
             :| [ routePageTitle (routeMetadata ShowcaseRoute) `shouldBe` "Showcase",
+                 routePageSuffix (routeMetadata ShowcaseRoute) `shouldBe` "/showcase",
                  routeEnhancementHooks (routeMetadata ShowcaseRoute) `shouldBe` ["web-api-showcase"],
                  routePageSegment (routeMetadata ShowcaseAlternateRoute) `shouldBe` Just "showcase-alternate",
                  routePageTitle (routeMetadata ShowcaseAlternateRoute) `shouldBe` "Showcase alternate",
+                 routePageSuffix (routeMetadata ShowcaseAlternateRoute) `shouldBe` "/showcase-alternate",
                  routeEnhancementHooks (routeMetadata ShowcaseAlternateRoute) `shouldBe` ["web-api-showcase-alternate"]
                ]
         )

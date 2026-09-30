@@ -3,10 +3,12 @@
 -- | @\/showcase-alternate@ — the deliberate scoped-CSS collision twin.
 --
 -- This static page defines the same local class names as 'WebApi.Pages.Showcase' —
--- @card@ and @heading@ — with deliberately different values.  If scoping ever
+-- @card@ and @heading@ — with deliberately different values. If scoping ever
 -- regressed, one page would style the other; the browser test asserts each
--- page keeps only its own rules.
-module WebApi.Pages.ShowcaseAlternate (pageDefinition) where
+-- page keeps only its own rules. Its generated dispatcher collects the
+-- declaration below so both Site and standalone rendering share the page's
+-- presentation facts.
+module WebApi.Pages.ShowcaseAlternate (pageDefinition, pagePresentation) where
 
 import Data.Text (Text)
 import HarchWeb
@@ -27,22 +29,29 @@ import HarchWeb qualified
 import HarchWeb.Site (RouteDefinition (..), RouteHandler (PageRouteHandler))
 import WebApi.Config (appTitlePrefix)
 import WebApi.PageModule (PageDefinitionContext (..))
-import WebApi.Route
+import WebApi.Route.Endpoint (endpointMetadata)
+import WebApi.Route.Types
   ( AppAuthorization,
     AppRequestContext,
     AppRoute (ShowcaseAlternateRoute),
-    endpointMetadata,
-    routeEnhancementHooks,
+    PagePresentation (..),
   )
-import WebApi.Route qualified as Route
 
 scope :: CssScope
 scope = cssScope "showcase-alternate"
 
+pagePresentation :: PagePresentation
+pagePresentation =
+  PagePresentation
+    { pagePresentationTitle = const showcaseAlternateHeading,
+      pagePresentationNavigation = const Nothing,
+      pagePresentationEnhancementHooks = ["web-api-showcase-alternate"]
+    }
+
 pageDefinition :: PageDefinitionContext -> RouteDefinition AppRoute AppRequestContext AppAuthorization
 pageDefinition context =
   RouteDefinition
-    { routeNavigation = const Nothing,
+    { routeNavigation = pagePresentationNavigation pagePresentation,
       routeMetadata = endpointMetadata ShowcaseAlternateRoute,
       routeMethods = const (routeMethodPolicy [RouteGet]),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
@@ -51,7 +60,7 @@ pageDefinition context =
           pure
             ( HarchWeb.RenderedPage $
                 Page
-                  { pageTitle = appTitlePrefix (pageDefinitionConfig context) <> ": " <> Route.routePageTitle (Route.routeMetadata ShowcaseAlternateRoute),
+                  { pageTitle = appTitlePrefix (pageDefinitionConfig context) <> ": " <> pagePresentationTitle pagePresentation (HarchWeb.requestContext routeRequest),
                     pageRoute = HarchWeb.requestRoute routeRequest,
                     pageContext = HarchWeb.requestContext routeRequest,
                     pageBody =
@@ -64,7 +73,7 @@ pageDefinition context =
                           </section>
                         |] ::
                         Html,
-                    pageBootstrapHooks = routeEnhancementHooks (Route.routeMetadata ShowcaseAlternateRoute),
+                    pageBootstrapHooks = pagePresentationEnhancementHooks pagePresentation,
                     pageStylesheets = [stylesheet (AssetPath "/assets/styles/pages/showcase-alternate.css")]
                   }
             )

@@ -29,14 +29,14 @@ import HarchWeb.Csrf (PageSecurity)
 import HarchWeb.Site
   ( RouteDefinition (..),
     RouteHandler (PageRouteHandler),
-    RouteNavigation,
   )
 import WebApi.Config (AppConfig)
 import WebApi.Database (PageRepository)
-import WebApi.Route
+import WebApi.Route.Types
   ( AppAuthorization,
     AppRequestContext,
     AppRoute,
+    PagePresentation (..),
   )
 
 -- | Dependencies passed to generated page definitions at application
@@ -59,7 +59,7 @@ data PageRequest = PageRequest
 -- interpretation. Load outcomes stay specific to each page.
 data PageModule dependencies outcome = PageModule
   { pageModuleEndpointMetadata :: EndpointMetadata AppAuthorization,
-    pageModuleNavigation :: AppRequestContext -> Maybe RouteNavigation,
+    pageModulePresentation :: PagePresentation,
     pageModuleMethods :: RouteMethodPolicy,
     pageModuleLoad :: dependencies -> PageRequest -> IO outcome,
     pageModuleRespond :: PageRequest -> outcome -> PageResult AppRoute AppRequestContext
@@ -75,7 +75,7 @@ pageModuleDefinition ::
   RouteDefinition AppRoute AppRequestContext AppAuthorization
 pageModuleDefinition pageModule dependencies =
   RouteDefinition
-    { routeNavigation = pageModuleNavigation pageModule,
+    { routeNavigation = pagePresentationNavigation (pageModulePresentation pageModule),
       routeMetadata = pageModuleEndpointMetadata pageModule,
       routeMethods = const (pageModuleMethods pageModule),
       routeExecutionPolicy = unboundedRouteExecutionPolicy,
