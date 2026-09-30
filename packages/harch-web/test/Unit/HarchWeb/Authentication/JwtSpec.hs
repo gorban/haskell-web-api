@@ -37,11 +37,14 @@ spec =
       let allowed = mkJwtAllowedAlgorithms (JwtHs256 :| [])
           verifier = jwtProofVerifierWithRequiredClaims validationSettings noRequiredClaims allowed (JoseJwk.JWKSet [wrongKey]) (Right . show)
           rejectedProjection = jwtProofVerifierWithRequiredClaims validationSettings noRequiredClaims allowed (JoseJwk.JWKSet [signingKey]) (const (Left (mkJwtClaimsError (requiredFailureCode "jwt.claims-rejected")) :: Either JwtClaimsError ()))
-          defaultPolicyVerifier = jwtProofVerifier validationSettings allowed (JoseJwk.JWKSet [signingKey]) (Right . show)
+          legacyVerifier = jwtProofVerifier validationSettings allowed (JoseJwk.JWKSet [signingKey]) (Right . show)
+          requiredDefaultClaims = resolveJwtRequiredClaims (JwtClaimGeneration False False False) defaultJwtClaimPresencePolicy
+          defaultPolicyVerifier = jwtProofVerifierWithRequiredClaims validationSettings requiredDefaultClaims allowed (JoseJwk.JWKSet [signingKey]) (Right . show)
           noneToken = encodedJwtFromBytes "eyJhbGciOiJub25lIn0.eyJzdWIiOiJhZGEifQ."
       expectAll
         ( (verifyAuthenticationProof verifier token `shouldReturn` Left (ProofRejected (mkProofRejection (requiredFailureCode "jwt.rejected"))))
-            :| [ verifyAuthenticationProof defaultPolicyVerifier token `shouldReturn` Left (ProofRejected (mkProofRejection (requiredFailureCode "jwt.rejected"))),
+            :| [ verifyAuthenticationProof legacyVerifier token >>= \result -> isAcceptedResult result `shouldBe` True,
+                 verifyAuthenticationProof defaultPolicyVerifier token `shouldReturn` Left (ProofRejected (mkProofRejection (requiredFailureCode "jwt.rejected"))),
                  verifyAuthenticationProof defaultPolicyVerifier expOnlyToken >>= \result -> isAcceptedResult result `shouldBe` True,
                  verifyAuthenticationProof verifier noneToken `shouldReturn` Left (ProofRejected (mkProofRejection (requiredFailureCode "jwt.rejected"))),
                  verifyAuthenticationProof rejectedProjection token `shouldReturn` Left (ProofRejected (mkProofRejection (requiredFailureCode "jwt.claims-rejected")))

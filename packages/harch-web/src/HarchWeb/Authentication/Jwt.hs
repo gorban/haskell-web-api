@@ -356,14 +356,16 @@ toJoseAlgorithm algorithm =
     JwtRs256 -> Jws.RS256
     JwtRs512 -> Jws.RS512
 
--- | Verify a compact JWT with Harch's generic defaults: expiration is
--- required, while not-before, issuer, and audience presence remain optional
--- until an application supplies its issuance policy. Signature, algorithm,
--- present standard-claim, and required-presence failures use Harch's fixed
+-- | Backwards-compatible verifier for applications that have not yet
+-- supplied a registered-claim presence policy. JOSE still validates every
+-- present standard claim, but this entry point does not require any claim to
+-- be present. New profile code should resolve 'defaultJwtClaimPresencePolicy'
+-- against its issuance contract and use 'jwtProofVerifierWithRequiredClaims'.
+-- Signature, algorithm, and present standard-claim failures use Harch's fixed
 -- rejection code.
 jwtProofVerifier :: JWTValidationSettings -> JwtAllowedAlgorithms -> JWKSet -> (ClaimsSet -> Either JwtClaimsError verified) -> AuthenticationProofVerifier EncodedJwt verified
 jwtProofVerifier validationSettings =
-  jwtProofVerifierWithClock getCurrentTime validationSettings genericDefaultRequiredClaims
+  jwtProofVerifierWithClock getCurrentTime validationSettings legacyOptionalRequiredClaims
 
 -- | Verify a compact JWT with the application's already-resolved presence
 -- policy and the system clock. A projection failure retains its validated
@@ -392,19 +394,29 @@ jwtProofVerifierWithClock readClock validationSettings requiredClaims allowedAlg
                 Left (JwtClaimsError failureCode) -> Left (ProofRejected (mkProofRejection failureCode))
                 Right verified -> Right verified
 
-genericDefaultRequiredClaims :: JwtRequiredClaims
-genericDefaultRequiredClaims =
+legacyOptionalRequiredClaims :: JwtRequiredClaims
+legacyOptionalRequiredClaims =
   resolveJwtRequiredClaims
     (JwtClaimGeneration False False False)
-    defaultJwtClaimPresencePolicy
+    JwtClaimPresencePolicy
+      { jwtExpirationPresence = AllowAbsence,
+        jwtNotBeforePresence = UseIssuanceDefault,
+        jwtIssuerPresence = UseIssuanceDefault,
+        jwtAudiencePresence = UseIssuanceDefault
+      }
 
 requiredClaimsArePresent :: JwtRequiredClaims -> ClaimsSet -> Bool
 requiredClaimsArePresent requiredClaims claimsSet =
-  (not (jwtRequiredExpiration requiredClaims) || isPresent (claimsSet ^. Jwt.claimExp))
-    && (not (jwtRequiredNotBefore requiredClaims) || isPresent (claimsSet ^. Jwt.claimNbf))
-    && (not (jwtRequiredIssuer requiredClaims) || isPresent (claimsSet ^. Jwt.claimIss))
-    && (not (jwtRequiredAudience requiredClaims) || isPresent (claimsSet ^. Jwt.claimAud))
+  not
+    ( or
+        [ missingRequired (jwtRequiredExpiration requiredClaims) (claimsSet ^. Jwt.claimExp),
+          missingRequired (jwtRequiredNotBefore requiredClaims) (claimsSet ^. Jwt.claimNbf),
+          missingRequired (jwtRequiredIssuer requiredClaims) (claimsSet ^. Jwt.claimIss),
+          missingRequired (jwtRequiredAudience requiredClaims) (claimsSet ^. Jwt.claimAud)
+        ]
+    )
   where
+    missingRequired required maybeValue = required && not (isPresent maybeValue)
     isPresent maybeValue =
       case maybeValue of
         Nothing -> False
