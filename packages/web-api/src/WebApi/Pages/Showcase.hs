@@ -62,7 +62,7 @@ pageDefinition context =
           pure
             ( HarchWeb.RenderedPage $
                 Page
-                  { pageTitle = appTitlePrefix (pageDefinitionConfig context) <> ": " <> pagePresentationTitle pagePresentation (HarchWeb.requestContext routeRequest),
+                  { pageTitle = appTitlePrefix (pageDefinitionConfig context) <> ": " <> showcaseHeading,
                     pageRoute = HarchWeb.requestRoute routeRequest,
                     pageContext = HarchWeb.requestContext routeRequest,
                     pageBody =

@@ -143,31 +143,34 @@ generatePageModules config = do
       presentationResult <- validatePagePresentations config pageSpecs
       case presentationResult of
         Left generationError -> pure (Left generationError)
-        Right () -> do
+        Right validatedPageSpecs -> do
           let routePath = moduleOutputPath config (routeModuleName config)
               dispatcherPath = moduleOutputPath config (dispatcherModuleName config)
               manifestPath = generatedSourceDirectory config </> "harch-page-routes.manifest"
               outputs =
-                [ (routePath, renderRouteModule config pageSpecs),
-                  (dispatcherPath, renderDispatcherModule config pageSpecs),
-                  (manifestPath, renderManifest pageSpecs)
+                [ (routePath, renderRouteModule config validatedPageSpecs),
+                  (dispatcherPath, renderDispatcherModule config validatedPageSpecs),
+                  (manifestPath, renderManifest validatedPageSpecs)
                 ]
           changed <- or <$> traverse (uncurry writeIfChanged) outputs
           pure (Right ((if changed then Generated else Unchanged) (map fst outputs)))
 
-validatePagePresentations :: GeneratorConfig -> [PageSpec] -> IO (Either GenerationError ())
+-- | Check optional page declarations and return the same discovered specs, so
+-- every generated artifact is rendered from the set whose declarations passed
+-- validation.
+validatePagePresentations :: GeneratorConfig -> [PageSpec] -> IO (Either GenerationError [PageSpec])
 validatePagePresentations config pageSpecs =
   case pagePresentationTypeName config of
-    Nothing -> pure (Right ())
+    Nothing -> pure (Right pageSpecs)
     Just _ -> do
       results <- forM pageSpecs $ \pageSpec -> do
         source <- readFile (pagesSourceDirectory config </> pageSourcePath pageSpec)
         pure
           ( if hasPagePresentation source
-              then Right ()
+              then Right pageSpec
               else Left (MissingPagePresentation (pageSourcePath pageSpec))
           )
-      pure (sequence_ results)
+      pure (sequence results)
 
 -- | Discover the page modules under a directory, naming each one under the
 -- supplied module prefix.  The prefix is the application's, so it is an argument

@@ -7,7 +7,7 @@ import HarchWeb qualified
 import HarchWeb.Site (RouteDefinition (routeNavigation))
 import TestCore.Wai (performWaiRequest, readResponseBody, waiRequest)
 import Unit.WebApi.TestSupport (pureApplication)
-import WebApi.Config (defaultAppConfig)
+import WebApi.Config (appTitlePrefix, defaultAppConfig)
 import WebApi.Database (defaultPageRepository)
 import WebApi.PageModule (PageDefinitionContext (..))
 import WebApi.Pages.Showcase qualified as Showcase
@@ -46,7 +46,8 @@ spec = describe "WebApi.Pages showcase family" $ do
       responseBody <- readResponseBody response
       expectAll
         ( (Text.isInfixOf "data-page=\"showcase\"" responseBody `shouldBe` True)
-            :| [ Text.isInfixOf "class=\"harch-showcase-root\"" responseBody `shouldBe` True,
+            :| [ Text.isInfixOf ("<title>" <> appTitlePrefix defaultAppConfig <> ": Showcase</title>") responseBody `shouldBe` True,
+                 Text.isInfixOf "class=\"harch-showcase-root\"" responseBody `shouldBe` True,
                  Text.isInfixOf "class=\"harch-showcase-heading\"" responseBody `shouldBe` True,
                  Text.isInfixOf "class=\"harch-showcase-card\"" responseBody `shouldBe` True,
                  Text.isInfixOf "href=\"/assets/styles/pages/showcase.css\"" responseBody `shouldBe` True,
@@ -60,7 +61,8 @@ spec = describe "WebApi.Pages showcase family" $ do
       responseBody <- readResponseBody response
       expectAll
         ( (Text.isInfixOf "data-page=\"showcase-alternate\"" responseBody `shouldBe` True)
-            :| [ Text.isInfixOf "class=\"harch-showcase-alternate-root\"" responseBody `shouldBe` True,
+            :| [ Text.isInfixOf ("<title>" <> appTitlePrefix defaultAppConfig <> ": Showcase alternate</title>") responseBody `shouldBe` True,
+                 Text.isInfixOf "class=\"harch-showcase-alternate-root\"" responseBody `shouldBe` True,
                  Text.isInfixOf "class=\"harch-showcase-alternate-card\"" responseBody `shouldBe` True,
                  Text.isInfixOf "href=\"/assets/styles/pages/showcase-alternate.css\"" responseBody `shouldBe` True,
                  Text.isInfixOf "This card is styled by showcase-alternate.css only." responseBody `shouldBe` True,

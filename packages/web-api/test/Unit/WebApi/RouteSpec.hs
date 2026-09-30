@@ -176,6 +176,7 @@ spec = do
       WebApi.Route.appRouteMethods (WebApi.Route.GeneratedPages Generated.SecondPage) `shouldBe` [HarchWeb.RouteGet]
       WebApi.Route.appRouteMethods (WebApi.Route.GeneratedPages Generated.ShowcasePage) `shouldBe` [HarchWeb.RouteGet]
       routePageSuffix (WebApi.Route.routeMetadata (WebApi.Route.GeneratedPages Generated.ShowcasePage)) `shouldBe` "/showcase"
+      routePageSegment (WebApi.Route.routeMetadata (WebApi.Route.GeneratedPages Generated.ShowcasePage)) `shouldBe` Just "showcase"
       routePageTitle (WebApi.Route.routeMetadata (WebApi.Route.GeneratedPages Generated.ShowcasePage)) `shouldBe` "Showcase"
       routePageSuffix (WebApi.Route.routeMetadata (WebApi.Route.GeneratedPages Generated.ShowcaseAlternatePage)) `shouldBe` "/showcase-alternate"
       HarchWeb.endpointNameText (HarchWeb.endpointName (WebApi.Route.endpointMetadata (WebApi.Route.GeneratedPages Generated.ShowcasePage))) `shouldBe` "web.showcase"

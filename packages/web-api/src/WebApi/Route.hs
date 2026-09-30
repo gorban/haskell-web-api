@@ -5,6 +5,8 @@
 -- those routes migrate in P5; discovered pages use their generated module
 -- declarations for title, hooks, and navigation in both Site and standalone
 -- document rendering.
+-- Discovered paths begin with "/" and contain a validated page segment, so
+-- generated metadata strips that prefix directly.
 module WebApi.Route
   ( AppAuthorization,
     AppLocale (..),
@@ -299,10 +301,7 @@ generatedPageMetadata :: Generated.PageRoute -> RouteMetadata
 generatedPageMetadata generatedPage =
   let presentation = PagesGenerated.pageRoutePresentation generatedPage
       pagePath = Generated.pageRoutePath generatedPage
-      pageSegments = filter (not . Text.null) (Text.splitOn "/" pagePath)
-      pageSegment = case pageSegments of
-        [] -> Nothing
-        _ -> Just (Text.intercalate "/" pageSegments)
+      pageSegment = Just (Text.drop 1 pagePath)
    in RouteMetadata
         { routePageSegment = pageSegment,
           routePageSuffix = pagePath,
