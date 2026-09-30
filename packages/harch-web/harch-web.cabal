@@ -342,6 +342,7 @@ test-suite harch-web-tests
     -- public baseline. warp ^>=3.4.15 and warp-tls ^>=3.4.14 exercise the
     -- same accepted-peer handoff as the library.
     aeson ^>=2.3.1.0,
+    array ^>=0.5.8.0,
     base ^>=4.22.0.0,
     base64-bytestring ^>=1.2.1.0,
     bytestring ^>=0.12.2.0,
@@ -358,6 +359,7 @@ test-suite harch-web-tests
     http-types ^>=0.12.5,
     http2 >=5.4.0 && <5.4.1,
     jose ^>=0.13,
+    lens ^>=5.3.6,
     network ^>=3.2.8.0,
     pem ^>=0.2.4,
     process ^>=1.6.26.1,
