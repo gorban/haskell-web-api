@@ -20,6 +20,18 @@
 -- the active signing key and verification JWK set. It proves that the active
 -- private key can issue an RS256 compact proof accepted by that set before a
 -- listener accepts login traffic.
+--
+-- Decision (configurable registered JWT claims, 2026-09-30): extend this same
+-- runtime with optional issuer/audience generation, default-on @nbf@, and one
+-- startup-resolved presence/skew policy. The generic jose verifier remains the
+-- only signature and present-claim validator. The web profile always emits
+-- its durable session expiry. @ACCOUNT_JWT_REQUIRE_EXP/NBF/ISS/AUD@ preserve
+-- unset versus explicit false, while @JWT_MAX_CLOCK_SKEW_MINUTES@ accepts any
+-- nonnegative integer minute value. See @docs/design-guidance.md@ and the R3
+-- records in @TASKS/pr-review-2026-09-30.md@. This runtime now crosses the
+-- module-health line/import threshold; the focused boundary review in
+-- @TASKS/follow-up-matches-pattern-quality.md@ owns any cohesive follow-up
+-- split without changing this startup-proof contract.
 module WebApi.AccountJwt.Runtime
   ( AccountJwtConfiguration,
     AccountJwtRawConfiguration (..),
@@ -33,6 +45,8 @@ module WebApi.AccountJwt.Runtime
     accountJwtIssuerFromRuntime,
     accountJwtRuntimeProofExtractor,
     accountJwtRuntimeProofVerifier,
+    accountJwtRuntimeProofVerifierWithAcceptance,
+    accountJwtRuntimeProofVerifierWithClock,
     accountJwtRuntimeSharedIssuance,
     loadAccountJwtRuntime,
     loadAccountJwtRuntimeWithSigner,
@@ -55,9 +69,10 @@ import Data.Aeson qualified as Aeson
 import Data.ByteString qualified as ByteString
 import Data.List (find)
 import Data.List.NonEmpty (NonEmpty (..))
-import Data.Maybe (isJust)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Time.Clock (UTCTime, addUTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Word (Word64)
 import HarchWeb qualified
@@ -68,8 +83,11 @@ import HarchWeb.Time (UnixTimeNanoseconds, unixTimeNanosecondsValue)
 import Text.Show (showListWith)
 
 data AccountJwtConfiguration = AccountJwtConfiguration
-  { accountJwtIssuer :: ValidatedStringOrUri,
-    accountJwtAudience :: ValidatedStringOrUri,
+  { accountJwtIssuer :: Maybe ValidatedStringOrUri,
+    accountJwtAudience :: Maybe ValidatedStringOrUri,
+    accountJwtProvideNotBefore :: Bool,
+    accountJwtRequiredClaims :: HarchWeb.JwtRequiredClaims,
+    accountJwtClockSkew :: HarchWeb.JwtClockSkew,
     accountJwtActiveKeyId :: Text,
     accountJwtSigningJwkFile :: FilePath,
     accountJwtVerificationJwkSetFile :: FilePath,
@@ -81,13 +99,16 @@ data AccountJwtConfiguration = AccountJwtConfiguration
 -- from being transposed at a call site while retaining one pure validation
 -- rail into 'AccountJwtConfiguration'.
 --
--- Decision (secure login and admission, 2026-09-05): this is a cohesive application
--- configuration value, not ambient startup state.  The account-JWT adapter
--- already owns all seven inputs and their validation; grouping them here
--- extends that owner instead of putting a second parser in the config loader.
+-- Decision (secure login and admission, 2026-09-05; configurable claims,
+-- 2026-09-30): this is a cohesive application configuration value, not
+-- ambient startup state. The account-JWT adapter owns validation; the config
+-- loader preserves unset booleans before the pure presence resolver runs here.
 data AccountJwtRawConfiguration = AccountJwtRawConfiguration
-  { rawAccountJwtIssuer :: Text,
-    rawAccountJwtAudience :: Text,
+  { rawAccountJwtIssuer :: Maybe Text,
+    rawAccountJwtAudience :: Maybe Text,
+    rawAccountJwtProvideNotBefore :: Bool,
+    rawAccountJwtClaimPresencePolicy :: HarchWeb.JwtClaimPresencePolicy,
+    rawAccountJwtClockSkewMinutes :: Integer,
     rawAccountJwtActiveKeyId :: Text,
     rawAccountJwtSigningJwkFile :: FilePath,
     rawAccountJwtVerificationJwkSetFile :: FilePath,
@@ -97,8 +118,11 @@ data AccountJwtRawConfiguration = AccountJwtRawConfiguration
 
 instance Eq AccountJwtConfiguration where
   left == right =
-    validatedStringOrUriText (accountJwtIssuer left) == validatedStringOrUriText (accountJwtIssuer right)
-      && validatedStringOrUriText (accountJwtAudience left) == validatedStringOrUriText (accountJwtAudience right)
+    (validatedStringOrUriText <$> accountJwtIssuer left) == (validatedStringOrUriText <$> accountJwtIssuer right)
+      && (validatedStringOrUriText <$> accountJwtAudience left) == (validatedStringOrUriText <$> accountJwtAudience right)
+      && accountJwtProvideNotBefore left == accountJwtProvideNotBefore right
+      && accountJwtRequiredClaims left == accountJwtRequiredClaims right
+      && accountJwtClockSkew left == accountJwtClockSkew right
       && accountJwtActiveKeyId left == accountJwtActiveKeyId right
       && accountJwtSigningJwkFile left == accountJwtSigningJwkFile right
       && accountJwtVerificationJwkSetFile left == accountJwtVerificationJwkSetFile right
@@ -108,9 +132,15 @@ instance Show AccountJwtConfiguration where
   showsPrec depth configuration =
     showParen (depth > 10) $
       showString "AccountJwtConfiguration {accountJwtIssuerText = "
-        . shows (validatedStringOrUriText (accountJwtIssuer configuration))
+        . shows (validatedStringOrUriText <$> accountJwtIssuer configuration)
         . showString ", accountJwtAudienceText = "
-        . shows (validatedStringOrUriText (accountJwtAudience configuration))
+        . shows (validatedStringOrUriText <$> accountJwtAudience configuration)
+        . showString ", accountJwtProvideNotBefore = "
+        . shows (accountJwtProvideNotBefore configuration)
+        . showString ", accountJwtRequiredClaims = "
+        . shows (accountJwtRequiredClaims configuration)
+        . showString ", accountJwtClockSkewMinutes = "
+        . shows (HarchWeb.jwtClockSkewMinutes (accountJwtClockSkew configuration))
         . showString ", accountJwtActiveKeyId = "
         . shows (accountJwtActiveKeyId configuration)
         . showString ", accountJwtSigningJwkFile = "
@@ -135,6 +165,7 @@ data AccountJwtConfigurationError
   | AccountJwtSigningJwkFileInvalid
   | AccountJwtVerificationJwkSetFileInvalid
   | AccountJwtCookiePolicyInvalid
+  | AccountJwtClockSkewInvalid
   deriving (Eq, Show)
 
 -- | Failure classes intentionally contain no JWK bytes, JWT text, or
@@ -192,8 +223,20 @@ data AccountJwtIssuer = AccountJwtIssuer
 -- attributes in Harch.
 mkAccountJwtConfiguration :: AccountJwtRawConfiguration -> Either AccountJwtConfigurationError AccountJwtConfiguration
 mkAccountJwtConfiguration rawConfiguration = do
-  validIssuer <- requireStringOrUri AccountJwtIssuerInvalid (rawAccountJwtIssuer rawConfiguration)
-  validAudience <- requireStringOrUri AccountJwtAudienceInvalid (rawAccountJwtAudience rawConfiguration)
+  validIssuer <- traverse (requireStringOrUri AccountJwtIssuerInvalid) (rawAccountJwtIssuer rawConfiguration)
+  validAudience <- traverse (requireStringOrUri AccountJwtAudienceInvalid) (rawAccountJwtAudience rawConfiguration)
+  clockSkew <-
+    case HarchWeb.mkJwtClockSkewMinutes (rawAccountJwtClockSkewMinutes rawConfiguration) of
+      Left _ -> Left AccountJwtClockSkewInvalid
+      Right value -> Right value
+  let requiredClaims =
+        HarchWeb.resolveJwtRequiredClaims
+          HarchWeb.JwtClaimGeneration
+            { HarchWeb.jwtGenerationEmitsNotBefore = rawAccountJwtProvideNotBefore rawConfiguration,
+              HarchWeb.jwtGenerationConfiguresIssuer = isJust validIssuer,
+              HarchWeb.jwtGenerationConfiguresAudience = isJust validAudience
+            }
+          (rawAccountJwtClaimPresencePolicy rawConfiguration)
   validKeyId <- requireBounded AccountJwtActiveKeyIdInvalid (rawAccountJwtActiveKeyId rawConfiguration)
   validSigningFile <- requireFilePath AccountJwtSigningJwkFileInvalid (rawAccountJwtSigningJwkFile rawConfiguration)
   validVerificationFile <- requireFilePath AccountJwtVerificationJwkSetFileInvalid (rawAccountJwtVerificationJwkSetFile rawConfiguration)
@@ -205,6 +248,9 @@ mkAccountJwtConfiguration rawConfiguration = do
     AccountJwtConfiguration
       { accountJwtIssuer = validIssuer,
         accountJwtAudience = validAudience,
+        accountJwtProvideNotBefore = rawAccountJwtProvideNotBefore rawConfiguration,
+        accountJwtRequiredClaims = requiredClaims,
+        accountJwtClockSkew = clockSkew,
         accountJwtActiveKeyId = validKeyId,
         accountJwtSigningJwkFile = validSigningFile,
         accountJwtVerificationJwkSetFile = validVerificationFile,
@@ -289,7 +335,8 @@ validateRuntimeKeys configuration signingKey verificationKeys@(JoseJwk.JWKSet ke
 -- compatible verification set.
 validateRuntimeKeyPair :: AccountJwtConfiguration -> HarchWeb.JwtSigner AccountJwtIssueError Jwt.ClaimsSet -> HarchWeb.JWKSet -> IO (Either AccountJwtLoadError HarchWeb.JWKSet)
 validateRuntimeKeyPair configuration signer verificationKeys = do
-  issued <- HarchWeb.signJwt signer validationHeader validationClaims
+  now <- getCurrentTime
+  issued <- HarchWeb.signJwt signer validationHeader (validationClaims now)
   case issued of
     Left AccountJwtIssueFailed -> pure (Left AccountJwtSigningKeyUnusable)
     Right proof -> do
@@ -313,10 +360,10 @@ validateRuntimeKeyPair configuration signer verificationKeys = do
     -- verifier's claim-validation callback as well as its RS256 key pairing.
     -- The callback deliberately accepts the probe's application-independent
     -- audience; request authentication below applies the configured audience.
-    validationClaims :: Jwt.ClaimsSet
-    validationClaims =
+    validationClaims :: UTCTime -> Jwt.ClaimsSet
+    validationClaims now =
       Jwt.emptyClaimsSet
-        & Jwt.claimAud ?~ Jwt.Audience [validatedStringOrUriValue (accountJwtAudience configuration)]
+        & Jwt.claimExp ?~ Jwt.NumericDate (addUTCTime 60 now)
 
 rsaPrivateJwk :: HarchWeb.JWK -> Bool
 rsaPrivateJwk key =
@@ -356,8 +403,9 @@ accountJwtIssuerFromRuntime runtime =
 -- authentication dispatcher.
 data SharedJwtIssuance = SharedJwtIssuance
   { sharedJwtSigningKey :: HarchWeb.JWK,
-    sharedJwtIssuer :: Jwt.StringOrURI,
-    sharedJwtAudience :: Jwt.StringOrURI,
+    sharedJwtIssuer :: Maybe Jwt.StringOrURI,
+    sharedJwtAudience :: Maybe Jwt.StringOrURI,
+    sharedJwtProvideNotBefore :: Bool,
     sharedJwtActiveKeyId :: Text
   }
 
@@ -365,8 +413,9 @@ accountJwtRuntimeSharedIssuance :: AccountJwtRuntime -> SharedJwtIssuance
 accountJwtRuntimeSharedIssuance runtime =
   SharedJwtIssuance
     { sharedJwtSigningKey = runtimeAccountJwtSigningKey runtime,
-      sharedJwtIssuer = validatedStringOrUriValue (accountJwtIssuer configuration),
-      sharedJwtAudience = validatedStringOrUriValue (accountJwtAudience configuration),
+      sharedJwtIssuer = validatedStringOrUriValue <$> accountJwtIssuer configuration,
+      sharedJwtAudience = validatedStringOrUriValue <$> accountJwtAudience configuration,
+      sharedJwtProvideNotBefore = accountJwtProvideNotBefore configuration,
       sharedJwtActiveKeyId = accountJwtActiveKeyId configuration
     }
   where
@@ -385,14 +434,18 @@ issueJwtForSession runtime session =
 
 claimsForSession :: AccountJwtConfiguration -> OpaqueSession Account.AccountId -> Jwt.ClaimsSet
 claimsForSession configuration session =
-  Jwt.emptyClaimsSet
-    & Jwt.claimIss ?~ validatedStringOrUriValue (accountJwtIssuer configuration)
-    & Jwt.claimAud ?~ Jwt.Audience [validatedStringOrUriValue (accountJwtAudience configuration)]
+  addAudience (addIssuer Jwt.emptyClaimsSet)
     & Jwt.claimSub ?~ accountIdStringOrUri (sessionPrincipal session)
     & Jwt.claimIat ?~ numericDate (sessionIssuedAtNanoseconds session)
-    & Jwt.claimNbf ?~ numericDate (sessionIssuedAtNanoseconds session)
+    & setNotBefore
     & Jwt.claimExp ?~ numericDate (sessionExpiresAtNanoseconds session)
     & Jwt.claimJti ?~ Session.sessionIdText (sessionId session)
+  where
+    addIssuer claims = maybe claims (\issuer -> claims & Jwt.claimIss ?~ validatedStringOrUriValue issuer) (accountJwtIssuer configuration)
+    addAudience claims = maybe claims (\audience -> claims & Jwt.claimAud ?~ Jwt.Audience [validatedStringOrUriValue audience]) (accountJwtAudience configuration)
+    setNotBefore claims
+      | accountJwtProvideNotBefore configuration = claims & Jwt.claimNbf ?~ numericDate (sessionIssuedAtNanoseconds session)
+      | otherwise = claims
 
 accountIdStringOrUri :: Account.AccountId -> Jwt.StringOrURI
 accountIdStringOrUri = review Jwt.string . Account.accountIdText
@@ -425,11 +478,26 @@ accountJwtRuntimeProofExtractor runtime =
 -- the scoped API-authentication combined profile is its second, with a claims-shape-
 -- discriminating projection of its own.
 accountJwtRuntimeProofVerifier :: AccountJwtRuntime -> (Jwt.ClaimsSet -> Either HarchWeb.JwtClaimsError claims) -> HarchWeb.AuthenticationProofVerifier HarchWeb.JwtProof claims
-accountJwtRuntimeProofVerifier runtime claimsProjection =
+accountJwtRuntimeProofVerifier runtime = accountJwtRuntimeProofVerifierWithAcceptance runtime Nothing Nothing
+
+-- | Use optional application-owned accepted-value predicates. A supplied
+-- predicate replaces the configured-generation singleton default and never
+-- widens it by union. Predicates are pure functions over jose's validated
+-- 'Jwt.StringOrURI' representation.
+accountJwtRuntimeProofVerifierWithAcceptance :: AccountJwtRuntime -> Maybe (Jwt.StringOrURI -> Bool) -> Maybe (Jwt.StringOrURI -> Bool) -> (Jwt.ClaimsSet -> Either HarchWeb.JwtClaimsError claims) -> HarchWeb.AuthenticationProofVerifier HarchWeb.JwtProof claims
+accountJwtRuntimeProofVerifierWithAcceptance = accountJwtRuntimeProofVerifierWithClock getCurrentTime
+
+-- | Clock-injected version of the same reference verifier for deterministic
+-- config-to-JOSE acceptance checks. Production uses the system clock through
+-- 'accountJwtRuntimeProofVerifierWithAcceptance'.
+accountJwtRuntimeProofVerifierWithClock :: IO UTCTime -> AccountJwtRuntime -> Maybe (Jwt.StringOrURI -> Bool) -> Maybe (Jwt.StringOrURI -> Bool) -> (Jwt.ClaimsSet -> Either HarchWeb.JwtClaimsError claims) -> HarchWeb.AuthenticationProofVerifier HarchWeb.JwtProof claims
+accountJwtRuntimeProofVerifierWithClock readClock runtime acceptedIssuers acceptedAudiences claimsProjection =
   HarchWeb.AuthenticationProofVerifier $ \proof ->
     HarchWeb.verifyAuthenticationProof
-      ( HarchWeb.jwtProofVerifier
+      ( HarchWeb.jwtProofVerifierWithClock
+          readClock
           validationSettings
+          (accountJwtRequiredClaims configuration)
           (HarchWeb.mkJwtAllowedAlgorithms (HarchWeb.JwtRs256 :| []))
           (runtimeAccountJwtVerificationKeys runtime)
           claimsProjection
@@ -437,9 +505,14 @@ accountJwtRuntimeProofVerifier runtime claimsProjection =
       (HarchWeb.jwtProofEncodedJwt proof)
   where
     configuration = runtimeAccountJwtConfiguration runtime
+    defaultIssuerPredicate = maybe (const False) ((==) . validatedStringOrUriValue) (accountJwtIssuer configuration)
+    defaultAudiencePredicate = maybe (const False) ((==) . validatedStringOrUriValue) (accountJwtAudience configuration)
     validationSettings =
-      Jwt.defaultJWTValidationSettings (== validatedStringOrUriValue (accountJwtAudience configuration))
-        & Jwt.jwtValidationSettingsIssuerPredicate .~ (== validatedStringOrUriValue (accountJwtIssuer configuration))
+      HarchWeb.jwtValidationSettingsWithClockSkew
+        (accountJwtClockSkew configuration)
+        ( Jwt.defaultJWTValidationSettings (fromMaybe defaultAudiencePredicate acceptedAudiences)
+            & Jwt.jwtValidationSettingsIssuerPredicate .~ fromMaybe defaultIssuerPredicate acceptedIssuers
+        )
 
 authenticationProofMaximumBytes :: HarchWeb.AuthenticationProofMaximumBytes
 authenticationProofMaximumBytes = HarchWeb.requiredAuthenticationProofMaximumBytesOrDie 8192

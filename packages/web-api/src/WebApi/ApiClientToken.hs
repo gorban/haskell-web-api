@@ -242,14 +242,16 @@ issueToken environment client scopes = do
 claimsForApiClient :: SharedJwtIssuance -> ApiClient -> [OAuth2Scope] -> UnixTimeNanoseconds -> UnixTimeNanoseconds -> Aeson.Value
 claimsForApiClient issuance client scopes now expiresAt =
   Aeson.object
-    [ "iss" Aeson..= sharedJwtIssuer issuance,
-      "aud" Aeson..= Jwt.Audience [sharedJwtAudience issuance],
-      "sub" Aeson..= review Jwt.string (apiClientIdText (apiClientId client)),
-      "iat" Aeson..= numericDate now,
-      "nbf" Aeson..= numericDate now,
-      "exp" Aeson..= numericDate expiresAt,
-      "scope" Aeson..= Text.unwords (oauth2ScopeText <$> scopes)
-    ]
+    ( maybe [] (\issuer -> ["iss" Aeson..= issuer]) (sharedJwtIssuer issuance)
+        <> maybe [] (\audience -> ["aud" Aeson..= Jwt.Audience [audience]]) (sharedJwtAudience issuance)
+        <> [ "sub" Aeson..= review Jwt.string (apiClientIdText (apiClientId client)),
+             "iat" Aeson..= numericDate now
+           ]
+        <> ["nbf" Aeson..= numericDate now | sharedJwtProvideNotBefore issuance]
+        <> [ "exp" Aeson..= numericDate expiresAt,
+             "scope" Aeson..= Text.unwords (oauth2ScopeText <$> scopes)
+           ]
+    )
 
 numericDate :: UnixTimeNanoseconds -> Jwt.NumericDate
 numericDate instant =

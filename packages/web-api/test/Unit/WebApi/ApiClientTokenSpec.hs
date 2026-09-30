@@ -15,6 +15,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word32)
+import HarchWeb qualified
 import HarchWeb.Api (ApiRequestData (..), ApiRequestDecodeResult (..), apiHeaderName, runRequestCodec)
 import HarchWeb.Authentication (ApiClientStore (..), ApiClientStoreError (..), EncodedJwt, OAuth2ClientCredentials, OAuth2Scope, OAuth2ScopeRequest, encodedJwtBytes, mkAuthenticationDependency, mkOAuth2Scope, oauth2ClientCredentialsRequestCodec, oauth2ClientCredentialsScopes, oauth2ClientSecretBasicCodec, requiredOAuth2ClientCredentialsMaximumBytesOrDie, requiredSecurityFailureCodeOrDie)
 import HarchWeb.Password (PasswordHash (..), PasswordHashingPolicy, argon2Iterations, argon2MemoryKib, argon2Parallelism, hashPasswordWithSalt, mkPassword, mkPasswordHashingPolicy, mkPasswordWorkBudget, newPasswordWorkGate)
@@ -36,6 +37,29 @@ spec =
               :| [ KeyMap.lookup "sub" payload `shouldBe` Just (Aeson.String "automation-client"),
                    KeyMap.lookup "scope" payload `shouldBe` Just (Aeson.String "resource:read"),
                    show outcome `shouldBe` "ApiClientTokenIssued <redacted> [\"resource:read\"] 900"
+                 ]
+          )
+
+    it "omits optional issuer, audience, and not-before claims when configuration leaves them unset" $
+      withTestEnvironment ampleWorkBudget $ \environment -> do
+        let issuance = apiClientTokenIssuance environment
+            environmentWithoutOptionalClaims =
+              environment
+                { apiClientTokenIssuance =
+                    issuance
+                      { sharedJwtIssuer = Nothing,
+                        sharedJwtAudience = Nothing,
+                        sharedJwtProvideNotBefore = False
+                      }
+                }
+        outcome <- issueApiClientToken environmentWithoutOptionalClaims (credentialsFor "automation-client" "current-secret") (scopeRequestFor [])
+        payload <- requiredPayload outcome
+        expectAll
+          ( (outcome `shouldSatisfy` isIssuedWithLifetime)
+              :| [ KeyMap.member "iss" payload `shouldBe` False,
+                   KeyMap.member "aud" payload `shouldBe` False,
+                   KeyMap.member "nbf" payload `shouldBe` False,
+                   KeyMap.member "exp" payload `shouldBe` True
                  ]
           )
 
@@ -177,8 +201,11 @@ withTestEnvironment workBudgetKibibytes action =
             "test shared JWT configuration"
             ( mkAccountJwtConfiguration
                 AccountJwtRawConfiguration
-                  { rawAccountJwtIssuer = "https://issuer.example.test",
-                    rawAccountJwtAudience = "web-api",
+                  { rawAccountJwtIssuer = Just "https://issuer.example.test",
+                    rawAccountJwtAudience = Just "web-api",
+                    rawAccountJwtProvideNotBefore = True,
+                    rawAccountJwtClaimPresencePolicy = HarchWeb.defaultJwtClaimPresencePolicy,
+                    rawAccountJwtClockSkewMinutes = 0,
                     rawAccountJwtActiveKeyId = "test-shared-key-v1",
                     rawAccountJwtSigningJwkFile = signingFile,
                     rawAccountJwtVerificationJwkSetFile = verificationFile,

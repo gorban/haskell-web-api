@@ -27,6 +27,8 @@ module WebApi.AccountJwt
     accountJwtIssuerFromRuntime,
     accountJwtRuntimeProofExtractor,
     accountJwtRuntimeProofVerifier,
+    accountJwtRuntimeProofVerifierWithAcceptance,
+    accountJwtRuntimeProofVerifierWithClock,
     accountJwtRuntimeSharedIssuance,
     authenticationErrorResponse,
     establishAccountPrincipal,

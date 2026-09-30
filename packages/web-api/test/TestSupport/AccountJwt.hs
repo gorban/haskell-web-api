@@ -15,6 +15,7 @@ import Crypto.JOSE.JWK qualified as JoseJwk
 import Data.Aeson qualified as Aeson
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
+import HarchWeb qualified
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import WebApi.AccountJwt (AccountJwtRawConfiguration (..), mkAccountJwtConfiguration)
@@ -30,8 +31,11 @@ withTestAccountJwtFixture action =
         configuration =
           case mkAccountJwtConfiguration
             AccountJwtRawConfiguration
-              { rawAccountJwtIssuer = "http://127.0.0.1:5001",
-                rawAccountJwtAudience = "web-api-account",
+              { rawAccountJwtIssuer = Just "http://127.0.0.1:5001",
+                rawAccountJwtAudience = Just "web-api-account",
+                rawAccountJwtProvideNotBefore = True,
+                rawAccountJwtClaimPresencePolicy = HarchWeb.defaultJwtClaimPresencePolicy,
+                rawAccountJwtClockSkewMinutes = 0,
                 rawAccountJwtActiveKeyId = "test-account-key-v1",
                 rawAccountJwtSigningJwkFile = signingFile,
                 rawAccountJwtVerificationJwkSetFile = verificationFile,

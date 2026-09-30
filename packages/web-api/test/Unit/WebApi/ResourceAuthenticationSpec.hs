@@ -253,8 +253,11 @@ withTestRuntime action =
             id
             ( mkAccountJwtConfiguration
                 AccountJwtRawConfiguration
-                  { rawAccountJwtIssuer = "https://issuer.example.test",
-                    rawAccountJwtAudience = "web-api",
+                  { rawAccountJwtIssuer = Just "https://issuer.example.test",
+                    rawAccountJwtAudience = Just "web-api",
+                    rawAccountJwtProvideNotBefore = True,
+                    rawAccountJwtClaimPresencePolicy = HarchWeb.defaultJwtClaimPresencePolicy,
+                    rawAccountJwtClockSkewMinutes = 0,
                     rawAccountJwtActiveKeyId = "test-resource-key-v1",
                     rawAccountJwtSigningJwkFile = signingFile,
                     rawAccountJwtVerificationJwkSetFile = verificationFile,
@@ -371,12 +374,11 @@ mintClaimsToken runtime extraClaims = do
   let issuance = accountJwtRuntimeSharedIssuance runtime
       claims =
         Aeson.object
-          ( [ "iss" Aeson..= sharedJwtIssuer issuance,
-              "aud" Aeson..= Jwt.Audience [sharedJwtAudience issuance],
-              "iat" Aeson..= testNumericDate now,
-              "nbf" Aeson..= testNumericDate now,
-              "exp" Aeson..= testNumericDate (testAddSeconds 900 now)
-            ]
+          ( maybe [] (\issuer -> ["iss" Aeson..= issuer]) (sharedJwtIssuer issuance)
+              <> maybe [] (\audience -> ["aud" Aeson..= Jwt.Audience [audience]]) (sharedJwtAudience issuance)
+              <> ["iat" Aeson..= testNumericDate now]
+              <> ["nbf" Aeson..= testNumericDate now | sharedJwtProvideNotBefore issuance]
+              <> ["exp" Aeson..= testNumericDate (testAddSeconds 900 now)]
               <> extraClaims
           )
       signer = HarchWeb.joseJwtSigner (sharedJwtSigningKey issuance)

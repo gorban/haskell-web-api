@@ -2,8 +2,6 @@
 
 {-# SPEC #-}
 
-import Control.Lens (preview)
-import Crypto.JWT qualified as Jwt
 import Data.Text (Text)
 import HarchWeb.Authentication (ApiClientStore (findApiClient), ApiClientStoreError (ApiClientStoreUnavailable))
 import HarchWeb.Time (unixTimeNanosecondsValue)
@@ -99,8 +97,8 @@ spec =
           findApiClient (apiClientTokenStore environment) clientId >>= \case
             Left (ApiClientStoreUnavailable _) -> pure ()
             _ -> expectationFailure "expected the unavailable store to reject every lookup"
-      preview Jwt.string (sharedJwtIssuer issuance) `shouldBe` Just ("unavailable-api-client-issuer" :: Text)
-      preview Jwt.string (sharedJwtAudience issuance) `shouldBe` Just ("unavailable-api-client-audience" :: Text)
+      sharedJwtIssuer issuance `shouldBe` Nothing
+      sharedJwtAudience issuance `shouldBe` Nothing
       sharedJwtActiveKeyId issuance `shouldBe` "unavailable"
       clockValue <- apiClientTokenClock environment
       unixTimeNanosecondsValue clockValue `shouldBe` 0

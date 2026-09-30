@@ -12,10 +12,8 @@ module WebApi.App.AccountWorkflow
   )
 where
 
-import Control.Lens (review)
 import Crypto.JOSE.JWA.JWK qualified as JwaJwk
 import Crypto.JOSE.JWK qualified as JoseJwk
-import Crypto.JWT qualified as Jwt
 import Data.Text qualified as Text
 import HarchWeb qualified
 import HarchWeb.Account qualified as HarchAccount
@@ -195,16 +193,15 @@ unavailableApiClientStore =
     apiClientStoreUnavailable = ApiClientStoreUnavailable (mkAuthenticationDependency (requiredSecurityFailureCodeOrDie "api-client.workflow-unavailable"))
 
 -- | A throwaway symmetric key for the deliberately unavailable workflow.
--- 'accountWorkflowApiClientTokenEnvironment' needs some real 'HarchWeb.JWK'
--- value even when issuance is unavailable ('SharedJwtIssuance' carries no
--- 'Maybe'); the unavailable store above means no code path ever reaches
+-- The unavailable store above means no code path ever reaches
 -- 'WebApi.ApiClientToken.issueApiClientToken''s signing step to use it.
 unavailableSharedJwtIssuance :: SharedJwtIssuance
 unavailableSharedJwtIssuance =
   SharedJwtIssuance
     { sharedJwtSigningKey = unsafePerformIO (JoseJwk.genJWK (JwaJwk.OctGenParam 32)),
-      sharedJwtIssuer = review Jwt.string ("unavailable-api-client-issuer" :: Text.Text),
-      sharedJwtAudience = review Jwt.string ("unavailable-api-client-audience" :: Text.Text),
+      sharedJwtIssuer = Nothing,
+      sharedJwtAudience = Nothing,
+      sharedJwtProvideNotBefore = True,
       sharedJwtActiveKeyId = "unavailable"
     }
 {-# NOINLINE unavailableSharedJwtIssuance #-}

@@ -12,7 +12,7 @@ import Data.Aeson qualified as Aeson
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.List.NonEmpty (NonEmpty (..))
-import Data.Maybe (isNothing)
+import Data.Maybe (isJust, isNothing)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
@@ -36,14 +36,15 @@ spec =
       let valid = mkAccountJwtConfiguration validRawConfiguration
       expectAll
         ( (valid `shouldSatisfy` isRight)
-            :| [ mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtIssuer = ""}) `shouldBe` Left AccountJwtIssuerInvalid,
-                 mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtIssuer = "https://accounts.example.test\NUL"}) `shouldBe` Left AccountJwtIssuerInvalid,
-                 mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtAudience = ""}) `shouldBe` Left AccountJwtAudienceInvalid,
+            :| [ mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtIssuer = Just ""}) `shouldBe` Left AccountJwtIssuerInvalid,
+                 mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtIssuer = Just "https://accounts.example.test\NUL"}) `shouldBe` Left AccountJwtIssuerInvalid,
+                 mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtAudience = Just ""}) `shouldBe` Left AccountJwtAudienceInvalid,
                  mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtActiveKeyId = ""}) `shouldBe` Left AccountJwtActiveKeyIdInvalid,
                  mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtActiveKeyId = Text.replicate 129 "a"}) `shouldBe` Left AccountJwtActiveKeyIdInvalid,
                  mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtSigningJwkFile = ""}) `shouldBe` Left AccountJwtSigningJwkFileInvalid,
                  mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtVerificationJwkSetFile = ""}) `shouldBe` Left AccountJwtVerificationJwkSetFileInvalid,
                  mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtCookieName = "session"}) `shouldBe` Left AccountJwtCookiePolicyInvalid,
+                 mkAccountJwtConfiguration (validRawConfiguration {rawAccountJwtClockSkewMinutes = -1}) `shouldBe` Left AccountJwtClockSkewInvalid,
                  hasDerivedContract [AccountJwtIssuerInvalid, AccountJwtAudienceInvalid] `shouldBe` True,
                  show AccountJwtIssuerInvalid `shouldBe` "AccountJwtIssuerInvalid",
                  showsPrec 11 AccountJwtIssuerInvalid "" `shouldBe` "AccountJwtIssuerInvalid",
@@ -63,7 +64,8 @@ spec =
               AccountJwtActiveKeyIdInvalid,
               AccountJwtSigningJwkFileInvalid,
               AccountJwtVerificationJwkSetFileInvalid,
-              AccountJwtCookiePolicyInvalid
+              AccountJwtCookiePolicyInvalid,
+              AccountJwtClockSkewInvalid
             ]
           loadErrors =
             [ AccountJwtSigningJwkUnreadable,
@@ -84,7 +86,7 @@ spec =
                  showsPrec 11 configuration "" `shouldContain` "(AccountJwtConfiguration",
                  show [configuration] `shouldContain` "[AccountJwtConfiguration",
                  hasDerivedContract configurationErrors `shouldBe` True,
-                 show configurationErrors `shouldContain` "AccountJwtCookiePolicyInvalid",
+                 show configurationErrors `shouldContain` "AccountJwtClockSkewInvalid",
                  showsPrec 11 AccountJwtIssuerInvalid "" `shouldBe` "AccountJwtIssuerInvalid",
                  hasDerivedContract loadErrors `shouldBe` True,
                  show loadErrors `shouldContain` "AccountJwtVerificationKeyNotRsa",
@@ -93,6 +95,141 @@ spec =
                  show [AccountJwtIssueFailed] `shouldBe` "[AccountJwtIssueFailed]"
                ]
         )
+
+    it "resolves optional registered claims and issuance from the same configuration"
+      $ withTestRuntimeConfigured
+        ( \raw ->
+            raw
+              { rawAccountJwtIssuer = Nothing,
+                rawAccountJwtAudience = Nothing,
+                rawAccountJwtProvideNotBefore = False,
+                rawAccountJwtClaimPresencePolicy = HarchWeb.defaultJwtClaimPresencePolicy
+              }
+        )
+      $ \_ runtime _ session -> do
+        issued <- issueAccountSessionJwt (accountJwtIssuerFromRuntime runtime) session
+        token <-
+          case issued of
+            Left issueError -> expectationFailure ("JWT issuance failed: " <> show issueError) >> error "unreachable"
+            Right value -> pure value
+        let verifier =
+              accountJwtRuntimeProofVerifierWithClock
+                (pure (posixSecondsToUTCTime 1735689600))
+                runtime
+                Nothing
+                Nothing
+                Right
+        verification <- HarchWeb.verifyAuthenticationProof verifier (HarchWeb.jwtProofFromCookie token)
+        case verification of
+          Right claims ->
+            expectAll
+              ( ((claims ^. Jwt.claimExp) `shouldSatisfy` isJust)
+                  :| [ (claims ^. Jwt.claimNbf) `shouldBe` Nothing,
+                       (claims ^. Jwt.claimIss) `shouldBe` Nothing,
+                       (claims ^. Jwt.claimAud) `shouldBe` Nothing
+                     ]
+              )
+          Left failure -> expectationFailure ("expected the optional-claim profile to accept its own token, got " <> show failure)
+
+    it "keeps explicit presence overrides independent and custom accepted predicates replace generation defaults" $
+      withTestRuntime $ \runtime signingKey session -> do
+        let localIssuer = requiredStringOrUri "https://accounts.example.test"
+            localAudience = requiredStringOrUri "web-api-account"
+            acceptedIssuer = requiredStringOrUri "https://partner.example.test"
+            acceptedAudience = requiredStringOrUri "api://partner"
+            verifier = accountJwtRuntimeProofVerifierWithAcceptance runtime (Just (== acceptedIssuer)) (Just (== acceptedAudience)) Right
+            defaultVerifier = accountJwtRuntimeProofVerifier runtime Right
+            partnerClaims =
+              claimsForTestSession session (Just "account_01") (Just (sessionIdText (sessionId session)))
+                & Jwt.claimIss ?~ acceptedIssuer
+                & Jwt.claimAud ?~ Jwt.Audience [localAudience, acceptedAudience]
+            localClaims =
+              claimsForTestSession session (Just "account_01") (Just (sessionIdText (sessionId session)))
+                & Jwt.claimIss ?~ localIssuer
+                & Jwt.claimAud ?~ Jwt.Audience [localAudience]
+        partnerToken <- HarchWeb.issueJwt signingKey accountJwtHeader partnerClaims
+        localToken <- HarchWeb.issueJwt signingKey accountJwtHeader localClaims
+        partnerProof <- either (const (expectationFailure "expected partner JWT issuance" >> error "unreachable")) pure partnerToken
+        localProof <- either (const (expectationFailure "expected local JWT issuance" >> error "unreachable")) pure localToken
+        partnerResult <- HarchWeb.verifyAuthenticationProof verifier (HarchWeb.jwtProofFromCookie partnerProof)
+        partnerDefaultResult <- HarchWeb.verifyAuthenticationProof defaultVerifier (HarchWeb.jwtProofFromCookie partnerProof)
+        localCustomResult <- HarchWeb.verifyAuthenticationProof verifier (HarchWeb.jwtProofFromCookie localProof)
+        expectAll
+          ( (partnerResult `shouldSatisfy` isAccepted)
+              :| [ isRejected partnerDefaultResult `shouldBe` True,
+                   isRejected localCustomResult `shouldBe` True
+                 ]
+          )
+
+    it "enforces an explicit nbf requirement and applies skew to optional but present expiration" $ do
+      withTestRuntimeConfigured
+        ( \raw ->
+            raw
+              { rawAccountJwtIssuer = Nothing,
+                rawAccountJwtAudience = Nothing,
+                rawAccountJwtProvideNotBefore = False,
+                rawAccountJwtClaimPresencePolicy =
+                  HarchWeb.defaultJwtClaimPresencePolicy
+                    { HarchWeb.jwtNotBeforePresence = HarchWeb.RequirePresence
+                    },
+                rawAccountJwtClockSkewMinutes = 2
+              }
+        )
+        $ \_ runtime _ session -> do
+          issued <- issueAccountSessionJwt (accountJwtIssuerFromRuntime runtime) session
+          token <-
+            case issued of
+              Left issueError -> expectationFailure ("JWT issuance failed: " <> show issueError) >> error "unreachable"
+              Right value -> pure value
+          let verifier =
+                accountJwtRuntimeProofVerifierWithClock
+                  (pure (posixSecondsToUTCTime 1735689600))
+                  runtime
+                  Nothing
+                  Nothing
+                  Right
+          result <- HarchWeb.verifyAuthenticationProof verifier (HarchWeb.jwtProofFromCookie token)
+          result `shouldSatisfy` isRejected
+      withTestRuntimeConfigured
+        ( \raw ->
+            raw
+              { rawAccountJwtIssuer = Nothing,
+                rawAccountJwtAudience = Nothing,
+                rawAccountJwtProvideNotBefore = False,
+                rawAccountJwtClaimPresencePolicy =
+                  HarchWeb.defaultJwtClaimPresencePolicy
+                    { HarchWeb.jwtExpirationPresence = HarchWeb.AllowAbsence
+                    },
+                rawAccountJwtClockSkewMinutes = 2
+              }
+        )
+        $ \_ runtime _ session -> do
+          let nowNanoseconds = 1735689600 * 1000000000
+              makeSession expiryOffsetSeconds =
+                session
+                  { sessionIssuedAtNanoseconds = nowNanoseconds - 300 * 1000000000,
+                    sessionExpiresAtNanoseconds = nowNanoseconds + expiryOffsetSeconds * 1000000000
+                  }
+              verifier =
+                accountJwtRuntimeProofVerifierWithClock
+                  (pure (posixSecondsToUTCTime 1735689600))
+                  runtime
+                  Nothing
+                  Nothing
+                  Right
+              issueAndVerify tokenSession = do
+                issued <- issueAccountSessionJwt (accountJwtIssuerFromRuntime runtime) tokenSession
+                token <-
+                  case issued of
+                    Left issueError -> expectationFailure ("JWT issuance failed: " <> show issueError) >> error "unreachable"
+                    Right value -> pure value
+                HarchWeb.verifyAuthenticationProof verifier (HarchWeb.jwtProofFromCookie token)
+          withinSkew <- issueAndVerify (makeSession (-119))
+          outsideSkew <- issueAndVerify (makeSession (-121))
+          expectAll
+            ( (withinSkew `shouldSatisfy` isAccepted)
+                :| [outsideSkew `shouldSatisfy` isRejected]
+            )
 
     it "loads only a matching RS256 private key/JWK set and admits the current durable session" $
       withTestRuntime $ \runtime signingKey session -> do
@@ -364,7 +501,10 @@ withTestRuntime action =
   withTestRuntimeConfiguration $ \_ runtime signingKey session -> action runtime signingKey session
 
 withTestRuntimeConfiguration :: (AccountJwtConfiguration -> AccountJwtRuntime -> HarchWeb.JWK -> OpaqueSession Account.AccountId -> IO value) -> IO value
-withTestRuntimeConfiguration action =
+withTestRuntimeConfiguration = withTestRuntimeConfigured id
+
+withTestRuntimeConfigured :: (AccountJwtRawConfiguration -> AccountJwtRawConfiguration) -> (AccountJwtConfiguration -> AccountJwtRuntime -> HarchWeb.JWK -> OpaqueSession Account.AccountId -> IO value) -> IO value
+withTestRuntimeConfigured adjustRawConfiguration action =
   withSystemTempDirectory "web-api-account-jwt" $ \directory -> do
     signingKey <- JoseJwk.genJWK (JwaJwk.RSAGenParam 1024)
     accountId <- requiredAccountId "account_01"
@@ -372,7 +512,17 @@ withTestRuntimeConfiguration action =
     let namedSigningKey = signingKey & JoseJwk.jwkKid ?~ "account-key-v1"
         signingFile = directory </> "private.jwk"
         verificationFile = directory </> "verification.jwks"
-        configuration = requiredConfiguration signingFile verificationFile
+        configuration =
+          case mkAccountJwtConfiguration
+            ( adjustRawConfiguration
+                ( validRawConfiguration
+                    { rawAccountJwtSigningJwkFile = signingFile,
+                      rawAccountJwtVerificationJwkSetFile = verificationFile
+                    }
+                )
+            ) of
+            Right value -> value
+            Left configurationError -> error ("test JWT configuration is invalid: " <> show configurationError)
         -- JOSE validates @exp@ against wall time; the durable-store test clock
         -- remains 150, while this intentionally distant expiry keeps the
         -- cryptographic proof valid independently of when the suite runs.
@@ -398,6 +548,9 @@ isAccepted result =
   case result of
     Right _ -> True
     Left _ -> False
+
+isRejected :: Either HarchWeb.ProofVerificationFailure value -> Bool
+isRejected = not . isAccepted
 
 establishIssuedPrincipal :: HarchWeb.AuthenticationPipeline AppRoute AppRequestContext AppAuthorization HarchWeb.JwtProof verified principal denial -> HarchWeb.EncodedJwt -> IO (Either HarchWeb.PrincipalEstablishmentFailure principal)
 establishIssuedPrincipal pipeline token = do
@@ -499,8 +652,11 @@ requiredConfiguration signingFile verificationFile =
 validRawConfiguration :: AccountJwtRawConfiguration
 validRawConfiguration =
   AccountJwtRawConfiguration
-    { rawAccountJwtIssuer = "https://accounts.example.test",
-      rawAccountJwtAudience = "web-api-account",
+    { rawAccountJwtIssuer = Just "https://accounts.example.test",
+      rawAccountJwtAudience = Just "web-api-account",
+      rawAccountJwtProvideNotBefore = True,
+      rawAccountJwtClaimPresencePolicy = HarchWeb.defaultJwtClaimPresencePolicy,
+      rawAccountJwtClockSkewMinutes = 0,
       rawAccountJwtActiveKeyId = "account-key-v1",
       rawAccountJwtSigningJwkFile = "private.jwk",
       rawAccountJwtVerificationJwkSetFile = "verification.jwks",

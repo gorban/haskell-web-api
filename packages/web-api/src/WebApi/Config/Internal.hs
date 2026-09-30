@@ -135,6 +135,7 @@ import HarchWeb
     unboundedRequestHeadLimits,
     warpDefaultRequestTransportLimits,
   )
+import HarchWeb qualified
 import HarchWeb.Csrf
   ( CsrfKeyId,
     SignedCsrfKeyring,
@@ -366,8 +367,6 @@ committedEnvDefaults =
     ("SMTP_USER", "test@localhost"),
     ("EMAIL_FROM", "noreply@localhost"),
     ("PUBLIC_BASE_URL", "http://127.0.0.1:5001"),
-    ("ACCOUNT_JWT_ISSUER", "http://127.0.0.1:5001"),
-    ("ACCOUNT_JWT_AUDIENCE", "web-api-account"),
     ("ACCOUNT_JWT_ACTIVE_KEY_ID", "development-v1"),
     ("ACCOUNT_JWT_SIGNING_JWK_FILE", "account-jwt-private.jwk"),
     ("ACCOUNT_JWT_VERIFICATION_JWK_SET_FILE", "account-jwt-verification.jwks"),
@@ -418,8 +417,11 @@ defaultAccountJwtConfiguration :: AccountJwtConfiguration
 defaultAccountJwtConfiguration =
   case mkAccountJwtConfiguration
     AccountJwtRawConfiguration
-      { rawAccountJwtIssuer = "http://127.0.0.1:5001",
-        rawAccountJwtAudience = "web-api-account",
+      { rawAccountJwtIssuer = Nothing,
+        rawAccountJwtAudience = Nothing,
+        rawAccountJwtProvideNotBefore = True,
+        rawAccountJwtClaimPresencePolicy = HarchWeb.defaultJwtClaimPresencePolicy,
+        rawAccountJwtClockSkewMinutes = 0,
         rawAccountJwtActiveKeyId = "development-v1",
         rawAccountJwtSigningJwkFile = "account-jwt-private.jwk",
         rawAccountJwtVerificationJwkSetFile = "account-jwt-verification.jwks",
@@ -568,8 +570,14 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
   csrfVerificationKeys <- requiredConfigValue "CSRF_SIGNING_VERIFICATION_KEYS"
   parsedCsrfSigningKeyring <- parseCsrfSigningKeyring csrfActiveKeyId csrfVerificationKeys
   () <- validateProductionCsrfSigningKeyring parsedMode parsedCsrfSigningKeyring
-  jwtIssuer <- requiredConfigValue "ACCOUNT_JWT_ISSUER"
-  jwtAudience <- requiredConfigValue "ACCOUNT_JWT_AUDIENCE"
+  jwtIssuer <- optionalConfigValue "ACCOUNT_JWT_ISSUER"
+  jwtAudience <- optionalConfigValue "ACCOUNT_JWT_AUDIENCE"
+  jwtProvideNotBefore <- fromMaybe True <$> optionalBoolean "ACCOUNT_JWT_PROVIDE_NOT_BEFORE"
+  jwtRequireExp <- optionalBoolean "ACCOUNT_JWT_REQUIRE_EXP"
+  jwtRequireNbf <- optionalBoolean "ACCOUNT_JWT_REQUIRE_NBF"
+  jwtRequireIss <- optionalBoolean "ACCOUNT_JWT_REQUIRE_ISS"
+  jwtRequireAud <- optionalBoolean "ACCOUNT_JWT_REQUIRE_AUD"
+  jwtClockSkewMinutes <- maybe (Right 0) (parseNonNegativeInteger "JWT_MAX_CLOCK_SKEW_MINUTES") =<< optionalConfigValue "JWT_MAX_CLOCK_SKEW_MINUTES"
   jwtActiveKeyId <- requiredConfigValue "ACCOUNT_JWT_ACTIVE_KEY_ID"
   jwtSigningJwkFile <- requiredConfigValue "ACCOUNT_JWT_SIGNING_JWK_FILE"
   jwtVerificationJwkSetFile <- requiredConfigValue "ACCOUNT_JWT_VERIFICATION_JWK_SET_FILE"
@@ -584,11 +592,21 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
           jwtSigningJwkFile
           jwtVerificationJwkSetFile
           jwtCookieName
+          jwtClockSkewMinutes
       )
       ( mkAccountJwtConfiguration
           AccountJwtRawConfiguration
             { rawAccountJwtIssuer = jwtIssuer,
               rawAccountJwtAudience = jwtAudience,
+              rawAccountJwtProvideNotBefore = jwtProvideNotBefore,
+              rawAccountJwtClaimPresencePolicy =
+                HarchWeb.JwtClaimPresencePolicy
+                  { HarchWeb.jwtExpirationPresence = requirementFromOptionalBoolean jwtRequireExp,
+                    HarchWeb.jwtNotBeforePresence = requirementFromOptionalBoolean jwtRequireNbf,
+                    HarchWeb.jwtIssuerPresence = requirementFromOptionalBoolean jwtRequireIss,
+                    HarchWeb.jwtAudiencePresence = requirementFromOptionalBoolean jwtRequireAud
+                  },
+              rawAccountJwtClockSkewMinutes = jwtClockSkewMinutes,
               rawAccountJwtActiveKeyId = jwtActiveKeyId,
               rawAccountJwtSigningJwkFile = Text.unpack jwtSigningJwkFile,
               rawAccountJwtVerificationJwkSetFile = Text.unpack jwtVerificationJwkSetFile,
@@ -615,14 +633,25 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
         accountJwtConfiguration = parsedAccountJwtConfiguration
       }
   where
-    accountJwtConfigurationError issuer audience activeKeyId signingJwkFile verificationJwkSetFile cookieName configurationError =
+    accountJwtConfigurationError issuer audience activeKeyId signingJwkFile verificationJwkSetFile cookieName clockSkewMinutes configurationError =
       case configurationError of
-        AccountJwtIssuerInvalid -> InvalidConfigValue "ACCOUNT_JWT_ISSUER" issuer
-        AccountJwtAudienceInvalid -> InvalidConfigValue "ACCOUNT_JWT_AUDIENCE" audience
+        AccountJwtIssuerInvalid -> InvalidConfigValue "ACCOUNT_JWT_ISSUER" (fromMaybe "" issuer)
+        AccountJwtAudienceInvalid -> InvalidConfigValue "ACCOUNT_JWT_AUDIENCE" (fromMaybe "" audience)
         AccountJwtActiveKeyIdInvalid -> InvalidConfigValue "ACCOUNT_JWT_ACTIVE_KEY_ID" activeKeyId
         AccountJwtSigningJwkFileInvalid -> InvalidConfigValue "ACCOUNT_JWT_SIGNING_JWK_FILE" signingJwkFile
         AccountJwtVerificationJwkSetFileInvalid -> InvalidConfigValue "ACCOUNT_JWT_VERIFICATION_JWK_SET_FILE" verificationJwkSetFile
         AccountJwtCookiePolicyInvalid -> InvalidConfigValue "ACCOUNT_JWT_COOKIE_NAME" cookieName
+        AccountJwtClockSkewInvalid -> InvalidConfigValue "JWT_MAX_CLOCK_SKEW_MINUTES" (Text.pack (show clockSkewMinutes))
+
+    requirementFromOptionalBoolean maybeValue =
+      case maybeValue of
+        Nothing -> HarchWeb.UseIssuanceDefault
+        Just True -> HarchWeb.RequirePresence
+        Just False -> HarchWeb.AllowAbsence
+
+    optionalBoolean key = traverse (parseBoolean key) =<< optionalConfigValue key
+
+    optionalConfigValue key = Right (lookupConfigValue key configLayers)
 
     requiredConfigValue key =
       case lookupConfigValue key configLayers of
@@ -651,6 +680,17 @@ parseMode value =
 
 parsePort :: Text -> Either ConfigParseError Int
 parsePort = parsePositiveInt "DATABASE_PORT"
+
+-- | Parse the deliberately unbounded external minutes unit without narrowing
+-- through a machine-sized integer. This keeps large nonnegative values exact;
+-- 'HarchWeb.mkJwtClockSkewMinutes' separately rejects the only invalid range
+-- specified by the policy: negative values.
+parseNonNegativeInteger :: Text -> Text -> Either ConfigParseError Integer
+parseNonNegativeInteger key rawValue =
+  case readMaybe (Text.unpack rawValue) of
+    Just value
+      | value >= 0 -> Right value
+    _ -> Left (InvalidConfigValue key rawValue)
 
 -- | The @DATABASE_CONNECT_TIMEOUT_SECONDS@ env var name, named once instead
 -- of written at both this module's uses (the required-value lookup in

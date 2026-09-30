@@ -1674,8 +1674,6 @@ spec = do
                      ("SMTP_USER", "test@localhost"),
                      ("EMAIL_FROM", "noreply@localhost"),
                      ("PUBLIC_BASE_URL", "http://127.0.0.1:5001"),
-                     ("ACCOUNT_JWT_ISSUER", "http://127.0.0.1:5001"),
-                     ("ACCOUNT_JWT_AUDIENCE", "web-api-account"),
                      ("ACCOUNT_JWT_ACTIVE_KEY_ID", "development-v1"),
                      ("ACCOUNT_JWT_SIGNING_JWK_FILE", "account-jwt-private.jwk"),
                      ("ACCOUNT_JWT_VERIFICATION_JWK_SET_FILE", "account-jwt-verification.jwks"),
@@ -1698,10 +1696,7 @@ spec = do
               }
           dynamicEnvironmentConfig = defaultAppEnvironmentConfig {smtpDeliveryConfig = dynamicSmtpConfig}
       show dynamicEnvironmentConfig
-        `shouldBe` ( "AppEnvironmentConfig {appMode = Development, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10, databasePoolCapacity = 10, databaseTransportSecurity = DatabaseTransportLibpqDefault}, smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = "
-                       <> show dynamicSmtpPort
-                       <> ", smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = <redacted>}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>, csrfSigningKeyring = SignedCsrfKeyring {signedCsrfActiveKey = CsrfKeyId \"development-v1\", signedCsrfVerificationKeys = <redacted>}, accountJwtConfiguration = AccountJwtConfiguration {accountJwtIssuerText = \"http://127.0.0.1:5001\", accountJwtAudienceText = \"web-api-account\", accountJwtActiveKeyId = \"development-v1\", accountJwtSigningJwkFile = \"account-jwt-private.jwk\", accountJwtVerificationJwkSetFile = \"account-jwt-verification.jwks\", accountJwtCookiePolicy = AuthenticationCookiePolicy {authenticationCookieName = AuthenticationCookieName \"__Host-harch-session\", authenticationCookieMaxAgeSeconds = 28800}}}"
-                   )
+        `shouldContain` "AccountJwtConfiguration {accountJwtIssuerText = Nothing, accountJwtAudienceText = Nothing, accountJwtProvideNotBefore = True, accountJwtRequiredClaims = JwtRequiredClaims {jwtRequiredExpiration = True, jwtRequiredNotBefore = True, jwtRequiredIssuer = False, jwtRequiredAudience = False}, accountJwtClockSkewMinutes = 0"
       show dynamicEnvironmentConfig `shouldNotContain` "databasePassword = \""
       show dynamicEnvironmentConfig `shouldNotContain` "smtpDeliveryPassword = \""
 
@@ -1886,9 +1881,9 @@ spec = do
         `shouldBe` "[DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10, databasePoolCapacity = 10, databaseTransportSecurity = DatabaseTransportLibpqDefault}]"
       show productionDatabaseConfig `shouldNotContain` "super-secret"
       show productionEnvironmentConfig
-        `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = <redacted>}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>, csrfSigningKeyring = SignedCsrfKeyring {signedCsrfActiveKey = CsrfKeyId \"production-v1\", signedCsrfVerificationKeys = <redacted>}, accountJwtConfiguration = AccountJwtConfiguration {accountJwtIssuerText = \"http://127.0.0.1:5001\", accountJwtAudienceText = \"web-api-account\", accountJwtActiveKeyId = \"development-v1\", accountJwtSigningJwkFile = \"account-jwt-private.jwk\", accountJwtVerificationJwkSetFile = \"account-jwt-verification.jwks\", accountJwtCookiePolicy = AuthenticationCookiePolicy {authenticationCookieName = AuthenticationCookieName \"__Host-harch-session\", authenticationCookieMaxAgeSeconds = 28800}}}"
+        `shouldContain` "accountJwtConfiguration = AccountJwtConfiguration {accountJwtIssuerText = Nothing, accountJwtAudienceText = Nothing, accountJwtProvideNotBefore = True"
       show [productionEnvironmentConfig]
-        `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = <redacted>}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>, csrfSigningKeyring = SignedCsrfKeyring {signedCsrfActiveKey = CsrfKeyId \"production-v1\", signedCsrfVerificationKeys = <redacted>}, accountJwtConfiguration = AccountJwtConfiguration {accountJwtIssuerText = \"http://127.0.0.1:5001\", accountJwtAudienceText = \"web-api-account\", accountJwtActiveKeyId = \"development-v1\", accountJwtSigningJwkFile = \"account-jwt-private.jwk\", accountJwtVerificationJwkSetFile = \"account-jwt-verification.jwks\", accountJwtCookiePolicy = AuthenticationCookiePolicy {authenticationCookieName = AuthenticationCookieName \"__Host-harch-session\", authenticationCookieMaxAgeSeconds = 28800}}}]"
+        `shouldContain` "accountJwtConfiguration = AccountJwtConfiguration {accountJwtIssuerText = Nothing, accountJwtAudienceText = Nothing, accountJwtProvideNotBefore = True"
       show productionEnvironmentConfig `shouldNotContain` "super-secret"
       show (MissingConfigValue "DATABASE_PASSWORD") `shouldBe` "MissingConfigValue \"DATABASE_PASSWORD\""
       show (InvalidConfigValue "APP_MODE" "staging") `shouldBe` "InvalidConfigValue \"APP_MODE\" \"staging\""
@@ -1907,6 +1902,48 @@ spec = do
     it "parses explicit local development credentials into the expected config" $
       parseAppEnvironmentConfig committedEnvDefaults developmentEnvironmentSecrets []
         `shouldBe` Right defaultAppEnvironmentConfig
+
+    it "preserves optional JWT strings and tri-state claim overrides through environment parsing" $ do
+      let hugeSkew = "1234567890123456789012345678901234567890"
+          configured =
+            parseAppEnvironmentConfig
+              committedEnvDefaults
+              developmentEnvironmentSecrets
+              [ ("ACCOUNT_JWT_ISSUER", "https://issuer.example.test"),
+                ("ACCOUNT_JWT_PROVIDE_NOT_BEFORE", "false"),
+                ("ACCOUNT_JWT_REQUIRE_EXP", "false"),
+                ("ACCOUNT_JWT_REQUIRE_NBF", "true"),
+                ("ACCOUNT_JWT_REQUIRE_ISS", "false"),
+                ("ACCOUNT_JWT_REQUIRE_AUD", "true"),
+                ("JWT_MAX_CLOCK_SKEW_MINUTES", hugeSkew)
+              ]
+      case configured of
+        Left parseError -> expectationFailure ("expected a valid JWT policy configuration: " <> show parseError)
+        Right environment ->
+          let rendered = show (accountJwtConfiguration environment)
+           in expectAll
+                ( (rendered `shouldContain` "accountJwtIssuerText = Just \"https://issuer.example.test\"")
+                    :| [ rendered `shouldContain` "accountJwtAudienceText = Nothing",
+                         rendered `shouldContain` "jwtRequiredExpiration = False",
+                         rendered `shouldContain` "jwtRequiredNotBefore = True",
+                         rendered `shouldContain` "jwtRequiredIssuer = False",
+                         rendered `shouldContain` "jwtRequiredAudience = True",
+                         rendered `shouldContain` ("accountJwtClockSkewMinutes = " <> Text.unpack hugeSkew),
+                         show defaultAppEnvironmentConfig `shouldContain` "accountJwtIssuerText = Nothing, accountJwtAudienceText = Nothing"
+                       ]
+                )
+
+    it "rejects malformed, negative, and empty JWT configuration values" $ do
+      forM_
+        [ ("JWT_MAX_CLOCK_SKEW_MINUTES", "-1"),
+          ("JWT_MAX_CLOCK_SKEW_MINUTES", "not-minutes"),
+          ("ACCOUNT_JWT_ISSUER", ""),
+          ("ACCOUNT_JWT_AUDIENCE", ""),
+          ("ACCOUNT_JWT_REQUIRE_NBF", "sometimes")
+        ]
+        $ \(key, value) ->
+          parseAppEnvironmentConfig committedEnvDefaults developmentEnvironmentSecrets [(key, value)]
+            `shouldBe` Left (InvalidConfigValue key value)
 
     it "parses only PostgreSQL's closed SSL modes and preserves libpq defaults when absent" $ do
       let parseTransport entries =

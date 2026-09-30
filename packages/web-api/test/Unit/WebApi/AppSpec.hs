@@ -1897,8 +1897,11 @@ spec = do
         let unreadableAccountJwtConfiguration =
               case mkAccountJwtConfiguration
                 AccountJwtRawConfiguration
-                  { rawAccountJwtIssuer = "https://accounts.example.test",
-                    rawAccountJwtAudience = "web-api-account",
+                  { rawAccountJwtIssuer = Just "https://accounts.example.test",
+                    rawAccountJwtAudience = Just "web-api-account",
+                    rawAccountJwtProvideNotBefore = True,
+                    rawAccountJwtClaimPresencePolicy = HarchWeb.defaultJwtClaimPresencePolicy,
+                    rawAccountJwtClockSkewMinutes = 0,
                     rawAccountJwtActiveKeyId = "account-key-v1",
                     rawAccountJwtSigningJwkFile = "/tmp/web-api-missing-private.jwk",
                     rawAccountJwtVerificationJwkSetFile = "/tmp/web-api-missing-verification.jwks",
