@@ -5,7 +5,27 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-required_commands=(cabal-gild hlint ormolu dos2unix)
+format_root="$repo_root"
+case "${1:-}" in
+  '') ;;
+  --format-target-fixture)
+    if [ "$#" != 2 ]; then
+      printf 'usage: %s --format-target-fixture <directory>\n' "$0" >&2
+      exit 2
+    fi
+    format_root="$2"
+    ;;
+  *)
+    printf 'usage: %s [--format-target-fixture <directory>]\n' "$0" >&2
+    exit 2
+    ;;
+esac
+
+if [ "$format_root" = "$repo_root" ]; then
+  "$repo_root/tools/test-formatting-checks.sh"
+fi
+
+required_commands=(cabal-gild hlint ormolu)
 missing_commands=()
 
 for command_name in "${required_commands[@]}"; do
@@ -28,29 +48,84 @@ fi
 
 format_ok=0
 
-while IFS= read -r cabal_file; do
+project_file="$format_root/cabal.project"
+if [ ! -f "$project_file" ]; then
+  printf 'Formatting target root has no cabal.project file: %s\n' "$format_root" >&2
+  exit 1
+fi
+
+mapfile -t package_directories < <(
+  awk '
+    /^packages:[[:space:]]*$/ { collecting = 1; next }
+    collecting && /^[[:space:]]+/ { print $1; next }
+    collecting { exit }
+  ' "$project_file"
+)
+
+if [ "${#package_directories[@]}" -eq 0 ]; then
+  printf 'No package directories were found in cabal.project: %s\n' "$project_file" >&2
+  exit 1
+fi
+
+cabal_files=()
+haskell_files=()
+for package_directory in "${package_directories[@]}"; do
+  case "$package_directory" in
+    packages/hspec-expectations-match/) continue ;;
+  esac
+
+  package_root="$format_root/$package_directory"
+  if [ ! -d "$package_root" ]; then
+    printf 'Cabal project package directory does not exist: %s\n' "$package_root" >&2
+    exit 1
+  fi
+
+  while IFS= read -r cabal_file; do
+    cabal_files+=("$cabal_file")
+  done < <(find "$package_root" -name '*.cabal' -type f -print | sort)
+
+  while IFS= read -r haskell_file; do
+    haskell_files+=("$haskell_file")
+  done < <(find "$package_root" -name '*.hs' -type f -print | sort)
+done
+
+if [ "${#cabal_files[@]}" -eq 0 ]; then
+  printf '%s\n' 'No Cabal files were found for formatting checks.' >&2
+  exit 1
+fi
+
+if [ "${#haskell_files[@]}" -eq 0 ]; then
+  printf '%s\n' 'No Haskell files were found for formatting checks.' >&2
+  exit 1
+fi
+
+for cabal_file in "${cabal_files[@]}"; do
   output="$(cabal-gild "$cabal_file" --mode check 2>&1)" || {
     printf '%s: %s\n\n' "$cabal_file" "$output"
     format_ok=1
   }
-done < <(find packages -name '*.cabal' -type f | grep -v '^packages/hspec-expectations-match')
+done
 
-while IFS= read -r haskell_file; do
-  dos2unix -q "$haskell_file"
-  output="$(hlint "$haskell_file" 2>&1)" || {
+for haskell_file in "${haskell_files[@]}"; do
+  if LC_ALL=C grep -q $'\r' "$haskell_file"; then
+    printf '%s: CR byte found; use LF line endings.\n' "$haskell_file"
+    format_ok=1
+    continue
+  fi
+  output="$(hlint --language=ImportQualifiedPost "$haskell_file" 2>&1)" || {
     printf '%s\n' "$output"
     format_ok=1
     continue
   }
-  output="$(ormolu -m check "$haskell_file" 2>&1)" || {
+  output="$(ormolu -m check --ghc-opt=-XImportQualifiedPost "$haskell_file" 2>&1)" || {
     printf '%s\n' "$output"
     format_ok=1
   }
-done < <(find packages -name '*.hs' -type f | grep -v '^packages/hspec-expectations-match')
+done
 
 if [ "$format_ok" -ne 0 ]; then
-  echo 'Found formatting issues in packages/ files'
+  echo 'Found formatting issues in project-owned package files'
   exit 1
 fi
 
-echo 'No formatting issues in packages/ files'
+echo 'No formatting issues in project-owned package files'

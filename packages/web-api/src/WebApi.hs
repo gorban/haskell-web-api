@@ -5,5 +5,6 @@ module WebApi
   )
 where
 
-import WebApi.App (buildApp, run)
+import WebApi.App (buildApp)
+import WebApi.App.Runtime (run)
 import WebApi.DatabaseSetup (runDatabaseSetupArgs)

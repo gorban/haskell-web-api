@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Core.Setup.PrerequisiteConfig
   ( SetupPrerequisiteConfig (..),
     SetupPrerequisiteConfigLoadError (..),
@@ -12,7 +10,8 @@ module Core.Setup.PrerequisiteConfig
 where
 
 import Core.Config
-  ( ConfigOverridesFileError (..),
+  ( ConfigLayers (..),
+    ConfigOverridesFileError (..),
     ConfigParseError (..),
     loadConfigOverridesFile,
     lookupConfigValue,
@@ -20,6 +19,7 @@ import Core.Config
     parsePositiveInt,
   )
 import Core.Setup.Prerequisite (TcpEndpoint (..))
+import Data.Bifunctor (first)
 import Data.Text (Text)
 
 data SetupPrerequisiteConfig = SetupPrerequisiteConfig
@@ -76,16 +76,12 @@ loadSetupPrerequisiteConfigWithFiles committedDefaultsPath localOverridesPath = 
   pure $ do
     committedDefaults <- committedDefaultsResult
     localOverrides <- localOverridesResult
-    case parseSetupPrerequisiteConfig committedPrerequisiteDefaults committedDefaults localOverrides of
-      Left parseError -> Left (SetupPrerequisiteConfigParseError parseError)
-      Right setupConfig -> Right setupConfig
+    first SetupPrerequisiteConfigParseError $
+      parseSetupPrerequisiteConfig committedPrerequisiteDefaults committedDefaults localOverrides
   where
     loadOverridesFile overridesPath =
       fmap
-        ( either
-            (Left . SetupPrerequisiteOverridesFileError overridesPath)
-            Right
-        )
+        (first (SetupPrerequisiteOverridesFileError overridesPath))
         (loadConfigOverridesFile overridesPath)
 
 parseSetupPrerequisiteConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError SetupPrerequisiteConfig
@@ -110,7 +106,14 @@ parseSetupPrerequisiteConfig committedDefaults localOverrides environmentOverrid
         Nothing -> Left (MissingConfigValue key)
 
     lookupOptionalValue key =
-      lookupConfigValue key committedDefaults localOverrides environmentOverrides
+      lookupConfigValue key configLayers
+
+    configLayers =
+      ConfigLayers
+        { configLayerCommittedDefaults = committedDefaults,
+          configLayerLocalOverrides = localOverrides,
+          configLayerEnvironmentOverrides = environmentOverrides
+        }
 
     optionalBoolean key fallback =
       maybe

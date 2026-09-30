@@ -1,0 +1,101 @@
+{-# SPEC #-}
+
+import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.Maybe (isNothing)
+import Data.Text qualified as Text
+import HarchWeb qualified
+import HarchWeb.Site (RouteDefinition (routeNavigation))
+import TestCore.Wai (performWaiRequest, readResponseBody, waiRequest)
+import Unit.WebApi.TestSupport (pureApplication)
+import WebApi.Config (appTitlePrefix, defaultAppConfig)
+import WebApi.Database (defaultPageRepository)
+import WebApi.PageModule (PageDefinitionContext (..))
+import WebApi.Pages.Showcase qualified as Showcase
+import WebApi.Pages.ShowcaseAlternate qualified as ShowcaseAlternate
+import WebApi.Route (AppRoute (DocsSwaggerRoute, ShowcaseAlternateRoute, ShowcaseRoute), RouteMetadata (..), defaultRequestContext, renderRoutePath, routeEnhancementHooks, routeMetadata, routePageSegment, routePageTitle)
+
+spec = describe "WebApi.Pages showcase family" $ do
+  let pageDefinitionContext = PageDefinitionContext defaultAppConfig defaultPageRepository
+
+  describe "generated module presentations" $ do
+    it "projects page-owned titles and hooks beside discovered route paths" $ do
+      expectAll
+        ( (routePageSegment (routeMetadata ShowcaseRoute) `shouldBe` Just "showcase")
+            :| [ routePageTitle (routeMetadata ShowcaseRoute) `shouldBe` "Showcase",
+                 routePageSuffix (routeMetadata ShowcaseRoute) `shouldBe` "/showcase",
+                 routeEnhancementHooks (routeMetadata ShowcaseRoute) `shouldBe` ["web-api-showcase"],
+                 routePageSegment (routeMetadata ShowcaseAlternateRoute) `shouldBe` Just "showcase-alternate",
+                 routePageTitle (routeMetadata ShowcaseAlternateRoute) `shouldBe` "Showcase alternate",
+                 routePageSuffix (routeMetadata ShowcaseAlternateRoute) `shouldBe` "/showcase-alternate",
+                 routeEnhancementHooks (routeMetadata ShowcaseAlternateRoute) `shouldBe` ["web-api-showcase-alternate"]
+               ]
+        )
+
+    it "declares each generated page's endpoint identity" $ do
+      renderRoutePath
+        ( HarchWeb.RouteRequest
+            { HarchWeb.requestRoute = ShowcaseRoute,
+              HarchWeb.requestContext = defaultRequestContext
+            }
+        )
+        `shouldBe` "/showcase"
+
+  describe "server-rendered pages" $ do
+    it "renders the showcase page with its scoped classes and its own stylesheet" $ do
+      response <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["showcase"])
+      responseBody <- readResponseBody response
+      expectAll
+        ( (Text.isInfixOf "data-page=\"showcase\"" responseBody `shouldBe` True)
+            :| [ Text.isInfixOf ("<title>" <> appTitlePrefix defaultAppConfig <> ": Showcase</title>") responseBody `shouldBe` True,
+                 Text.isInfixOf "class=\"harch-showcase-root\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "class=\"harch-showcase-heading\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "class=\"harch-showcase-card\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "href=\"/assets/styles/pages/showcase.css\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "This card is styled by showcase.css only." responseBody `shouldBe` True,
+                 Text.isInfixOf "href=\"/assets/styles/pages/showcase-alternate.css\"" responseBody `shouldBe` False
+               ]
+        )
+
+    it "renders the alternate page with the same local classes under its own scope" $ do
+      response <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["showcase-alternate"])
+      responseBody <- readResponseBody response
+      expectAll
+        ( (Text.isInfixOf "data-page=\"showcase-alternate\"" responseBody `shouldBe` True)
+            :| [ Text.isInfixOf ("<title>" <> appTitlePrefix defaultAppConfig <> ": Showcase alternate</title>") responseBody `shouldBe` True,
+                 Text.isInfixOf "class=\"harch-showcase-alternate-root\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "class=\"harch-showcase-alternate-card\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "href=\"/assets/styles/pages/showcase-alternate.css\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "This card is styled by showcase-alternate.css only." responseBody `shouldBe` True,
+                 Text.isInfixOf "harch-showcase-root" responseBody `shouldBe` False
+               ]
+        )
+
+  describe "page-owned navigation" $ do
+    it "keeps the generated showcase pages out of navigation" $ do
+      isNothing (routeNavigation (Showcase.pageDefinition pageDefinitionContext) defaultRequestContext) `shouldBe` True
+      isNothing (routeNavigation (ShowcaseAlternate.pageDefinition pageDefinitionContext) defaultRequestContext) `shouldBe` True
+
+  describe "the /docs Swagger page as an ordinary typed surface" $ do
+    it "renders complete SSR with the fallback, mount, prefixed assets, and enhancement descriptor" $ do
+      response <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["docs"])
+      responseBody <- readResponseBody response
+      expectAll
+        ( (Text.isInfixOf "data-page=\"docs\"" responseBody `shouldBe` True)
+            :| [ Text.isInfixOf "data-swagger-fallback=\"true\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "href=\"/docs/openapi.json\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "data-swagger-ui=\"true\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "data-swagger-spec-url=\"/docs/openapi.json\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "data-swagger-bundle-url=\"/docs/assets/swagger-ui-bundle.js\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "href=\"/docs/assets/swagger-ui.css\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "data-harch-page-enhancement=\"harch-swagger-ui\"" responseBody `shouldBe` True,
+                 Text.isInfixOf "src=\"/docs/assets/swagger-enhancement.js\"" responseBody `shouldBe` True
+               ]
+        )
+
+    it "projects the Swagger route presentation" $ do
+      expectAll
+        ( (routePageSegment (routeMetadata DocsSwaggerRoute) `shouldBe` Just "docs")
+            :| [ routePageTitle (routeMetadata DocsSwaggerRoute) `shouldBe` "Documentation",
+                 routeEnhancementHooks (routeMetadata DocsSwaggerRoute) `shouldBe` ["web-api-docs"]
+               ]
+        )

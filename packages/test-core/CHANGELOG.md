@@ -1,5 +1,10 @@
 # Revision history for test-core
 
+## 0.1.2.0
+
+* **Breaking: browser/testing support was substantially reorganized.** Affected: browser runner protocol, scenario model, test preprocessing, and shared assertions.
+* (added) Real-browser scenarios, runner configuration/protocol support, WAI helpers, and file-input upload interaction.
+
 ## 0.1.1.0
 
 * Aligned changelog headings with the repository-wide version-first format used for the upcoming `0.1.1.0` work.

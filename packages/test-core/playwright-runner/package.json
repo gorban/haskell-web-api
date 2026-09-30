@@ -1,0 +1,9 @@
+{
+  "name": "haskell-web-api-playwright-runner",
+  "private": true,
+  "version": "0.1.0",
+  "type": "commonjs",
+  "dependencies": {
+    "@playwright/test": "1.61.1"
+  }
+}

@@ -1,5 +1,10 @@
 # Revision history for core
 
+## v0.1.2.0
+
+* **Breaking: core setup/configuration helpers were substantially reorganized.** Affected: package setup, environment/config parsing, and prerequisite reporting.
+* (added) Page-route generation and focused database/container/tracing prerequisite modules.
+
 ## 0.1.1.0
 
 * Clarified package metadata to reference `test-core` instead of the retired `test-lib` name.
