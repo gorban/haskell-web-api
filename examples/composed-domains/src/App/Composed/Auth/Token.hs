@@ -12,10 +12,15 @@ module App.Composed.Auth.Token
     ComposedJwtIssueError (..),
     ComposedWebClaims (..),
     composedApiProofVerifier,
+    composedApiProofVerifierWithAcceptance,
+    composedApiProofVerifierWithClock,
     composedAudienceMismatch,
     composedWebProofVerifier,
+    composedWebProofVerifierWithAcceptance,
+    composedWebProofVerifierWithClock,
     issueComposedApiToken,
     issueComposedWebToken,
+    issueComposedWebTokenWithClock,
     parseComposedApiJwtClaims,
     parseComposedWebJwtClaims,
   )
@@ -35,8 +40,10 @@ import Data.List (nub)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Time.Clock (UTCTime, addUTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import HarchWeb
   ( AuthenticationProofVerifier (AuthenticationProofVerifier),
@@ -48,7 +55,8 @@ import HarchWeb
     JwtSigner (JwtSigner),
     joseJwtSigner,
     jwtProofEncodedJwt,
-    jwtProofVerifier,
+    jwtProofVerifierWithClock,
+    jwtValidationSettingsWithClockSkew,
     mapJwtSignerError,
     mkJwtAllowedAlgorithms,
     mkJwtClaimsError,
@@ -76,17 +84,29 @@ data ComposedApiClaims = ComposedApiClaims
 
 -- | Mint one account-web-audience token over the shared key set.
 issueComposedWebToken :: ComposedJwtRuntime -> Text -> IO (Either ComposedJwtIssueError EncodedJwt)
-issueComposedWebToken runtime subject =
+issueComposedWebToken = issueComposedWebTokenWithClock getCurrentTime
+
+-- | Clock-injected web-profile issuer. Its configured lifetime supplies the
+-- real expiry instant; skew is added only at verification.
+issueComposedWebTokenWithClock :: IO UTCTime -> ComposedJwtRuntime -> Text -> IO (Either ComposedJwtIssueError EncodedJwt)
+issueComposedWebTokenWithClock readClock runtime subject = do
+  now <- readClock
+  let configuration = composedRuntimeConfiguration runtime
+      expiresAt = addUTCTime (fromIntegral (composedJwtWebTokenLifetimeSeconds configuration)) now
+      signer = composedSigner runtime
+      header = composedJwsHeader configuration
+      baseClaims =
+        Jwt.emptyClaimsSet
+          & Jwt.claimIss ?~ composedJwtIssuer configuration
+          & Jwt.claimAud ?~ Jwt.Audience [composedWebAudience configuration]
+          & Jwt.claimSub ?~ (Jwt.string # subject)
+          & Jwt.claimIat ?~ Jwt.NumericDate now
+          & Jwt.claimExp ?~ Jwt.NumericDate expiresAt
+      claims =
+        if composedJwtProvideNotBefore configuration
+          then baseClaims & Jwt.claimNbf ?~ Jwt.NumericDate now
+          else baseClaims
   signJwt signer header claims
-  where
-    configuration = composedRuntimeConfiguration runtime
-    signer = composedSigner runtime
-    header = composedJwsHeader configuration
-    claims =
-      Jwt.emptyClaimsSet
-        & Jwt.claimIss ?~ composedJwtIssuer configuration
-        & Jwt.claimAud ?~ Jwt.Audience [composedWebAudience configuration]
-        & Jwt.claimSub ?~ (Jwt.string # subject)
 
 -- | Mint one expiring API-audience token over the shared key set. The caller
 -- supplies the durable issuance instants so the client-credentials workflow
@@ -99,15 +119,18 @@ issueComposedApiToken runtime subject scopes issuedAt expiresAt
     configuration = composedRuntimeConfiguration runtime
     signer = composedSigner runtime
     header = composedJwsHeader configuration
-    claims =
+    baseClaims =
       Jwt.emptyClaimsSet
         & Jwt.claimIss ?~ composedJwtIssuer configuration
         & Jwt.claimAud ?~ Jwt.Audience [composedApiAudience configuration]
         & Jwt.claimSub ?~ (Jwt.string # subject)
         & Jwt.claimIat ?~ numericDate issuedAt
-        & Jwt.claimNbf ?~ numericDate issuedAt
         & Jwt.claimExp ?~ numericDate expiresAt
         & Jwt.unregisteredClaims .~ scopeClaim scopes
+    claims =
+      if composedJwtProvideNotBefore configuration
+        then baseClaims & Jwt.claimNbf ?~ numericDate issuedAt
+        else baseClaims
 
 numericDate :: UnixTimeNanoseconds -> Jwt.NumericDate
 numericDate instant =
@@ -141,34 +164,81 @@ composedAudienceMismatch =
 -- and issuer, then require the account-web audience by name.
 composedWebProofVerifier :: ComposedJwtRuntime -> AuthenticationProofVerifier JwtProof ComposedWebClaims
 composedWebProofVerifier runtime =
+  composedWebProofVerifierWithAcceptance runtime Nothing (Just (composedReferenceAudienceAcceptance configuration))
+  where
+    configuration = composedRuntimeConfiguration runtime
+
+-- | Supply pure accepted-value predicates for this runtime. Each predicate
+-- replaces its default singleton predicate. The public reference verifier
+-- supplies an explicit audience predicate accepting both configured profile
+-- audiences, so a correctly signed cross-profile token reaches the stable
+-- application-level audience mismatch parser.
+composedWebProofVerifierWithAcceptance :: ComposedJwtRuntime -> Maybe (Jwt.StringOrURI -> Bool) -> Maybe (Jwt.StringOrURI -> Bool) -> AuthenticationProofVerifier JwtProof ComposedWebClaims
+composedWebProofVerifierWithAcceptance = composedWebProofVerifierWithClock getCurrentTime
+
+-- | Clock-injected form used to prove the composed profile's exact temporal
+-- boundaries without sleeps.
+composedWebProofVerifierWithClock :: IO UTCTime -> ComposedJwtRuntime -> Maybe (Jwt.StringOrURI -> Bool) -> Maybe (Jwt.StringOrURI -> Bool) -> AuthenticationProofVerifier JwtProof ComposedWebClaims
+composedWebProofVerifierWithClock readClock runtime acceptedIssuers acceptedAudiences =
   AuthenticationProofVerifier $ \proof ->
     verifyAuthenticationProof
-      ( jwtProofVerifier
-          (composedValidationSettings runtime)
+      ( jwtProofVerifierWithClock
+          readClock
+          (composedValidationSettings runtime (composedWebAudience configuration) acceptedIssuers acceptedAudiences)
+          (composedJwtWebRequiredClaims (composedRuntimeConfiguration runtime))
           (mkJwtAllowedAlgorithms (JwtRs256 :| []))
           (composedRuntimeVerificationKeys runtime)
           (parseComposedWebJwtClaims (composedRuntimeConfiguration runtime))
       )
       (jwtProofEncodedJwt proof)
+  where
+    configuration = composedRuntimeConfiguration runtime
 
 -- | Verify an API-audience token the same way, then require the API audience
 -- by name — so a correctly signed web token fails exactly at the audience.
 composedApiProofVerifier :: ComposedJwtRuntime -> AuthenticationProofVerifier JwtProof ComposedApiClaims
 composedApiProofVerifier runtime =
+  composedApiProofVerifierWithAcceptance runtime Nothing (Just (composedReferenceAudienceAcceptance configuration))
+  where
+    configuration = composedRuntimeConfiguration runtime
+
+composedApiProofVerifierWithAcceptance :: ComposedJwtRuntime -> Maybe (Jwt.StringOrURI -> Bool) -> Maybe (Jwt.StringOrURI -> Bool) -> AuthenticationProofVerifier JwtProof ComposedApiClaims
+composedApiProofVerifierWithAcceptance = composedApiProofVerifierWithClock getCurrentTime
+
+composedApiProofVerifierWithClock :: IO UTCTime -> ComposedJwtRuntime -> Maybe (Jwt.StringOrURI -> Bool) -> Maybe (Jwt.StringOrURI -> Bool) -> AuthenticationProofVerifier JwtProof ComposedApiClaims
+composedApiProofVerifierWithClock readClock runtime acceptedIssuers acceptedAudiences =
   AuthenticationProofVerifier $ \proof ->
     verifyAuthenticationProof
-      ( jwtProofVerifier
-          (composedValidationSettings runtime)
+      ( jwtProofVerifierWithClock
+          readClock
+          (composedValidationSettings runtime (composedApiAudience configuration) acceptedIssuers acceptedAudiences)
+          (composedJwtApiRequiredClaims (composedRuntimeConfiguration runtime))
           (mkJwtAllowedAlgorithms (JwtRs256 :| []))
           (composedRuntimeVerificationKeys runtime)
           (parseComposedApiJwtClaims (composedRuntimeConfiguration runtime))
       )
       (jwtProofEncodedJwt proof)
+  where
+    configuration = composedRuntimeConfiguration runtime
 
-composedValidationSettings :: ComposedJwtRuntime -> Jwt.JWTValidationSettings
-composedValidationSettings runtime =
-  Jwt.defaultJWTValidationSettings (const True)
-    & Jwt.jwtValidationSettingsIssuerPredicate .~ (== composedJwtIssuer (composedRuntimeConfiguration runtime))
+composedValidationSettings :: ComposedJwtRuntime -> Jwt.StringOrURI -> Maybe (Jwt.StringOrURI -> Bool) -> Maybe (Jwt.StringOrURI -> Bool) -> Jwt.JWTValidationSettings
+composedValidationSettings runtime defaultAudience acceptedIssuers acceptedAudiences =
+  jwtValidationSettingsWithClockSkew
+    (composedJwtClockSkew configuration)
+    ( Jwt.defaultJWTValidationSettings (fromMaybe (== defaultAudience) acceptedAudiences)
+        & Jwt.jwtValidationSettingsIssuerPredicate .~ fromMaybe defaultIssuerAcceptance acceptedIssuers
+    )
+  where
+    configuration = composedRuntimeConfiguration runtime
+    defaultIssuerAcceptance = (== composedJwtIssuer configuration)
+
+-- | The composed reference app explicitly accepts the two audience values it
+-- itself issues at the common JOSE boundary. The profile-specific claim
+-- parser then preserves the stable web/API mismatch classification. Custom
+-- verifier predicates replace this application predicate entirely.
+composedReferenceAudienceAcceptance :: ComposedJwtConfiguration -> Jwt.StringOrURI -> Bool
+composedReferenceAudienceAcceptance configuration candidate =
+  candidate == composedWebAudience configuration || candidate == composedApiAudience configuration
 
 -- | A web token must carry the account-web audience and a subject.
 parseComposedWebJwtClaims :: ComposedJwtConfiguration -> Jwt.ClaimsSet -> Either JwtClaimsError ComposedWebClaims

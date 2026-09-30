@@ -1,14 +1,21 @@
--- | Startup-validated issuer, audience, and RS256 key-set configuration for
--- the composed example's two-audience JWT runtime.
+-- | Startup-validated issuer, audience, registered-claim policy, and RS256
+-- key-set configuration for the composed example's two-audience JWT runtime.
+-- Web and API presence policies resolve independently. Both token profiles
+-- generate expiry; the web profile's one-hour lifetime and the minute-based
+-- verification skew are explicit settings, and default-on @nbf@ generation
+-- feeds the unresolved policy defaults.
 module App.Composed.Auth.Runtime
   ( ComposedJwtConfiguration (..),
     ComposedJwtConfigurationError (..),
+    ComposedJwtPolicySettings (..),
     ComposedJwtRuntime (..),
     composedJwtApiAudienceText,
     composedJwtIssuerText,
     composedJwtPublicJwkSet,
+    defaultComposedJwtPolicySettings,
     loadComposedJwtRuntime,
     mkComposedJwtConfiguration,
+    mkComposedJwtConfigurationWithPolicy,
   )
 where
 
@@ -21,18 +28,50 @@ import Crypto.JWT qualified as Jwt
 import Data.List (nub)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Word (Word64)
+import HarchWeb qualified
 
--- | The composed deployment's immutable issuer identity: one issuer name and
--- two deliberately distinct audience values over one key set.
+-- | The composed deployment's immutable issuer identity: one explicit issuer
+-- and two deliberately distinct audience values over one key set. It also
+-- retains separately resolved presence requirements for the web and API
+-- profiles; each profile's expiry requirement matches its generated lifetime.
 data ComposedJwtConfiguration = ComposedJwtConfiguration
   { composedJwtIssuer :: Jwt.StringOrURI,
     composedJwtIssuerTextValue :: Text,
     composedWebAudience :: Jwt.StringOrURI,
     composedApiAudience :: Jwt.StringOrURI,
     composedJwtApiAudienceTextValue :: Text,
-    composedJwtActiveKeyId :: Text
+    composedJwtActiveKeyId :: Text,
+    composedJwtWebTokenLifetimeSeconds :: Word64,
+    composedJwtProvideNotBefore :: Bool,
+    composedJwtWebRequiredClaims :: HarchWeb.JwtRequiredClaims,
+    composedJwtApiRequiredClaims :: HarchWeb.JwtRequiredClaims,
+    composedJwtClockSkew :: HarchWeb.JwtClockSkew
   }
   deriving (Eq, Show)
+
+-- | The reference profile keeps separate presence overrides for the web and
+-- API token contracts. Both profiles emit @exp@: web tokens use their
+-- explicitly configured lifetime, API tokens use the client-credentials
+-- lifetime. Both profiles inherit default-on @nbf@.
+data ComposedJwtPolicySettings = ComposedJwtPolicySettings
+  { composedPolicyProvideNotBefore :: Bool,
+    composedPolicyWebTokenLifetimeSeconds :: Word64,
+    composedWebPresencePolicy :: HarchWeb.JwtClaimPresencePolicy,
+    composedApiPresencePolicy :: HarchWeb.JwtClaimPresencePolicy,
+    composedPolicyClockSkewMinutes :: Integer
+  }
+  deriving (Eq, Show)
+
+defaultComposedJwtPolicySettings :: ComposedJwtPolicySettings
+defaultComposedJwtPolicySettings =
+  ComposedJwtPolicySettings
+    { composedPolicyProvideNotBefore = True,
+      composedPolicyWebTokenLifetimeSeconds = 3600,
+      composedWebPresencePolicy = HarchWeb.defaultJwtClaimPresencePolicy,
+      composedApiPresencePolicy = HarchWeb.defaultJwtClaimPresencePolicy,
+      composedPolicyClockSkewMinutes = 0
+    }
 
 -- | Deployment settings and verification keys that failed startup validation.
 data ComposedJwtConfigurationError
@@ -45,30 +84,65 @@ data ComposedJwtConfigurationError
   | ComposedJwtIssuerUnparseable
   | ComposedJwtWebAudienceUnparseable
   | ComposedJwtApiAudienceUnparseable
+  | ComposedJwtClockSkewInvalid
+  | ComposedJwtWebTokenLifetimeInvalid
   deriving (Eq, Show)
 
 mkComposedJwtConfiguration :: Text -> Text -> Text -> Text -> Either ComposedJwtConfigurationError ComposedJwtConfiguration
-mkComposedJwtConfiguration issuerText webAudienceText apiAudienceText activeKeyId
-  | Text.null issuerText = Left ComposedJwtIssuerEmpty
-  | Text.null webAudienceText = Left ComposedJwtWebAudienceEmpty
-  | Text.null apiAudienceText = Left ComposedJwtApiAudienceEmpty
-  | webAudienceText == apiAudienceText = Left ComposedJwtAudiencesNotDistinct
-  | Text.null activeKeyId = Left ComposedJwtActiveKeyIdEmpty
-  | otherwise =
-      case (normalizedStringOrUri issuerText, normalizedStringOrUri webAudienceText, normalizedStringOrUri apiAudienceText) of
-        (Just issuer, Just webAudience, Just apiAudience) ->
-          Right
-            ComposedJwtConfiguration
-              { composedJwtIssuer = issuer,
-                composedJwtIssuerTextValue = issuerText,
-                composedWebAudience = webAudience,
-                composedApiAudience = apiAudience,
-                composedJwtApiAudienceTextValue = apiAudienceText,
-                composedJwtActiveKeyId = activeKeyId
-              }
-        (Nothing, _, _) -> Left ComposedJwtIssuerUnparseable
-        (_, Nothing, _) -> Left ComposedJwtWebAudienceUnparseable
-        (_, _, Nothing) -> Left ComposedJwtApiAudienceUnparseable
+mkComposedJwtConfiguration = mkComposedJwtConfigurationWithPolicy defaultComposedJwtPolicySettings
+
+-- | Validate explicit discovery/resource identities and resolve both token
+-- profiles' generation-dependent defaults in one startup configuration.
+-- Caller-supplied acceptance predicates are supplied to the verifier and
+-- replace the default functions; they are not stored or unioned here.
+mkComposedJwtConfigurationWithPolicy :: ComposedJwtPolicySettings -> Text -> Text -> Text -> Text -> Either ComposedJwtConfigurationError ComposedJwtConfiguration
+mkComposedJwtConfigurationWithPolicy policySettings issuerText webAudienceText apiAudienceText activeKeyId = do
+  issuer <- requireConfiguredIdentity ComposedJwtIssuerEmpty ComposedJwtIssuerUnparseable issuerText
+  webAudience <- requireConfiguredIdentity ComposedJwtWebAudienceEmpty ComposedJwtWebAudienceUnparseable webAudienceText
+  apiAudience <- requireConfiguredIdentity ComposedJwtApiAudienceEmpty ComposedJwtApiAudienceUnparseable apiAudienceText
+  if webAudience == apiAudience
+    then Left ComposedJwtAudiencesNotDistinct
+    else Right ()
+  requireNonEmptyText ComposedJwtActiveKeyIdEmpty activeKeyId
+  if composedPolicyWebTokenLifetimeSeconds policySettings == 0
+    then Left ComposedJwtWebTokenLifetimeInvalid
+    else Right ()
+  clockSkew <-
+    case HarchWeb.mkJwtClockSkewMinutes (composedPolicyClockSkewMinutes policySettings) of
+      Left _ -> Left ComposedJwtClockSkewInvalid
+      Right value -> Right value
+  let profileGeneration =
+        HarchWeb.JwtClaimGeneration
+          { HarchWeb.jwtGenerationEmitsNotBefore = composedPolicyProvideNotBefore policySettings,
+            HarchWeb.jwtGenerationConfiguresIssuer = True,
+            HarchWeb.jwtGenerationConfiguresAudience = True
+          }
+      webRequiredClaims = HarchWeb.resolveJwtRequiredClaims profileGeneration (composedWebPresencePolicy policySettings)
+      apiRequiredClaims = HarchWeb.resolveJwtRequiredClaims profileGeneration (composedApiPresencePolicy policySettings)
+  Right
+    ComposedJwtConfiguration
+      { composedJwtIssuer = issuer,
+        composedJwtIssuerTextValue = issuerText,
+        composedWebAudience = webAudience,
+        composedApiAudience = apiAudience,
+        composedJwtApiAudienceTextValue = apiAudienceText,
+        composedJwtActiveKeyId = activeKeyId,
+        composedJwtWebTokenLifetimeSeconds = composedPolicyWebTokenLifetimeSeconds policySettings,
+        composedJwtProvideNotBefore = composedPolicyProvideNotBefore policySettings,
+        composedJwtWebRequiredClaims = webRequiredClaims,
+        composedJwtApiRequiredClaims = apiRequiredClaims,
+        composedJwtClockSkew = clockSkew
+      }
+
+requireConfiguredIdentity :: ComposedJwtConfigurationError -> ComposedJwtConfigurationError -> Text -> Either ComposedJwtConfigurationError Jwt.StringOrURI
+requireConfiguredIdentity emptyError parseError value
+  | Text.null value = Left emptyError
+  | otherwise = maybe (Left parseError) Right (normalizedStringOrUri value)
+
+requireNonEmptyText :: ComposedJwtConfigurationError -> Text -> Either ComposedJwtConfigurationError ()
+requireNonEmptyText errorValue value
+  | Text.null value = Left errorValue
+  | otherwise = Right ()
 
 -- | Mint and compare through jose's own @stringOrUri@ normalization (the
 -- exact construction @jose@'s @FromJSON@ produces on verification), so a

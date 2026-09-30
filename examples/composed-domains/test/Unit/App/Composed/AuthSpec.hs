@@ -2,8 +2,11 @@ module Unit.App.Composed.AuthSpec (spec) where
 
 import App.Composed.Auth
 import Control.Lens ((#), (&), (.~), (?~), (^.))
+import Crypto.JOSE.Header (HeaderParam (..), RequiredProtection (..))
 import Crypto.JOSE.JWA.JWK qualified as JwaJwk
+import Crypto.JOSE.JWA.JWS qualified as JwaJws
 import Crypto.JOSE.JWK qualified as JoseJwk
+import Crypto.JOSE.JWS qualified as JoseJws
 import Crypto.JOSE.Types (Base64Integer (..))
 import Crypto.JWT qualified as Jwt
 import Data.Aeson qualified as Aeson
@@ -11,6 +14,8 @@ import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
+import Data.Time.Clock (addUTCTime, getCurrentTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import HarchWeb
   ( AuthenticationProofVerifier (AuthenticationProofVerifier),
     EncodedJwt,
@@ -21,8 +26,9 @@ import HarchWeb
     mkProofRejection,
     requiredSecurityFailureCodeOrDie,
   )
+import HarchWeb qualified
 import HarchWeb.Authentication qualified as OAuth2
-import HarchWeb.Time (addUnixTimeNanoseconds, currentUnixTimeNanoseconds)
+import HarchWeb.Time (addUnixTimeNanoseconds, currentUnixTimeNanoseconds, unixTimeNanoseconds)
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
 
@@ -34,19 +40,33 @@ spec = describe "Unit.App.Composed.Auth" $ do
         verificationKeys = JoseJwk.JWKSet [namedSigningKey]
     configuration <- orFail "composed JWT configuration" (mkComposedJwtConfiguration "https://composed.test" "account-web" "composed-api" "composed-key-v1")
     runtime <- orFail "composed JWT runtime" (loadComposedJwtRuntime configuration namedSigningKey verificationKeys)
-    webToken <- orMint =<< issueComposedWebToken runtime "account-1"
+    fixedNow <- getCurrentTime
+    webToken <- orMint =<< issueComposedWebTokenWithClock (pure fixedNow) runtime "account-1"
     apiToken <- orMint =<< issueTestApiToken runtime "client-1" ["catalog:read", "orders:write"]
     let AuthenticationProofVerifier verifyWeb = composedWebProofVerifier runtime
         AuthenticationProofVerifier verifyApi = composedApiProofVerifier runtime
+        AuthenticationProofVerifier verifyWebAtFixed = composedWebProofVerifierWithClock (pure fixedNow) runtime Nothing Nothing
+        AuthenticationProofVerifier verifyWebBeforeNbf = composedWebProofVerifierWithClock (pure (addUTCTime (-1) fixedNow)) runtime Nothing Nothing
+        AuthenticationProofVerifier verifyApiWithRejectedIssuer = composedApiProofVerifierWithAcceptance runtime (Just (const False)) Nothing
+        AuthenticationProofVerifier verifyApiWithReplacementAudience =
+          composedApiProofVerifierWithAcceptance runtime Nothing (Just (== (Jwt.string # ("other-api" :: Text))))
         audienceRejection :: Either ProofVerificationFailure value
         audienceRejection = Left (ProofRejected (mkProofRejection (requiredSecurityFailureCodeOrDie "composed.audience-mismatch")))
     webVerified <- verifyWeb (jwtProofFromCookie webToken)
+    webVerifiedAtNbf <- verifyWebAtFixed (jwtProofFromCookie webToken)
+    webBeforeNbf <- verifyWebBeforeNbf (jwtProofFromCookie webToken)
     apiVerified <- verifyApi (jwtProofFromCookie apiToken)
+    apiRejectedByCustomIssuer <- verifyApiWithRejectedIssuer (jwtProofFromCookie apiToken)
+    apiRejectedByReplacementAudience <- verifyApiWithReplacementAudience (jwtProofFromCookie apiToken)
     webTokenAtApi <- verifyApi (jwtProofFromCookie webToken)
     apiTokenAtWeb <- verifyWeb (jwtProofFromCookie apiToken)
     expectAll
       ( (webVerified `shouldBe` Right (ComposedWebClaims "account-1"))
-          :| [ apiVerified `shouldBe` Right (ComposedApiClaims "client-1" ["catalog:read", "orders:write"]),
+          :| [ webVerifiedAtNbf `shouldBe` Right (ComposedWebClaims "account-1"),
+               webBeforeNbf `shouldSatisfy` isRejected,
+               apiVerified `shouldBe` Right (ComposedApiClaims "client-1" ["catalog:read", "orders:write"]),
+               apiRejectedByCustomIssuer `shouldSatisfy` isRejected,
+               apiRejectedByReplacementAudience `shouldSatisfy` isRejected,
                webTokenAtApi `shouldBe` audienceRejection,
                apiTokenAtWeb `shouldBe` audienceRejection,
                show runtime `shouldBe` "ComposedJwtRuntime <redacted>",
@@ -115,6 +135,137 @@ spec = describe "Unit.App.Composed.Auth" $ do
       ( (isIssueFailed emptyLifetime `shouldBe` True)
           :| [isIssueFailed reversedLifetime `shouldBe` True]
       )
+
+  it "uses the configured minute skew once at exact nbf and exp boundaries" $ do
+    signingKey <- JoseJwk.genJWK (JwaJwk.RSAGenParam 1024)
+    let namedSigningKey = signingKey & JoseJwk.jwkKid ?~ "composed-key-v1"
+        policySettings = defaultComposedJwtPolicySettings {composedPolicyClockSkewMinutes = 2}
+        nowSeconds = 1735689600 :: Integer
+        fixedNow = posixSecondsToUTCTime (fromInteger nowSeconds)
+        atOffset offset = unixTimeNanoseconds (fromInteger ((nowSeconds + offset) * 1000000000))
+    configuration <-
+      orFail
+        "composed JWT skew configuration"
+        (mkComposedJwtConfigurationWithPolicy policySettings "https://composed.test" "account-web" "composed-api" "composed-key-v1")
+    runtime <- orFail "composed JWT skew runtime" (loadComposedJwtRuntime configuration namedSigningKey (JoseJwk.JWKSet [namedSigningKey]))
+    let AuthenticationProofVerifier verifyApi = composedApiProofVerifierWithClock (pure fixedNow) runtime Nothing Nothing
+        issueAndVerify nbfOffset expOffset = do
+          token <-
+            orMint
+              =<< issueComposedApiToken
+                runtime
+                "client-1"
+                (requiredTestScopes ["catalog:read"])
+                (atOffset nbfOffset)
+                (atOffset expOffset)
+          verifyApi (jwtProofFromCookie token)
+    nbfAtInclusiveBoundary <- issueAndVerify 120 600
+    nbfBeyondBoundary <- issueAndVerify 121 600
+    expWithinSkew <- issueAndVerify (-300) (-119)
+    expAtExclusiveBoundary <- issueAndVerify (-300) (-120)
+    expBeyondSkew <- issueAndVerify (-300) (-121)
+    expectAll
+      ( (nbfAtInclusiveBoundary `shouldSatisfy` isRight)
+          :| [ nbfBeyondBoundary `shouldSatisfy` isRejected,
+               expWithinSkew `shouldSatisfy` isRight,
+               expAtExclusiveBoundary `shouldSatisfy` isRejected,
+               expBeyondSkew `shouldSatisfy` isRejected
+             ]
+      )
+
+  it "resolves default-on nbf generation against independent per-profile overrides" $ do
+    signingKey <- JoseJwk.genJWK (JwaJwk.RSAGenParam 1024)
+    let namedSigningKey = signingKey & JoseJwk.jwkKid ?~ "composed-key-v1"
+        verificationKeys = JoseJwk.JWKSet [namedSigningKey]
+        nowSeconds = 1735689600 :: Integer
+        fixedNow = posixSecondsToUTCTime (fromInteger nowSeconds)
+        issuedAt = unixTimeNanoseconds (fromInteger (nowSeconds * 1000000000))
+        expiresAt = unixTimeNanoseconds (fromInteger ((nowSeconds + 900) * 1000000000))
+        basePolicy = defaultComposedJwtPolicySettings {composedPolicyProvideNotBefore = False}
+        requireNbfPolicy =
+          basePolicy
+            { composedApiPresencePolicy =
+                (composedApiPresencePolicy basePolicy)
+                  { HarchWeb.jwtNotBeforePresence = HarchWeb.RequirePresence
+                  }
+            }
+        allowNbfByDefaultPolicy = basePolicy
+    requiredNbfConfiguration <-
+      orFail
+        "explicit required nbf configuration"
+        (mkComposedJwtConfigurationWithPolicy requireNbfPolicy "https://composed.test" "account-web" "composed-api" "composed-key-v1")
+    defaultNbfConfiguration <-
+      orFail
+        "emission-derived nbf configuration"
+        (mkComposedJwtConfigurationWithPolicy allowNbfByDefaultPolicy "https://composed.test" "account-web" "composed-api" "composed-key-v1")
+    requiredNbfRuntime <- orFail "required nbf runtime" (loadComposedJwtRuntime requiredNbfConfiguration namedSigningKey verificationKeys)
+    defaultNbfRuntime <- orFail "default nbf runtime" (loadComposedJwtRuntime defaultNbfConfiguration namedSigningKey verificationKeys)
+    tokenWithoutNbf <-
+      orMint
+        =<< issueComposedApiToken requiredNbfRuntime "client-1" (requiredTestScopes ["catalog:read"]) issuedAt expiresAt
+    tokenWithNbfOptional <-
+      orMint
+        =<< issueComposedApiToken defaultNbfRuntime "client-1" (requiredTestScopes ["catalog:read"]) issuedAt expiresAt
+    let AuthenticationProofVerifier verifyRequiredNbf = composedApiProofVerifierWithClock (pure fixedNow) requiredNbfRuntime Nothing Nothing
+        AuthenticationProofVerifier verifyDerivedNbf = composedApiProofVerifierWithClock (pure fixedNow) defaultNbfRuntime Nothing Nothing
+    explicitlyRequiredButMissing <- verifyRequiredNbf (jwtProofFromCookie tokenWithoutNbf)
+    unsetFollowsDisabledEmission <- verifyDerivedNbf (jwtProofFromCookie tokenWithNbfOptional)
+    expectAll
+      ( (explicitlyRequiredButMissing `shouldSatisfy` isRejected)
+          :| [unsetFollowsDisabledEmission `shouldSatisfy` isRight]
+      )
+
+  it "allows explicitly optional exp and nbf when absent but still validates a present exp" $ do
+    signingKey <- JoseJwk.genJWK (JwaJwk.RSAGenParam 1024)
+    let activeKeyId = "composed-key-v1"
+        namedSigningKey = signingKey & JoseJwk.jwkKid ?~ activeKeyId
+        verificationKeys = JoseJwk.JWKSet [namedSigningKey]
+        fixedNow = posixSecondsToUTCTime 1735689600
+        policySettings =
+          defaultComposedJwtPolicySettings
+            { composedPolicyProvideNotBefore = False,
+              composedApiPresencePolicy =
+                (composedApiPresencePolicy defaultComposedJwtPolicySettings)
+                  { HarchWeb.jwtExpirationPresence = HarchWeb.AllowAbsence,
+                    HarchWeb.jwtNotBeforePresence = HarchWeb.AllowAbsence
+                  }
+            }
+    configuration <-
+      orFail
+        "optional temporal-claim configuration"
+        (mkComposedJwtConfigurationWithPolicy policySettings "https://composed.test" "account-web" "composed-api" activeKeyId)
+    runtime <- orFail "optional temporal-claim runtime" (loadComposedJwtRuntime configuration namedSigningKey verificationKeys)
+    let header :: HarchWeb.JWSHeader RequiredProtection
+        header =
+          JoseJws.newJWSHeaderProtected JwaJws.RS256
+            & JoseJws.kid ?~ HeaderParam RequiredProtection activeKeyId
+        commonClaims =
+          [ "iss" Aeson..= ("https://composed.test" :: Text),
+            "aud" Aeson..= ["composed-api" :: Text],
+            "sub" Aeson..= ("client-1" :: Text),
+            "scope" Aeson..= ("catalog:read" :: Text)
+          ]
+        claimsWithExpiration maybeExpiration =
+          Aeson.object (commonClaims <> maybe [] (\expiration -> ["exp" Aeson..= expiration]) maybeExpiration)
+        signClaims = HarchWeb.signJwt (HarchWeb.joseJwtSigner namedSigningKey) header
+        AuthenticationProofVerifier verifyApi = composedApiProofVerifierWithClock (pure fixedNow) runtime Nothing Nothing
+    missingTemporalToken <-
+      orMint . either (const (Left ComposedJwtIssueFailed)) Right
+        =<< signClaims (claimsWithExpiration Nothing)
+    expiredPresentToken <-
+      orMint . either (const (Left ComposedJwtIssueFailed)) Right
+        =<< signClaims (claimsWithExpiration (Just (Jwt.NumericDate (posixSecondsToUTCTime 1735689599))))
+    missingTemporalResult <- verifyApi (jwtProofFromCookie missingTemporalToken)
+    expiredPresentResult <- verifyApi (jwtProofFromCookie expiredPresentToken)
+    expectAll
+      ( (missingTemporalResult `shouldBe` Right (ComposedApiClaims "client-1" ["catalog:read"]))
+          :| [expiredPresentResult `shouldSatisfy` isRejected]
+      )
+
+  it "rejects negative profile skew during startup validation" $ do
+    let invalidPolicy = defaultComposedJwtPolicySettings {composedPolicyClockSkewMinutes = -1}
+    mkComposedJwtConfigurationWithPolicy invalidPolicy "https://composed.test" "account-web" "composed-api" "composed-key-v1"
+      `shouldSatisfy` isConfigurationError ComposedJwtClockSkewInvalid
 
   it "rejects values jose cannot normalize and pins every derived representation" $ do
     configuration <- orFail "composed JWT configuration" (mkComposedJwtConfiguration "https://composed.test" "account-web" "composed-api" "composed-key-v1")
@@ -191,6 +342,15 @@ isConfigurationError expected result =
   case result of
     Left failure -> failure == expected
     Right _ -> False
+
+isRight :: Either failure value -> Bool
+isRight result =
+  case result of
+    Left _ -> False
+    Right _ -> True
+
+isRejected :: Either ProofVerificationFailure value -> Bool
+isRejected = not . isRight
 
 mintedWithUnusableKey :: Either ComposedJwtIssueError value -> Expectation
 mintedWithUnusableKey result =
